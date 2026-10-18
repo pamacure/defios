@@ -16,6 +16,10 @@ _Avoid_: peer, member, client
 A per-Node Ed25519 keypair, held by that Node alone, used to sign the messages it sends; peers verify against the known auth public keys. Unrelated to a Group's threshold Keys, even when those are also Ed25519.
 _Avoid_: device key, identity key, node key
 
+**Encryption keypair**:
+A per-Node X25519 keypair, held by that Node alone, used to seal point-to-point Session payloads so only the addressed Node can read them. Unrelated to the auth keypair, which signs but never encrypts.
+_Avoid_: encryption key, box key, crypto key
+
 **Key**:
 One threshold public key held jointly by a Group, together with the per-Node shares of it. Minted by a keygen Session; exists for ECDSA or Ed25519 signing.
 _Avoid_: keypair, wallet, wallet key
@@ -27,3 +31,7 @@ _Avoid_: ceremony, run
 **COSL**:
 The canonically-ordered signature log: the shared, append-only message history every Node maintains a local replica of. Message data is signed by the sender's auth keypair.
 _Avoid_: log, ledger, history, message list
+
+**Conversation**:
+A Key-scoped discussion among a Group's Nodes, carried on direct connections between Nodes rather than the COSL. A COSL message may be linked to the Conversation it belongs to by id; a nil conversation id marks a Group-level COSL message.
+_Avoid_: chat, channel, room, thread
