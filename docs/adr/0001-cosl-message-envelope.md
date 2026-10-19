@@ -47,15 +47,24 @@ its envelope on its behalf
 
 ## Consequences
 
-- The roster/invite must carry `group_id` (minted at Group formation) and each Node's
-  X25519 encryption public key
-  ([Design Group formation and membership mechanics](https://github.com/pamacure/defios/issues/5)).
-- Node storage keeps the encryption private key alongside the keyshare, encrypted at rest;
-  the sqlite row exposes `conversation_id` and `created_at` for queries
-  ([Design Node storage: encrypted keyshare container and COSL sqlite schema](https://github.com/pamacure/defios/issues/8)).
-- Session orchestration drives the engine through the wrapper (`from` = sender → PartyID,
-  routing tag → `isBroadcast`) and keeps the `SetSessionNonce` value off the log
-  ([Design keygen Session orchestration over the COSL](https://github.com/pamacure/defios/issues/6)).
-- Conversations mint `conversation_id` and their COSL messages link back to it
-  ([Design the Key-scoped group chat channel](https://github.com/pamacure/defios/issues/7)).
+- `sender` is a Node ID, not the auth public key; `membership.join` carries the
+  auth public key, encryption public key, display name, and tsnet hostname.
+  `group_id` is derived from the Roster's Node IDs, not minted.
+  ([Design Group formation and membership mechanics](https://github.com/pamacure/defios/issues/5);
+  [ADR 0002](0002-group-formation.md)).
+- Node storage keeps the encryption private key alongside the keyshare in the
+  Vault; the sqlite row exposes `conversation_id` and `created_at` for queries
+  ([Design Node storage: encrypted keyshare container and COSL sqlite schema](https://github.com/pamacure/defios/issues/8);
+  [ADR 0005](0005-node-storage-vault-and-cosl-sqlite.md)).
+- Session orchestration: replica apply of `session.start` is implicit join;
+  engine `Start()` waits on local accept; `from` = sender Node ID → PartyID;
+  routing tag is Node ID (nil = broadcast → `isBroadcast`); `SetSessionNonce`
+  preimage is sealed inside `session.start`, never plaintext on the log
+  ([Design keygen Session orchestration over the COSL](https://github.com/pamacure/defios/issues/6);
+  [ADR 0003](0003-keygen-session-orchestration.md);
+  [ADR 0005](0005-node-storage-vault-and-cosl-sqlite.md)).
+- Conversations are `app.freeform` COSL rows; `conversation_id` is derived from
+  the Key, not minted
+  ([Design the Key-scoped group chat channel](https://github.com/pamacure/defios/issues/7);
+  [ADR 0004](0004-conversation-on-cosl.md)).
 - Sealed rows are opaque in exports and debugging; only the addressed Node can open them.
