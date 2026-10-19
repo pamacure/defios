@@ -11,3 +11,7 @@ The five canonical triage roles are used as-is: `needs-triage`, `needs-info`, `r
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### MVP spec
+
+The implementable MVP spec is `docs/spec/mvp.md`.

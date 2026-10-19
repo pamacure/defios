@@ -24,6 +24,10 @@ _Avoid_: peer, member, client
 A Node's 32-byte public-facing identity, distinct from its auth public key. Determined once at init from that auth public key, then stored; it does not change if the auth keypair later does.
 _Avoid_: peer id, member id, node key, auth public key
 
+**Identity**:
+A Node's signed advertisement of Node ID, auth public key, encryption public key, display name, and tsnet hostname, published on the tailnet for discovery and Group formation.
+_Avoid_: profile, peer record, hello
+
 **Auth keypair**:
 A per-Node Ed25519 keypair, held by that Node alone, used to sign the messages it sends. Other Nodes verify against the auth public key pinned for that Node ID on the Roster. Unrelated to a Group's threshold Keys, even when those are also Ed25519.
 _Avoid_: device key, identity key, node key
