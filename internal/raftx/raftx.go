@@ -28,6 +28,10 @@ const (
 	ForwardPort = 4633
 )
 
+// ApplyTimeout bounds one append (§4.2): with n=2 and the other Node down,
+// this is how long a write waits before failing.
+const ApplyTimeout = 10 * time.Second
+
 // §4.2 knobs.
 const (
 	heartbeatTimeout  = 500 * time.Millisecond
@@ -36,7 +40,6 @@ const (
 	snapshotInterval  = 120 * time.Second
 	snapshotThreshold = 1024
 	trailingLogs      = 512
-	applyTimeout      = 10 * time.Second
 
 	transportTimeout = 10 * time.Second
 	transportPool    = 3
@@ -270,7 +273,7 @@ func (r *Replica) apply(ctx context.Context, s cosl.Signed) (Position, error) {
 		close(p.done)
 	}()
 
-	f := r.raft.Apply(s.Bytes, applyTimeout)
+	f := r.raft.Apply(s.Bytes, ApplyTimeout)
 	if err := f.Error(); err != nil {
 		switch {
 		case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrLeadershipLost), errors.Is(err, raft.ErrEnqueueTimeout):

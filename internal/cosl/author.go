@@ -3,8 +3,10 @@ package cosl
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 
@@ -65,4 +67,23 @@ func MembershipJoin(n *identity.Node, displayName, tsnetHostname string) *coslv1
 		EncryptionPublicKey: n.EncryptionPublicKey,
 		AuthPublicKey:       n.AuthPublicKey,
 	}
+}
+
+// MaxFreeformBytes bounds app.freeform text (§5.2 type 6).
+const MaxFreeformBytes = 65536
+
+// ErrBadText means freeform text is empty, not UTF-8, or too long.
+var ErrBadText = errors.New("cosl: text must be non-empty UTF-8 of at most 65536 bytes")
+
+// Freeform is an app.freeform payload for text, content type text/plain.
+func Freeform(text string) (*coslv1.AppFreeform, error) {
+	switch {
+	case text == "":
+		return nil, fmt.Errorf("%w: it is empty", ErrBadText)
+	case len(text) > MaxFreeformBytes:
+		return nil, fmt.Errorf("%w: got %d bytes", ErrBadText, len(text))
+	case !utf8.ValidString(text):
+		return nil, fmt.Errorf("%w: it is not valid UTF-8", ErrBadText)
+	}
+	return &coslv1.AppFreeform{Text: text, ContentType: "text/plain"}, nil
 }

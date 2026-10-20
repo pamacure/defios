@@ -130,6 +130,25 @@ func TestFormation(t *testing.T) {
 			}
 		}
 	}
+
+	// Group-level Conversation (§8): a send from each Node, and both
+	// `conversation log` outputs are identical and in seq order.
+	var sentA, sentB serve.SendView
+	alice.mustJSONVerb(t, &sentA, "conversation", "send", "hello from alice")
+	bob.mustJSONVerb(t, &sentB, "conversation", "send", "hello from bob")
+	if sentB.Seq <= sentA.Seq {
+		t.Fatalf("sends out of order: alice seq %d, bob seq %d", sentA.Seq, sentB.Seq)
+	}
+	bothSaid := func(rows []messageLine) bool { return len(rows) == 2 }
+	ma, talkA := alice.conversationLog(t, bothSaid)
+	_, talkB := bob.conversationLog(t, bothSaid)
+	if talkA != talkB {
+		t.Fatalf("conversation log differs:\nalice %s\nbob   %s", talkA, talkB)
+	}
+	if ma[0].Seq != sentA.Seq || ma[0].SenderDisplayName != "alice" || ma[0].Text != "hello from alice" ||
+		ma[1].Seq != sentB.Seq || ma[1].SenderDisplayName != "bob" || ma[1].Text != "hello from bob" {
+		t.Fatalf("conversation log = %+v", ma)
+	}
 }
 
 func mustMarshal(t *testing.T, v any) string {

@@ -76,6 +76,7 @@ func (a App) rootCommand(g *globals) *cobra.Command {
 	root.AddCommand(nodeCommand(g))
 	root.AddCommand(groupCommand(g))
 	root.AddCommand(serveCommand(g))
+	root.AddCommand(conversationCommand(g))
 	root.AddCommand(coslCommand(g))
 	return root
 }

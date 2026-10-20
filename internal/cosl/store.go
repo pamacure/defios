@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite" // pure-Go sqlite driver
@@ -105,19 +106,29 @@ type Meta struct {
 }
 
 // Query filters Log. Limit > 0 returns the latest Limit rows, in seq order.
+// GroupLevel keeps only rows whose conversation id is unset (§8).
 type Query struct {
-	MsgType *uint32
-	Limit   int
+	MsgType    *uint32
+	GroupLevel bool
+	Limit      int
 }
 
 const rowColumns = "seq, term, envelope, sender, msg_type, msg_id, conversation_id, created_at, prev_hash"
 
 // Log returns rows in seq order.
 func (s *Store) Log(q Query) ([]Row, error) {
-	where, args := "", []any{}
+	var conds []string
+	args := []any{}
 	if q.MsgType != nil {
-		where = "WHERE msg_type = ?"
+		conds = append(conds, "msg_type = ?")
 		args = append(args, *q.MsgType)
+	}
+	if q.GroupLevel {
+		conds = append(conds, "conversation_id IS NULL")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 	stmt := fmt.Sprintf("SELECT %s FROM cosl %s ORDER BY seq", rowColumns, where)
 	if q.Limit > 0 {

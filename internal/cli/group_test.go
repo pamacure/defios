@@ -223,6 +223,13 @@ func TestGroupCreateUsageAndServeErrors(t *testing.T) {
 // body, recording the last request path.
 func fakeGroupServe(t *testing.T, dir string, status int, kind, body string) *atomic.Value {
 	t.Helper()
+	return fakeLocalServe(t, dir, "/v1/group/", status, kind, body)
+}
+
+// fakeLocalServe answers every local API path under prefix with a canned
+// status, error kind, and body, recording the last request path.
+func fakeLocalServe(t *testing.T, dir, prefix string, status int, kind, body string) *atomic.Value {
+	t.Helper()
 	l, err := net.Listen("unix", filepath.Join(dir, "serve.sock"))
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +237,7 @@ func fakeGroupServe(t *testing.T, dir string, status int, kind, body string) *at
 	last := new(atomic.Value)
 	last.Store("")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/group/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
 		last.Store(r.URL.Path)
 		if kind != "" {
 			w.Header().Set("X-DeFiOS-Error", kind)

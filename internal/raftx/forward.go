@@ -24,7 +24,7 @@ import (
 const (
 	forwardPath     = "/v1/forward"
 	forwardMaxBytes = 1 << 20
-	forwardTimeout  = applyTimeout + 5*time.Second
+	forwardTimeout  = ApplyTimeout + 5*time.Second
 )
 
 // statusNotLeader tells the forwarder to look the leader up again;

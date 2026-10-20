@@ -15,8 +15,10 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/raftx"
 )
 
 // Status is what the local API reports about this serve.
@@ -163,17 +165,22 @@ func (s *server) localHandler() http.Handler {
 		v, err := s.groupDecline(r.Context(), gid, req.Reason)
 		s.answer(w, v, err)
 	})
+	s.conversationRoutes(mux)
 	return mux
 }
 
-// readLocal decodes a local JSON request; formation verbs also need the
+// localMaxBytes bounds a local request body: a maximal app.freeform text
+// (§5.2) survives JSON escaping with room to spare.
+const localMaxBytes = 512 << 10
+
+// readLocal decodes a local JSON request; writing verbs also need the
 // tailnet, so they answer 503 until it is up.
 func (s *server) readLocal(w http.ResponseWriter, r *http.Request, v any) bool {
 	if !s.tailnetUp.Load() {
 		writeError(w, ErrTailnetNotUp)
 		return false
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(v); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, localMaxBytes)).Decode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
@@ -201,6 +208,10 @@ var errorKinds = []struct {
 	{group.ErrBadAccept, "bad-accept", http.StatusBadRequest},
 	{group.ErrBadDecline, "bad-decline", http.StatusBadRequest},
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
+	{ErrNoReplica, "no-replica", http.StatusConflict},
+	{cosl.ErrBadText, "bad-text", http.StatusBadRequest},
+	{raftx.ErrNoLeader, "no-leader", http.StatusServiceUnavailable},
+	{raftx.ErrNotInserted, "not-inserted", http.StatusUnprocessableEntity},
 }
 
 // writeError answers err with its kind and status.

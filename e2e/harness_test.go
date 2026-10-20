@@ -394,6 +394,34 @@ func (n *node) coslLog(t *testing.T, until func([]coslLine) bool) ([]coslLine, s
 	return nil, ""
 }
 
+// messageLine is one `conversation log --json` row.
+type messageLine struct {
+	Seq               uint64 `json:"seq"`
+	Sender            string `json:"sender"`
+	SenderDisplayName string `json:"sender_display_name"`
+	Text              string `json:"text"`
+}
+
+// conversationLog polls `conversation log --json` (no serve needed) until
+// the predicate holds; returns the decoded rows and their exact stdout.
+func (n *node) conversationLog(t *testing.T, until func([]messageLine) bool) ([]messageLine, string) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	var last []messageLine
+	for time.Now().Before(deadline) {
+		r := n.run(context.Background(), "conversation", "log", "--json")
+		if r.code == 0 {
+			last = nil
+			if err := json.Unmarshal([]byte(r.stdout), &last); err == nil && until(last) {
+				return last, r.stdout
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("%s conversation log never satisfied the predicate; last = %+v", n.name, last)
+	return nil, ""
+}
+
 // nodeList polls `node list --json` until the predicate holds.
 func (n *node) nodeList(t *testing.T, until func([]serve.NodeSummary) bool) []serve.NodeSummary {
 	t.Helper()
