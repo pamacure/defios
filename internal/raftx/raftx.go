@@ -50,6 +50,9 @@ var (
 	// ErrNoLeader means no leader is known before ctx expired; with n=2
 	// that is the other Node being unreachable (§4.5). Retryable.
 	ErrNoLeader = errors.New("raftx: no leader; the other Node is not reachable")
+	// ErrNotCaughtUp means WaitCaughtUp's ctx expired while a leader was
+	// known but this replica had not yet applied what the leader had.
+	ErrNotCaughtUp = errors.New("raftx: not caught up with the leader yet")
 	// ErrNotInserted means the entry committed but the FSM rejected it
 	// (§5.4), so it occupies a raft index and produced no COSL row.
 	ErrNotInserted = errors.New("raftx: committed but not inserted")
@@ -335,7 +338,7 @@ func (r *Replica) WaitCaughtUp(ctx context.Context) error {
 			for r.raft.AppliedIndex() < target {
 				select {
 				case <-ctx.Done():
-					return ErrNoLeader
+					return ErrNotCaughtUp
 				case <-time.After(commitTimeout):
 				}
 			}

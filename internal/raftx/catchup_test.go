@@ -10,6 +10,7 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/raftx"
+	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // wipe empties Node i's group/<id>/ as an operator who lost the directory
@@ -144,5 +145,56 @@ func TestWipedFollowerIsRestoredFromLeaderSnapshot(t *testing.T) {
 	sameRows(t, waitRows(t, leader.store, n+1), waitRows(t, follower.store, n+1))
 	if _, err := follower.store.Log(cosl.Query{GroupLevel: true}); err != nil {
 		t.Fatalf("restored replica is not readable: %v", err)
+	}
+}
+
+// A replica that diverged from the leader's history is not overwritten by
+// the snapshot: the live rows survive and the operator sees why.
+func TestDivergedReplicaRefusesLeaderSnapshot(t *testing.T) {
+	c := newPair(t)
+	reps := []*replica{c.open(0), c.open(1)}
+	li := c.leaderIndex(reps[0])
+	fi := 1 - li
+	leader := reps[li]
+	const n = 530
+	for i := range n {
+		if _, err := leader.Append(c.ctx(20*time.Second), c.freeform(li, fmt.Sprint("m", i))); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	waitRows(t, reps[fi].store, n)
+	if err := leader.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	reps[fi].close()
+
+	// The follower's replica now holds a row the leader's history does not.
+	store, err := cosl.Open(filepath.Join(c.dirs[fi], "cosl.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsm := cosl.NewFSM(store, c.roster)
+	s, _ := c.author(fi).Sign(cosl.TypeAppFreeform, nil, &coslv1.AppFreeform{Text: "divergent"})
+	if res, err := fsm.Apply(1, 1, s.Bytes); err != nil || !res.Inserted {
+		t.Fatalf("diverge: %v %+v", err, res)
+	}
+	store.Close()
+
+	reps[fi] = c.open(fi)
+	defer reps[fi].close()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, _ := reps[fi].store.Log(cosl.Query{})
+		if len(rows) == n {
+			t.Fatal("a diverged replica was overwritten by the leader's snapshot")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	rows, _ := reps[fi].store.Log(cosl.Query{})
+	if len(rows) < 1 || rows[0].Seq != 1 || rows[0].MsgID != s.MsgID {
+		t.Fatalf("diverged replica lost its row: %d rows, first seq %d", len(rows), rows[0].Seq)
+	}
+	if len(rows) == n {
+		t.Fatal("a diverged replica was overwritten by the leader's snapshot")
 	}
 }

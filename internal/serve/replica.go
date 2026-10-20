@@ -88,17 +88,17 @@ func (s *server) join(ctx context.Context, replica *raftx.Replica, store *cosl.S
 	}
 	for {
 		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
-		pos, err := s.joinOnce(attempt, replica, store, signed)
+		pos, appended, err := s.joinOnce(attempt, replica, store, signed)
 		cancel()
 		switch {
 		case err == nil:
-			if pos.Index > 0 {
+			if appended {
 				s.opts.Logf("serve: membership.join committed at seq %d", pos.Index)
 			}
 			return
 		case errors.Is(err, raftx.ErrClosed), ctx.Err() != nil:
 			return
-		case errors.Is(err, raftx.ErrNoLeader):
+		case errors.Is(err, raftx.ErrNoLeader), errors.Is(err, raftx.ErrNotCaughtUp):
 			s.opts.Logf("serve: membership.join waiting for the other Node")
 		default:
 			s.opts.Logf("serve: membership.join: %v", err)
@@ -112,18 +112,20 @@ func (s *server) join(ctx context.Context, replica *raftx.Replica, store *cosl.S
 	}
 }
 
-// joinOnce is one attempt: catch up, skip if already joined (zero
-// Position), else append.
-func (s *server) joinOnce(ctx context.Context, replica *raftx.Replica, store *cosl.Store, signed cosl.Signed) (raftx.Position, error) {
+// joinOnce is one attempt: catch up, skip if already joined, else append.
+// appended is false when a row from an earlier serve or from catch-up
+// already covers this Node.
+func (s *server) joinOnce(ctx context.Context, replica *raftx.Replica, store *cosl.Store, signed cosl.Signed) (pos raftx.Position, appended bool, err error) {
 	if err := replica.WaitCaughtUp(ctx); err != nil {
-		return raftx.Position{}, err
+		return raftx.Position{}, false, err
 	}
 	if joined, err := s.joined(store); err != nil {
-		return raftx.Position{}, err
+		return raftx.Position{}, false, err
 	} else if joined {
-		return raftx.Position{}, nil
+		return raftx.Position{}, false, nil
 	}
-	return replica.Append(ctx, signed)
+	pos, err = replica.Append(ctx, signed)
+	return pos, err == nil, err
 }
 
 // joined reports whether this Node's membership.join is on the replica.

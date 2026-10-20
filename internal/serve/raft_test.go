@@ -95,7 +95,9 @@ func TestWipedReplicaCatchesUpWithoutRejoining(t *testing.T) {
 
 	b.stop()
 	for _, name := range []string{"cosl.sqlite", "cosl.sqlite-wal", "cosl.sqlite-shm", "raft.db", "raft-snap"} {
-		os.RemoveAll(filepath.Join(b.paths.GroupDir(gid.String()), name))
+		if err := os.RemoveAll(filepath.Join(b.paths.GroupDir(gid.String()), name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	b.restart(t)
 

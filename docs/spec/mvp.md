@@ -182,7 +182,7 @@ $XDG_DATA_HOME/defios/
   vault                       # binary age(scrypt); private keys and shares
   tsnet/
   group/<group_id_hex>/
-    roster.json               # signed Create proposal + Accepts held (§6.2); pending or valid
+    roster.json               # signed Create proposal + Accepts held (§6.2); pending or valid; keep this — without it a Node cannot resume its Group and must form again (§4.4)
     cosl.sqlite
     raft.db                   # raft-boltdb LogStore + StableStore
     raft-snap/                # FileSnapshotStore
@@ -190,7 +190,7 @@ $XDG_DATA_HOME/defios/
 $XDG_RUNTIME_DIR/defios/serve.sock
 ```
 
-Backup of this Node is `identity` + `vault`. `group/` is disposable if a majority still has the replica (a pending proposal that is lost is simply proposed again). Lost Vault = new Node.
+Backup of this Node is `identity` + `vault`. `group/` is disposable if a majority still has the replica, except `roster.json`: it is the Node's record of its Group, and without it the Node has no Group to resume and must form again (§4.4). A pending proposal that is lost is simply proposed again. Lost Vault = new Node.
 
 ### 3.2 `identity` (JSON, plaintext)
 
@@ -284,11 +284,13 @@ Decided in [Choose the COSL ordering algorithm](https://github.com/pamacure/defi
 4. Commit is Raft majority of `|Roster|`. For n=2 that is both Nodes.
 5. `FSM.Apply` verifies and inserts. Only `LogCommand` entries produce COSL rows; raft-internal indexes may gap.
 
-Forward gate protobuf: `{ envelope bytes }` → `{ index, term, error }`.
+Forward gate protobuf: `{ envelope bytes }` → `{ index, term, error }`. The gate also answers `GET /v1/applied` with the leader's applied index, so a Node coming back (§4.4) can wait until it has read its own history before appending `membership.join` again.
+
+The local API also has `POST /v1/raft/snapshot` (no CLI verb): it snapshots and compacts now instead of waiting for §4.2's interval and threshold. Raft does this on its own; the verb exists so tests can make a Node fall beyond the retained log quickly.
 
 ### 4.4 Catch-up
 
-Automatic. Behind within the retained log: AppendEntries backfill. Beyond it: `InstallSnapshot`; `FSM.Restore` writes a staging sqlite, checks `prev_hash` from the snapshot head, then sqlite Online Backup API into the live file (the one legitimate rewrite; triggers do not fire). A Node whose Vault survived and whose `group/<id>/` is empty is still that Node — the leader snapshots it. No extra resync verb. Lost Vault, or no majority with data: unrestorable at MVP.
+Automatic. Behind within the retained log: AppendEntries backfill. Beyond it: `InstallSnapshot`; `FSM.Restore` writes a staging sqlite, verifies the `prev_hash` chain from genesis to the snapshot's recorded head and that this replica's rows are its prefix, then sqlite Online Backup API into the live file (the one legitimate rewrite; triggers do not fire). A snapshot no further along than the replica changes nothing; one that does not verify is refused and the live replica left as it was. A Node whose Vault survived and whose replica state (`cosl.sqlite`, `raft.db`, `raft-snap/`) is gone is still that Node — the leader snapshots it, and it does not append a second `membership.join`. `roster.json` must survive for that: without it the Node has no Group to start Raft for and must form again (§6). No extra resync verb. Lost Vault, or no majority with data: unrestorable at MVP.
 
 ### 4.5 Availability
 
