@@ -32,7 +32,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	var members []group.Member
+	var members []group.RosterNode
 	var nodes []*identity.Node
 	for _, name := range []string{"alice", "bob"} {
 		n, err := identity.Generate()
@@ -40,7 +40,7 @@ func newFixture(t *testing.T) *fixture {
 			t.Fatal(err)
 		}
 		nodes = append(nodes, n)
-		members = append(members, group.Member{Public: n.Public, DisplayName: name, TsnetHostname: "defios-" + name})
+		members = append(members, group.RosterNode{Public: n.Public, DisplayName: name, TsnetHostname: "defios-" + name})
 	}
 	roster := group.NewRoster(members...)
 	path := filepath.Join(t.TempDir(), "cosl.sqlite")

@@ -3,7 +3,14 @@
 // verifies committed entries into it (docs/spec/mvp.md §5).
 package cosl
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+
+	"google.golang.org/protobuf/proto"
+
+	coslv1 "defios.com/proto/cosl/v1"
+)
 
 // Registry ids (docs/spec/mvp.md §5.2).
 const (
@@ -15,29 +22,53 @@ const (
 	TypeAppFreeform     uint32 = 6
 )
 
-var typeNames = map[uint32]string{
-	TypeMembershipJoin:  "membership.join",
-	TypeSessionStart:    "session.start",
-	TypeSessionAbort:    "session.abort",
-	TypeSessionComplete: "session.complete",
-	TypeTssSession:      "tss.session",
-	TypeAppFreeform:     "app.freeform",
+// kind is one registry entry: its wire name and its payload schema.
+type kind struct {
+	name string
+	new  func() proto.Message
 }
+
+// registry is the single table every type lookup reads. Adding a kind is
+// one line here plus a Summary case.
+var registry = map[uint32]kind{
+	TypeMembershipJoin:  {"membership.join", func() proto.Message { return &coslv1.MembershipJoin{} }},
+	TypeSessionStart:    {"session.start", func() proto.Message { return &coslv1.SessionStart{} }},
+	TypeSessionAbort:    {"session.abort", func() proto.Message { return &coslv1.SessionAbort{} }},
+	TypeSessionComplete: {"session.complete", func() proto.Message { return &coslv1.SessionComplete{} }},
+	TypeTssSession:      {"tss.session", func() proto.Message { return &coslv1.TssSession{} }},
+	TypeAppFreeform:     {"app.freeform", func() proto.Message { return &coslv1.AppFreeform{} }},
+}
+
+// ErrUnknownType is returned by DecodePayload for ids outside the registry.
+var ErrUnknownType = errors.New("cosl: unknown msg_type")
 
 // TypeName is the registry name for id, or "unknown(<id>)".
 func TypeName(id uint32) string {
-	if name, ok := typeNames[id]; ok {
-		return name
+	if k, ok := registry[id]; ok {
+		return k.name
 	}
 	return fmt.Sprintf("unknown(%d)", id)
 }
 
 // TypeByName resolves a registry name to its id.
 func TypeByName(name string) (uint32, bool) {
-	for id, n := range typeNames {
-		if n == name {
+	for id, k := range registry {
+		if k.name == name {
 			return id, true
 		}
 	}
 	return 0, false
+}
+
+// DecodePayload parses payload as the registry message for msgType.
+func DecodePayload(msgType uint32, payload []byte) (proto.Message, error) {
+	k, ok := registry[msgType]
+	if !ok {
+		return nil, ErrUnknownType
+	}
+	msg := k.new()
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil, fmt.Errorf("cosl: %s payload: %w", k.name, err)
+	}
+	return msg, nil
 }

@@ -24,14 +24,14 @@ import (
 func replica(t *testing.T, dir string) (gid string, msgIDs []string) {
 	t.Helper()
 	var nodes []*identity.Node
-	var members []group.Member
+	var members []group.RosterNode
 	for _, name := range []string{"alice", "bob"} {
 		n, err := identity.Generate()
 		if err != nil {
 			t.Fatal(err)
 		}
 		nodes = append(nodes, n)
-		members = append(members, group.Member{Public: n.Public, DisplayName: name})
+		members = append(members, group.RosterNode{Public: n.Public, DisplayName: name})
 	}
 	roster := group.NewRoster(members...)
 	g := roster.GroupID()

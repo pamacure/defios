@@ -1,14 +1,18 @@
 package cosl
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/url"
 
+	"google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite" // pure-Go sqlite driver
 
 	"defios.com/internal/identity"
+	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // schema is docs/spec/mvp.md §5.5 verbatim. PRAGMAs ride on the DSN so every
@@ -173,6 +177,104 @@ func (s *Store) Meta() (Meta, error) {
 	return readMeta(s.db)
 }
 
+// Decode parses the stored envelope bytes.
+func (r Row) Decode() (*coslv1.Envelope, error) {
+	var env coslv1.Envelope
+	if err := proto.Unmarshal(r.Envelope, &env); err != nil {
+		return nil, fmt.Errorf("cosl: seq %d: stored envelope is unreadable: %w", r.Seq, err)
+	}
+	return &env, nil
+}
+
+// append is §5.4 steps 6–7 for an already-verified envelope: INSERT OR
+// IGNORE on msg_id, extend the prev_hash chain, record last_applied. One
+// transaction, so a crash leaves either all or none. Reports false on a
+// duplicate msg_id.
+func (s *Store) append(index, term uint64, data []byte, env *coslv1.Envelope) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("cosl: %w", err)
+	}
+	defer tx.Rollback()
+
+	meta, err := readMeta(tx)
+	if err != nil {
+		return false, err
+	}
+	head := chainHash(meta.ChainHead, index, term, data)
+
+	var conversationID any
+	if env.ConversationId != nil {
+		conversationID = env.ConversationId
+	}
+	res, err := tx.Exec(`INSERT OR IGNORE INTO cosl
+		(seq, term, envelope, sender, msg_type, msg_id, conversation_id, created_at, prev_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		index, term, data, env.Sender, env.MsgType, env.MsgId, conversationID, env.CreatedAt, head[:])
+	if err != nil {
+		return false, fmt.Errorf("cosl: insert: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cosl: %w", err)
+	}
+	if n == 1 {
+		if err := setMeta(tx, metaChainHead, head[:]); err != nil {
+			return false, err
+		}
+	}
+	if err := setLastApplied(tx, index, term); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("cosl: %w", err)
+	}
+	return n == 1, nil
+}
+
+// markApplied records last_applied for an entry that produced no row.
+func (s *Store) markApplied(index, term uint64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("cosl: %w", err)
+	}
+	defer tx.Rollback()
+	if err := setLastApplied(tx, index, term); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("cosl: %w", err)
+	}
+	return nil
+}
+
+// chainHash is SHA-256(prev || seq_be64 || term_be64 || envelope_bytes).
+func chainHash(prev [32]byte, seq, term uint64, envelope []byte) [32]byte {
+	h := sha256.New()
+	h.Write(prev[:])
+	h.Write(binary.BigEndian.AppendUint64(nil, seq))
+	h.Write(binary.BigEndian.AppendUint64(nil, term))
+	h.Write(envelope)
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func setLastApplied(tx *sql.Tx, index, term uint64) error {
+	if err := setMeta(tx, metaLastAppliedSeq, binary.BigEndian.AppendUint64(nil, index)); err != nil {
+		return err
+	}
+	return setMeta(tx, metaLastAppliedTerm, binary.BigEndian.AppendUint64(nil, term))
+}
+
+func setMeta(tx *sql.Tx, key string, value []byte) error {
+	if _, err := tx.Exec(`INSERT INTO cosl_meta (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+		return fmt.Errorf("cosl: meta %s: %w", key, err)
+	}
+	return nil
+}
+
 type querier interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
@@ -221,4 +323,11 @@ func scanRow(rows *sql.Rows) (Row, error) {
 	copy(r.MsgID[:], msgID)
 	copy(r.PrevHash[:], prevHash)
 	return r, nil
+}
+
+func beUint64(b []byte) uint64 {
+	if len(b) != 8 {
+		return 0
+	}
+	return binary.BigEndian.Uint64(b)
 }

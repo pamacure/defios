@@ -5,6 +5,7 @@ package group
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 
 	"defios.com/internal/identity"
@@ -13,8 +14,12 @@ import (
 // groupIDDomain separates Group IDs from every other SHA-256 in the system.
 const groupIDDomain = "defios-group-id-v1"
 
-// ID is a 32-byte Group ID.
-type ID = identity.ID
+// ID is a 32-byte Group ID. A distinct type from identity.ID so the two
+// cannot be passed for each other.
+type ID [32]byte
+
+// String is the lowercase hex display form.
+func (id ID) String() string { return hex.EncodeToString(id[:]) }
 
 // GroupID derives SHA-256("defios-group-id-v1" || sorted Node IDs). Node IDs
 // are sorted as raw bytes, so the same Roster is the same Group.
@@ -31,9 +36,9 @@ func GroupID(nodeIDs []identity.ID) ID {
 	return out
 }
 
-// Member is one Roster entry: the Node's pinned keys plus its advertised
-// display name and tsnet hostname.
-type Member struct {
+// RosterNode is one Roster entry: the Node's pinned keys plus its
+// advertised display name and tsnet hostname.
+type RosterNode struct {
 	identity.Public
 	DisplayName   string
 	TsnetHostname string
@@ -41,36 +46,36 @@ type Member struct {
 
 // Roster is the Group's fixed set of Nodes, sorted by Node ID.
 type Roster struct {
-	members []Member
+	nodes []RosterNode
 }
 
-// NewRoster sorts members by Node ID.
-func NewRoster(members ...Member) Roster {
-	sorted := slices.Clone(members)
-	slices.SortFunc(sorted, func(a, b Member) int { return bytes.Compare(a.NodeID[:], b.NodeID[:]) })
-	return Roster{members: sorted}
+// NewRoster sorts nodes by Node ID.
+func NewRoster(nodes ...RosterNode) Roster {
+	sorted := slices.Clone(nodes)
+	slices.SortFunc(sorted, func(a, b RosterNode) int { return bytes.Compare(a.NodeID[:], b.NodeID[:]) })
+	return Roster{nodes: sorted}
 }
 
-// Members returns the sorted Roster.
-func (r Roster) Members() []Member { return slices.Clone(r.members) }
+// Nodes returns the sorted Roster.
+func (r Roster) Nodes() []RosterNode { return slices.Clone(r.nodes) }
 
 // NodeIDs returns the sorted Node IDs.
 func (r Roster) NodeIDs() []identity.ID {
-	ids := make([]identity.ID, len(r.members))
-	for i, m := range r.members {
-		ids[i] = m.NodeID
+	ids := make([]identity.ID, len(r.nodes))
+	for i, n := range r.nodes {
+		ids[i] = n.NodeID
 	}
 	return ids
 }
 
-// Lookup finds the Member for a Node ID.
-func (r Roster) Lookup(nodeID identity.ID) (Member, bool) {
-	for _, m := range r.members {
-		if m.NodeID == nodeID {
-			return m, true
+// Lookup finds the Roster entry for a Node ID.
+func (r Roster) Lookup(nodeID identity.ID) (RosterNode, bool) {
+	for _, n := range r.nodes {
+		if n.NodeID == nodeID {
+			return n, true
 		}
 	}
-	return Member{}, false
+	return RosterNode{}, false
 }
 
 // GroupID is the Group this Roster constitutes.

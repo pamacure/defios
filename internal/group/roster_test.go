@@ -32,8 +32,8 @@ func TestGroupIDSortsNodeIDsBeforeHashing(t *testing.T) {
 }
 
 func TestRosterLookupAndGroupID(t *testing.T) {
-	a := group.Member{Public: identity.Public{NodeID: id(0x0a), AuthPublicKey: bytes.Repeat([]byte{1}, 32)}, DisplayName: "a"}
-	b := group.Member{Public: identity.Public{NodeID: id(0x0b), AuthPublicKey: bytes.Repeat([]byte{2}, 32)}, DisplayName: "b"}
+	a := group.RosterNode{Public: identity.Public{NodeID: id(0x0a), AuthPublicKey: bytes.Repeat([]byte{1}, 32)}, DisplayName: "a"}
+	b := group.RosterNode{Public: identity.Public{NodeID: id(0x0b), AuthPublicKey: bytes.Repeat([]byte{2}, 32)}, DisplayName: "b"}
 	r := group.NewRoster(b, a) // out of order on purpose
 
 	got, ok := r.Lookup(id(0x0a))

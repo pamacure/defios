@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -50,27 +51,27 @@ func coslCommand(g *globals) *cobra.Command {
 
 // openReplica finds this Node's one Group and opens its COSL. Reads work
 // without serve: WAL readers see the FSM's committed rows.
-func openReplica(g *globals) (*cosl.Store, string, error) {
+func openReplica(g *globals) (*cosl.Store, error) {
 	p := g.paths()
 	matches, err := filepath.Glob(filepath.Join(p.GroupsDir(), "*", "cosl.sqlite"))
 	if err != nil {
-		return nil, "", exitOperational(err)
+		return nil, exitOperational(err)
 	}
 	switch len(matches) {
 	case 0:
 		if _, err := os.Stat(p.Data); errors.Is(err, os.ErrNotExist) {
-			return nil, "", errNoNode(p)
+			return nil, errNoNode(p)
 		}
-		return nil, "", exitOperationalf("this Node has no Group; there is no COSL to read")
+		return nil, exitOperationalf("this Node has no Group; there is no COSL to read")
 	case 1:
 	default:
-		return nil, "", exitOperationalf("found %d Groups under %s; a Node has at most one", len(matches), p.GroupsDir())
+		return nil, exitOperationalf("found %d Groups under %s; a Node has at most one", len(matches), p.GroupsDir())
 	}
 	store, err := cosl.Open(matches[0])
 	if err != nil {
-		return nil, "", exitOperational(err)
+		return nil, exitOperational(err)
 	}
-	return store, filepath.Base(filepath.Dir(matches[0])), nil
+	return store, nil
 }
 
 // displayNames maps sender Node IDs to the display names their
@@ -83,8 +84,8 @@ func displayNames(store *cosl.Store) (map[identity.ID]string, error) {
 	}
 	names := map[identity.ID]string{}
 	for _, r := range rows {
-		var env coslv1.Envelope
-		if proto.Unmarshal(r.Envelope, &env) != nil {
+		env, err := r.Decode()
+		if err != nil {
 			continue
 		}
 		var join coslv1.MembershipJoin
@@ -117,6 +118,7 @@ func rfc3339(unixNanos int64) string {
 	return time.Unix(0, unixNanos).UTC().Format(time.RFC3339)
 }
 
+// logLine is one `cosl log` row, human or JSON.
 type logLine struct {
 	Seq               uint64  `json:"seq"`
 	Term              uint64  `json:"term"`
@@ -142,7 +144,7 @@ func runCoslLog(g *globals, typeFlag string, limit int) error {
 		}
 		q.MsgType = &id
 	}
-	store, _, err := openReplica(g)
+	store, err := openReplica(g)
 	if err != nil {
 		return err
 	}
@@ -159,9 +161,9 @@ func runCoslLog(g *globals, typeFlag string, limit int) error {
 
 	lines := make([]logLine, 0, len(rows))
 	for _, r := range rows {
-		var env coslv1.Envelope
-		if err := proto.Unmarshal(r.Envelope, &env); err != nil {
-			return exitOperationalf("seq %d: stored envelope is unreadable: %w", r.Seq, err)
+		env, err := r.Decode()
+		if err != nil {
+			return exitOperational(err)
 		}
 		l := logLine{
 			Seq:               r.Seq,
@@ -189,6 +191,8 @@ func runCoslLog(g *globals, typeFlag string, limit int) error {
 	return nil
 }
 
+// decodedRow is `cosl decode`'s view: row bookkeeping, every envelope
+// field, and the payload decoded through the registry.
 type decodedRow struct {
 	Seq            uint64         `json:"seq"`
 	Term           uint64         `json:"term"`
@@ -211,7 +215,7 @@ func runCoslDecode(g *globals, arg string) error {
 	if err != nil || len(prefix) == 0 {
 		return exitUsagef("msg-id must be hex (a full 32-byte msg_id or a unique prefix)")
 	}
-	store, _, err := openReplica(g)
+	store, err := openReplica(g)
 	if err != nil {
 		return err
 	}
@@ -226,9 +230,9 @@ func runCoslDecode(g *globals, arg string) error {
 	case err != nil:
 		return exitOperational(err)
 	}
-	var env coslv1.Envelope
-	if err := proto.Unmarshal(row.Envelope, &env); err != nil {
-		return exitOperationalf("seq %d: stored envelope is unreadable: %w", row.Seq, err)
+	env, err := row.Decode()
+	if err != nil {
+		return exitOperational(err)
 	}
 
 	d := decodedRow{
@@ -280,28 +284,28 @@ func runCoslDecode(g *globals, arg string) error {
 		return nil
 	}
 	fmt.Fprintln(w, "payload:")
-	printFields(g, fields, "  ")
+	printFields(w, fields, "  ")
 	return nil
 }
 
-func printFields(g *globals, fields []cosl.Field, indent string) {
+func printFields(w io.Writer, fields []cosl.Field, indent string) {
 	for _, f := range fields {
 		switch v := f.Value.(type) {
 		case []cosl.Field:
-			fmt.Fprintf(g.app.Stdout, "%s%s:\n", indent, f.Name)
-			printFields(g, v, indent+"  ")
+			fmt.Fprintf(w, "%s%s:\n", indent, f.Name)
+			printFields(w, v, indent+"  ")
 		case []any:
-			fmt.Fprintf(g.app.Stdout, "%s%s: [%d]\n", indent, f.Name, len(v))
+			fmt.Fprintf(w, "%s%s: [%d]\n", indent, f.Name, len(v))
 			for _, item := range v {
 				if nested, ok := item.([]cosl.Field); ok {
-					fmt.Fprintf(g.app.Stdout, "%s  -\n", indent)
-					printFields(g, nested, indent+"    ")
+					fmt.Fprintf(w, "%s  -\n", indent)
+					printFields(w, nested, indent+"    ")
 				} else {
-					fmt.Fprintf(g.app.Stdout, "%s  - %v\n", indent, item)
+					fmt.Fprintf(w, "%s  - %v\n", indent, item)
 				}
 			}
 		default:
-			fmt.Fprintf(g.app.Stdout, "%s%s: %v\n", indent, f.Name, v)
+			fmt.Fprintf(w, "%s%s: %v\n", indent, f.Name, v)
 		}
 	}
 }

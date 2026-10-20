@@ -12,34 +12,6 @@ import (
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// ErrUnknownType is returned by DecodePayload for ids outside the registry.
-var ErrUnknownType = errors.New("cosl: unknown msg_type")
-
-// DecodePayload parses payload as the registry message for msgType.
-func DecodePayload(msgType uint32, payload []byte) (proto.Message, error) {
-	var msg proto.Message
-	switch msgType {
-	case TypeMembershipJoin:
-		msg = &coslv1.MembershipJoin{}
-	case TypeSessionStart:
-		msg = &coslv1.SessionStart{}
-	case TypeSessionAbort:
-		msg = &coslv1.SessionAbort{}
-	case TypeSessionComplete:
-		msg = &coslv1.SessionComplete{}
-	case TypeTssSession:
-		msg = &coslv1.TssSession{}
-	case TypeAppFreeform:
-		msg = &coslv1.AppFreeform{}
-	default:
-		return nil, ErrUnknownType
-	}
-	if err := proto.Unmarshal(payload, msg); err != nil {
-		return nil, fmt.Errorf("cosl: %s payload: %w", TypeName(msgType), err)
-	}
-	return msg, nil
-}
-
 // Field is one decoded payload field, in schema order. Value is a string
 // (bytes as hex), an integer, a bool, a []Field (nested message), or a
 // []any of those.
