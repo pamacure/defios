@@ -1,6 +1,7 @@
 package key_test
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"testing"
@@ -14,6 +15,21 @@ import (
 	"defios.com/internal/session"
 	coslv1 "defios.com/proto/cosl/v1"
 )
+
+func TestConversationIDKnownAnswer(t *testing.T) {
+	// Independent SHA-256("defios-conversation-id-v1" || curve || public key).
+	// The ECDSA key is 0x02 followed by 32 0x11 bytes; the Ed25519 key is 32 0x66 bytes.
+	ecdsa := bytesKey(0x02, 0x11)
+	eddsa := bytes.Repeat([]byte{0x66}, 32)
+	ecdsaID := key.ConversationID("ecdsa", ecdsa)
+	eddsaID := key.ConversationID("eddsa", eddsa)
+	if got := encode(ecdsaID[:]); got != "6f802e2947ac9eb31137ebf46b2455d9f5312f3118b3826befdacf5aa7c41566" {
+		t.Fatalf("ecdsa conversation id = %s", got)
+	}
+	if got := encode(eddsaID[:]); got != "08415e4ab855a747a20236533e8c87cd5f5e26d7d71e1d0e4af7438e7c493abc" {
+		t.Fatalf("eddsa conversation id = %s", got)
+	}
+}
 
 func TestListAndResolveMintedKeys(t *testing.T) {
 	rows, pk := minted(t)

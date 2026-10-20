@@ -86,7 +86,7 @@ func TestWipedReplicaCatchesUpWithoutRejoining(t *testing.T) {
 	b.joins(t, gid, 2)
 	ctx := context.Background()
 	for i := range 3 {
-		if _, err := a.client().ConversationSend(ctx, fmt.Sprint("m", i)); err != nil {
+		if _, err := a.client().ConversationSend(ctx, fmt.Sprint("m", i), nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -107,7 +107,7 @@ func TestWipedReplicaCatchesUpWithoutRejoining(t *testing.T) {
 			t.Fatalf("row %d differs after catch-up:\n%+v\n%+v", i, want[i], got[i])
 		}
 	}
-	if _, err := b.client().ConversationSend(ctx, "back"); err != nil {
+	if _, err := b.client().ConversationSend(ctx, "back", nil); err != nil {
 		t.Fatalf("send after catch-up: %v", err)
 	}
 	a.groupLevelRows(t, gid, 4)

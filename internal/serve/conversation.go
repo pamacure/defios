@@ -23,16 +23,20 @@ type SendView struct {
 }
 
 type sendRequest struct {
-	Text string `json:"text"`
+	Text           string `json:"text"`
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
-// conversationSend is `conversation send` (§8): author a Group-level
-// app.freeform and commit it through Raft, bounded by the §4.2 apply
-// timeout; with the other Node down that bound is the failure.
-func (s *server) conversationSend(ctx context.Context, text string) (SendView, error) {
+// conversationSend is `conversation send` (§8): author an app.freeform and
+// commit it through Raft, bounded by the §4.2 apply timeout; with the other
+// Node down that bound is the failure. A nil conversationID is Group-level.
+func (s *server) conversationSend(ctx context.Context, text string, conversationID []byte) (SendView, error) {
 	payload, err := cosl.Freeform(text)
 	if err != nil {
 		return SendView{}, err
+	}
+	if conversationID != nil && len(conversationID) != 32 {
+		return SendView{}, fmt.Errorf("serve: conversation id is %d bytes, want 32", len(conversationID))
 	}
 	replica, _, running := s.current()
 	rec, held := s.slot.Current()
@@ -40,7 +44,7 @@ func (s *server) conversationSend(ctx context.Context, text string) (SendView, e
 		return SendView{}, ErrNoReplica
 	}
 	author := cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}
-	signed, err := author.Sign(cosl.TypeAppFreeform, nil, payload)
+	signed, err := author.Sign(cosl.TypeAppFreeform, conversationID, payload)
 	if err != nil {
 		return SendView{}, fmt.Errorf("serve: %w", err)
 	}
@@ -59,7 +63,16 @@ func (s *server) conversationRoutes(mux *http.ServeMux) {
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		v, err := s.conversationSend(r.Context(), req.Text)
+		var conv []byte
+		if req.ConversationID != "" {
+			var err error
+			conv, err = hex.DecodeString(req.ConversationID)
+			if err != nil || len(conv) != 32 {
+				writeError(w, fmt.Errorf("serve: conversation id must be 32-byte hex"))
+				return
+			}
+		}
+		v, err := s.conversationSend(r.Context(), req.Text, conv)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -91,10 +104,14 @@ func (c Client) Snapshot(ctx context.Context) error {
 	return c.do(ctx, "/v1/raft/snapshot", struct{}{}, &struct{}{})
 }
 
-// ConversationSend is `conversation send`: append text as Group-level
-// app.freeform.
-func (c Client) ConversationSend(ctx context.Context, text string) (SendView, error) {
+// ConversationSend is `conversation send`. A nil conversationID appends
+// Group-level app.freeform; otherwise the row is that Conversation.
+func (c Client) ConversationSend(ctx context.Context, text string, conversationID []byte) (SendView, error) {
 	var v SendView
-	err := c.do(ctx, "/v1/conversation/send", sendRequest{Text: text}, &v)
+	req := sendRequest{Text: text}
+	if conversationID != nil {
+		req.ConversationID = hex.EncodeToString(conversationID)
+	}
+	err := c.do(ctx, "/v1/conversation/send", req, &v)
 	return v, err
 }

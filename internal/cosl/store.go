@@ -107,10 +107,12 @@ type Meta struct {
 
 // Query filters Log. Limit > 0 returns the latest Limit rows, in seq order.
 // GroupLevel keeps only rows whose conversation id is unset (§8).
+// ConversationID, when set, keeps rows where conversation_id equals it.
 type Query struct {
-	MsgType    *uint32
-	GroupLevel bool
-	Limit      int
+	MsgType        *uint32
+	GroupLevel     bool
+	ConversationID []byte
+	Limit          int
 }
 
 const rowColumns = "seq, term, envelope, sender, msg_type, msg_id, conversation_id, created_at, prev_hash"
@@ -125,6 +127,10 @@ func (s *Store) Log(q Query) ([]Row, error) {
 	}
 	if q.GroupLevel {
 		conds = append(conds, "conversation_id IS NULL")
+	}
+	if q.ConversationID != nil {
+		conds = append(conds, "conversation_id = ?")
+		args = append(args, q.ConversationID)
 	}
 	where := ""
 	if len(conds) > 0 {

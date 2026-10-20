@@ -10,6 +10,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/key"
 	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -20,29 +21,41 @@ func conversationCommand(g *globals) *cobra.Command {
 		Use:   "conversation",
 		Short: "Talk with the other Nodes of this Group over the COSL",
 	}
-	root.AddCommand(&cobra.Command{
+	var keyQuery string
+	send := &cobra.Command{
 		Use:   "send <text>",
-		Short: "Append a Group-level message (requires serve)",
+		Short: "Append a message (requires serve). --key scopes it to that Key",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return runConversationSend(cmd, g, args[0]) },
-	})
+		RunE:  func(cmd *cobra.Command, args []string) error { return runConversationSend(cmd, g, keyQuery, args[0]) },
+	}
+	send.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	root.AddCommand(send)
 	var limit int
 	log := &cobra.Command{
 		Use:   "log",
-		Short: "Print Group-level messages: seq, time, display name, text",
+		Short: "Print messages: seq, time, display name, text. --key scopes to that Key",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runConversationLog(g, limit) },
+		RunE:  func(*cobra.Command, []string) error { return runConversationLog(g, keyQuery, limit) },
 	}
+	log.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	log.Flags().IntVar(&limit, "limit", 0, "only the latest N messages")
 	root.AddCommand(log)
 	return root
 }
 
-func runConversationSend(cmd *cobra.Command, g *globals, text string) error {
+func runConversationSend(cmd *cobra.Command, g *globals, keyQuery, text string) error {
 	if _, err := cosl.Freeform(text); err != nil {
 		return exitUsagef("%w", err)
 	}
-	v, err := serve.Client{Socket: g.paths().Socket}.ConversationSend(cmd.Context(), text)
+	var conv []byte
+	if keyQuery != "" {
+		id, err := resolveConversation(g, keyQuery)
+		if err != nil {
+			return err
+		}
+		conv = id
+	}
+	v, err := serve.Client{Socket: g.paths().Socket}.ConversationSend(cmd.Context(), text, conv)
 	if err != nil {
 		return sendError(err)
 	}
@@ -80,7 +93,7 @@ type messageLine struct {
 	ContentType       string `json:"content_type"`
 }
 
-func runConversationLog(g *globals, limit int) error {
+func runConversationLog(g *globals, keyQuery string, limit int) error {
 	if limit < 0 {
 		return exitUsagef("--limit must be >= 0")
 	}
@@ -95,7 +108,17 @@ func runConversationLog(g *globals, limit int) error {
 	defer store.Close()
 
 	typ := cosl.TypeAppFreeform
-	rows, err := store.Log(cosl.Query{MsgType: &typ, GroupLevel: true, Limit: limit})
+	q := cosl.Query{MsgType: &typ, Limit: limit}
+	if keyQuery == "" {
+		q.GroupLevel = true
+	} else {
+		id, err := conversationID(store, keyQuery)
+		if err != nil {
+			return err
+		}
+		q.ConversationID = id
+	}
+	rows, err := store.Log(q)
 	if err != nil {
 		return exitOperational(err)
 	}
@@ -128,6 +151,34 @@ func runConversationLog(g *globals, limit int) error {
 		fmt.Fprintf(g.app.Stdout, "%d %s %s  %s\n", l.Seq, l.CreatedAt, l.SenderDisplayName, cosl.EscapeNewlines(l.Text))
 	}
 	return nil
+}
+
+// resolveConversation is the Conversation of a minted Key. Unknown and
+// ambiguous queries are usage errors: a Conversation exists iff the Key does.
+func resolveConversation(g *globals, query string) ([]byte, error) {
+	store, err := openReplica(g)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return conversationID(store, query)
+}
+
+func conversationID(store *cosl.Store, query string) ([]byte, error) {
+	rows, err := store.Log(cosl.Query{})
+	if err != nil {
+		return nil, exitOperational(err)
+	}
+	keys, err := key.List(rows)
+	if err != nil {
+		return nil, exitOperational(err)
+	}
+	k, err := key.Resolve(keys, query)
+	if err != nil {
+		return nil, exitUsagef("%w", err)
+	}
+	id := key.ConversationID(k.Curve, k.PublicKey)
+	return append([]byte(nil), id[:]...), nil
 }
 
 // rosterName is the display name the Roster pins for a sender; the FSM

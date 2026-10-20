@@ -1,6 +1,7 @@
 package serve_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -44,11 +45,11 @@ func TestConversationSendFromEitherNodeReachesBoth(t *testing.T) {
 	b.joins(t, gid, 2)
 
 	ctx := context.Background()
-	va, err := a.client().ConversationSend(ctx, "hello from alice")
+	va, err := a.client().ConversationSend(ctx, "hello from alice", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vb, err := b.client().ConversationSend(ctx, "hello from bob")
+	vb, err := b.client().ConversationSend(ctx, "hello from bob", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,16 +81,56 @@ func TestConversationSendFromEitherNodeReachesBoth(t *testing.T) {
 	}
 }
 
+// A send with a Conversation ID lands on both replicas with that id set.
+// A Group-level send on the same Group stays unset and out of the filter.
+func TestConversationSendSetsConversationID(t *testing.T) {
+	a, b := pair(t)
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+
+	conv := bytes.Repeat([]byte{0x11}, 32)
+	ctx := context.Background()
+	if _, err := a.client().ConversationSend(ctx, "about the key", conv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.client().ConversationSend(ctx, "group", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	scoped := func(n *node) []cosl.Row {
+		t.Helper()
+		store, err := cosl.Open(n.paths.CoslFile(gid.String()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		rows, err := store.Log(cosl.Query{ConversationID: conv})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	ra, rb := scoped(a), scoped(b)
+	if len(ra) != 1 || len(rb) != 1 || ra[0].MsgID != rb[0].MsgID || !bytes.Equal(ra[0].ConversationID, conv) {
+		t.Fatalf("scoped replicas:\n%+v\n%+v", ra, rb)
+	}
+	group := a.groupLevelRows(t, gid, 1)
+	if len(group) != 1 || group[0].ConversationID != nil {
+		t.Fatalf("group-level = %+v", group)
+	}
+}
+
 // Without a valid Group there is no replica to append to; bad text is the
 // caller's error.
 func TestConversationSendErrors(t *testing.T) {
 	a := newNode(t, "alice")
 	a.start(t)
 	ctx := context.Background()
-	if _, err := a.client().ConversationSend(ctx, "anyone?"); !errors.Is(err, serve.ErrNoReplica) {
+	if _, err := a.client().ConversationSend(ctx, "anyone?", nil); !errors.Is(err, serve.ErrNoReplica) {
 		t.Fatalf("send without a Group = %v, want ErrNoReplica", err)
 	}
-	if _, err := a.client().ConversationSend(ctx, ""); !errors.Is(err, cosl.ErrBadText) {
+	if _, err := a.client().ConversationSend(ctx, "", nil); !errors.Is(err, cosl.ErrBadText) {
 		t.Fatalf("send empty = %v, want ErrBadText", err)
 	}
 }

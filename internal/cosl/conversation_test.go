@@ -44,6 +44,62 @@ func TestLogGroupLevelFilter(t *testing.T) {
 	}
 }
 
+// A Conversation filter is WHERE conversation_id = ?, and it does not
+// return Group-level rows. Group-level stays IS NULL.
+func TestLogFiltersByConversationID(t *testing.T) {
+	f := newFixture(t)
+	ecdsa := bytes.Repeat([]byte{0x11}, 32)
+	eddsa := bytes.Repeat([]byte{0x22}, 32)
+	a := cosl.Author{Node: f.nodes[0], GroupID: f.roster.GroupID()}
+	b := cosl.Author{Node: f.nodes[1], GroupID: f.roster.GroupID()}
+	sign := func(au cosl.Author, conv []byte, text string) []byte {
+		s, err := au.Sign(cosl.TypeAppFreeform, conv, freeform(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Bytes
+	}
+	f.apply(1, 1, sign(a, nil, "group"))
+	f.apply(2, 1, sign(a, ecdsa, "about ecdsa"))
+	f.apply(3, 1, sign(b, eddsa, "about eddsa"))
+	f.apply(4, 1, sign(b, ecdsa, "also ecdsa"))
+
+	rows, err := f.store.Log(cosl.Query{ConversationID: ecdsa})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Seq != 2 || rows[1].Seq != 4 {
+		t.Fatalf("ecdsa rows = %+v", seqs(rows))
+	}
+	for _, r := range rows {
+		if !bytes.Equal(r.ConversationID, ecdsa) {
+			t.Fatalf("seq %d conversation = %x", r.Seq, r.ConversationID)
+		}
+	}
+	rows, err = f.store.Log(cosl.Query{ConversationID: eddsa})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Seq != 3 {
+		t.Fatalf("eddsa rows = %+v", seqs(rows))
+	}
+	group, err := f.store.Log(cosl.Query{GroupLevel: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(group) != 1 || group[0].Seq != 1 || group[0].ConversationID != nil {
+		t.Fatalf("group-level = %+v", seqs(group))
+	}
+}
+
+func seqs(rows []cosl.Row) []uint64 {
+	out := make([]uint64, len(rows))
+	for i, r := range rows {
+		out[i] = r.Seq
+	}
+	return out
+}
+
 // Freeform text is UTF-8 and at most 65536 bytes (§5.2 type 6).
 func TestFreeformTextRules(t *testing.T) {
 	msg, err := cosl.Freeform("hello")
