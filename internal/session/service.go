@@ -61,7 +61,8 @@ type Service struct {
 	pending  map[ID]struct{} // local accept in this process
 	onDisk   map[ID]struct{} // local accept durable across restarts
 	inflight map[ID]struct{} // abort already submitted
-	failed   map[ID]struct{} // engine failed; do not start another
+	failed   map[ID]struct{} // do not start another engine
+	aborting map[ID]string   // abort not yet durable; retry this reason
 	parties  map[ID]*party
 	waitLog  map[ID]struct{}
 }
@@ -126,6 +127,7 @@ func New(cfg Config) (*Service, error) {
 		onDisk:   onDisk,
 		inflight: map[ID]struct{}{},
 		failed:   map[ID]struct{}{},
+		aborting: map[ID]string{},
 		parties:  map[ID]*party{},
 		waitLog:  map[ID]struct{}{},
 	}, nil
@@ -267,22 +269,19 @@ func (s *Service) poll(ctx context.Context) {
 		if r.status != Open {
 			s.stop(r.id)
 			s.forget(r.id)
+			delete(s.aborting, r.id)
+			continue
+		}
+		if _, ok := s.aborting[r.id]; ok {
+			s.giveUp(ctx, r.id, s.aborting[r.id])
 			continue
 		}
 		if reason, ok := need[r.id]; ok {
-			s.stop(r.id)
-			s.fail(r.id)
-			if err := s.abort(ctx, r.id, reason); err != nil {
-				s.cfg.Logf("session: abort %s: %v", r.id, err)
-			}
+			s.giveUp(ctx, r.id, reason)
 			continue
 		}
 		if s.lost(r) {
-			s.stop(r.id)
-			s.fail(r.id)
-			if err := s.abort(ctx, r.id, reasonPartyLost); err != nil {
-				s.cfg.Logf("session: abort %s: %v", r.id, err)
-			}
+			s.giveUp(ctx, r.id, reasonPartyLost)
 			continue
 		}
 		if runnable == nil || *runnable != r.id {
@@ -291,10 +290,7 @@ func (s *Service) poll(ctx context.Context) {
 		if !s.pendingNow(r.id) {
 			s.logWaiting(r)
 			if s.cfg.Now().Sub(time.Unix(0, r.createdAt)) > s.cfg.WaitingFor {
-				s.fail(r.id)
-				if err := s.abort(ctx, r.id, reasonWaitingAccept); err != nil {
-					s.cfg.Logf("session: abort %s: %v", r.id, err)
-				}
+				s.giveUp(ctx, r.id, reasonWaitingAccept)
 			}
 			continue
 		}
@@ -324,14 +320,12 @@ func (s *Service) ensureParty(ctx context.Context, r *rec, head uint64) {
 	}
 	eng := s.cfg.NewEngine()
 	if eng == nil {
-		s.fail(r.id)
-		_ = s.abort(ctx, r.id, ErrNoEngine.Error())
+		s.giveUp(ctx, r.id, ErrNoEngine.Error())
 		return
 	}
 	nonce, err := unsealNonce(r.boxes, s.cfg.Node.NodeID, s.cfg.Node.EncryptionPrivateKey)
 	if err != nil {
-		s.fail(r.id)
-		_ = s.abort(ctx, r.id, err.Error())
+		s.giveUp(ctx, r.id, err.Error())
 		return
 	}
 	params := Params{
@@ -350,9 +344,7 @@ func (s *Service) ensureParty(ctx context.Context, r *rec, head uint64) {
 	s.parties[r.id] = p
 	go s.pump(pctx, r.id, p)
 	if err := eng.Start(params); err != nil {
-		s.stop(r.id)
-		s.fail(r.id)
-		_ = s.abort(ctx, r.id, err.Error())
+		s.giveUp(ctx, r.id, err.Error())
 	}
 }
 
@@ -369,9 +361,7 @@ func (s *Service) feed(ctx context.Context, r *rec) {
 			break
 		}
 		if err := s.deliver(p, round); err != nil {
-			s.stop(r.id)
-			s.fail(r.id)
-			_ = s.abort(ctx, r.id, err.Error())
+			s.giveUp(ctx, r.id, err.Error())
 			return
 		}
 		p.fed = round.seq
@@ -381,9 +371,7 @@ func (s *Service) feed(ctx context.Context, r *rec) {
 		p.finishReplay()
 	}
 	if err, ok := p.takeDone(); ok && err != nil {
-		s.stop(r.id)
-		s.fail(r.id)
-		_ = s.abort(ctx, r.id, err.Error())
+		s.giveUp(ctx, r.id, err.Error())
 	}
 }
 
@@ -426,10 +414,23 @@ func (s *Service) checkWait(ctx context.Context, r *rec) {
 		return
 	}
 	if s.cfg.Now().Sub(p.waitSince) > s.cfg.WaitingFor {
-		s.stop(r.id)
-		s.fail(r.id)
-		_ = s.abort(ctx, r.id, reasonTimedOut)
+		s.giveUp(ctx, r.id, reasonTimedOut)
 	}
+}
+
+// giveUp stops the engine and appends session.abort. A failed append is
+// remembered and retried; the engine is not started again.
+func (s *Service) giveUp(ctx context.Context, id ID, reason string) {
+	s.stop(id)
+	s.fail(id)
+	if _, ok := s.aborting[id]; !ok {
+		s.aborting[id] = reason
+	}
+	if err := s.abort(ctx, id, s.aborting[id]); err != nil {
+		s.cfg.Logf("session: abort %s: %v", id, err)
+		return
+	}
+	delete(s.aborting, id)
 }
 
 func (s *Service) pump(ctx context.Context, id ID, p *party) {
@@ -476,12 +477,12 @@ func (s *Service) emit(ctx context.Context, id ID, o Outgoing) {
 	msg := &coslv1.TssSession{SessionId: append([]byte(nil), id[:]...), Data: append([]byte(nil), o.Data...)}
 	if o.To != nil {
 		msg.RoutingTag = append([]byte(nil), o.To[:]...)
-		peer, ok := s.cfg.Roster.Lookup(identity.ID(*o.To))
+		recipient, ok := s.cfg.Roster.Lookup(identity.ID(*o.To))
 		if !ok {
 			s.cfg.Logf("session: recipient %x is not on the roster", o.To[:])
 			return
 		}
-		eph, nonce, ct, err := seal(o.Data, peer.EncryptionPublicKey)
+		eph, nonce, ct, err := seal(o.Data, recipient.EncryptionPublicKey)
 		if err != nil {
 			s.cfg.Logf("session: seal: %v", err)
 			return

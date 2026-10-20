@@ -12,7 +12,7 @@ import (
 	"defios.com/internal/serve"
 )
 
-// TestSessionLocalAccept (§12, §11.4): a peer's session.start lands here.
+// TestSessionLocalAccept (§12, §11.4): another Node's session.start lands here.
 // This Node emits no tss.session and does not start its engine until
 // `session accept`. With no accept, the Session aborts by the injected
 // WaitingFor.
@@ -54,7 +54,7 @@ func TestSessionLocalAccept(t *testing.T) {
 		return n >= 2
 	})
 
-	// No accept: the peer logs the wait, emits nothing, and the Session
+	// No accept: this Node logs the wait, emits nothing, and the Session
 	// aborts once the injected wait passes — not immediately.
 	var started sessionView
 	alice.mustJSONVerb(t, &started, "session", "start", "--curve", "ecdsa")

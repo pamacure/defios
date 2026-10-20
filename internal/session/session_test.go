@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,6 +100,8 @@ type node struct {
 	acceptPath string
 	clock      func() time.Time
 	append     func(context.Context, cosl.Signed) error
+	appendFn   func(context.Context, cosl.Signed) error
+	waiting    [][32]byte
 	mu         sync.Mutex
 	doubles    []*double
 	script     func(session.Params, chan session.Outgoing)
@@ -108,7 +111,8 @@ type node struct {
 	done       chan struct{}
 }
 
-type cluster struct {
+// pair is two Nodes sharing one Roster. Appends fan out to both replicas.
+type pair struct {
 	t      *testing.T
 	roster group.Roster
 	fan    *fanout
@@ -118,7 +122,7 @@ type cluster struct {
 	now    time.Time
 }
 
-func newCluster(t *testing.T, waitingFor time.Duration) *cluster {
+func newPair(t *testing.T, waitingFor time.Duration) *pair {
 	t.Helper()
 	aliceNode, err := identity.Generate()
 	if err != nil {
@@ -132,7 +136,7 @@ func newCluster(t *testing.T, waitingFor time.Duration) *cluster {
 		group.RosterNode{Public: aliceNode.Public, DisplayName: "alice", TsnetHostname: "defios-alice"},
 		group.RosterNode{Public: bobNode.Public, DisplayName: "bob", TsnetHostname: "defios-bob"},
 	)
-	c := &cluster{t: t, roster: roster, fan: &fanout{}, now: time.Now()}
+	c := &pair{t: t, roster: roster, fan: &fanout{}, now: time.Now()}
 	c.alice = c.open(aliceNode, "alice", waitingFor)
 	c.bob = c.open(bobNode, "bob", waitingFor)
 	t.Cleanup(func() {
@@ -144,7 +148,7 @@ func newCluster(t *testing.T, waitingFor time.Duration) *cluster {
 	return c
 }
 
-func (c *cluster) open(id *identity.Node, name string, waitingFor time.Duration) *node {
+func (c *pair) open(id *identity.Node, name string, waitingFor time.Duration) *node {
 	c.t.Helper()
 	dir := c.t.TempDir()
 	store, err := cosl.Open(dir + "/cosl.sqlite")
@@ -155,20 +159,21 @@ func (c *cluster) open(id *identity.Node, name string, waitingFor time.Duration)
 	n := &node{
 		t: c.t, id: id, name: name, store: store, roster: c.roster,
 		waitingFor: waitingFor, acceptPath: dir + "/local-accept.json",
-		clock:  c.nowFn,
-		append: c.fan.Append,
+		clock: c.nowFn,
 	}
+	n.appendFn = c.fan.Append
+	n.append = n.dispatchAppend
 	n.start()
 	return n
 }
 
-func (c *cluster) nowFn() time.Time {
+func (c *pair) nowFn() time.Time {
 	c.nowMu.Lock()
 	defer c.nowMu.Unlock()
 	return c.now
 }
 
-func (c *cluster) advance(d time.Duration) {
+func (c *pair) advance(d time.Duration) {
 	c.nowMu.Lock()
 	c.now = c.now.Add(d)
 	c.nowMu.Unlock()
@@ -214,11 +219,36 @@ func (n *node) restart(acceptPath string) {
 	n.start()
 }
 
+func (n *node) dispatchAppend(ctx context.Context, signed cosl.Signed) error {
+	n.mu.Lock()
+	fn := n.appendFn
+	n.mu.Unlock()
+	return fn(ctx, signed)
+}
+
+func (n *node) setAppend(fn func(context.Context, cosl.Signed) error) {
+	n.mu.Lock()
+	n.appendFn = fn
+	n.mu.Unlock()
+}
+
+func (n *node) setWaiting(ids [][32]byte) {
+	n.mu.Lock()
+	n.waiting = append([][32]byte(nil), ids...)
+	for _, d := range n.doubles {
+		d.mu.Lock()
+		d.waiting = append([][32]byte(nil), ids...)
+		d.mu.Unlock()
+	}
+	n.mu.Unlock()
+}
+
 func (n *node) engine() session.Engine {
 	d := newDouble()
 	n.mu.Lock()
 	d.script = n.script
 	d.onRecv = n.onRecv
+	d.waiting = append([][32]byte(nil), n.waiting...)
 	n.doubles = append(n.doubles, d)
 	n.mu.Unlock()
 	return d
@@ -340,7 +370,7 @@ func mustID(t *testing.T, hexID string) []byte {
 	return append([]byte(nil), id[:]...)
 }
 
-func (c *cluster) sign(n *node, typ uint32, payload proto.Message) cosl.Signed {
+func (c *pair) sign(n *node, typ uint32, payload proto.Message) cosl.Signed {
 	c.t.Helper()
 	signed, err := (cosl.Author{Node: n.id, GroupID: c.roster.GroupID()}).Sign(typ, nil, payload)
 	if err != nil {
@@ -453,7 +483,7 @@ func TestListAndInspectReportStatusParticipantsAndCompletes(t *testing.T) {
 }
 
 func TestStartSealsTheNonceToEachParticipant(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -545,8 +575,8 @@ func openBox(b *coslv1.SealedBox, priv []byte) ([]byte, bool) {
 	return box.Open(nil, b.Ciphertext, &nonce, &eph, &rp)
 }
 
-func TestPeerDoesNotStartUntilLocalAccept(t *testing.T) {
-	c := newCluster(t, time.Hour)
+func TestOtherNodeDoesNotStartUntilLocalAccept(t *testing.T) {
+	c := newPair(t, time.Hour)
 	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -564,7 +594,7 @@ func TestPeerDoesNotStartUntilLocalAccept(t *testing.T) {
 		t.Fatal("bob started an engine while waiting for accept")
 	}
 	if len(c.bob.ofType(t, cosl.TypeTssSession)) != 0 || len(c.alice.ofType(t, cosl.TypeTssSession)) != 0 {
-		t.Fatal("tss.session emitted before the peer accepted")
+		t.Fatal("tss.session emitted before the other Node accepted")
 	}
 	id, err := session.ParseID(sum.SessionID)
 	if err != nil {
@@ -580,12 +610,12 @@ func TestPeerDoesNotStartUntilLocalAccept(t *testing.T) {
 	alice := c.alice.engines()[0].started()[0].Nonce
 	bob := c.bob.engines()[0].started()[0].Nonce
 	if alice != bob {
-		t.Fatal("peers unsealed different nonces")
+		t.Fatal("nodes unsealed different nonces")
 	}
 }
 
 func TestOutOfRangeTIsAbortedWithoutStartingTheEngine(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 1)
 	if err != nil {
 		t.Fatal(err)
@@ -602,7 +632,7 @@ func TestOutOfRangeTIsAbortedWithoutStartingTheEngine(t *testing.T) {
 }
 
 func TestLaterStartWhileOneIsOpenIsAborted(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	first, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -632,7 +662,7 @@ func TestLaterStartWhileOneIsOpenIsAborted(t *testing.T) {
 }
 
 func TestPointToPointIsSealedAndBroadcastIsPlaintextOnEveryReplica(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	to := [32]byte(c.bob.id.NodeID)
 	c.alice.setScript(func(_ session.Params, out chan session.Outgoing) {
 		out <- session.Outgoing{Data: []byte("hello-all")}
@@ -685,7 +715,7 @@ func TestPointToPointIsSealedAndBroadcastIsPlaintextOnEveryReplica(t *testing.T)
 }
 
 func TestReplayDeliversCommittedRoundsBeforeLiveOutgoing(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -746,7 +776,7 @@ func TestReplayDeliversCommittedRoundsBeforeLiveOutgoing(t *testing.T) {
 }
 
 func TestSilenceAbortsWhenTheWaitExpires(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -779,7 +809,7 @@ func TestSilenceAbortsWhenTheWaitExpires(t *testing.T) {
 }
 
 func TestRestartAbortsASessionWhosePartyIsGone(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -798,7 +828,7 @@ func TestRestartAbortsASessionWhosePartyIsGone(t *testing.T) {
 		t.Fatal("restarted initiator started a fresh engine")
 	}
 
-	c2 := newCluster(t, time.Hour)
+	c2 := newPair(t, time.Hour)
 	sum, err = c2.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -820,7 +850,7 @@ func TestRestartAbortsASessionWhosePartyIsGone(t *testing.T) {
 }
 
 func TestOperatorAbortAppendsTheReasonOnce(t *testing.T) {
-	c := newCluster(t, time.Hour)
+	c := newPair(t, time.Hour)
 	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -848,6 +878,52 @@ func TestOperatorAbortAppendsTheReasonOnce(t *testing.T) {
 	missing[0] = 1
 	if err := c.bob.svc.Abort(context.Background(), missing, ""); !errors.Is(err, session.ErrUnknownSession) {
 		t.Fatalf("abort missing: %v", err)
+	}
+}
+
+func TestLiveWaitAbortIsRetriedWhenAppendFails(t *testing.T) {
+	c := newPair(t, time.Hour)
+	var attempts atomic.Int32
+	c.alice.setAppend(func(ctx context.Context, signed cosl.Signed) error {
+		var env coslv1.Envelope
+		if err := proto.Unmarshal(signed.Bytes, &env); err != nil {
+			t.Errorf("envelope: %v", err)
+			return err
+		}
+		if env.MsgType == cosl.TypeSessionAbort && attempts.Add(1) == 1 {
+			return errors.New("no leader")
+		}
+		return c.fan.Append(ctx, signed)
+	})
+	c.alice.setWaiting([][32]byte{[32]byte(c.bob.id.NodeID)})
+
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := session.ParseID(sum.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.bob.svc.Accept(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, func() bool {
+		return len(c.alice.engines()) == 1 && len(c.alice.engines()[0].started()) == 1
+	})
+	time.Sleep(30 * time.Millisecond)
+	c.advance(time.Hour + time.Second)
+	wait(t, func() bool {
+		return abortedReason(t, c.alice, sum.SessionID, "timed out waiting for parties")
+	})
+	if attempts.Load() < 2 {
+		t.Fatalf("abort attempts = %d, want a retry after the first failure", attempts.Load())
+	}
+	if n := len(c.alice.ofType(t, cosl.TypeSessionAbort)); n != 1 {
+		t.Fatalf("abort rows = %d", n)
+	}
+	if got := len(c.alice.engines()[0].started()); got != 1 {
+		t.Fatalf("engine starts = %d, want 1", got)
 	}
 }
 

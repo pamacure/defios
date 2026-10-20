@@ -82,7 +82,7 @@ type Engine interface {
 	Abort()
 }
 
-// Params is one Node's view of a keygen run.
+// Params is one Node's view of a keygen Session.
 type Params struct {
 	SessionID    [32]byte
 	Curve        string // ecdsa | eddsa
