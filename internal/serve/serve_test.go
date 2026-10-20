@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -129,7 +130,7 @@ func (n *node) start(t *testing.T) context.CancelFunc {
 	client := serve.Client{Socket: n.paths.Socket}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := client.Status(ctx); err == nil {
+		if st, err := client.Status(ctx); err == nil && st.TailnetUp {
 			t.Cleanup(func() {
 				cancel()
 				if err := <-done; err != nil {
@@ -157,7 +158,7 @@ func TestStatusOverSocketAndSocketMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.NodeID != a.id.NodeID.String() || st.Hostname != "defios-alice" {
+	if st.NodeID != a.id.NodeID.String() || st.Hostname != "defios-alice" || !st.TailnetUp {
 		t.Fatalf("status = %+v", st)
 	}
 	info, err := os.Lstat(a.paths.Socket)
@@ -217,10 +218,12 @@ func TestIdentityEndpointServesSignedIdentity(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var id groupv1.Identity
-	raw := make([]byte, 4096)
-	n, _ := resp.Body.Read(raw)
-	if err := proto.Unmarshal(raw[:n], &id); err != nil {
+	if err := proto.Unmarshal(raw, &id); err != nil {
 		t.Fatal(err)
 	}
 	node, err := group.VerifyIdentity(&id)

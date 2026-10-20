@@ -41,7 +41,7 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 		return exitOperational(err)
 	}
 	if cfg.HeadscaleURL == "" {
-		return exitUsagef("headscale_url is not set in %s", p.ConfigFile())
+		return exitOperationalf("headscale_url is not set in %s", p.ConfigFile())
 	}
 	if serve.IsUp(p.Socket) {
 		return exitOperational(serve.ErrAlreadyRunning)

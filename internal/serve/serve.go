@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"defios.com/internal/config"
@@ -57,11 +58,16 @@ type Options struct {
 	Logf    func(format string, args ...any)
 }
 
-// Run binds the socket, joins the tailnet, serves formation HTTP and the
-// local API, and returns when ctx is done or a listener fails.
+// Run binds the socket and answers the local API at once, then joins the
+// tailnet and serves formation HTTP. Returns when ctx is done or a
+// listener fails.
 func Run(ctx context.Context, o Options) error {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
+	}
+	self, err := group.SignIdentity(o.Node, o.Config.DisplayName, o.Config.Hostname)
+	if err != nil {
+		return err
 	}
 	socket, err := bindSocket(o.Paths.Socket)
 	if err != nil {
@@ -69,29 +75,27 @@ func Run(ctx context.Context, o Options) error {
 	}
 	defer socket.Close()
 
+	s := &server{opts: o, self: self}
+	localSrv := &http.Server{Handler: s.localHandler()}
+	errc := make(chan error, 2)
+	go func() { errc <- localSrv.Serve(socket) }()
+	o.Logf("serve: node %s listening on %s; joining tailnet as %s", o.Node.NodeID, o.Paths.Socket, o.Config.Hostname)
+
 	if err := o.Tailnet.Up(ctx); err != nil {
+		localSrv.Close()
 		return fmt.Errorf("serve: tailnet: %w", err)
 	}
 	defer o.Tailnet.Close()
-
-	self, err := group.SignIdentity(o.Node, o.Config.DisplayName, o.Config.Hostname)
-	if err != nil {
-		return err
-	}
 	formation, err := o.Tailnet.Listen("tcp", fmt.Sprintf(":%d", FormationPort))
 	if err != nil {
+		localSrv.Close()
 		return fmt.Errorf("serve: formation listener: %w", err)
 	}
 	defer formation.Close()
-
-	s := &server{opts: o, self: self}
 	formationSrv := &http.Server{Handler: s.formationHandler()}
-	localSrv := &http.Server{Handler: s.localHandler()}
-
-	errc := make(chan error, 2)
 	go func() { errc <- formationSrv.Serve(formation) }()
-	go func() { errc <- localSrv.Serve(socket) }()
-	o.Logf("serve: node %s up as %s; socket %s", o.Node.NodeID, o.Config.Hostname, o.Paths.Socket)
+	s.tailnetUp.Store(true)
+	o.Logf("serve: tailnet up; formation HTTP on :%d", FormationPort)
 
 	select {
 	case <-ctx.Done():
@@ -110,8 +114,9 @@ func Run(ctx context.Context, o Options) error {
 
 // server is the running state behind both HTTP handlers.
 type server struct {
-	opts Options
-	self *groupv1.Identity // signed once at startup
+	opts      Options
+	self      *groupv1.Identity // signed once at startup
+	tailnetUp atomic.Bool       // set once Up and the formation listener succeed
 }
 
 // bindSocket listens on path with mode 0600. A live listener there means
@@ -120,8 +125,7 @@ func bindSocket(path string) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("serve: %w", err)
 	}
-	if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
-		conn.Close()
+	if IsUp(path) {
 		return nil, ErrAlreadyRunning
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {

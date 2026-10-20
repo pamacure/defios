@@ -69,9 +69,9 @@ func runNodeInspect(g *globals) error {
 	if g.json {
 		return g.emitJSON(v)
 	}
-	up, group := "down", "none"
+	serveState, group := "down", "none"
 	if v.ServeUp {
-		up = "up"
+		serveState = "up"
 	}
 	if v.GroupID != nil {
 		group = *v.GroupID
@@ -82,29 +82,25 @@ func runNodeInspect(g *globals) error {
 	fmt.Fprintf(w, "Hostname:              %s\n", v.Hostname)
 	fmt.Fprintf(w, "Auth public key:       %s\n", v.AuthPublicKey)
 	fmt.Fprintf(w, "Encryption public key: %s\n", v.EncryptionPublicKey)
-	fmt.Fprintf(w, "Serve:                 %s\n", up)
+	fmt.Fprintf(w, "Serve:                 %s\n", serveState)
 	fmt.Fprintf(w, "Group:                 %s\n", group)
 	return nil
 }
 
-// serveClient is the CLI's connection to the running serve; absent serve
-// is the operational error every "requires serve" verb shares.
-func serveClient(g *globals) (serve.Client, error) {
-	p := g.paths()
-	if !serve.IsUp(p.Socket) {
-		return serve.Client{}, exitOperationalf("%w: start `defios serve` first (socket %s)", serve.ErrNotRunning, p.Socket)
+// serveError maps a local-API failure to the operational error every
+// "requires serve" verb shares.
+func serveError(err error) error {
+	if errors.Is(err, serve.ErrNotRunning) {
+		return exitOperationalf("%w; start `defios serve` first", err)
 	}
-	return serve.Client{Socket: p.Socket}, nil
+	return exitOperational(err)
 }
 
 func runNodeList(cmd *cobra.Command, g *globals) error {
-	client, err := serveClient(g)
-	if err != nil {
-		return err
-	}
+	client := serve.Client{Socket: g.paths().Socket}
 	nodes, err := client.Nodes(cmd.Context())
 	if err != nil {
-		return exitOperational(err)
+		return serveError(err)
 	}
 	if g.json {
 		return g.emitJSON(nodes)

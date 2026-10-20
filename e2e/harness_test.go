@@ -21,6 +21,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"tailscale.com/envknob"
 
 	"defios.com/internal/cli"
 	"defios.com/internal/serve"
@@ -41,6 +42,10 @@ type headscale struct {
 func startHeadscale(t *testing.T) *headscale {
 	t.Helper()
 	ctx := context.Background()
+
+	// Headscale's embedded DERP is reached at server_url, which is plain
+	// http here; tailscale dials region DERP over TLS unless told not to.
+	envknob.SetenvForTest(t, "TS_DEBUG_USE_DERP_HTTP", "1")
 
 	httpPort, stunPort := freePort(t, "tcp"), freePort(t, "udp")
 	url := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
@@ -273,7 +278,9 @@ func (n *node) run(ctx context.Context, args ...string) result {
 	return result{code: code, stdout: out.String(), stderr: errb.String()}
 }
 
-// startServe runs `serve` in the background until the test ends.
+// startServe runs `serve` in the background until the test ends and waits
+// for the tailnet to be up, so a stuck join fails fast instead of at the
+// test timeout.
 func (n *node) startServe(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -290,9 +297,10 @@ func (n *node) startServe(t *testing.T) {
 			t.Errorf("%s serve did not stop", n.name)
 		}
 	})
-	deadline := time.Now().Add(90 * time.Second)
+	client := serve.Client{Socket: n.sock}
+	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
-		if serve.IsUp(n.sock) {
+		if st, err := client.Status(ctx); err == nil && st.TailnetUp {
 			return
 		}
 		select {
@@ -300,9 +308,25 @@ func (n *node) startServe(t *testing.T) {
 			t.Fatalf("%s serve exited early (%d): %s", n.name, r.code, r.stderr)
 		default:
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatalf("%s serve never bound its socket", n.name)
+	t.Fatalf("%s serve never reported the tailnet up", n.name)
+}
+
+// inspect returns `node inspect --json`.
+func (n *node) inspect(t *testing.T) (view struct {
+	NodeID  string `json:"node_id"`
+	ServeUp bool   `json:"serve_up"`
+}) {
+	t.Helper()
+	r := n.run(context.Background(), "node", "inspect", "--json")
+	if r.code != 0 {
+		t.Fatalf("%s node inspect: exit %d: %s", n.name, r.code, r.stderr)
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &view); err != nil {
+		t.Fatalf("%s node inspect: %v\n%s", n.name, err, r.stdout)
+	}
+	return view
 }
 
 // nodeList polls `node list --json` until the predicate holds.

@@ -23,9 +23,10 @@ const (
 	identityMaxBytes     = 64 << 10
 )
 
-// discover fetches and verifies every reachable peer's Identity (§6.1).
-// Unreachable peers are skipped; an Identity whose Node ID is not derived
-// from its auth public key is rejected and not listed (§11.3).
+// discover fetches the Identity of every reachable tailnet peer (§6.1) and
+// keeps the Nodes that verify. Unreachable peers are skipped; an Identity
+// whose Node ID is not derived from its auth public key is rejected and not
+// listed (§11.3).
 func (s *server) discover(ctx context.Context) ([]group.RosterNode, error) {
 	peers, err := s.opts.Tailnet.Peers(ctx)
 	if err != nil {

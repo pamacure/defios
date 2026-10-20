@@ -97,11 +97,13 @@ func TestServeRefusesWhenSocketIsBound(t *testing.T) {
 	}
 }
 
-func TestServeWithoutHeadscaleURLIsUsageError(t *testing.T) {
+// An unset headscale_url is a problem with this Node's config, not with
+// the command line: operational, exit 2.
+func TestServeWithoutHeadscaleURLIsOperationalError(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	r := run(t, withPass, "", "--dir", dir, "serve")
-	if r.code != 1 || !strings.Contains(r.stderr, "headscale_url") {
-		t.Fatalf("exit %d, stderr %q; want 1 mentioning headscale_url", r.code, r.stderr)
+	if r.code != 2 || !strings.Contains(r.stderr, "headscale_url") {
+		t.Fatalf("exit %d, stderr %q; want 2 mentioning headscale_url", r.code, r.stderr)
 	}
 }
