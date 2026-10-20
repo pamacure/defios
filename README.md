@@ -1,1 +1,1 @@
-![DeFiOS](assets/DeFiOS_white_bg-2136x1048.png)
+![DeFiOS](assets/DeFiOS_text_whitebg-977x977.png)
