@@ -123,10 +123,12 @@ func runInit(g *globals, o initOptions) error {
 	return nil
 }
 
-// ecdsaPreparams fills VaultContents.ecdsa_preparams. DEFIOS_ECDSA_PREPARAMS
+// ecdsaPreparams fills VaultContents.ecdsa_preparams. Unset generates
+// tss-lib LocalPreParams and prints progress on stderr. DEFIOS_ECDSA_PREPARAMS
 // is a test hook: "skip" leaves the field empty, any other value is a file
-// of adapter bytes. Unset generates tss-lib LocalPreParams, unless the Vault
-// already has some.
+// of adapter bytes. init refuses to overwrite a Node, so a Vault that already
+// holds preparams is left untouched; KeepOrGenerate is what skips generation
+// when those bytes are passed in.
 func ecdsaPreparams(g *globals) ([]byte, error) {
 	switch g.app.Getenv("DEFIOS_ECDSA_PREPARAMS") {
 	case "skip":

@@ -209,11 +209,11 @@ func parse(rows []cosl.Row) ([]*rec, error) {
 func (r *rec) recompute() {
 	r.agreed, r.completeSeq, r.conflict = agreement(r)
 	switch {
+	case r.agreed:
+		r.status = Complete
 	case len(r.abortAt) > 0:
 		r.status = Aborted
 		r.reason = r.abortReason
-	case r.agreed:
-		r.status = Complete
 	default:
 		r.status = Open
 	}

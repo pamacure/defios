@@ -67,19 +67,23 @@ func TestKeygenECDSA_2of2(t *testing.T) {
 	bob.mustJSONVerb(t, &sessionView{}, "session", "accept", started.SessionID)
 
 	rows := waitCompletes(t, alice, started.SessionID, 2)
-	if n := countSession(rows, "session.start", started.SessionID); n != 1 {
-		t.Fatalf("session.start rows = %d", n)
-	}
-	if n := countSession(rows, "session.complete", started.SessionID); n != 2 {
-		t.Fatalf("session.complete rows = %d", n)
-	}
 	bobRows := waitCompletes(t, bob, started.SessionID, 2)
-	if a, b := completeHex(rows, started.SessionID), completeHex(bobRows, started.SessionID); a == "" || a != b {
-		t.Fatalf("completes disagree: %q vs %q", a, b)
+	for _, set := range [][]coslLine{rows, bobRows} {
+		if n := countSession(set, "session.start", started.SessionID); n != 1 {
+			t.Fatalf("session.start rows = %d", n)
+		}
+		if n := countSession(set, "session.complete", started.SessionID); n != 2 {
+			t.Fatalf("session.complete rows = %d", n)
+		}
+	}
+	aliceHex := completeHexes(rows, started.SessionID)
+	bobHex := completeHexes(bobRows, started.SessionID)
+	if len(aliceHex) != 2 || aliceHex[0] == "" || aliceHex[0] != aliceHex[1] || aliceHex[0] != bobHex[0] || aliceHex[0] != bobHex[1] {
+		t.Fatalf("completes disagree: alice %q bob %q", aliceHex, bobHex)
 	}
 
 	var aliceKey, bobKey keyView
-	alice.mustJSONVerb(t, &aliceKey, "key", "inspect", "ecdsa:"+completeHex(rows, started.SessionID))
+	alice.mustJSONVerb(t, &aliceKey, "key", "inspect", "ecdsa:"+aliceHex[0])
 	bob.mustJSONVerb(t, &bobKey, "key", "inspect", aliceKey.Key)
 	if !aliceKey.Share || !bobKey.Share || aliceKey.Key != bobKey.Key || !strings.HasPrefix(aliceKey.Key, "ecdsa:") {
 		t.Fatalf("inspect alice=%+v bob=%+v", aliceKey, bobKey)
@@ -133,21 +137,22 @@ func countSession(rows []coslLine, typ, id string) int {
 	return n
 }
 
-func completeHex(rows []coslLine, id string) string {
+func completeHexes(rows []coslLine, id string) []string {
 	short := id
 	if len(short) > 8 {
 		short = short[:8]
 	}
+	var out []string
 	for _, r := range rows {
 		if r.TypeName != "session.complete" || !strings.Contains(r.Summary, "session="+short) {
 			continue
 		}
 		_, hexPart, ok := strings.Cut(r.Summary, "ecdsa:")
 		if ok {
-			return hexPart
+			out = append(out, hexPart)
 		}
 	}
-	return ""
+	return out
 }
 
 func waitCompletes(t *testing.T, n *node, id string, want int) []coslLine {

@@ -486,6 +486,19 @@ func TestListAndInspectReportStatusParticipantsAndCompletes(t *testing.T) {
 	if err != nil || detail.Status != session.Complete || len(detail.Completes) != 2 {
 		t.Fatalf("after both completes: %+v %v", detail, err)
 	}
+	apply(alice, cosl.TypeSessionAbort, &coslv1.SessionAbort{SessionId: bID[:], Reason: "late"})
+	rows, err = store.Log(cosl.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err = session.Inspect(rows, bID)
+	if err != nil || detail.Status != session.Complete {
+		t.Fatalf("agreeing completes stay a Key after abort: %+v %v", detail, err)
+	}
+	minted, err := session.CompletedSessions(rows)
+	if err != nil || len(minted) != 1 || minted[0].SessionID != bID {
+		t.Fatalf("minted = %+v %v", minted, err)
+	}
 	if _, err := session.Inspect(rows, session.ID{}); !errors.Is(err, session.ErrUnknownSession) {
 		t.Fatalf("missing session: %v", err)
 	}
