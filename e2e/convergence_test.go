@@ -16,7 +16,10 @@ import (
 // waits until both membership.join rows are on both replicas.
 func formValidPair(t *testing.T, hs *headscale) (alice, bob *node, gid string) {
 	t.Helper()
-	alice, bob = newNode(t, hs, "alice"), newNode(t, hs, "bob")
+	alice, bob = newNodeOpts(t, hs, "alice", false), newNodeOpts(t, hs, "bob", false)
+	for _, n := range []*node{alice, bob} {
+		n.env["DEFIOS_SESSION_TIMEOUT"] = "5m"
+	}
 	alice.startServe(t)
 	bob.startServe(t)
 	aliceID, bobID := alice.inspect(t).NodeID, bob.inspect(t).NodeID
@@ -71,17 +74,25 @@ func mustConverge(t *testing.T, a, b *node, n int) []coslLine {
 	}
 }
 
-// TestCOSLConvergence (§11.2, §4.4, §4.5), pre-keygen form: a 2-Node Group
-// does not append while one Node is down; when it returns, the log is
-// backfilled. A Node whose replica state was wiped is restored from the
-// leader's snapshot once it has fallen beyond the retained log. Both
-// replicas end with the same msg_ids in the same seq order and the same
-// chain head.
+// TestCOSLConvergence (§11.2, §4.4, §4.5): after both keygen Sessions and
+// a Group-level app.freeform, both replicas have the same msg_ids in the
+// same seq order and the same chain head. A 2-Node Group does not append
+// while one Node is down; when it returns, the log is backfilled. A Node
+// whose replica state was wiped is restored from the leader's snapshot
+// once it has fallen beyond the retained log.
 func TestCOSLConvergence(t *testing.T) {
 	hs := startHeadscale(t)
 	alice, bob, gid := formValidPair(t, hs)
+	mintCurve(t, alice, bob, "ecdsa")
+	mintCurve(t, alice, bob, "eddsa")
 	alice.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "both up")
 	rows := mustConverge(t, alice, bob, 3)
+	if countType(rows, "session.complete") != 4 {
+		t.Fatalf("session.complete rows = %d, want 4", countType(rows, "session.complete"))
+	}
+	if countType(rows, "app.freeform") < 1 {
+		t.Fatal("no Group-level app.freeform on the converged log")
+	}
 
 	// Bob goes away: alice's send fails clearly and leaves no row.
 	bob.stopServe(t)

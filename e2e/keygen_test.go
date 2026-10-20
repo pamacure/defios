@@ -22,8 +22,7 @@ import (
 // ecdsa:<hex> with share=yes.
 func TestKeygenECDSA_2of2(t *testing.T) {
 	hs := startHeadscale(t)
-	alice := newNodeOpts(t, hs, "alice", false)
-	bob := newNodeOpts(t, hs, "bob", false)
+	alice, bob := initKeygenNodes(t, hs)
 	for _, n := range []*node{alice, bob} {
 		if !strings.Contains(n.logs.String(), "generating ECDSA preparams") {
 			t.Fatalf("%s init did not report preparam generation", n.name)
@@ -37,9 +36,52 @@ func TestKeygenECDSA_2of2(t *testing.T) {
 			t.Fatalf("%s preparams: %v", n.name, err)
 		}
 	}
+	startKeygenGroup(t, alice, bob)
+	sessionID, pub := mintCurve(t, alice, bob, "ecdsa")
+	assertMintedKey(t, alice, bob, "ecdsa", sessionID, pub)
+}
+
+// TestKeygenEd25519_2of2 (§11.1, Ed25519 half): after the ECDSA Key exists,
+// the same Group mints an Ed25519 Key in a second Session. key list on
+// both Nodes prints both Keys, and key inspect reports share=yes.
+func TestKeygenEd25519_2of2(t *testing.T) {
+	hs := startHeadscale(t)
+	alice, bob := initKeygenNodes(t, hs)
+	startKeygenGroup(t, alice, bob)
+	_, ecdsaPub := mintCurve(t, alice, bob, "ecdsa")
+	sessionID, eddsaPub := mintCurve(t, alice, bob, "eddsa")
+	assertMintedKey(t, alice, bob, "eddsa", sessionID, eddsaPub)
+
+	aliceList := alice.run(context.Background(), "key", "list")
+	bobList := bob.run(context.Background(), "key", "list")
+	if aliceList.code != 0 || bobList.code != 0 {
+		t.Fatalf("list alice %d %s bob %d %s", aliceList.code, aliceList.stderr, bobList.code, bobList.stderr)
+	}
+	if strings.TrimSpace(aliceList.stdout) != strings.TrimSpace(bobList.stdout) {
+		t.Fatalf("lists differ:\n%s\n%s", aliceList.stdout, bobList.stdout)
+	}
+	for _, line := range []string{
+		"ecdsa:" + ecdsaPub + "  t=2 n=2  share=yes",
+		"eddsa:" + eddsaPub + "  t=2 n=2  share=yes",
+	} {
+		if !strings.Contains(aliceList.stdout, line) {
+			t.Fatalf("list = %q, missing %s", aliceList.stdout, line)
+		}
+	}
+}
+
+func initKeygenNodes(t *testing.T, hs *headscale) (alice, bob *node) {
+	t.Helper()
+	alice = newNodeOpts(t, hs, "alice", false)
+	bob = newNodeOpts(t, hs, "bob", false)
 	for _, n := range []*node{alice, bob} {
 		n.env["DEFIOS_SESSION_TIMEOUT"] = "5m"
 	}
+	return alice, bob
+}
+
+func startKeygenGroup(t *testing.T, alice, bob *node) {
+	t.Helper()
 	alice.startServe(t)
 	bob.startServe(t)
 	aliceID := alice.inspect(t).NodeID
@@ -52,7 +94,6 @@ func TestKeygenECDSA_2of2(t *testing.T) {
 		}
 		return false
 	})
-
 	var created serve.GroupView
 	alice.mustJSONVerb(t, &created, "group", "create", aliceID, bobID)
 	var accepted serve.GroupView
@@ -60,9 +101,14 @@ func TestKeygenECDSA_2of2(t *testing.T) {
 	waitRaft(t, alice)
 	waitRaft(t, bob)
 	alice.coslLog(t, func(rows []coslLine) bool { return countType(rows, "membership.join") >= 2 })
+}
 
+// mintCurve runs one t=2 Session to two agreeing completes and returns the
+// Session ID and the canonical public-key hex.
+func mintCurve(t *testing.T, alice, bob *node, curve string) (sessionID, pub string) {
+	t.Helper()
 	var started sessionView
-	alice.mustJSONVerb(t, &started, "session", "start", "--curve", "ecdsa", "--t", "2")
+	alice.mustJSONVerb(t, &started, "session", "start", "--curve", curve, "--t", "2")
 	bob.coslLog(t, func(rows []coslLine) bool { return hasStart(rows, started.SessionID) })
 	bob.mustJSONVerb(t, &sessionView{}, "session", "accept", started.SessionID)
 
@@ -76,19 +122,30 @@ func TestKeygenECDSA_2of2(t *testing.T) {
 			t.Fatalf("session.complete rows = %d", n)
 		}
 	}
-	aliceHex := completeHexes(rows, started.SessionID)
-	bobHex := completeHexes(bobRows, started.SessionID)
+	aliceHex := completeHexes(rows, started.SessionID, curve)
+	bobHex := completeHexes(bobRows, started.SessionID, curve)
 	if len(aliceHex) != 2 || aliceHex[0] == "" || aliceHex[0] != aliceHex[1] || aliceHex[0] != bobHex[0] || aliceHex[0] != bobHex[1] {
 		t.Fatalf("completes disagree: alice %q bob %q", aliceHex, bobHex)
 	}
+	want := 66
+	if curve == "eddsa" {
+		want = 64
+	}
+	if len(aliceHex[0]) != want {
+		t.Fatalf("%s public key hex length = %d, want %d", curve, len(aliceHex[0]), want)
+	}
+	return started.SessionID, aliceHex[0]
+}
 
+func assertMintedKey(t *testing.T, alice, bob *node, curve, sessionID, pub string) {
+	t.Helper()
 	var aliceKey, bobKey keyView
-	alice.mustJSONVerb(t, &aliceKey, "key", "inspect", "ecdsa:"+aliceHex[0])
+	alice.mustJSONVerb(t, &aliceKey, "key", "inspect", curve+":"+pub)
 	bob.mustJSONVerb(t, &bobKey, "key", "inspect", aliceKey.Key)
-	if !aliceKey.Share || !bobKey.Share || aliceKey.Key != bobKey.Key || !strings.HasPrefix(aliceKey.Key, "ecdsa:") {
+	if !aliceKey.Share || !bobKey.Share || aliceKey.Key != bobKey.Key || aliceKey.Key != curve+":"+pub {
 		t.Fatalf("inspect alice=%+v bob=%+v", aliceKey, bobKey)
 	}
-	if aliceKey.T != 2 || aliceKey.N != 2 || aliceKey.SessionID != started.SessionID || aliceKey.ConversationID == "" {
+	if aliceKey.T != 2 || aliceKey.N != 2 || aliceKey.SessionID != sessionID || aliceKey.ConversationID == "" {
 		t.Fatalf("inspect = %+v", aliceKey)
 	}
 	aliceList := alice.run(context.Background(), "key", "list")
@@ -137,7 +194,7 @@ func countSession(rows []coslLine, typ, id string) int {
 	return n
 }
 
-func completeHexes(rows []coslLine, id string) []string {
+func completeHexes(rows []coslLine, id, curve string) []string {
 	short := id
 	if len(short) > 8 {
 		short = short[:8]
@@ -147,7 +204,7 @@ func completeHexes(rows []coslLine, id string) []string {
 		if r.TypeName != "session.complete" || !strings.Contains(r.Summary, "session="+short) {
 			continue
 		}
-		_, hexPart, ok := strings.Cut(r.Summary, "ecdsa:")
+		_, hexPart, ok := strings.Cut(r.Summary, curve+":")
 		if ok {
 			out = append(out, hexPart)
 		}

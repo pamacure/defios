@@ -14,7 +14,7 @@ func TestPartyIDsUseNodeIDKeyAndHexID(t *testing.T) {
 	// after the integer's own encoding drops the zero.
 	low := node(0x00, 0xff)
 	high := node(0x01, 0x00)
-	sorted, self, byNode, err := partyIDs([][32]byte{high, low}, low)
+	sorted, self, byNode, err := partyIDs("ecdsa", [][32]byte{high, low}, low)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestPartyIDsUseNodeIDKeyAndHexID(t *testing.T) {
 	}
 	// SortPartyIDs is what assigned the indices; a hand-rolled order would
 	// disagree when the input is reversed.
-	again, _, _, err := partyIDs([][32]byte{low, high}, high)
+	again, _, _, err := partyIDs("eddsa", [][32]byte{low, high}, high)
 	if err != nil {
 		t.Fatal(err)
 	}

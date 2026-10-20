@@ -228,13 +228,13 @@ func sessionTimeout(getenv func(string) string) (time.Duration, error) {
 	return d, nil
 }
 
-// sessionEngine reads DEFIOS_SESSION_ENGINE. Empty is the tss-lib ECDSA
-// adapter. "unavailable" refuses Start. "exchange" is the trivial round
-// engine the local-accept test drives.
+// sessionEngine reads DEFIOS_SESSION_ENGINE. Empty is the tss-lib adapter,
+// which runs ecdsa or eddsa from the Session's curve. "unavailable" refuses
+// Start. "exchange" is the trivial round engine the local-accept test drives.
 func sessionEngine(getenv func(string) string, self identity.ID) (func() session.Engine, error) {
 	switch getenv("DEFIOS_SESSION_ENGINE") {
 	case "", "tss":
-		return func() session.Engine { return tssl.NewECDSA([32]byte(self)) }, nil
+		return func() session.Engine { return tssl.New([32]byte(self)) }, nil
 	case "unavailable":
 		return func() session.Engine { return session.Unavailable{} }, nil
 	case "exchange":
