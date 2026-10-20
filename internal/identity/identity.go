@@ -23,6 +23,17 @@ type ID [32]byte
 // String is the lowercase hex display form.
 func (id ID) String() string { return hex.EncodeToString(id[:]) }
 
+// ParseID reads the 64-hex-digit display form.
+func ParseID(s string) (ID, error) {
+	var id ID
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != len(id) {
+		return id, fmt.Errorf("identity: %q is not a 32-byte hex Node ID", s)
+	}
+	copy(id[:], b)
+	return id, nil
+}
+
 // NodeID derives SHA-256("defios-node-id-v1" || auth_public_key).
 func NodeID(authPublicKey ed25519.PublicKey) ID {
 	h := sha256.New()

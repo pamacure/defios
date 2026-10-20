@@ -74,12 +74,17 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	defer socket.Close()
+	slot, err := group.OpenSlot(o.Paths.GroupsDir(), o.Node)
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
 
-	s := &server{opts: o, self: self}
+	s := &server{opts: o, self: self, slot: slot}
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()
 	o.Logf("serve: node %s listening on %s; joining tailnet as %s", o.Node.NodeID, o.Paths.Socket, o.Config.Hostname)
+	s.logStatus("resumed")
 
 	if err := o.Tailnet.Up(ctx); err != nil {
 		localSrv.Close()
@@ -116,6 +121,7 @@ func Run(ctx context.Context, o Options) error {
 type server struct {
 	opts      Options
 	self      *groupv1.Identity // signed once at startup
+	slot      *group.Slot       // this Node's one Group (§1.2)
 	tailnetUp atomic.Bool       // set once Up and the formation listener succeed
 }
 

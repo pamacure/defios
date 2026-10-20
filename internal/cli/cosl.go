@@ -62,7 +62,7 @@ func openReplica(g *globals) (*cosl.Store, error) {
 		if _, err := os.Stat(p.Data); errors.Is(err, os.ErrNotExist) {
 			return nil, errNoNode(p)
 		}
-		return nil, exitOperationalf("this Node has no Group; there is no COSL to read")
+		return nil, exitOperationalf("this Node has no COSL replica yet; it is created once a Group is valid and Raft starts")
 	case 1:
 	default:
 		return nil, exitOperationalf("found %d Groups under %s; a Node has at most one", len(matches), p.GroupsDir())

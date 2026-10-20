@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
+	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/serve"
 )
@@ -64,17 +65,23 @@ func runNodeInspect(g *globals) error {
 		AuthPublicKey:       hex.EncodeToString(pub.AuthPublicKey),
 		EncryptionPublicKey: hex.EncodeToString(pub.EncryptionPublicKey),
 		ServeUp:             serve.IsUp(p.Socket),
-		GroupID:             nil, // Groups do not exist yet
+	}
+	groupState := "none"
+	switch rec, err := group.Load(p.GroupsDir()); {
+	case err == nil:
+		gid := rec.GroupID().String()
+		v.GroupID = &gid
+		groupState = fmt.Sprintf("%s (%s)", gid, rec.Status())
+	case errors.Is(err, group.ErrNoGroup):
+	default:
+		return exitOperational(err)
 	}
 	if g.json {
 		return g.emitJSON(v)
 	}
-	serveState, group := "down", "none"
+	serveState := "down"
 	if v.ServeUp {
 		serveState = "up"
-	}
-	if v.GroupID != nil {
-		group = *v.GroupID
 	}
 	w := g.app.Stdout
 	fmt.Fprintf(w, "Node ID:               %s\n", v.NodeID)
@@ -83,7 +90,7 @@ func runNodeInspect(g *globals) error {
 	fmt.Fprintf(w, "Auth public key:       %s\n", v.AuthPublicKey)
 	fmt.Fprintf(w, "Encryption public key: %s\n", v.EncryptionPublicKey)
 	fmt.Fprintf(w, "Serve:                 %s\n", serveState)
-	fmt.Fprintf(w, "Group:                 %s\n", group)
+	fmt.Fprintf(w, "Group:                 %s\n", groupState)
 	return nil
 }
 

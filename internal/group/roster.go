@@ -1,11 +1,14 @@
-// Package group holds the Roster and Group ID (docs/spec/mvp.md §2.2, §6).
-// Formation itself lands in a later ticket.
+// Package group holds the Roster and Group ID (docs/spec/mvp.md §2.2) and
+// the select-and-accept formation that produces them (§6): signed
+// Identities, Create proposals, Accepts and Declines, and this Node's one
+// Group Slot persisted under group/<gid>/.
 package group
 
 import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"slices"
 
 	"defios.com/internal/identity"
@@ -20,6 +23,17 @@ type ID [32]byte
 
 // String is the lowercase hex display form.
 func (id ID) String() string { return hex.EncodeToString(id[:]) }
+
+// ParseID reads the 64-hex-digit display form.
+func ParseID(s string) (ID, error) {
+	var id ID
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != len(id) {
+		return id, fmt.Errorf("group: %q is not a 32-byte hex Group ID", s)
+	}
+	copy(id[:], b)
+	return id, nil
+}
 
 // GroupID derives SHA-256("defios-group-id-v1" || sorted Node IDs). Node IDs
 // are sorted as raw bytes, so the same Roster is the same Group.

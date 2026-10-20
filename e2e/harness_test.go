@@ -329,6 +329,40 @@ func (n *node) inspect(t *testing.T) (view struct {
 	return view
 }
 
+// mustJSONVerb runs a verb, requires exit 0, and decodes its --json output.
+func (n *node) mustJSONVerb(t *testing.T, v any, args ...string) {
+	t.Helper()
+	r := n.run(context.Background(), append(args, "--json")...)
+	if r.code != 0 {
+		t.Fatalf("%s %v: exit %d: %s", n.name, args, r.code, r.stderr)
+	}
+	if err := json.Unmarshal([]byte(r.stdout), v); err != nil {
+		t.Fatalf("%s %v: %v\n%s", n.name, args, err, r.stdout)
+	}
+}
+
+// groupInspect is `group inspect --json`; works with or without serve.
+type groupInspect struct {
+	GroupID string `json:"group_id"`
+	Status  string `json:"status"`
+	Roster  []struct {
+		NodeID              string `json:"node_id"`
+		DisplayName         string `json:"display_name"`
+		Hostname            string `json:"hostname"`
+		Reachable           bool   `json:"reachable"`
+		Joined              bool   `json:"joined"`
+		AuthPublicKey       string `json:"auth_public_key"`
+		EncryptionPublicKey string `json:"encryption_public_key"`
+	} `json:"roster"`
+}
+
+func (n *node) groupInspect(t *testing.T) groupInspect {
+	t.Helper()
+	var v groupInspect
+	n.mustJSONVerb(t, &v, "group", "inspect")
+	return v
+}
+
 // nodeList polls `node list --json` until the predicate holds.
 func (n *node) nodeList(t *testing.T, until func([]serve.NodeSummary) bool) []serve.NodeSummary {
 	t.Helper()
