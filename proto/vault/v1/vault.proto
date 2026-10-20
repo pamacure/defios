@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package defios.vault.v1;
+
+option go_package = "defios.com/proto/vault/v1;vaultv1";
+
+// VaultContents is the plaintext inside the age-encrypted Vault file
+// (docs/spec/mvp.md §3.4).
+message VaultContents {
+  uint32 version = 1;                 // 1
+  bytes auth_seed = 2;                // 32-byte Ed25519 seed
+  bytes encryption_private_key = 3;   // 32-byte X25519
+  bytes ecdsa_preparams = 4;          // opaque adapter bytes (JSON of tss-lib LocalPreParams)
+  repeated KeyShare shares = 5;
+}
+
+message KeyShare {
+  string curve = 1;                   // ecdsa | eddsa
+  bytes public_key = 2;               // canonical export
+  bytes save_data = 3;                // opaque adapter bytes (JSON of LocalPartySaveData)
+}
