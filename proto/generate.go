@@ -3,4 +3,4 @@
 // Regenerate with `go generate ./proto/...` (needs protoc and protoc-gen-go).
 package proto
 
-//go:generate protoc --go_out=. --go_opt=paths=source_relative vault/v1/vault.proto cosl/v1/cosl.proto
+//go:generate protoc --go_out=. --go_opt=paths=source_relative vault/v1/vault.proto cosl/v1/cosl.proto group/v1/group.proto

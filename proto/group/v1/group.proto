@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package defios.group.v1;
+
+option go_package = "defios.com/proto/group/v1;groupv1";
+
+// Formation messages (docs/spec/mvp.md §6.1). No maps: every message is
+// signed over its deterministic serialization with sig empty.
+
+message Identity {
+  bytes node_id = 1;
+  bytes auth_public_key = 2;
+  bytes encryption_public_key = 3;
+  string display_name = 4;
+  string tsnet_hostname = 5;
+  bytes sig = 6;
+}
+
+message CreateProposal {
+  bytes group_id = 1;
+  repeated Identity roster = 2;       // sorted by node_id; includes initiator
+  bytes initiator = 3;                // Node ID
+  int64 created_at = 4;
+  bytes sig = 5;                      // initiator auth
+}
+
+message CreateAccept {
+  bytes group_id = 1;
+  bytes node_id = 2;
+  bytes sig = 3;
+}
+
+message CreateDecline {
+  bytes group_id = 1;
+  bytes node_id = 2;
+  string reason = 3;
+  bytes sig = 4;
+}

@@ -2,41 +2,87 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/config"
+	"defios.com/internal/identity"
+	"defios.com/internal/serve"
 	"defios.com/internal/vault"
 )
 
-// serveCommand is the skeleton of the long-running process: it unlocks the
-// Vault (so the passphrase path and exit code 4 are real) and stops there.
-// tsnet, formation HTTP, Raft, and the unix socket land in later tickets.
+// serveCommand is the long-running process: unlock the Vault, join the
+// tailnet, serve formation HTTP and the local socket until interrupted.
 func serveCommand(g *globals) *cobra.Command {
 	var pass passphraseSource
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Unlock the Vault and run this Node",
+		Short: "Unlock the Vault and run this Node on the tailnet",
 		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			p := g.paths()
-			passphrase, err := pass.read(g, false)
-			if err != nil {
-				return err
-			}
-			if _, err := vault.Open(p.VaultFile(), passphrase); err != nil {
-				switch {
-				case errors.Is(err, vault.ErrBadPassphrase):
-					return exitVerify(err)
-				case errors.Is(err, os.ErrNotExist):
-					return errNoNode(p)
-				default:
-					return exitOperational(err)
-				}
-			}
-			return exitOperationalf("serve: Vault unlocked, but tailnet, formation, and Raft are not implemented yet")
-		},
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runServe(cmd, g, pass) },
 	}
 	pass.bind(cmd)
 	return cmd
+}
+
+func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
+	p := g.paths()
+	pub, err := identity.ReadFile(p.IdentityFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return errNoNode(p)
+	} else if err != nil {
+		return exitOperational(err)
+	}
+	cfg, err := config.ReadFile(p.ConfigFile())
+	if err != nil {
+		return exitOperational(err)
+	}
+	if cfg.HeadscaleURL == "" {
+		return exitUsagef("headscale_url is not set in %s", p.ConfigFile())
+	}
+	if serve.IsUp(p.Socket) {
+		return exitOperational(serve.ErrAlreadyRunning)
+	}
+
+	passphrase, err := pass.read(g, false)
+	if err != nil {
+		return err
+	}
+	contents, err := vault.Open(p.VaultFile(), passphrase)
+	if errors.Is(err, vault.ErrBadPassphrase) {
+		return exitVerify(err)
+	} else if err != nil {
+		return exitOperational(err)
+	}
+	node, err := identity.Unlock(pub, contents.AuthSeed, contents.EncryptionPrivateKey)
+	if err != nil {
+		return exitVerify(err)
+	}
+
+	logf := func(format string, args ...any) { fmt.Fprintf(g.app.Stderr, format+"\n", args...) }
+	authKey := g.app.Getenv("TS_AUTHKEY")
+	if authKey == "" {
+		authKey = cfg.AuthKey
+	}
+	tailnet := serve.NewTsnet(serve.TsnetOptions{
+		Dir:        filepath.Join(p.Data, "tsnet"),
+		Hostname:   cfg.Hostname,
+		ControlURL: cfg.HeadscaleURL,
+		AuthKey:    authKey,
+		Logf:       logf,
+	})
+	err = serve.Run(cmd.Context(), serve.Options{
+		Paths:   p,
+		Node:    node,
+		Config:  cfg,
+		Tailnet: tailnet,
+		Logf:    logf,
+	})
+	if err != nil {
+		return exitOperational(err)
+	}
+	return nil
 }

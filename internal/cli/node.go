@@ -10,6 +10,7 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/identity"
+	"defios.com/internal/serve"
 )
 
 func nodeCommand(g *globals) *cobra.Command {
@@ -22,6 +23,12 @@ func nodeCommand(g *globals) *cobra.Command {
 		Short: "Print this Node's identity and configuration",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runNodeInspect(g) },
+	})
+	node.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "Discover Nodes on the tailnet and print their Identities (requires serve)",
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runNodeList(cmd, g) },
 	})
 	return node
 }
@@ -56,15 +63,15 @@ func runNodeInspect(g *globals) error {
 		Hostname:            cfg.Hostname,
 		AuthPublicKey:       hex.EncodeToString(pub.AuthPublicKey),
 		EncryptionPublicKey: hex.EncodeToString(pub.EncryptionPublicKey),
-		ServeUp:             false, // serve does not exist yet
-		GroupID:             nil,   // Groups do not exist yet
+		ServeUp:             serve.IsUp(p.Socket),
+		GroupID:             nil, // Groups do not exist yet
 	}
 	if g.json {
 		return g.emitJSON(v)
 	}
-	serve, group := "down", "none"
+	up, group := "down", "none"
 	if v.ServeUp {
-		serve = "up"
+		up = "up"
 	}
 	if v.GroupID != nil {
 		group = *v.GroupID
@@ -75,7 +82,35 @@ func runNodeInspect(g *globals) error {
 	fmt.Fprintf(w, "Hostname:              %s\n", v.Hostname)
 	fmt.Fprintf(w, "Auth public key:       %s\n", v.AuthPublicKey)
 	fmt.Fprintf(w, "Encryption public key: %s\n", v.EncryptionPublicKey)
-	fmt.Fprintf(w, "Serve:                 %s\n", serve)
+	fmt.Fprintf(w, "Serve:                 %s\n", up)
 	fmt.Fprintf(w, "Group:                 %s\n", group)
+	return nil
+}
+
+// serveClient is the CLI's connection to the running serve; absent serve
+// is the operational error every "requires serve" verb shares.
+func serveClient(g *globals) (serve.Client, error) {
+	p := g.paths()
+	if !serve.IsUp(p.Socket) {
+		return serve.Client{}, exitOperationalf("%w: start `defios serve` first (socket %s)", serve.ErrNotRunning, p.Socket)
+	}
+	return serve.Client{Socket: p.Socket}, nil
+}
+
+func runNodeList(cmd *cobra.Command, g *globals) error {
+	client, err := serveClient(g)
+	if err != nil {
+		return err
+	}
+	nodes, err := client.Nodes(cmd.Context())
+	if err != nil {
+		return exitOperational(err)
+	}
+	if g.json {
+		return g.emitJSON(nodes)
+	}
+	for _, n := range nodes {
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", n.NodeID, n.DisplayName, n.Hostname)
+	}
 	return nil
 }

@@ -80,6 +80,32 @@ func FromSeed(seed []byte) (*Node, error) {
 	}, nil
 }
 
+// Unlock rebuilds the Node from the identity file's public half and the
+// Vault's secrets. The Node ID is taken from the file, never recomputed
+// (ADR 0005); the seed must still produce the file's auth public key.
+func Unlock(pub Public, seed, encryptionPrivateKey []byte) (*Node, error) {
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("vault auth seed is %d bytes, want %d", len(seed), ed25519.SeedSize)
+	}
+	authPub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	if !authPub.Equal(pub.AuthPublicKey) {
+		return nil, errors.New("vault auth seed does not match the identity file's auth public key")
+	}
+	encPriv, err := ecdh.X25519().NewPrivateKey(encryptionPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("vault encryption private key: %w", err)
+	}
+	encPub, err := ecdh.X25519().NewPublicKey(pub.EncryptionPublicKey)
+	if err != nil || !encPriv.PublicKey().Equal(encPub) {
+		return nil, errors.New("vault encryption private key does not match the identity file's encryption public key")
+	}
+	return &Node{
+		Public:               pub,
+		AuthSeed:             append([]byte(nil), seed...),
+		EncryptionPrivateKey: encPriv.Bytes(),
+	}, nil
+}
+
 // fileV1 is the on-disk JSON shape of the identity file.
 type fileV1 struct {
 	Version             int    `json:"version"`

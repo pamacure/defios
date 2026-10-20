@@ -117,6 +117,31 @@ func TestIdentityFileRoundTripAndShape(t *testing.T) {
 	}
 }
 
+func TestUnlockKeepsStoredNodeIDAndChecksSecretsMatch(t *testing.T) {
+	n, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a rotated-in-the-file Node ID: Unlock must not recompute it.
+	stored := n.Public
+	stored.NodeID[0] ^= 0xff
+	got, err := identity.Unlock(stored, n.AuthSeed, n.EncryptionPrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NodeID != stored.NodeID {
+		t.Fatal("Unlock recomputed the Node ID instead of using the identity file's")
+	}
+
+	other, _ := identity.Generate()
+	if _, err := identity.Unlock(n.Public, other.AuthSeed, n.EncryptionPrivateKey); err == nil {
+		t.Fatal("Unlock accepted a seed that does not produce the stored auth public key")
+	}
+	if _, err := identity.Unlock(n.Public, n.AuthSeed, other.EncryptionPrivateKey); err == nil {
+		t.Fatal("Unlock accepted an encryption private key that does not match the stored public key")
+	}
+}
+
 func TestReadFileRejectsUnknownVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity")
 	if err := os.WriteFile(path, []byte(`{"version":2,"node_id":"00","auth_public_key":"00","encryption_public_key":"00"}`), 0o600); err != nil {

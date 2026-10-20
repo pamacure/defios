@@ -14,6 +14,9 @@ type Config struct {
 	HeadscaleURL string `toml:"headscale_url"`
 	DisplayName  string `toml:"display_name"`
 	Hostname     string `toml:"hostname"`
+	// AuthKey is a tailnet preauth key. TS_AUTHKEY is preferred; init never
+	// writes this.
+	AuthKey string `toml:"auth_key,omitempty"`
 }
 
 // WriteFile writes config.toml, mode 0600.

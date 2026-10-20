@@ -254,7 +254,7 @@ func TestUsageErrors(t *testing.T) {
 
 func TestServeWrongPassphraseIsVerifyFailure(t *testing.T) {
 	dir := t.TempDir()
-	mustInit(t, dir)
+	mustInit(t, dir, "--headscale-url", "http://headscale.invalid")
 	r := run(t, map[string]string{"DEFIOS_PASSPHRASE": "not-it"}, "", "--dir", dir, "serve")
 	if r.code != 4 {
 		t.Fatalf("exit %d, want 4; stderr: %s", r.code, r.stderr)
