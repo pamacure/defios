@@ -55,8 +55,8 @@ func (t *transport) Dial(ctx context.Context, network, addr string) (net.Conn, e
 	return (&net.Dialer{}).DialContext(ctx, network, real)
 }
 
-// cluster is a 2-Node Roster with the key material to author envelopes.
-type cluster struct {
+// pair is a 2-Node Roster with the key material to author envelopes.
+type pair struct {
 	t      *testing.T
 	net    *fakeNet
 	nodes  []*identity.Node
@@ -64,9 +64,9 @@ type cluster struct {
 	dirs   []string
 }
 
-func newCluster(t *testing.T) *cluster {
+func newPair(t *testing.T) *pair {
 	t.Helper()
-	c := &cluster{t: t, net: newFakeNet()}
+	c := &pair{t: t, net: newFakeNet()}
 	var members []group.RosterNode
 	for _, name := range []string{"alice", "bob"} {
 		n, err := identity.Generate()
@@ -91,7 +91,7 @@ type replica struct {
 	store *cosl.Store
 }
 
-func (c *cluster) open(i int) *replica {
+func (c *pair) open(i int) *replica {
 	c.t.Helper()
 	store, err := cosl.Open(filepath.Join(c.dirs[i], "cosl.sqlite"))
 	if err != nil {
@@ -119,11 +119,11 @@ func (r *replica) close() {
 	r.store.Close()
 }
 
-func (c *cluster) author(i int) cosl.Author {
+func (c *pair) author(i int) cosl.Author {
 	return cosl.Author{Node: c.nodes[i], GroupID: c.roster.GroupID()}
 }
 
-func (c *cluster) freeform(i int, text string) cosl.Signed {
+func (c *pair) freeform(i int, text string) cosl.Signed {
 	c.t.Helper()
 	s, err := c.author(i).Sign(cosl.TypeAppFreeform, nil, &coslv1.AppFreeform{Text: text})
 	if err != nil {
@@ -132,7 +132,7 @@ func (c *cluster) freeform(i int, text string) cosl.Signed {
 	return s
 }
 
-func (c *cluster) ctx(d time.Duration) context.Context {
+func (c *pair) ctx(d time.Duration) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	c.t.Cleanup(cancel)
 	return ctx
@@ -170,7 +170,7 @@ func sameRows(t *testing.T, a, b []cosl.Row) {
 }
 
 func TestTwoReplicasConvergeFromLeaderAndFollowerAppends(t *testing.T) {
-	c := newCluster(t)
+	c := newPair(t)
 	a, b := c.open(0), c.open(1)
 
 	// Whoever is leader, both appends go through: one direct, one forwarded.
@@ -197,7 +197,7 @@ func TestTwoReplicasConvergeFromLeaderAndFollowerAppends(t *testing.T) {
 }
 
 func TestDuplicateMsgIDIsNotProposedTwice(t *testing.T) {
-	c := newCluster(t)
+	c := newPair(t)
 	a, b := c.open(0), c.open(1)
 	s := c.freeform(0, "once")
 	p1, err := a.Append(c.ctx(20*time.Second), s)
@@ -222,7 +222,7 @@ func TestDuplicateMsgIDIsNotProposedTwice(t *testing.T) {
 // An envelope that fails §5.4 still commits (it occupies a raft index on
 // every replica) but produces no row; the author learns why.
 func TestRejectedEnvelopeLeavesSeqGap(t *testing.T) {
-	c := newCluster(t)
+	c := newPair(t)
 	a, b := c.open(0), c.open(1)
 	first, err := a.Append(c.ctx(20*time.Second), c.freeform(0, "ok"))
 	if err != nil {
@@ -245,7 +245,7 @@ func TestRejectedEnvelopeLeavesSeqGap(t *testing.T) {
 }
 
 func TestRestartResumesFromRaftDB(t *testing.T) {
-	c := newCluster(t)
+	c := newPair(t)
 	a, b := c.open(0), c.open(1)
 	if _, err := a.Append(c.ctx(20*time.Second), c.freeform(0, "before")); err != nil {
 		t.Fatal(err)
@@ -268,7 +268,7 @@ func TestRestartResumesFromRaftDB(t *testing.T) {
 
 // n=2 commits need both Nodes (§4.5): alone, an append cannot complete.
 func TestLoneReplicaCannotAppend(t *testing.T) {
-	c := newCluster(t)
+	c := newPair(t)
 	a := c.open(0)
 	_, err := a.Append(c.ctx(3*time.Second), c.freeform(0, "alone"))
 	if !errors.Is(err, raftx.ErrNoLeader) {

@@ -14,10 +14,10 @@ import (
 // coming up (n=2 needs both for commit, §4.5).
 const joinRetry = 2 * time.Second
 
-// onValid starts Raft if the Slot holds a valid Group and nothing is
+// startReplica starts Raft if the Slot holds a valid Group and nothing is
 // running yet (§6.2 step 5). Called after the tailnet is up and whenever
 // an Accept lands; safe to call repeatedly.
-func (s *server) onValid() {
+func (s *server) startReplica() {
 	if !s.tailnetUp.Load() {
 		return
 	}

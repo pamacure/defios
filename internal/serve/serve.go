@@ -83,7 +83,7 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	s := &server{opts: o, self: self, slot: slot}
+	s := &server{opts: o, self: self, slot: slot, ctx: ctx}
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()
@@ -105,8 +105,7 @@ func Run(ctx context.Context, o Options) error {
 	go func() { errc <- formationSrv.Serve(formation) }()
 	s.tailnetUp.Store(true)
 	o.Logf("serve: tailnet up; formation HTTP on :%d", FormationPort)
-	s.ctx = ctx
-	s.onValid() // a valid Group from before this serve started resumes Raft
+	s.startReplica() // a valid Group from before this serve started resumes Raft
 
 	select {
 	case <-ctx.Done():
@@ -130,7 +129,7 @@ type server struct {
 	self      *groupv1.Identity // signed once at startup
 	slot      *group.Slot       // this Node's one Group (§1.2)
 	tailnetUp atomic.Bool       // set once Up and the formation listener succeed
-	ctx       context.Context   // Run's; bounds background work such as the join
+	ctx       context.Context   // Run's, set before any handler runs; bounds the join
 
 	replicaMu sync.Mutex
 	replica   *raftx.Replica // nil until the Group is valid

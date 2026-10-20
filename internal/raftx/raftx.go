@@ -78,7 +78,8 @@ type Position struct {
 	Term  uint64
 }
 
-// Replica is this Node's member of the Group's Raft cluster.
+// Replica is this Node's copy of the Group's COSL, kept in step with the
+// other Roster Nodes by Raft.
 type Replica struct {
 	opts    Options
 	raft    *raft.Raft
@@ -132,21 +133,30 @@ func Open(o Options) (*Replica, error) {
 	conf.LogOutput = &logWriter{logf: o.Logf}
 	conf.LogLevel = "WARN"
 
+	// Everything opened below is released on any later failure.
+	var cleanup []func()
+	fail := func(err error) (*Replica, error) {
+		for i := len(cleanup) - 1; i >= 0; i-- {
+			cleanup[i]()
+		}
+		return nil, err
+	}
+
 	logs, err := raftboltdb.NewBoltStore(filepath.Join(o.Dir, "raft.db"))
 	if err != nil {
 		return nil, fmt.Errorf("raftx: raft.db: %w", err)
 	}
+	cleanup = append(cleanup, func() { logs.Close() })
 	snaps, err := raft.NewFileSnapshotStore(filepath.Join(o.Dir, "raft-snap"), snapshotRetain, conf.LogOutput)
 	if err != nil {
-		logs.Close()
-		return nil, fmt.Errorf("raftx: raft-snap: %w", err)
+		return fail(fmt.Errorf("raftx: raft-snap: %w", err))
 	}
 	stream, err := newStreamLayer(o.Transport, RaftPort, serverAddress(self))
 	if err != nil {
-		logs.Close()
-		return nil, err
+		return fail(err)
 	}
 	trans := raft.NewNetworkTransport(stream, transportPool, transportTimeout, conf.LogOutput)
+	cleanup = append(cleanup, func() { trans.Close() })
 
 	// Identical voter list on every Node (§4.2); a retry on a Node that
 	// already has state is the one error to ignore.
@@ -161,22 +171,18 @@ func Open(o Options) (*Replica, error) {
 	case errors.Is(err, raft.ErrCantBootstrap):
 		o.Logf("raft: resuming from %s", filepath.Join(o.Dir, "raft.db"))
 	default:
-		trans.Close()
-		logs.Close()
-		return nil, fmt.Errorf("raftx: bootstrap: %w", err)
+		return fail(fmt.Errorf("raftx: bootstrap: %w", err))
 	}
 
 	r := &Replica{opts: o, trans: trans, logs: logs, inflight: map[[32]byte]*pending{}}
-	r.raft, err = raft.NewRaft(conf, &fsm{inner: cosl.NewFSM(o.Store, o.Roster), store: o.Store}, logs, logs, snaps, trans)
+	r.raft, err = raft.NewRaft(conf, newFSM(o.Store, o.Roster, o.Dir), logs, logs, snaps, trans)
 	if err != nil {
-		trans.Close()
-		logs.Close()
-		return nil, fmt.Errorf("raftx: %w", err)
+		return fail(fmt.Errorf("raftx: %w", err))
 	}
-	r.forward, err = newForwardGate(r, self)
+	cleanup = append(cleanup, func() { r.raft.Shutdown().Error() })
+	r.forward, err = newForwardGate(r)
 	if err != nil {
-		r.Close()
-		return nil, err
+		return fail(err)
 	}
 	return r, nil
 }
@@ -266,9 +272,12 @@ func (r *Replica) apply(ctx context.Context, s cosl.Signed) (Position, error) {
 
 	f := r.raft.Apply(s.Bytes, applyTimeout)
 	if err := f.Error(); err != nil {
-		if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
+		switch {
+		case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrLeadershipLost), errors.Is(err, raft.ErrEnqueueTimeout):
 			p.err = errRetry
-		} else {
+		case errors.Is(err, raft.ErrRaftShutdown):
+			p.err = ErrClosed
+		default:
 			p.err = fmt.Errorf("raftx: apply: %w", err)
 		}
 		return Position{}, p.err
@@ -276,7 +285,17 @@ func (r *Replica) apply(ctx context.Context, s cosl.Signed) (Position, error) {
 	switch resp := f.Response().(type) {
 	case applied:
 		p.pos = Position{Index: resp.index, Term: resp.term}
-		if !resp.result.Inserted && !resp.result.Duplicate {
+		switch {
+		case resp.result.Inserted:
+		case resp.result.Duplicate:
+			// Raced an identical commit between committed() and inflight:
+			// the row that won owns the Position, not this entry.
+			if pos, ok, err := r.committed(s.MsgID); err != nil {
+				p.err = err
+			} else if ok {
+				p.pos = pos
+			}
+		default:
 			p.err = fmt.Errorf("%w at index %d: %s", ErrNotInserted, resp.index, resp.result.Reason)
 		}
 	case error:

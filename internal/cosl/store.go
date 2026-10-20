@@ -181,15 +181,6 @@ func (s *Store) VacuumInto(path string) error {
 	return nil
 }
 
-// Has reports whether a row with this msg_id is committed.
-func (s *Store) Has(msgID [32]byte) (bool, error) {
-	var n int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM cosl WHERE msg_id = ?", msgID[:]).Scan(&n); err != nil {
-		return false, fmt.Errorf("cosl: %w", err)
-	}
-	return n > 0, nil
-}
-
 // Meta reads cosl_meta; a fresh replica reports zeroes and a genesis head.
 func (s *Store) Meta() (Meta, error) {
 	return readMeta(s.db)

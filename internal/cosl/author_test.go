@@ -2,6 +2,7 @@ package cosl_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -28,13 +29,8 @@ func TestAuthorProducesEnvelopeTheFSMAccepts(t *testing.T) {
 	if len(rows) != 1 || rows[0].MsgID != m1.MsgID || rows[0].ConversationID != nil || rows[0].Sender != f.nodes[0].NodeID {
 		t.Fatalf("rows = %+v", rows)
 	}
-	has, err := f.store.Has(m1.MsgID)
-	if err != nil || !has {
-		t.Fatalf("Has(committed) = %v, %v", has, err)
-	}
-	has, err = f.store.Has(m2.MsgID)
-	if err != nil || has {
-		t.Fatalf("Has(uncommitted) = %v, %v", has, err)
+	if _, err := f.store.ByMsgIDPrefix(m2.MsgID[:]); !errors.Is(err, cosl.ErrNotFound) {
+		t.Fatalf("unsigned-off envelope is on the replica: %v", err)
 	}
 
 	// A Key-scoped envelope carries the conversation id.

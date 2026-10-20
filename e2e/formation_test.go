@@ -114,9 +114,10 @@ func TestFormation(t *testing.T) {
 		}
 		return true
 	}
-	la, lb := alice.coslLog(t, bothJoined), bob.coslLog(t, bothJoined)
-	if mustMarshal(t, la) != mustMarshal(t, lb) {
-		t.Fatalf("cosl log differs:\nalice %s\nbob   %s", mustMarshal(t, la), mustMarshal(t, lb))
+	la, rawA := alice.coslLog(t, bothJoined)
+	_, rawB := bob.coslLog(t, bothJoined)
+	if rawA != rawB {
+		t.Fatalf("cosl log differs:\nalice %s\nbob   %s", rawA, rawB)
 	}
 	senders := map[string]string{la[0].Sender: la[0].SenderDisplayName, la[1].Sender: la[1].SenderDisplayName}
 	if senders[aliceID] != "alice" || senders[bobID] != "bob" {

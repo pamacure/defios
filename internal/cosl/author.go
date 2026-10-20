@@ -17,8 +17,6 @@ import (
 type Author struct {
 	Node    *identity.Node
 	GroupID group.ID
-	// Now stamps created_at; nil means time.Now. Advisory only (§5.1).
-	Now func() time.Time
 }
 
 // Signed is a signed envelope ready for the log.
@@ -37,10 +35,6 @@ func (a Author) Sign(msgType uint32, conversationID []byte, payload proto.Messag
 	if err != nil {
 		return Signed{}, fmt.Errorf("cosl: payload: %w", err)
 	}
-	now := time.Now
-	if a.Now != nil {
-		now = a.Now
-	}
 	var msgID [32]byte
 	if _, err := rand.Read(msgID[:]); err != nil {
 		return Signed{}, fmt.Errorf("cosl: %w", err)
@@ -52,7 +46,7 @@ func (a Author) Sign(msgType uint32, conversationID []byte, payload proto.Messag
 		Sender:         a.Node.NodeID[:],
 		MsgId:          msgID[:],
 		ConversationId: conversationID,
-		CreatedAt:      now().UnixNano(),
+		CreatedAt:      time.Now().UnixNano(),
 		Payload:        raw,
 	}
 	b, err := Sign(env, ed25519.NewKeyFromSeed(a.Node.AuthSeed))

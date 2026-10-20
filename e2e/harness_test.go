@@ -375,8 +375,8 @@ type coslLine struct {
 }
 
 // coslLog polls `cosl log --json` (no serve needed) until the predicate
-// holds.
-func (n *node) coslLog(t *testing.T, until func([]coslLine) bool) []coslLine {
+// holds; returns the decoded rows and the exact stdout they came from.
+func (n *node) coslLog(t *testing.T, until func([]coslLine) bool) ([]coslLine, string) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	var last []coslLine
@@ -385,13 +385,13 @@ func (n *node) coslLog(t *testing.T, until func([]coslLine) bool) []coslLine {
 		if r.code == 0 {
 			last = nil
 			if err := json.Unmarshal([]byte(r.stdout), &last); err == nil && until(last) {
-				return last
+				return last, r.stdout
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("%s cosl log never satisfied the predicate; last = %+v", n.name, last)
-	return nil
+	return nil, ""
 }
 
 // nodeList polls `node list --json` until the predicate holds.

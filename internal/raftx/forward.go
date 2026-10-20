@@ -27,8 +27,14 @@ const (
 	forwardTimeout  = applyTimeout + 5*time.Second
 )
 
-// statusNotLeader tells the forwarder to look the leader up again.
-const statusNotLeader = http.StatusConflict
+// statusNotLeader tells the forwarder to look the leader up again;
+// statusTransient tells it the leader could not apply right now (queue
+// full, shutting down). Both mean retry. Only a committed-but-rejected
+// outcome (ErrNotInserted) travels in the response body.
+const (
+	statusNotLeader = http.StatusConflict
+	statusTransient = http.StatusServiceUnavailable
+)
 
 type forwardGate struct {
 	replica *Replica
@@ -36,7 +42,7 @@ type forwardGate struct {
 	client  *http.Client
 }
 
-func newForwardGate(r *Replica, self group.RosterNode) (*forwardGate, error) {
+func newForwardGate(r *Replica) (*forwardGate, error) {
 	l, err := r.opts.Transport.Listen("tcp", fmt.Sprintf(":%d", ForwardPort))
 	if err != nil {
 		return nil, fmt.Errorf("raftx: listen :%d: %w", ForwardPort, err)
@@ -86,15 +92,25 @@ func (g *forwardGate) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pos, err := g.replica.apply(r.Context(), cosl.Signed{MsgID: msgID, Bytes: req.Envelope})
-	if errors.Is(err, errRetry) {
+	switch {
+	case err == nil:
+	case errors.Is(err, errRetry):
 		http.Error(w, raft.ErrNotLeader.Error(), statusNotLeader)
+		return
+	case errors.Is(err, ErrNotInserted):
+	default:
+		http.Error(w, err.Error(), statusTransient)
 		return
 	}
 	resp := &raftv1.ForwardResponse{Index: pos.Index, Term: pos.Term}
 	if err != nil {
 		resp.Error = err.Error()
 	}
-	out, _ := proto.Marshal(resp)
+	out, err := proto.Marshal(resp)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	w.Write(out)
 }
@@ -103,12 +119,12 @@ func (g *forwardGate) handle(w http.ResponseWriter, r *http.Request) {
 func (g *forwardGate) send(ctx context.Context, leader group.RosterNode, s cosl.Signed) (Position, error) {
 	body, err := proto.Marshal(&raftv1.ForwardRequest{Envelope: s.Bytes})
 	if err != nil {
-		return Position{}, err
+		return Position{}, fmt.Errorf("raftx: forward: %w", err)
 	}
 	url := "http://" + net.JoinHostPort(leader.TsnetHostname, fmt.Sprint(ForwardPort)) + forwardPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return Position{}, err
+		return Position{}, fmt.Errorf("raftx: forward: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	httpResp, err := g.client.Do(req)
@@ -122,7 +138,7 @@ func (g *forwardGate) send(ctx context.Context, leader group.RosterNode, s cosl.
 	raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 4<<10))
 	switch httpResp.StatusCode {
 	case http.StatusOK:
-	case statusNotLeader:
+	case statusNotLeader, statusTransient:
 		return Position{}, errRetry
 	default:
 		return Position{}, fmt.Errorf("raftx: forward: %s: %s", httpResp.Status, bytes.TrimSpace(raw))
