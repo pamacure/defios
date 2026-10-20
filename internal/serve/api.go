@@ -166,6 +166,7 @@ func (s *server) localHandler() http.Handler {
 		s.answer(w, v, err)
 	})
 	s.conversationRoutes(mux)
+	s.snapshotRoutes(mux)
 	return mux
 }
 

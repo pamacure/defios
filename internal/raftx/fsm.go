@@ -1,7 +1,6 @@
 package raftx
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -55,15 +54,10 @@ func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
 	return &fileSnapshot{path: path}, nil
 }
 
-// ErrRestoreUnsupported: installing another Node's snapshot over this
-// replica is the catch-up ticket's (§4.4); until then a Node that has
-// fallen behind the retained log must keep its replica.
-var ErrRestoreUnsupported = errors.New("raftx: snapshot restore is not implemented yet (catch-up ticket)")
-
 // Restore is called by NewRaft for the latest local snapshot and by
-// InstallSnapshot from the leader. The replica file is durable on its
-// own, so a snapshot this Node has already applied past is a no-op;
-// anything further ahead is the unsupported case.
+// InstallSnapshot from the leader (§4.4). The stream is staged as a file
+// beside the replica and handed to the Store, which verifies the chain
+// and rewrites the live file only if the snapshot is ahead of it.
 func (f *fsm) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
 	path, err := f.staging()
@@ -74,23 +68,10 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 	if err := writeFile(path, rc); err != nil {
 		return fmt.Errorf("raftx: restore: %w", err)
 	}
-	snap, err := cosl.Open(path)
-	if err != nil {
+	if err := f.store.Restore(path); err != nil {
 		return fmt.Errorf("raftx: restore: %w", err)
 	}
-	defer snap.Close()
-	theirs, err := snap.Meta()
-	if err != nil {
-		return fmt.Errorf("raftx: restore: %w", err)
-	}
-	ours, err := f.store.Meta()
-	if err != nil {
-		return fmt.Errorf("raftx: restore: %w", err)
-	}
-	if ours.LastAppliedSeq >= theirs.LastAppliedSeq {
-		return nil
-	}
-	return fmt.Errorf("%w: snapshot at seq %d, replica at seq %d", ErrRestoreUnsupported, theirs.LastAppliedSeq, ours.LastAppliedSeq)
+	return nil
 }
 
 // staging reserves a fresh file name under dir for a snapshot copy. The

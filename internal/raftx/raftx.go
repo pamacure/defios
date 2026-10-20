@@ -321,6 +321,59 @@ func (r *Replica) committed(msgID [32]byte) (Position, bool, error) {
 	return Position{Index: row.Seq, Term: row.Term}, true, nil
 }
 
+// WaitCaughtUp returns once this replica has applied everything the leader
+// had applied when asked, so a Node coming back after downtime or a wipe
+// (§4.4) reads its own history before acting on it. The leader is caught
+// up by definition. ErrNoLeader if none is known before ctx ends.
+func (r *Replica) WaitCaughtUp(ctx context.Context) error {
+	for {
+		if r.raft.State() == raft.Leader {
+			return nil
+		}
+		target, err := r.leaderApplied(ctx)
+		if err == nil {
+			for r.raft.AppliedIndex() < target {
+				select {
+				case <-ctx.Done():
+					return ErrNoLeader
+				case <-time.After(commitTimeout):
+				}
+			}
+			return nil
+		}
+		if !errors.Is(err, errRetry) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ErrNoLeader
+		case <-time.After(heartbeatTimeout):
+		}
+	}
+}
+
+func (r *Replica) leaderApplied(ctx context.Context) (uint64, error) {
+	leaderID, ok := r.Leader()
+	if !ok {
+		return 0, errRetry
+	}
+	leader, ok := r.opts.Roster.Lookup(leaderID)
+	if !ok {
+		return 0, fmt.Errorf("raftx: leader %s is not on the Roster", leaderID)
+	}
+	return r.forward.applied(ctx, leader)
+}
+
+// Snapshot takes a snapshot now instead of waiting for §4.2's interval and
+// threshold, and compacts the log behind it. Raft does this on its own;
+// this is for tests that need a Node to fall beyond the retained log.
+func (r *Replica) Snapshot() error {
+	if err := r.raft.Snapshot().Error(); err != nil {
+		return fmt.Errorf("raftx: snapshot: %w", err)
+	}
+	return nil
+}
+
 // Close stops the forward gate and Raft and closes raft.db. The Store is
 // the caller's.
 func (r *Replica) Close() error {

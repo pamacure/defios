@@ -1,7 +1,6 @@
 package raftx
 
 import (
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -13,11 +12,10 @@ import (
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// TestSnapshotRestoreIsNoOpForOwnReplica: a Node restarting with a local
-// snapshot restores it against a replica that already holds every row,
-// which must succeed; a replica behind the snapshot is the catch-up case
-// and is refused loudly.
-func TestSnapshotRestoreIsNoOpForOwnReplica(t *testing.T) {
+// A Node restarting with a local snapshot restores it against a replica
+// that already holds every row, which must leave it alone; an empty
+// replica is rewritten to the snapshot (§4.4).
+func TestSnapshotRestoreKeepsOwnReplicaAndFillsEmptyOne(t *testing.T) {
 	n, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +72,13 @@ func TestSnapshotRestoreIsNoOpForOwnReplica(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = newFSM(behind, roster, dir).Restore(rc)
-	if !errors.Is(err, ErrRestoreUnsupported) {
-		t.Fatalf("restore over an empty replica = %v, want ErrRestoreUnsupported", err)
+	if err := newFSM(behind, roster, dir).Restore(rc); err != nil {
+		t.Fatalf("restore over an empty replica: %v", err)
+	}
+	theirs, _ := store.Meta()
+	ours, _ := behind.Meta()
+	if theirs != ours {
+		t.Fatalf("restored meta %+v, want %+v", ours, theirs)
 	}
 	if entries, _ := filepath.Glob(filepath.Join(dir, "cosl-snap-*")); len(entries) != 0 {
 		t.Fatalf("staging files left behind: %v", entries)

@@ -62,6 +62,8 @@ func sendError(err error) error {
 		return &ExitError{Code: ExitProtocol, Err: err}
 	case errors.Is(err, cosl.ErrBadText):
 		return exitUsagef("%w", err)
+	case errors.Is(err, raftx.ErrNoLeader):
+		return exitOperationalf("%w; not committed now, but if this Node was leading it may still land when the other Node returns: check `conversation log` before re-sending", err)
 	}
 	return serveError(err)
 }

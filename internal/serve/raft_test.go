@@ -2,6 +2,9 @@ package serve_test
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -73,6 +76,47 @@ func TestValidGroupStartsRaftAndBothNodesJoin(t *testing.T) {
 		t.Fatalf("status = %+v, %v", st, err)
 	}
 }
+
+// A Node whose replica state was wiped (roster.json kept) catches up from
+// the other Node and does not append a second membership.join (§4.4).
+func TestWipedReplicaCatchesUpWithoutRejoining(t *testing.T) {
+	a, b := pair(t)
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	ctx := context.Background()
+	for i := range 3 {
+		if _, err := a.client().ConversationSend(ctx, fmt.Sprint("m", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := a.groupLevelRows(t, gid, 3)
+	b.groupLevelRows(t, gid, 3)
+
+	b.stop()
+	for _, name := range []string{"cosl.sqlite", "cosl.sqlite-wal", "cosl.sqlite-shm", "raft.db", "raft-snap"} {
+		os.RemoveAll(filepath.Join(b.paths.GroupDir(gid.String()), name))
+	}
+	b.restart(t)
+
+	got := b.groupLevelRows(t, gid, 3)
+	for i := range want {
+		if want[i].Seq != got[i].Seq || want[i].MsgID != got[i].MsgID || want[i].PrevHash != got[i].PrevHash {
+			t.Fatalf("row %d differs after catch-up:\n%+v\n%+v", i, want[i], got[i])
+		}
+	}
+	if _, err := b.client().ConversationSend(ctx, "back"); err != nil {
+		t.Fatalf("send after catch-up: %v", err)
+	}
+	a.groupLevelRows(t, gid, 4)
+	time.Sleep(joinSettle)
+	if rows := b.joins(t, gid, 2); len(rows) != 2 {
+		t.Fatalf("%d membership.join rows after catch-up, want 2", len(rows))
+	}
+}
+
+// joinSettle is how long a Node that was going to re-join would need.
+const joinSettle = 2 * time.Second
 
 // A restarted serve on a valid Group resumes Raft from raft.db: no second
 // join, and the replica keeps converging.

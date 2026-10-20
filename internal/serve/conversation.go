@@ -68,6 +68,29 @@ func (s *server) conversationRoutes(mux *http.ServeMux) {
 	})
 }
 
+// snapshotRoutes exposes Replica.Snapshot on the local API. No CLI verb
+// fronts it: Raft snapshots on its own (§4.2); e2e tests use this to make
+// a Node fall beyond the retained log quickly.
+func (s *server) snapshotRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/raft/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		replica, _, ok := s.current()
+		if !ok {
+			writeError(w, ErrNoReplica)
+			return
+		}
+		if err := replica.Snapshot(); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, struct{}{})
+	})
+}
+
+// Snapshot asks the running serve to snapshot and compact its Raft log now.
+func (c Client) Snapshot(ctx context.Context) error {
+	return c.do(ctx, "/v1/raft/snapshot", struct{}{}, &struct{}{})
+}
+
 // ConversationSend is `conversation send`: append text as Group-level
 // app.freeform.
 func (c Client) ConversationSend(ctx context.Context, text string) (SendView, error) {

@@ -76,14 +76,10 @@ func (s *server) current() (*raftx.Replica, *cosl.Store, bool) {
 }
 
 // join appends this Node's membership.join once (§6.2 step 6), retrying
-// until it commits or serve stops. A row from an earlier serve counts.
+// until it commits or serve stops. A row from an earlier serve counts,
+// including one that only arrives with catch-up (§4.4), so each attempt
+// first catches up with the leader and then looks again.
 func (s *server) join(ctx context.Context, replica *raftx.Replica, store *cosl.Store, gid group.ID) {
-	if joined, err := s.joined(store); err != nil {
-		s.opts.Logf("serve: reading replica: %v", err)
-		return
-	} else if joined {
-		return
-	}
 	author := cosl.Author{Node: s.opts.Node, GroupID: gid}
 	signed, err := author.Sign(cosl.TypeMembershipJoin, nil, cosl.MembershipJoin(s.opts.Node, s.opts.Config.DisplayName, s.opts.Config.Hostname))
 	if err != nil {
@@ -92,11 +88,13 @@ func (s *server) join(ctx context.Context, replica *raftx.Replica, store *cosl.S
 	}
 	for {
 		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
-		pos, err := replica.Append(attempt, signed)
+		pos, err := s.joinOnce(attempt, replica, store, signed)
 		cancel()
 		switch {
 		case err == nil:
-			s.opts.Logf("serve: membership.join committed at seq %d", pos.Index)
+			if pos.Index > 0 {
+				s.opts.Logf("serve: membership.join committed at seq %d", pos.Index)
+			}
 			return
 		case errors.Is(err, raftx.ErrClosed), ctx.Err() != nil:
 			return
@@ -112,6 +110,20 @@ func (s *server) join(ctx context.Context, replica *raftx.Replica, store *cosl.S
 		case <-time.After(joinRetry):
 		}
 	}
+}
+
+// joinOnce is one attempt: catch up, skip if already joined (zero
+// Position), else append.
+func (s *server) joinOnce(ctx context.Context, replica *raftx.Replica, store *cosl.Store, signed cosl.Signed) (raftx.Position, error) {
+	if err := replica.WaitCaughtUp(ctx); err != nil {
+		return raftx.Position{}, err
+	}
+	if joined, err := s.joined(store); err != nil {
+		return raftx.Position{}, err
+	} else if joined {
+		return raftx.Position{}, nil
+	}
+	return replica.Append(ctx, signed)
 }
 
 // joined reports whether this Node's membership.join is on the replica.

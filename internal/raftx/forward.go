@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -23,6 +25,7 @@ import (
 // framing matches the formation port; the body is the §4.3 protobuf.
 const (
 	forwardPath     = "/v1/forward"
+	appliedPath     = "/v1/applied" // GET: the leader's applied index, decimal
 	forwardMaxBytes = 1 << 20
 	forwardTimeout  = ApplyTimeout + 5*time.Second
 )
@@ -50,6 +53,13 @@ func newForwardGate(r *Replica) (*forwardGate, error) {
 	g := &forwardGate{replica: r}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+forwardPath, g.handle)
+	mux.HandleFunc("GET "+appliedPath, func(w http.ResponseWriter, _ *http.Request) {
+		if g.replica.raft.State() != raft.Leader {
+			http.Error(w, raft.ErrNotLeader.Error(), statusNotLeader)
+			return
+		}
+		fmt.Fprint(w, g.replica.raft.AppliedIndex())
+	})
 	g.srv = &http.Server{Handler: mux}
 	g.client = &http.Client{
 		Timeout: forwardTimeout,
@@ -152,6 +162,29 @@ func (g *forwardGate) send(ctx context.Context, leader group.RosterNode, s cosl.
 		return pos, &notInsertedError{msg: resp.Error}
 	}
 	return pos, nil
+}
+
+// applied asks the leader how far it has applied.
+func (g *forwardGate) applied(ctx context.Context, leader group.RosterNode) (uint64, error) {
+	url := "http://" + net.JoinHostPort(leader.TsnetHostname, fmt.Sprint(ForwardPort)) + appliedPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("raftx: applied: %w", err)
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return 0, errRetry
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if resp.StatusCode != http.StatusOK {
+		return 0, errRetry
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("raftx: applied: %w", err)
+	}
+	return n, nil
 }
 
 // notInsertedError is the leader's ErrNotInserted as the forwarder sees

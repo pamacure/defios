@@ -238,6 +238,7 @@ type node struct {
 	dir  string
 	env  map[string]string
 	sock string
+	stop func() // stops the running serve; nil when none runs
 }
 
 func newNode(t *testing.T, hs *headscale, name string) *node {
@@ -278,25 +279,29 @@ func (n *node) run(ctx context.Context, args ...string) result {
 	return result{code: code, stdout: out.String(), stderr: errb.String()}
 }
 
-// startServe runs `serve` in the background until the test ends and waits
-// for the tailnet to be up, so a stuck join fails fast instead of at the
-// test timeout.
+// startServe runs `serve` in the background until stopServe or the test's
+// end, and waits for the tailnet to be up, so a stuck join fails fast
+// instead of at the test timeout.
 func (n *node) startServe(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan result, 1)
 	go func() { done <- n.run(ctx, "serve") }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case r := <-done:
-			if r.code != 0 {
-				t.Errorf("%s serve exited %d: %s", n.name, r.code, r.stderr)
+	var once sync.Once
+	n.stop = func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case r := <-done:
+				if r.code != 0 {
+					t.Errorf("%s serve exited %d: %s", n.name, r.code, r.stderr)
+				}
+			case <-time.After(30 * time.Second):
+				t.Errorf("%s serve did not stop", n.name)
 			}
-		case <-time.After(30 * time.Second):
-			t.Errorf("%s serve did not stop", n.name)
-		}
-	})
+		})
+	}
+	t.Cleanup(n.stop)
 	client := serve.Client{Socket: n.sock}
 	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
@@ -311,6 +316,36 @@ func (n *node) startServe(t *testing.T) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Fatalf("%s serve never reported the tailnet up", n.name)
+}
+
+// stopServe stops this Node's serve as a crash or shutdown would.
+func (n *node) stopServe(t *testing.T) {
+	t.Helper()
+	if n.stop == nil {
+		t.Fatalf("%s: serve is not running", n.name)
+	}
+	n.stop()
+	n.stop = nil
+}
+
+// wipeReplica removes the Group's replica state (cosl.sqlite, raft.db,
+// raft-snap/) but keeps roster.json: the Node still knows its Group and
+// relies on the leader to restore the COSL (§4.4).
+func (n *node) wipeReplica(t *testing.T, gid string) {
+	t.Helper()
+	dir := filepath.Join(n.dir, "group", gid)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() == "roster.json" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // inspect returns `node inspect --json`.
