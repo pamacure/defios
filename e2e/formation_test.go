@@ -11,10 +11,11 @@ import (
 	"defios.com/internal/serve"
 )
 
-// TestGroupFormationToValid: alice proposes, bob accepts, both `group
+// TestFormation (§12): alice proposes, bob accepts, both `group
 // inspect` outputs agree on Roster and Group ID with status valid (§6.2,
-// §11.5). A second proposal into the valid Group is refused.
-func TestGroupFormationToValid(t *testing.T) {
+// §11.5). A second proposal into the occupied slot is refused. The
+// §11.5 clause "both append membership.join" lands with Raft (#17).
+func TestFormation(t *testing.T) {
 	hs := startHeadscale(t)
 	alice := newNode(t, hs, "alice")
 	bob := newNode(t, hs, "bob")

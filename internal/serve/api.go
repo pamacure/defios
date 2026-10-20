@@ -89,7 +89,7 @@ func (s *server) localHandler() http.Handler {
 	})
 	mux.HandleFunc("GET /v1/nodes", func(w http.ResponseWriter, r *http.Request) {
 		if !s.tailnetUp.Load() {
-			s.answer(w, GroupView{}, ErrTailnetNotUp)
+			writeError(w, ErrTailnetNotUp)
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -161,7 +161,7 @@ func (s *server) localHandler() http.Handler {
 // tailnet, so they answer 503 until it is up.
 func (s *server) readLocal(w http.ResponseWriter, r *http.Request, v any) bool {
 	if !s.tailnetUp.Load() {
-		s.answer(w, GroupView{}, ErrTailnetNotUp)
+		writeError(w, ErrTailnetNotUp)
 		return false
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(v); err != nil {
@@ -171,13 +171,14 @@ func (s *server) readLocal(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// errorKindHeader names the error class on a non-200 local response so
-// Client can hand the CLI the same sentinel the server saw.
+// errorKindHeader names the error class on a non-200 response so Client
+// can hand the CLI the same sentinel the server saw.
 const errorKindHeader = "X-DeFiOS-Error"
 
-// localErrors pairs each sentinel the local API can report with its wire
-// kind and HTTP status. Order matters only for the first match.
-var localErrors = []struct {
+// errorKinds pairs each sentinel either HTTP face can report with its wire
+// kind and status. The formation face (:4634) uses the status alone; the
+// local face also sends the kind. First match wins.
+var errorKinds = []struct {
 	err    error
 	kind   string
 	status int
@@ -187,15 +188,14 @@ var localErrors = []struct {
 	{group.ErrAlreadyValid, "already-valid", http.StatusConflict},
 	{group.ErrUnknownGroup, "unknown-group", http.StatusNotFound},
 	{group.ErrNoGroup, "no-group", http.StatusNotFound},
+	{group.ErrBadProposal, "bad-proposal", http.StatusBadRequest},
+	{group.ErrBadAccept, "bad-accept", http.StatusBadRequest},
+	{group.ErrBadDecline, "bad-decline", http.StatusBadRequest},
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
 }
 
-// answer writes a GroupView or maps err to a kind and status.
-func (s *server) answer(w http.ResponseWriter, v GroupView, err error) {
-	if err == nil {
-		writeJSON(w, v)
-		return
-	}
+// writeError answers err with its kind and status.
+func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	var req *requestError
 	var unreachable *unreachableError
@@ -205,7 +205,7 @@ func (s *server) answer(w http.ResponseWriter, v GroupView, err error) {
 	case errors.As(err, &unreachable):
 		status = http.StatusBadGateway
 	}
-	for _, e := range localErrors {
+	for _, e := range errorKinds {
 		if errors.Is(err, e.err) {
 			w.Header().Set(errorKindHeader, e.kind)
 			status = e.status
@@ -215,13 +215,22 @@ func (s *server) answer(w http.ResponseWriter, v GroupView, err error) {
 	http.Error(w, err.Error(), status)
 }
 
-// localError is Client's inverse of answer: the server's message, tagged
-// with the sentinel its kind names.
+// answer writes a GroupView, or the error.
+func (s *server) answer(w http.ResponseWriter, v GroupView, err error) {
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// localError is Client's inverse of writeError: the server's message,
+// tagged with the sentinel its kind names.
 func localError(path string, resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	msg := strings.TrimSpace(string(body))
 	kind := resp.Header.Get(errorKindHeader)
-	for _, e := range localErrors {
+	for _, e := range errorKinds {
 		if e.kind == kind {
 			return &kindError{sentinel: e.err, msg: msg}
 		}

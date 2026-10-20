@@ -26,11 +26,10 @@ func SignIdentity(n *identity.Node, displayName, tsnetHostname string) (*groupv1
 		DisplayName:         displayName,
 		TsnetHostname:       tsnetHostname,
 	}
-	msg, err := canonical.Marshal(id)
-	if err != nil {
-		return nil, fmt.Errorf("group: %w", err)
+	var err error
+	if id.Sig, err = sign(n, id); err != nil {
+		return nil, err
 	}
-	id.Sig = ed25519.Sign(ed25519.NewKeyFromSeed(n.AuthSeed), msg)
 	return id, nil
 }
 
@@ -38,25 +37,17 @@ func SignIdentity(n *identity.Node, displayName, tsnetHostname string) (*groupv1
 // and that node_id == SHA-256("defios-node-id-v1" || auth_public_key), then
 // returns the Roster entry it describes.
 func VerifyIdentity(id *groupv1.Identity) (RosterNode, error) {
-	if len(id.AuthPublicKey) != ed25519.PublicKeySize || len(id.Sig) != ed25519.SignatureSize {
-		return RosterNode{}, fmt.Errorf("%w: malformed key or signature", ErrBadIdentity)
+	if len(id.AuthPublicKey) != ed25519.PublicKeySize {
+		return RosterNode{}, fmt.Errorf("%w: malformed auth public key", ErrBadIdentity)
 	}
-	unsigned := proto.Clone(id).(*groupv1.Identity)
-	unsigned.Sig = nil
-	msg, err := canonical.Marshal(unsigned)
-	if err != nil {
-		return RosterNode{}, fmt.Errorf("group: %w", err)
+	if err := verify(id.AuthPublicKey, id, id.Sig); err != nil {
+		return RosterNode{}, fmt.Errorf("%w: %w", ErrBadIdentity, err)
 	}
-	if !ed25519.Verify(id.AuthPublicKey, msg, id.Sig) {
-		return RosterNode{}, fmt.Errorf("%w: bad signature", ErrBadIdentity)
-	}
-	want := identity.NodeID(id.AuthPublicKey)
-	var got identity.ID
-	if len(id.NodeId) != len(got) {
+	got, ok := nodeIDFromBytes(id.NodeId)
+	if !ok {
 		return RosterNode{}, fmt.Errorf("%w: node_id is not 32 bytes", ErrBadIdentity)
 	}
-	copy(got[:], id.NodeId)
-	if got != want {
+	if want := identity.NodeID(id.AuthPublicKey); got != want {
 		return RosterNode{}, fmt.Errorf("%w: node_id %s is not derived from the auth public key", ErrBadIdentity, got)
 	}
 	if len(id.EncryptionPublicKey) != 32 {

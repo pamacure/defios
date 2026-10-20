@@ -59,7 +59,7 @@ func (s *Slot) Propose(roster []*groupv1.Identity, now time.Time) (*groupv1.Crea
 	if err != nil {
 		return nil, err
 	}
-	if err := s.hold(prop); err != nil {
+	if err := s.holdProposal(prop); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -84,14 +84,16 @@ func (s *Slot) ReceiveProposal(p *groupv1.CreateProposal) (Proposal, error) {
 		}
 		return Proposal{}, ErrOneGroup
 	}
-	if err := s.hold(prop); err != nil {
+	if err := s.holdProposal(prop); err != nil {
 		return Proposal{}, err
 	}
 	return prop, nil
 }
 
-// Accept signs this Node's Accept of the held Group and records it; the
-// caller delivers it to every other Roster Node (§6.2 step 4). Idempotent.
+// Accept signs this Node's Accept of the held Group (§6.2 step 4). It does
+// not hold it: the caller delivers it to every other Roster Node and then
+// passes it to ReceiveAccept, so this Node turns Valid only once the
+// others can too.
 func (s *Slot) Accept(gid ID) (*groupv1.CreateAccept, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,20 +103,12 @@ func (s *Slot) Accept(gid ID) (*groupv1.CreateAccept, error) {
 	if a, ok := s.rec.accepts[s.self.NodeID]; ok {
 		return a, nil
 	}
-	a, err := SignAccept(s.self, gid)
-	if err != nil {
-		return nil, err
-	}
-	if s.self.NodeID != s.rec.Initiator() {
-		if err := s.record(s.self.NodeID, a); err != nil {
-			return nil, err
-		}
-	}
-	return a, nil
+	return SignAccept(s.self, gid)
 }
 
-// ReceiveAccept verifies and records another Node's Accept, returning who
-// accepted. The Record turns Valid once every Roster Node has.
+// ReceiveAccept verifies and holds an Accept (another Node's, or this
+// Node's own once delivered), returning who accepted. The Record turns
+// Valid once every Roster Node has.
 func (s *Slot) ReceiveAccept(a *groupv1.CreateAccept) (identity.ID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,13 +123,10 @@ func (s *Slot) ReceiveAccept(a *groupv1.CreateAccept) (identity.ID, error) {
 	if err != nil {
 		return identity.ID{}, err
 	}
-	if who == s.rec.Initiator() {
-		return who, nil // the initiator's create already counts
+	if who == s.rec.Initiator() || s.rec.holds(who) {
+		return who, nil // the initiator's create already counts; re-delivery is a no-op
 	}
-	if _, held := s.rec.accepts[who]; held {
-		return who, nil
-	}
-	return who, s.record(who, a)
+	return who, s.hold(who, a)
 }
 
 // Decline signs this Node's Decline and cancels the held Group, freeing the
@@ -202,8 +193,8 @@ func (s *Slot) check(gid ID) error {
 	return nil
 }
 
-// hold persists prop as this Node's pending Group. Caller holds mu.
-func (s *Slot) hold(prop Proposal) error {
+// holdProposal persists prop as this Node's pending Group. Caller holds mu.
+func (s *Slot) holdProposal(prop Proposal) error {
 	rec := &Record{proposal: prop, accepts: map[identity.ID]*groupv1.CreateAccept{}}
 	if err := rec.save(s.dir); err != nil {
 		return err
@@ -212,8 +203,8 @@ func (s *Slot) hold(prop Proposal) error {
 	return nil
 }
 
-// record persists one more Accept. Caller holds mu.
-func (s *Slot) record(who identity.ID, a *groupv1.CreateAccept) error {
+// hold persists one more Accept. Caller holds mu.
+func (s *Slot) hold(who identity.ID, a *groupv1.CreateAccept) error {
 	s.rec.accepts[who] = a
 	if err := s.rec.save(s.dir); err != nil {
 		delete(s.rec.accepts, who)

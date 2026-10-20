@@ -56,15 +56,19 @@ func (r *Record) Roster() Roster { return r.proposal.Roster }
 // Initiator is the Node that proposed the Group.
 func (r *Record) Initiator() identity.ID { return r.proposal.Initiator }
 
-// Proposal is the verified proposal.
-func (r *Record) Proposal() Proposal { return r.proposal }
-
 // Accepted reports whether node's Accept is held. The initiator always
 // has.
 func (r *Record) Accepted(node identity.ID) bool {
 	if node == r.proposal.Initiator {
 		return true
 	}
+	_, ok := r.accepts[node]
+	return ok
+}
+
+// holds reports whether a signed Accept from node is stored (the
+// initiator's implicit one is not).
+func (r *Record) holds(node identity.ID) bool {
 	_, ok := r.accepts[node]
 	return ok
 }
@@ -79,8 +83,8 @@ func (r *Record) Status() Status {
 	return Valid
 }
 
-// recordFile is the on-disk form, group/<gid>/roster.json: the signed wire
-// messages, re-verified on load.
+// recordFileName is the on-disk Record, group/<gid>/roster.json (§3.1):
+// the signed wire messages, re-verified on load.
 const recordFileName = "roster.json"
 
 type recordFileV1 struct {

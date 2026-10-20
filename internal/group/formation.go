@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -27,17 +28,14 @@ type Proposal struct {
 	GroupID   ID
 	Roster    Roster
 	Initiator identity.ID
-	CreatedAt int64 // unix seconds
-	raw       *groupv1.CreateProposal
+	CreatedAt int64                   // unix seconds
+	raw       *groupv1.CreateProposal // the signed wire form, kept for the Record
 }
-
-// Message is the signed wire form this Proposal was verified from.
-func (p Proposal) Message() *groupv1.CreateProposal { return p.raw }
 
 // SignProposal builds the initiator's Create proposal over the given signed
 // Identities (§6.2 step 2). The initiator must be one of them.
 func SignProposal(initiator *identity.Node, roster []*groupv1.Identity, now time.Time) (*groupv1.CreateProposal, error) {
-	r, err := rosterFromIdentities(roster, ErrBadProposal)
+	r, err := rosterFromIdentities(roster)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +45,7 @@ func SignProposal(initiator *identity.Node, roster []*groupv1.Identity, now time
 	gid := r.GroupID()
 	p := &groupv1.CreateProposal{
 		GroupId:   gid[:],
-		Roster:    sortIdentities(roster),
+		Roster:    sortedIdentities(roster),
 		Initiator: initiator.NodeID[:],
 		CreatedAt: now.Unix(),
 	}
@@ -61,7 +59,7 @@ func SignProposal(initiator *identity.Node, roster []*groupv1.Identity, now time
 // VerifyProposal checks a received proposal: Identities, Group ID hash,
 // initiator on the Roster, and the initiator's signature.
 func VerifyProposal(p *groupv1.CreateProposal) (Proposal, error) {
-	r, err := rosterFromIdentities(p.Roster, ErrBadProposal)
+	r, err := rosterFromIdentities(p.Roster)
 	if err != nil {
 		return Proposal{}, err
 	}
@@ -83,7 +81,7 @@ func VerifyProposal(p *groupv1.CreateProposal) (Proposal, error) {
 		return Proposal{}, fmt.Errorf("%w: initiator %s is not on the roster", ErrBadProposal, initiator)
 	}
 	if err := verify(signer.AuthPublicKey, p, p.Sig); err != nil {
-		return Proposal{}, fmt.Errorf("%w: %v", ErrBadProposal, err)
+		return Proposal{}, fmt.Errorf("%w: %w", ErrBadProposal, err)
 	}
 	return Proposal{GroupID: gid, Roster: r, Initiator: initiator, CreatedAt: p.CreatedAt, raw: p}, nil
 }
@@ -101,7 +99,7 @@ func SignAccept(n *identity.Node, gid ID) (*groupv1.CreateAccept, error) {
 func VerifyAccept(a *groupv1.CreateAccept, p Proposal) (identity.ID, error) {
 	who, err := verifyResponse(a.GroupId, a.NodeId, a, a.Sig, p)
 	if err != nil {
-		return identity.ID{}, fmt.Errorf("%w: %v", ErrBadAccept, err)
+		return identity.ID{}, fmt.Errorf("%w: %w", ErrBadAccept, err)
 	}
 	return who, nil
 }
@@ -119,14 +117,14 @@ func SignDecline(n *identity.Node, gid ID, reason string) (*groupv1.CreateDeclin
 func VerifyDecline(d *groupv1.CreateDecline, p Proposal) (identity.ID, string, error) {
 	who, err := verifyResponse(d.GroupId, d.NodeId, d, d.Sig, p)
 	if err != nil {
-		return identity.ID{}, "", fmt.Errorf("%w: %v", ErrBadDecline, err)
+		return identity.ID{}, "", fmt.Errorf("%w: %w", ErrBadDecline, err)
 	}
 	return who, d.Reason, nil
 }
 
 // verifyResponse is the shared Accept/Decline check: same Group, sender on
 // the Roster, signature under the Roster's pinned auth key.
-func verifyResponse(groupID, nodeID []byte, msg signable, sig []byte, p Proposal) (identity.ID, error) {
+func verifyResponse(groupID, nodeID []byte, msg proto.Message, sig []byte, p Proposal) (identity.ID, error) {
 	gid, ok := idFromBytes(groupID)
 	if !ok || gid != p.GroupID {
 		return identity.ID{}, errors.New("group_id is not this proposal's")
@@ -146,20 +144,20 @@ func verifyResponse(groupID, nodeID []byte, msg signable, sig []byte, p Proposal
 }
 
 // rosterFromIdentities verifies each Identity and builds the Roster,
-// rejecting duplicates. wrap is the caller's sentinel.
-func rosterFromIdentities(ids []*groupv1.Identity, wrap error) (Roster, error) {
+// rejecting duplicates.
+func rosterFromIdentities(ids []*groupv1.Identity) (Roster, error) {
 	if len(ids) < 2 {
-		return Roster{}, fmt.Errorf("%w: a roster needs at least two Nodes", wrap)
+		return Roster{}, fmt.Errorf("%w: a roster needs at least two Nodes", ErrBadProposal)
 	}
 	nodes := make([]RosterNode, 0, len(ids))
 	seen := map[identity.ID]bool{}
 	for _, id := range ids {
 		n, err := VerifyIdentity(id)
 		if err != nil {
-			return Roster{}, fmt.Errorf("%w: %v", wrap, err)
+			return Roster{}, fmt.Errorf("%w: %w", ErrBadProposal, err)
 		}
 		if seen[n.NodeID] {
-			return Roster{}, fmt.Errorf("%w: node %s appears twice", wrap, n.NodeID)
+			return Roster{}, fmt.Errorf("%w: node %s appears twice", ErrBadProposal, n.NodeID)
 		}
 		seen[n.NodeID] = true
 		nodes = append(nodes, n)
@@ -167,38 +165,29 @@ func rosterFromIdentities(ids []*groupv1.Identity, wrap error) (Roster, error) {
 	return NewRoster(nodes...), nil
 }
 
-// sortIdentities clones ids (the proposal owns its Roster) sorted by
+// sortedIdentities clones ids (the proposal owns its Roster) sorted by
 // node_id as raw bytes.
-func sortIdentities(ids []*groupv1.Identity) []*groupv1.Identity {
+func sortedIdentities(ids []*groupv1.Identity) []*groupv1.Identity {
 	sorted := make([]*groupv1.Identity, len(ids))
 	for i, id := range ids {
 		sorted[i] = proto.Clone(id).(*groupv1.Identity)
 	}
-	for i := 1; i < len(sorted); i++ {
-		for j := i; j > 0 && bytes.Compare(sorted[j-1].NodeId, sorted[j].NodeId) > 0; j-- {
-			sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
-		}
-	}
+	slices.SortFunc(sorted, func(a, b *groupv1.Identity) int { return bytes.Compare(a.NodeId, b.NodeId) })
 	return sorted
 }
 
-// signable is any formation message whose signature field is the only
-// thing excluded from the signed bytes.
-type signable interface {
-	proto.Message
-}
-
-// unsigned returns msg's deterministic bytes with sig cleared.
-func unsigned(msg signable) ([]byte, error) {
+// unsigned returns msg's deterministic bytes with sig cleared: every
+// formation message is signed over everything but its sig field (§2.6).
+func unsigned(msg proto.Message) ([]byte, error) {
 	clone := proto.Clone(msg)
 	switch m := clone.(type) {
+	case *groupv1.Identity:
+		m.Sig = nil
 	case *groupv1.CreateProposal:
 		m.Sig = nil
 	case *groupv1.CreateAccept:
 		m.Sig = nil
 	case *groupv1.CreateDecline:
-		m.Sig = nil
-	case *groupv1.Identity:
 		m.Sig = nil
 	default:
 		return nil, fmt.Errorf("group: cannot sign %T", msg)
@@ -206,7 +195,8 @@ func unsigned(msg signable) ([]byte, error) {
 	return canonical.Marshal(clone)
 }
 
-func sign(n *identity.Node, msg signable) ([]byte, error) {
+// sign produces n's auth signature over msg.
+func sign(n *identity.Node, msg proto.Message) ([]byte, error) {
 	b, err := unsigned(msg)
 	if err != nil {
 		return nil, err
@@ -214,7 +204,8 @@ func sign(n *identity.Node, msg signable) ([]byte, error) {
 	return ed25519.Sign(ed25519.NewKeyFromSeed(n.AuthSeed), b), nil
 }
 
-func verify(pub ed25519.PublicKey, msg signable, sig []byte) error {
+// verify checks sig over msg under pub.
+func verify(pub ed25519.PublicKey, msg proto.Message, sig []byte) error {
 	if len(sig) != ed25519.SignatureSize {
 		return errors.New("malformed signature")
 	}
@@ -228,6 +219,7 @@ func verify(pub ed25519.PublicKey, msg signable, sig []byte) error {
 	return nil
 }
 
+// idFromBytes reads a wire group_id.
 func idFromBytes(b []byte) (ID, bool) {
 	var id ID
 	if len(b) != len(id) {
@@ -237,6 +229,7 @@ func idFromBytes(b []byte) (ID, bool) {
 	return id, true
 }
 
+// nodeIDFromBytes reads a wire node_id.
 func nodeIDFromBytes(b []byte) (identity.ID, bool) {
 	var id identity.ID
 	if len(b) != len(id) {

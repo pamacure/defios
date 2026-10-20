@@ -182,6 +182,7 @@ $XDG_DATA_HOME/defios/
   vault                       # binary age(scrypt); private keys and shares
   tsnet/
   group/<group_id_hex>/
+    roster.json               # signed Create proposal + Accepts held (§6.2); pending or valid
     cosl.sqlite
     raft.db                   # raft-boltdb LogStore + StableStore
     raft-snap/                # FileSnapshotStore
@@ -189,7 +190,7 @@ $XDG_DATA_HOME/defios/
 $XDG_RUNTIME_DIR/defios/serve.sock
 ```
 
-Backup of this Node is `identity` + `vault`. `group/` is disposable if a majority still has the replica. Lost Vault = new Node.
+Backup of this Node is `identity` + `vault`. `group/` is disposable if a majority still has the replica (a pending proposal that is lost is simply proposed again). Lost Vault = new Node.
 
 ### 3.2 `identity` (JSON, plaintext)
 

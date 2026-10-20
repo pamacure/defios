@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,6 +146,35 @@ func TestGroupInspectErrors(t *testing.T) {
 	}
 }
 
+// A Record whose stored proposal no longer verifies is a verify failure.
+func TestGroupInspectTamperedRecordIsVerifyFailure(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	gid, _, _ := formGroup(t, dir, true)
+	path := filepath.Join(dir, "group", gid.String(), "roster.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Version  int      `json:"version"`
+		Proposal []byte   `json:"proposal"`
+		Accepts  [][]byte `json:"accepts"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc.Proposal[len(doc.Proposal)-1] ^= 1 // last byte is inside the initiator's sig
+	raw, _ = json.Marshal(doc)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := run(t, nil, "", "--dir", dir, "group", "inspect")
+	if r.code != 4 || !strings.Contains(r.stderr, "does not verify") {
+		t.Fatalf("exit %d, stderr %q; want 4 and 'does not verify'", r.code, r.stderr)
+	}
+}
+
 func TestNodeInspectShowsGroupID(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
@@ -190,16 +221,17 @@ func TestGroupCreateUsageAndServeErrors(t *testing.T) {
 
 // fakeGroupServe answers the local formation API with a canned status and
 // body, recording the last request path.
-func fakeGroupServe(t *testing.T, dir string, status int, kind, body string) *string {
+func fakeGroupServe(t *testing.T, dir string, status int, kind, body string) *atomic.Value {
 	t.Helper()
 	l, err := net.Listen("unix", filepath.Join(dir, "serve.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var last string
+	last := new(atomic.Value)
+	last.Store("")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/group/", func(w http.ResponseWriter, r *http.Request) {
-		last = r.URL.Path
+		last.Store(r.URL.Path)
 		if kind != "" {
 			w.Header().Set("X-DeFiOS-Error", kind)
 		}
@@ -209,7 +241,7 @@ func fakeGroupServe(t *testing.T, dir string, status int, kind, body string) *st
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
-	return &last
+	return last
 }
 
 func TestGroupCreateAcceptDeclineThroughServe(t *testing.T) {
@@ -220,8 +252,8 @@ func TestGroupCreateAcceptDeclineThroughServe(t *testing.T) {
 
 	last := fakeGroupServe(t, dir, 200, "", `{"group_id":"`+gid.String()+`","status":"pending"}`)
 	r := run(t, nil, "", "--dir", dir, "group", "create", self, identity.ID{7}.String())
-	if r.code != 0 || *last != "/v1/group/create" || !strings.Contains(r.stdout, gid.String()) || !strings.Contains(r.stdout, "pending") {
-		t.Fatalf("create: exit %d, path %s, stdout %q, stderr %q", r.code, *last, r.stdout, r.stderr)
+	if r.code != 0 || last.Load() != "/v1/group/create" || !strings.Contains(r.stdout, gid.String()) || !strings.Contains(r.stdout, "pending") {
+		t.Fatalf("create: exit %d, path %s, stdout %q, stderr %q", r.code, last.Load(), r.stdout, r.stderr)
 	}
 	r = run(t, nil, "", "--dir", dir, "group", "create", "--json", self, identity.ID{7}.String())
 	var doc map[string]any
@@ -233,16 +265,16 @@ func TestGroupCreateAcceptDeclineThroughServe(t *testing.T) {
 	mustInit(t, dir)
 	last = fakeGroupServe(t, dir, 200, "", `{"group_id":"`+gid.String()+`","status":"valid"}`)
 	r = run(t, nil, "", "--dir", dir, "group", "accept", gid.String())
-	if r.code != 0 || *last != "/v1/group/accept" || !strings.Contains(r.stdout, "valid") {
-		t.Fatalf("accept: exit %d, path %s, stdout %q", r.code, *last, r.stdout)
+	if r.code != 0 || last.Load() != "/v1/group/accept" || !strings.Contains(r.stdout, "valid") {
+		t.Fatalf("accept: exit %d, path %s, stdout %q", r.code, last.Load(), r.stdout)
 	}
 
 	dir = t.TempDir()
 	mustInit(t, dir)
 	last = fakeGroupServe(t, dir, 200, "", `{"group_id":"`+gid.String()+`","status":"declined"}`)
 	r = run(t, nil, "", "--dir", dir, "group", "decline", gid.String(), "--reason", "nope")
-	if r.code != 0 || *last != "/v1/group/decline" || !strings.Contains(r.stdout, "declined") {
-		t.Fatalf("decline: exit %d, path %s, stdout %q", r.code, *last, r.stdout)
+	if r.code != 0 || last.Load() != "/v1/group/decline" || !strings.Contains(r.stdout, "declined") {
+		t.Fatalf("decline: exit %d, path %s, stdout %q", r.code, last.Load(), r.stdout)
 	}
 }
 
@@ -255,7 +287,7 @@ func TestGroupVerbExitCodesFromServe(t *testing.T) {
 		body   string
 		code   int
 	}{
-		{"peer rejected", 422, "rejected", "node 1234 rejected (409): already has a Group", 3},
+		{"node refused", 422, "rejected", "serve: node 1234 refused (409): already has a Group", 3},
 		{"one group", 409, "one-group", "group: this Node already has a pending or valid Group", 2},
 		{"no group", 404, "no-group", "group: this Node has no Group", 2},
 		{"unreachable", 502, "", "node abcd is not reachable on the tailnet", 2},

@@ -18,13 +18,8 @@ import (
 )
 
 // Formation over tsnet :4634 (§6.2). Each POST carries one protobuf; the
-// receiver verifies it through its Slot and answers with a status code the
-// sender maps back to an error class:
-//
-//	200  held
-//	400  does not verify (signature, hash, roster)
-//	404  not this Node's Group
-//	409  this Node already has a Group / the Group is already valid
+// receiver verifies it through its Slot and answers 200 when held, else
+// the status errorKinds gives the refusal.
 const (
 	formationPostTimeout = 10 * time.Second
 	formationMaxBytes    = 256 << 10
@@ -32,9 +27,9 @@ const (
 
 // ErrRejected means another Node refused a formation message: a protocol
 // reject, as opposed to not reaching it at all.
-var ErrRejected = errors.New("rejected")
+var ErrRejected = errors.New("serve: another Node refused the formation message")
 
-// rejectError carries the peer's status and reason.
+// rejectError carries the refusing Node's status and reason.
 type rejectError struct {
 	node   identity.ID
 	status int
@@ -42,7 +37,7 @@ type rejectError struct {
 }
 
 func (e *rejectError) Error() string {
-	return fmt.Sprintf("node %s %s (%d): %s", e.node.String()[:8], ErrRejected, e.status, e.reason)
+	return fmt.Sprintf("serve: node %s refused (%d): %s", e.node.String()[:8], e.status, e.reason)
 }
 func (e *rejectError) Is(target error) bool { return target == ErrRejected }
 
@@ -56,7 +51,7 @@ func (s *server) formationRoutes(mux *http.ServeMux) {
 		prop, err := s.slot.ReceiveProposal(&p)
 		if err != nil {
 			s.opts.Logf("serve: proposal refused: %v", err)
-			http.Error(w, err.Error(), slotStatus(err))
+			writeError(w, err)
 			return
 		}
 		s.opts.Logf("serve: holding proposal for Group %s from %s (pending)", prop.GroupID, prop.Initiator.String()[:8])
@@ -70,7 +65,7 @@ func (s *server) formationRoutes(mux *http.ServeMux) {
 		who, err := s.slot.ReceiveAccept(&a)
 		if err != nil {
 			s.opts.Logf("serve: accept refused: %v", err)
-			http.Error(w, err.Error(), slotStatus(err))
+			writeError(w, err)
 			return
 		}
 		s.logStatus("accept from " + who.String()[:8])
@@ -84,7 +79,7 @@ func (s *server) formationRoutes(mux *http.ServeMux) {
 		who, err := s.slot.ReceiveDecline(&d)
 		if err != nil {
 			s.opts.Logf("serve: decline refused: %v", err)
-			http.Error(w, err.Error(), slotStatus(err))
+			writeError(w, err)
 			return
 		}
 		s.opts.Logf("serve: Group declined by %s (%q); slot is free", who.String()[:8], d.Reason)
@@ -97,19 +92,6 @@ func (s *server) logStatus(event string) {
 	if rec, ok := s.slot.Current(); ok {
 		s.opts.Logf("serve: %s; Group %s is %s", event, rec.GroupID(), rec.Status())
 	}
-}
-
-// slotStatus maps a Slot error to the HTTP code above.
-func slotStatus(err error) int {
-	switch {
-	case errors.Is(err, group.ErrOneGroup), errors.Is(err, group.ErrAlreadyValid):
-		return http.StatusConflict
-	case errors.Is(err, group.ErrNoGroup), errors.Is(err, group.ErrUnknownGroup):
-		return http.StatusNotFound
-	case errors.Is(err, group.ErrBadProposal), errors.Is(err, group.ErrBadAccept), errors.Is(err, group.ErrBadDecline), errors.Is(err, group.ErrBadIdentity):
-		return http.StatusBadRequest
-	}
-	return http.StatusInternalServerError
 }
 
 // readProto decodes the request body into msg, answering 400 itself.
@@ -166,10 +148,10 @@ func (s *server) groupCreate(ctx context.Context, nodeIDs []identity.ID) (GroupV
 		others = append(others, id)
 	}
 	if !seenSelf {
-		return GroupView{}, &requestError{"this Node must be on the roster"}
+		return GroupView{}, &requestError{"serve: this Node must be on the roster"}
 	}
 	if len(others) != 1 {
-		return GroupView{}, &requestError{fmt.Sprintf("MVP forms Groups of exactly two Nodes; got %d others", len(others))}
+		return GroupView{}, &requestError{fmt.Sprintf("serve: MVP forms Groups of exactly one other Node; got %d", len(others))}
 	}
 	if rec, ok := s.slot.Current(); ok {
 		return GroupView{}, fmt.Errorf("%w (%s, %s)", group.ErrOneGroup, rec.GroupID(), rec.Status())
@@ -207,15 +189,22 @@ func (s *server) groupCreate(ctx context.Context, nodeIDs []identity.ID) (GroupV
 	return s.view(nil), nil
 }
 
-// groupAccept is `group accept` (§6.2 step 4): sign, hold, deliver to every
-// other Roster Node. The local Accept stands even if delivery fails; the
-// view names the Nodes still to reach so the operator can retry.
+// groupAccept is `group accept` (§6.2 step 4): sign, deliver to every other
+// Roster Node, and only then hold the Accept locally, so this Node is not
+// valid while another is still pending. The view names the Nodes still
+// to reach so the operator can re-run the verb (re-delivery is a no-op).
 func (s *server) groupAccept(ctx context.Context, gid group.ID) (GroupView, error) {
 	a, err := s.slot.Accept(gid)
 	if err != nil {
 		return GroupView{}, err
 	}
-	undelivered := s.deliver(ctx, "/v1/group/accept", a)
+	rec, _ := s.slot.Current()
+	undelivered := s.deliverTo(ctx, rec.Roster(), "/v1/group/accept", a)
+	if len(undelivered) == 0 {
+		if _, err := s.slot.ReceiveAccept(a); err != nil {
+			return GroupView{}, err
+		}
+	}
 	s.logStatus("accepted")
 	return s.view(undelivered), nil
 }
@@ -236,16 +225,8 @@ func (s *server) groupDecline(ctx context.Context, gid group.ID, reason string) 
 	return GroupView{GroupID: gid.String(), Status: "declined", Undelivered: undelivered}, nil
 }
 
-// deliver posts msg to every other Node on the held Roster and returns the
-// Node IDs it could not reach or that refused.
-func (s *server) deliver(ctx context.Context, path string, msg proto.Message) []string {
-	rec, ok := s.slot.Current()
-	if !ok {
-		return nil
-	}
-	return s.deliverTo(ctx, rec.Roster(), path, msg)
-}
-
+// deliverTo posts msg to every other Node on roster and returns the Node
+// IDs it could not reach or that refused.
 func (s *server) deliverTo(ctx context.Context, roster group.Roster, path string, msg proto.Message) []string {
 	located, err := s.locate(ctx)
 	if err != nil {
@@ -284,9 +265,10 @@ type requestError struct{ msg string }
 
 func (e *requestError) Error() string { return e.msg }
 
-// unreachableError names a Node no tailnet peer advertised (502).
+// unreachableError names a Roster Node no tailnet machine advertised an
+// Identity for (502).
 type unreachableError struct{ node identity.ID }
 
 func (e *unreachableError) Error() string {
-	return fmt.Sprintf("node %s is not reachable on the tailnet", e.node)
+	return fmt.Sprintf("serve: node %s is not reachable on the tailnet", e.node)
 }

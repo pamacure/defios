@@ -55,12 +55,20 @@ func TestSlotsReachValidWithSameGroupID(t *testing.T) {
 		t.Fatal(err)
 	}
 	rb, _ = sb.Current()
-	if rb.Status() != group.Valid {
-		t.Fatalf("responder after own accept = %s; initiator's create is its accept", rb.Status())
+	if rb.Status() != group.Pending {
+		t.Fatalf("responder right after signing = %s; it holds its Accept only once delivered", rb.Status())
 	}
 
+	// Delivered to alice, then held by bob himself.
 	if _, err := sa.ReceiveAccept(acc); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := sb.ReceiveAccept(acc); err != nil {
+		t.Fatal(err)
+	}
+	rb, _ = sb.Current()
+	if rb.Status() != group.Valid {
+		t.Fatalf("responder after holding own accept = %s; initiator's create is its accept", rb.Status())
 	}
 	ra, _ = sa.Current()
 	if ra.Status() != group.Valid || ra.GroupID() != rb.GroupID() {
@@ -156,7 +164,9 @@ func TestAcceptForUnknownGroupAndWithoutGroup(t *testing.T) {
 		t.Fatalf("accept with no Group: err = %v", err)
 	}
 	p, _ := sa.Propose(ids, time.Now())
-	sb.ReceiveProposal(p)
+	if _, err := sb.ReceiveProposal(p); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := sb.Accept(other); !errors.Is(err, group.ErrUnknownGroup) {
 		t.Fatalf("accept of another Group: err = %v", err)
 	}
@@ -198,7 +208,9 @@ func TestSlotReopensPendingState(t *testing.T) {
 func TestRecordFilesAreOwnerOnly(t *testing.T) {
 	alice, _, ids := twoNodes(t)
 	sa, dir := openSlot(t, alice)
-	sa.Propose(ids, time.Now())
+	if _, err := sa.Propose(ids, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	r, _ := sa.Current()
 	gdir := filepath.Join(dir, r.GroupID().String())
 	info, err := os.Stat(gdir)

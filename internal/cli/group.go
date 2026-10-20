@@ -56,19 +56,24 @@ func groupCommand(g *globals) *cobra.Command {
 	return root
 }
 
-// loadGroup reads this Node's Record from disk; no serve needed.
+// loadGroup reads this Node's Record from disk; no serve needed. A Record
+// whose signatures no longer check is a verify failure (4), not a missing
+// file (2).
 func loadGroup(g *globals) (*group.Record, error) {
 	p := g.paths()
 	rec, err := group.Load(p.GroupsDir())
-	if errors.Is(err, group.ErrNoGroup) {
+	switch {
+	case err == nil:
+		return rec, nil
+	case errors.Is(err, group.ErrNoGroup):
 		if _, serr := os.Stat(p.IdentityFile()); errors.Is(serr, os.ErrNotExist) {
 			return nil, errNoNode(p)
 		}
 		return nil, exitOperational(err)
-	} else if err != nil {
-		return nil, exitOperational(err)
+	case errors.Is(err, group.ErrBadProposal), errors.Is(err, group.ErrBadAccept):
+		return nil, exitVerify(err)
 	}
-	return rec, nil
+	return nil, exitOperational(err)
 }
 
 func parseGroupID(s string) (group.ID, error) {
@@ -202,10 +207,9 @@ type rosterRow struct {
 }
 
 type groupView struct {
-	GroupID   string       `json:"group_id"`
-	Status    group.Status `json:"status"`
-	Initiator string       `json:"initiator"`
-	Roster    []rosterRow  `json:"roster"`
+	GroupID string       `json:"group_id"`
+	Status  group.Status `json:"status"`
+	Roster  []rosterRow  `json:"roster"`
 }
 
 func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
@@ -245,7 +249,7 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 		return exitOperational(err)
 	}
 
-	v := groupView{GroupID: rec.GroupID().String(), Status: rec.Status(), Initiator: rec.Initiator().String()}
+	v := groupView{GroupID: rec.GroupID().String(), Status: rec.Status()}
 	for _, n := range rec.Roster().Nodes() {
 		row := rosterRow{
 			NodeID:              n.NodeID.String(),
@@ -267,9 +271,8 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 		return g.emitJSON(v)
 	}
 	w := g.app.Stdout
-	fmt.Fprintf(w, "Group ID:  %s\n", v.GroupID)
-	fmt.Fprintf(w, "Status:    %s\n", v.Status)
-	fmt.Fprintf(w, "Initiator: %s\n", v.Initiator)
+	fmt.Fprintf(w, "Group ID: %s\n", v.GroupID)
+	fmt.Fprintf(w, "Status:   %s\n", v.Status)
 	fmt.Fprintln(w, "Roster:")
 	for _, r := range v.Roster {
 		fmt.Fprintf(w, "  %s  %s  %s  reachable=%s  joined=%s\n", r.NodeID, r.DisplayName, r.Hostname, yesNo(r.Reachable), yesNo(r.Joined))
