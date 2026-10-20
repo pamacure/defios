@@ -129,8 +129,14 @@ func short(id []byte) string {
 }
 
 // oneLine escapes line breaks and truncates so a row never spans lines.
+// EscapeNewlines keeps operator text on one output line: CR and LF become
+// the two-character escapes \r and \n. Nothing is truncated.
+func EscapeNewlines(s string) string {
+	return strings.NewReplacer("\r", `\r`, "\n", `\n`).Replace(s)
+}
+
 func oneLine(s string) string {
-	s = strings.NewReplacer("\r", `\r`, "\n", `\n`).Replace(s)
+	s = EscapeNewlines(s)
 	if r := []rune(s); len(r) > 80 {
 		s = string(r[:79]) + "…"
 	}

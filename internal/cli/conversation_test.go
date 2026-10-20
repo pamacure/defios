@@ -14,11 +14,11 @@ import (
 	groupv1 "defios.com/proto/group/v1"
 )
 
-// talk writes a valid Group record for alice+bob under dir and a replica
+// groupWithTalk writes a valid Group record for alice+bob under dir and a replica
 // with: alice's membership.join, alice "hello group", bob "scoped" in a
 // Key Conversation, bob "hi back". bob never joined, so his name can only
 // come from the Roster. Returns the Nodes in that order.
-func talk(t *testing.T, dir string) (alice, bob *identity.Node) {
+func groupWithTalk(t *testing.T, dir string) (alice, bob *identity.Node) {
 	t.Helper()
 	alice, _ = identity.Generate()
 	bob, _ = identity.Generate()
@@ -59,6 +59,7 @@ func talk(t *testing.T, dir string) (alice, bob *identity.Node) {
 		{alice, cosl.TypeAppFreeform, nil, "hello group"},
 		{bob, cosl.TypeAppFreeform, make([]byte, 32), "scoped"},
 		{bob, cosl.TypeAppFreeform, nil, "hi back"},
+		{alice, cosl.TypeAppFreeform, nil, "two\nlines"},
 	}
 	for i, e := range entries {
 		author := cosl.Author{Node: e.node, GroupID: prop.GroupID}
@@ -88,14 +89,14 @@ func TestConversationLogWithoutGroupIsOperationalError(t *testing.T) {
 
 func TestConversationLogHumanLinesFromRoster(t *testing.T) {
 	dir := t.TempDir()
-	talk(t, dir)
+	groupWithTalk(t, dir)
 	r := run(t, nil, "", "--dir", dir, "conversation", "log")
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("want 2 Group-level lines, got %d:\n%s", len(lines), r.stdout)
+	if len(lines) != 3 {
+		t.Fatalf("want 3 Group-level lines, got %d:\n%s", len(lines), r.stdout)
 	}
 	// <seq> <RFC3339> <display_name>  <text>; names come from the Roster,
 	// so bob is named although he never appended membership.join.
@@ -105,6 +106,10 @@ func TestConversationLogHumanLinesFromRoster(t *testing.T) {
 	if !strings.HasPrefix(lines[1], "4 ") || !strings.HasSuffix(lines[1], " bob  hi back") {
 		t.Errorf("line 2: %q", lines[1])
 	}
+	// A newline in the text never breaks the one-line format.
+	if !strings.HasSuffix(lines[2], ` alice  two\nlines`) {
+		t.Errorf("line 3: %q", lines[2])
+	}
 	stamp := strings.Fields(lines[0])[1]
 	if _, err := time.Parse(time.RFC3339, stamp); err != nil {
 		t.Errorf("created_at %q is not RFC3339: %v", stamp, err)
@@ -113,7 +118,7 @@ func TestConversationLogHumanLinesFromRoster(t *testing.T) {
 
 func TestConversationLogLimitAndJSON(t *testing.T) {
 	dir := t.TempDir()
-	_, bob := talk(t, dir)
+	alice, _ := groupWithTalk(t, dir)
 
 	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--limit", "1", "--json")
 	if r.code != 0 {
@@ -123,10 +128,10 @@ func TestConversationLogLimitAndJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, r.stdout)
 	}
-	if len(rows) != 1 || rows[0]["seq"] != float64(4) || rows[0]["text"] != "hi back" {
+	if len(rows) != 1 || rows[0]["seq"] != float64(5) || rows[0]["text"] != "two\nlines" {
 		t.Fatalf("rows = %v", rows)
 	}
-	if rows[0]["sender"] != bob.NodeID.String() || rows[0]["sender_display_name"] != "bob" || rows[0]["content_type"] != "text/plain" {
+	if rows[0]["sender"] != alice.NodeID.String() || rows[0]["sender_display_name"] != "alice" || rows[0]["content_type"] != "text/plain" {
 		t.Errorf("row = %v", rows[0])
 	}
 	for _, k := range []string{"seq", "term", "created_at", "sender", "sender_display_name", "msg_id", "text", "content_type"} {

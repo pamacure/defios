@@ -3,7 +3,6 @@ package cosl
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"time"
 	"unicode/utf8"
@@ -73,7 +72,7 @@ func MembershipJoin(n *identity.Node, displayName, tsnetHostname string) *coslv1
 const MaxFreeformBytes = 65536
 
 // ErrBadText means freeform text is empty, not UTF-8, or too long.
-var ErrBadText = errors.New("cosl: text must be non-empty UTF-8 of at most 65536 bytes")
+var ErrBadText = fmt.Errorf("cosl: text must be non-empty UTF-8 of at most %d bytes", MaxFreeformBytes)
 
 // Freeform is an app.freeform payload for text, content type text/plain.
 func Freeform(text string) (*coslv1.AppFreeform, error) {

@@ -13,9 +13,9 @@ import (
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// groupLevel polls the Node's replica until n Group-level app.freeform
+// groupLevelRows polls the Node's replica until n Group-level app.freeform
 // rows are there.
-func (n *node) groupLevel(t *testing.T, gid group.ID, want int) []cosl.Row {
+func (n *node) groupLevelRows(t *testing.T, gid group.ID, want int) []cosl.Row {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	var rows []cosl.Row
@@ -56,7 +56,7 @@ func TestConversationSendFromEitherNodeReachesBoth(t *testing.T) {
 		t.Fatalf("views = %+v, %+v", va, vb)
 	}
 
-	ra, rb := a.groupLevel(t, gid, 2), b.groupLevel(t, gid, 2)
+	ra, rb := a.groupLevelRows(t, gid, 2), b.groupLevelRows(t, gid, 2)
 	for i := range ra {
 		if ra[i].Seq != rb[i].Seq || ra[i].MsgID != rb[i].MsgID || ra[i].ConversationID != nil {
 			t.Fatalf("replicas differ at %d:\n%+v\n%+v", i, ra[i], rb[i])

@@ -27,16 +27,16 @@ type sendRequest struct {
 }
 
 // conversationSend is `conversation send` (§8): author a Group-level
-// app.freeform and commit it through Raft. One attempt, bounded by the
-// §4.2 apply timeout; with the other Node down that is the failure.
+// app.freeform and commit it through Raft, bounded by the §4.2 apply
+// timeout; with the other Node down that bound is the failure.
 func (s *server) conversationSend(ctx context.Context, text string) (SendView, error) {
 	payload, err := cosl.Freeform(text)
 	if err != nil {
 		return SendView{}, err
 	}
-	replica, _, ok := s.current()
-	rec, valid := s.slot.Current()
-	if !ok || !valid {
+	replica, _, running := s.current()
+	rec, held := s.slot.Current()
+	if !running || !held {
 		return SendView{}, ErrNoReplica
 	}
 	author := cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}

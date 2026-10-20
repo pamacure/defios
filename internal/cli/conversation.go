@@ -40,7 +40,7 @@ func conversationCommand(g *globals) *cobra.Command {
 
 func runConversationSend(cmd *cobra.Command, g *globals, text string) error {
 	if _, err := cosl.Freeform(text); err != nil {
-		return exitUsagef("%v", err)
+		return exitUsagef("%w", err)
 	}
 	v, err := serve.Client{Socket: g.paths().Socket}.ConversationSend(cmd.Context(), text)
 	if err != nil {
@@ -61,7 +61,7 @@ func sendError(err error) error {
 	case errors.Is(err, raftx.ErrNotInserted):
 		return &ExitError{Code: ExitProtocol, Err: err}
 	case errors.Is(err, cosl.ErrBadText):
-		return exitUsagef("%v", err)
+		return exitUsagef("%w", err)
 	}
 	return serveError(err)
 }
@@ -123,7 +123,7 @@ func runConversationLog(g *globals, limit int) error {
 		return g.emitJSON(lines)
 	}
 	for _, l := range lines {
-		fmt.Fprintf(g.app.Stdout, "%d %s %s  %s\n", l.Seq, l.CreatedAt, l.SenderDisplayName, l.Text)
+		fmt.Fprintf(g.app.Stdout, "%d %s %s  %s\n", l.Seq, l.CreatedAt, l.SenderDisplayName, cosl.EscapeNewlines(l.Text))
 	}
 	return nil
 }
