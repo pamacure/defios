@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"encoding/hex"
 	"net/http"
 
 	"defios.com/internal/session"
@@ -21,7 +22,24 @@ type (
 	}
 )
 
+type keyShareRef struct {
+	Curve     string `json:"curve"`
+	PublicKey string `json:"public_key"`
+}
+
 func (s *server) sessionRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/key/shares", func(w http.ResponseWriter, _ *http.Request) {
+		if s.opts.Vault == nil {
+			writeJSON(w, []keyShareRef{})
+			return
+		}
+		shares := s.opts.Vault.Shares()
+		out := make([]keyShareRef, len(shares))
+		for i, sh := range shares {
+			out[i] = keyShareRef{Curve: sh.Curve, PublicKey: hex.EncodeToString(sh.PublicKey)}
+		}
+		writeJSON(w, out)
+	})
 	mux.HandleFunc("POST /v1/session/start", func(w http.ResponseWriter, r *http.Request) {
 		var req sessionStartRequest
 		if !s.readLocal(w, r, &req) {
@@ -113,4 +131,12 @@ func (c Client) SessionAccept(ctx context.Context, id session.ID) error {
 // SessionAbort is `session abort`.
 func (c Client) SessionAbort(ctx context.Context, id session.ID, reason string) error {
 	return c.do(ctx, "/v1/session/abort", sessionIDRequest{SessionID: id.String(), Reason: reason}, &sessionAck{})
+}
+
+// KeyShares is the public keys this Node holds a share of. Save data stays
+// in the Vault.
+func (c Client) KeyShares(ctx context.Context) ([]keyShareRef, error) {
+	var refs []keyShareRef
+	err := c.do(ctx, "/v1/key/shares", nil, &refs)
+	return refs, err
 }

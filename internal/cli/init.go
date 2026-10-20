@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
+	"defios.com/internal/engine/tssl"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/vault"
@@ -83,10 +84,15 @@ func runInit(g *globals, o initOptions) error {
 			return exitOperational(err)
 		}
 	}
+	preparams, err := ecdsaPreparams(g)
+	if err != nil {
+		return exitOperational(err)
+	}
 	contents := &vaultv1.VaultContents{
 		Version:              1,
 		AuthSeed:             node.AuthSeed,
 		EncryptionPrivateKey: node.EncryptionPrivateKey,
+		EcdsaPreparams:       preparams,
 	}
 	if err := vault.Seal(p.VaultFile(), contents, passphrase); err != nil {
 		if errors.Is(err, vault.ErrEmptyPassphrase) {
@@ -115,6 +121,22 @@ func runInit(g *globals, o initOptions) error {
 	}
 	fmt.Fprintf(g.app.Stdout, "Node %s created\n  config: %s\n  data:   %s\n", node.NodeID, p.Config, p.Data)
 	return nil
+}
+
+// ecdsaPreparams fills VaultContents.ecdsa_preparams. DEFIOS_ECDSA_PREPARAMS
+// is a test hook: "skip" leaves the field empty, any other value is a file
+// of adapter bytes. Unset generates tss-lib LocalPreParams, unless the Vault
+// already has some.
+func ecdsaPreparams(g *globals) ([]byte, error) {
+	switch g.app.Getenv("DEFIOS_ECDSA_PREPARAMS") {
+	case "skip":
+		return nil, nil
+	case "":
+		logf := func(format string, args ...any) { fmt.Fprintf(g.app.Stderr, format+"\n", args...) }
+		return tssl.KeepOrGenerate(nil, logf)
+	default:
+		return os.ReadFile(g.app.Getenv("DEFIOS_ECDSA_PREPARAMS"))
+	}
 }
 
 // mkdirPrivate creates dir and forces 0700 on it even when it already

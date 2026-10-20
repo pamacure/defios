@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/engine/tssl"
 	"defios.com/internal/identity"
 	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
@@ -227,12 +228,14 @@ func sessionTimeout(getenv func(string) string) (time.Duration, error) {
 	return d, nil
 }
 
-// sessionEngine reads DEFIOS_SESSION_ENGINE. Empty is the stand-in that
-// refuses Start; "exchange" is the trivial round engine the local-accept
-// test drives.
+// sessionEngine reads DEFIOS_SESSION_ENGINE. Empty is the tss-lib ECDSA
+// adapter. "unavailable" refuses Start. "exchange" is the trivial round
+// engine the local-accept test drives.
 func sessionEngine(getenv func(string) string, self identity.ID) (func() session.Engine, error) {
 	switch getenv("DEFIOS_SESSION_ENGINE") {
-	case "", "unavailable":
+	case "", "tss":
+		return func() session.Engine { return tssl.NewECDSA([32]byte(self)) }, nil
+	case "unavailable":
 		return func() session.Engine { return session.Unavailable{} }, nil
 	case "exchange":
 		return func() session.Engine { return session.NewExchangeEngine([32]byte(self)) }, nil

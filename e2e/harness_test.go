@@ -244,14 +244,24 @@ type node struct {
 
 func newNode(t *testing.T, hs *headscale, name string) *node {
 	t.Helper()
+	return newNodeOpts(t, hs, name, true)
+}
+
+// newNodeOpts with skipPreparams false generates ECDSA preparams at init.
+func newNodeOpts(t *testing.T, hs *headscale, name string, skipPreparams bool) *node {
+	t.Helper()
+	env := map[string]string{
+		"DEFIOS_PASSPHRASE": passphrase,
+		"TS_AUTHKEY":        hs.preauthKey(t, name),
+	}
+	if skipPreparams {
+		env["DEFIOS_ECDSA_PREPARAMS"] = "skip"
+	}
 	n := &node{
 		t:    t,
 		name: name,
 		dir:  filepath.Join(t.TempDir(), name),
-		env: map[string]string{
-			"DEFIOS_PASSPHRASE": passphrase,
-			"TS_AUTHKEY":        hs.preauthKey(t, name),
-		},
+		env:  env,
 	}
 	n.sock = filepath.Join(n.dir, "serve.sock")
 	n.logs = &safeBuf{}

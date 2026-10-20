@@ -78,6 +78,7 @@ type rec struct {
 	completes    []seen
 	completeSeq  uint64
 	agreed       bool
+	conflict     bool
 	rounds       []round
 	status       string
 	reason       string
@@ -206,7 +207,7 @@ func parse(rows []cosl.Row) ([]*rec, error) {
 }
 
 func (r *rec) recompute() {
-	r.agreed, r.completeSeq = agreement(r)
+	r.agreed, r.completeSeq, r.conflict = agreement(r)
 	switch {
 	case len(r.abortAt) > 0:
 		r.status = Aborted
@@ -219,23 +220,23 @@ func (r *rec) recompute() {
 }
 
 // agreement reports whether n distinct participants have completed with
-// the same curve and public key as each other and as the start.
-func agreement(r *rec) (bool, uint64) {
+// the same curve and public key as each other and as the start. conflict
+// is a complete that disagrees; the Session is not a Key.
+func agreement(r *rec) (agreed bool, at uint64, conflict bool) {
 	if r.n == 0 || len(r.completes) == 0 {
-		return false, 0
+		return false, 0, false
 	}
 	var curve string
 	var pk []byte
 	seen := map[identity.ID]struct{}{}
-	var at uint64
 	for _, c := range r.completes {
-		if len(seen) == 0 {
+		if c.curve != r.curve {
+			return false, 0, true
+		}
+		if pk == nil {
 			curve, pk = c.curve, c.publicKey
 		} else if c.curve != curve || !bytes.Equal(c.publicKey, pk) {
-			return false, 0
-		}
-		if c.curve != r.curve {
-			return false, 0
+			return false, 0, true
 		}
 		if _, ok := seen[c.sender]; ok {
 			continue
@@ -245,7 +246,38 @@ func agreement(r *rec) (bool, uint64) {
 			at = c.seq
 		}
 	}
-	return len(seen) == int(r.n), at
+	return len(seen) == int(r.n), at, false
+}
+
+// Completed is a Key the replica has minted: n session.complete rows agree
+// on curve and canonical public key.
+type Completed struct {
+	SessionID ID
+	Curve     string
+	PublicKey []byte
+	T, N      int
+}
+
+// CompletedSessions reads minted Keys off the replica. There is no keys table.
+func CompletedSessions(rows []cosl.Row) ([]Completed, error) {
+	recs, err := parse(rows)
+	if err != nil {
+		return nil, err
+	}
+	var out []Completed
+	for _, r := range recs {
+		if r.status != Complete || len(r.completes) == 0 {
+			continue
+		}
+		out = append(out, Completed{
+			SessionID: r.id,
+			Curve:     r.curve,
+			PublicKey: append([]byte(nil), r.completes[0].publicKey...),
+			T:         int(r.t),
+			N:         int(r.n),
+		})
+	}
+	return out, nil
 }
 
 // validate is Key policy (§7.1), not a COSL commit rule. An invalid start

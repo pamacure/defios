@@ -27,7 +27,15 @@ const (
 	reasonPartyLost     = "party state lost"
 	reasonWaitingAccept = "waiting for accept"
 	reasonTimedOut      = "timed out waiting for parties"
+	reasonDisagree      = "completes disagree"
 )
+
+// ShareStore is where a minted share is written before session.complete
+// and deleted again if the Session aborts or the completes disagree.
+type ShareStore interface {
+	Put(curve string, publicKey, saveData []byte) error
+	Delete(curve string, publicKey []byte) error
+}
 
 // Config is one Node's Session layer.
 type Config struct {
@@ -49,6 +57,11 @@ type Config struct {
 	// Node already accepted and aborts them: the in-memory party is gone
 	// and cannot be resumed. Empty keeps accepts in memory only.
 	AcceptPath string
+	// Shares is the unlocked Vault. Nil skips minting (tests that do not
+	// finish a Key). PendingPath remembers a share that is in the Vault
+	// but not yet a minted Key, so a restart can delete it on abort.
+	Shares      ShareStore
+	PendingPath string
 	// Tick is how often the replica is polled. Zero means 50ms.
 	Tick time.Duration
 }
@@ -63,8 +76,14 @@ type Service struct {
 	inflight map[ID]struct{} // abort already submitted
 	failed   map[ID]struct{} // do not start another engine
 	aborting map[ID]string   // abort not yet durable; retry this reason
+	held     map[ID]shareRef // share in the Vault, Key not minted yet
 	parties  map[ID]*party
 	waitLog  map[ID]struct{}
+}
+
+type shareRef struct {
+	Curve     string
+	PublicKey []byte
 }
 
 type party struct {
@@ -76,24 +95,25 @@ type party struct {
 	replayDone chan struct{}
 	once       sync.Once
 	waitSince  time.Time
+	minted     bool
 
 	mu      sync.Mutex
-	doneErr error
+	result  Result
 	doneSet bool
 }
 
 func (p *party) finishReplay() { p.once.Do(func() { close(p.replayDone) }) }
 
-func (p *party) setDone(err error) {
+func (p *party) setDone(res Result) {
 	p.mu.Lock()
-	p.doneErr, p.doneSet = err, true
+	p.result, p.doneSet = res, true
 	p.mu.Unlock()
 }
 
-func (p *party) takeDone() (error, bool) {
+func (p *party) takeDone() (Result, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.doneErr, p.doneSet
+	return p.result, p.doneSet
 }
 
 // New prepares a Service. It does not watch the replica until Run.
@@ -121,6 +141,10 @@ func New(cfg Config) (*Service, error) {
 		}
 		onDisk = ids
 	}
+	held, err := loadPending(cfg.PendingPath)
+	if err != nil {
+		return nil, err
+	}
 	return &Service{
 		cfg:      cfg,
 		pending:  map[ID]struct{}{},
@@ -128,6 +152,7 @@ func New(cfg Config) (*Service, error) {
 		inflight: map[ID]struct{}{},
 		failed:   map[ID]struct{}{},
 		aborting: map[ID]string{},
+		held:     held,
 		parties:  map[ID]*party{},
 		waitLog:  map[ID]struct{}{},
 	}, nil
@@ -240,7 +265,11 @@ func (s *Service) Abort(ctx context.Context, id ID, reason string) error {
 	if r.status != Open {
 		return nil
 	}
-	return s.abort(ctx, id, reason)
+	if err := s.abort(ctx, id, reason); err != nil {
+		return err
+	}
+	s.dropShare(id)
+	return nil
 }
 
 func (s *Service) poll(ctx context.Context) {
@@ -270,6 +299,15 @@ func (s *Service) poll(ctx context.Context) {
 			s.stop(r.id)
 			s.forget(r.id)
 			delete(s.aborting, r.id)
+			if r.status == Aborted {
+				s.dropShare(r.id)
+			} else {
+				s.forgetShare(r.id)
+			}
+			continue
+		}
+		if r.conflict {
+			s.giveUp(ctx, r.id, reasonDisagree)
 			continue
 		}
 		if _, ok := s.aborting[r.id]; ok {
@@ -370,8 +408,14 @@ func (s *Service) feed(ctx context.Context, r *rec) {
 		p.replayed = true
 		p.finishReplay()
 	}
-	if err, ok := p.takeDone(); ok && err != nil {
-		s.giveUp(ctx, r.id, err.Error())
+	if res, ok := p.takeDone(); ok {
+		if res.Err != nil {
+			s.giveUp(ctx, r.id, res.Err.Error())
+			return
+		}
+		if !p.minted {
+			s.mint(ctx, r, p, res)
+		}
 	}
 }
 
@@ -402,7 +446,10 @@ func (s *Service) deliver(p *party, round round) error {
 
 func (s *Service) checkWait(ctx context.Context, r *rec) {
 	p := s.parties[r.id]
-	if p == nil || !p.replayed {
+	if p == nil || !p.replayed || p.minted {
+		return
+	}
+	if res, ok := p.takeDone(); ok && res.Err == nil {
 		return
 	}
 	if len(p.engine.WaitingFor()) == 0 {
@@ -422,6 +469,7 @@ func (s *Service) checkWait(ctx context.Context, r *rec) {
 // remembered and retried; the engine is not started again.
 func (s *Service) giveUp(ctx context.Context, id ID, reason string) {
 	s.stop(id)
+	s.dropShare(id)
 	s.fail(id)
 	if _, ok := s.aborting[id]; !ok {
 		s.aborting[id] = reason
@@ -464,7 +512,7 @@ func (s *Service) pump(ctx context.Context, id ID, p *party) {
 			if !ok {
 				return
 			}
-			p.setDone(res.Err)
+			p.setDone(res)
 			return
 		}
 	}

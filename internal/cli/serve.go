@@ -89,6 +89,7 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 		Tailnet:           tailnet,
 		Logf:              logf,
 		Preparams:         contents.EcdsaPreparams,
+		Vault:             vault.NewStore(p.VaultFile(), passphrase, contents),
 		SessionWaitingFor: wait,
 		NewEngine:         engine,
 	})

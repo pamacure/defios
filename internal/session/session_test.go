@@ -30,6 +30,7 @@ type double struct {
 	done    chan session.Result
 	script  func(session.Params, chan session.Outgoing)
 	waiting [][32]byte
+	finish  *session.Result
 	onRecv  func([]byte)
 }
 
@@ -50,6 +51,9 @@ func (d *double) Start(p session.Params) error {
 	d.mu.Unlock()
 	if script != nil {
 		script(p, d.out)
+	}
+	if d.finish != nil {
+		d.done <- *d.finish
 	}
 	return nil
 }
@@ -90,25 +94,28 @@ func (d *double) received() []recv {
 // node is one participant. Appends land on every replica, the way Raft does,
 // so a routing tag cannot be used as a delivery address.
 type node struct {
-	t          *testing.T
-	id         *identity.Node
-	name       string
-	store      *cosl.Store
-	svc        *session.Service
-	roster     group.Roster
-	waitingFor time.Duration
-	acceptPath string
-	clock      func() time.Time
-	append     func(context.Context, cosl.Signed) error
-	appendFn   func(context.Context, cosl.Signed) error
-	waiting    [][32]byte
-	mu         sync.Mutex
-	doubles    []*double
-	script     func(session.Params, chan session.Outgoing)
-	onRecv     func([]byte)
-	logs       []string
-	cancel     context.CancelFunc
-	done       chan struct{}
+	t           *testing.T
+	id          *identity.Node
+	name        string
+	store       *cosl.Store
+	svc         *session.Service
+	roster      group.Roster
+	waitingFor  time.Duration
+	acceptPath  string
+	pendingPath string
+	shares      session.ShareStore
+	finish      *session.Result
+	clock       func() time.Time
+	append      func(context.Context, cosl.Signed) error
+	appendFn    func(context.Context, cosl.Signed) error
+	waiting     [][32]byte
+	mu          sync.Mutex
+	doubles     []*double
+	script      func(session.Params, chan session.Outgoing)
+	onRecv      func([]byte)
+	logs        []string
+	cancel      context.CancelFunc
+	done        chan struct{}
 }
 
 // pair is two Nodes sharing one Roster. Appends fan out to both replicas.
@@ -185,6 +192,7 @@ func (n *node) start() {
 		Node: n.id, Roster: n.roster, Store: n.store, Append: n.append,
 		NewEngine: n.engine, Preparams: []byte("ecdsa-preparams"),
 		WaitingFor: n.waitingFor, Now: n.clock, Logf: n.logf, AcceptPath: n.acceptPath,
+		Shares: n.shares, PendingPath: n.pendingPath,
 		Tick: 5 * time.Millisecond,
 	})
 	if err != nil {
@@ -248,6 +256,7 @@ func (n *node) engine() session.Engine {
 	n.mu.Lock()
 	d.script = n.script
 	d.onRecv = n.onRecv
+	d.finish = n.finish
 	d.waiting = append([][32]byte(nil), n.waiting...)
 	n.doubles = append(n.doubles, d)
 	n.mu.Unlock()
@@ -924,6 +933,92 @@ func TestLiveWaitAbortIsRetriedWhenAppendFails(t *testing.T) {
 	}
 	if got := len(c.alice.engines()[0].started()); got != 1 {
 		t.Fatalf("engine starts = %d, want 1", got)
+	}
+}
+
+type memShares struct {
+	mu     sync.Mutex
+	shares map[string][]byte
+	onPut  func()
+	puts   int
+}
+
+func (m *memShares) key(curve string, publicKey []byte) string {
+	return curve + ":" + hexEncode(publicKey)
+}
+
+func (m *memShares) Put(curve string, publicKey, saveData []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shares == nil {
+		m.shares = map[string][]byte{}
+	}
+	m.shares[m.key(curve, publicKey)] = append([]byte(nil), saveData...)
+	m.puts++
+	if m.onPut != nil {
+		m.onPut()
+	}
+	return nil
+}
+
+func (m *memShares) Delete(curve string, publicKey []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.shares, m.key(curve, publicKey))
+	return nil
+}
+
+func (m *memShares) has(curve string, publicKey []byte) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.shares[m.key(curve, publicKey)]
+	return ok
+}
+
+func hexEncode(b []byte) string {
+	const digits = "0123456789abcdef"
+	out := make([]byte, len(b)*2)
+	for i, c := range b {
+		out[i*2] = digits[c>>4]
+		out[i*2+1] = digits[c&0x0f]
+	}
+	return string(out)
+}
+
+func TestShareIsWrittenBeforeCompleteAndRemovedWhenCompletesDisagree(t *testing.T) {
+	c := newPair(t, time.Hour)
+	aliceShares := &memShares{}
+	bobShares := &memShares{}
+	c.alice.shares = aliceShares
+	c.bob.shares = bobShares
+	c.alice.restart(c.alice.acceptPath)
+	c.bob.restart(c.bob.acceptPath)
+
+	pk := bytes.Repeat([]byte{0x02}, 33)
+	other := bytes.Repeat([]byte{0x03}, 33)
+	var completesAtPut int
+	aliceShares.onPut = func() {
+		completesAtPut = len(c.alice.ofType(t, cosl.TypeSessionComplete))
+	}
+	c.alice.finish = &session.Result{PublicKey: pk, SaveData: []byte("alice-share")}
+	c.bob.finish = &session.Result{PublicKey: other, SaveData: []byte("bob-share")}
+
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := session.ParseID(sum.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.bob.svc.Accept(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, func() bool {
+		return abortedReason(t, c.alice, sum.SessionID, "completes disagree") && !aliceShares.has("ecdsa", pk) && !bobShares.has("ecdsa", other)
+	})
+	if aliceShares.puts < 1 || bobShares.puts < 1 || completesAtPut != 0 {
+		t.Fatalf("puts alice=%d bob=%d, completes visible at alice Put = %d", aliceShares.puts, bobShares.puts, completesAtPut)
 	}
 }
 

@@ -98,8 +98,8 @@ type Outgoing struct {
 	Data []byte
 }
 
-// Result is the engine's terminal output. SaveData is opaque Vault
-// material; this package does not write it (the curve adapters do).
+// Result is the engine's terminal output. The Session layer writes
+// SaveData to the Vault before it appends session.complete.
 type Result struct {
 	PublicKey []byte
 	SaveData  []byte

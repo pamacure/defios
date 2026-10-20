@@ -22,6 +22,7 @@ import (
 	"defios.com/internal/nodedir"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
+	"defios.com/internal/vault"
 	groupv1 "defios.com/proto/group/v1"
 )
 
@@ -62,9 +63,11 @@ type Options struct {
 	Tailnet Tailnet
 	Logf    func(format string, args ...any)
 	// Preparams are the unlocked Vault's ECDSA preparams, passed into
-	// engine Start. SessionWaitingFor overrides the 2-minute wait when
-	// non-zero. NewEngine nil means this serve does not run Sessions.
+	// engine Start. Vault is that same unlocked file, used to write shares.
+	// SessionWaitingFor overrides the 2-minute wait when non-zero.
+	// NewEngine nil means this serve does not run Sessions.
 	Preparams         []byte
+	Vault             *vault.Store
 	SessionWaitingFor time.Duration
 	NewEngine         func() session.Engine
 }

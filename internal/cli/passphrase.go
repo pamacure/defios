@@ -24,6 +24,23 @@ func (p *passphraseSource) bind(cmd *cobra.Command) {
 // the two entries must match. An empty passphrase is a usage error. Only a
 // trailing line ending is stripped, identically for every source, so the
 // bytes that sealed the Vault are the bytes that open it.
+// provided is the passphrase when the caller already has one. It does not
+// prompt. ok is false when neither --passphrase-file nor DEFIOS_PASSPHRASE
+// is set.
+func (p passphraseSource) provided(g *globals) (phrase string, ok bool, err error) {
+	if p.file != "" {
+		raw, err := os.ReadFile(p.file)
+		if err != nil {
+			return "", false, exitUsagef("passphrase file: %w", err)
+		}
+		return strings.TrimRight(string(raw), "\r\n"), true, nil
+	}
+	if v := g.app.Getenv("DEFIOS_PASSPHRASE"); v != "" {
+		return v, true, nil
+	}
+	return "", false, nil
+}
+
 func (p passphraseSource) read(g *globals, confirm bool) (string, error) {
 	var pass string
 	switch {

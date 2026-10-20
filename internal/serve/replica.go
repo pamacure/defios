@@ -66,14 +66,16 @@ func (s *server) startSessions(replica *raftx.Replica, store *cosl.Store, roster
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	svc, err := session.New(session.Config{
-		Node:       s.opts.Node,
-		Roster:     roster,
-		Store:      store,
-		Preparams:  s.opts.Preparams,
-		WaitingFor: s.opts.SessionWaitingFor,
-		NewEngine:  s.opts.NewEngine,
-		Logf:       s.opts.Logf,
-		AcceptPath: filepath.Join(s.opts.Paths.GroupDir(roster.GroupID().String()), "local-accept.json"),
+		Node:        s.opts.Node,
+		Roster:      roster,
+		Store:       store,
+		Preparams:   s.opts.Preparams,
+		WaitingFor:  s.opts.SessionWaitingFor,
+		NewEngine:   s.opts.NewEngine,
+		Logf:        s.opts.Logf,
+		Shares:      s.opts.Vault,
+		AcceptPath:  filepath.Join(s.opts.Paths.GroupDir(roster.GroupID().String()), "local-accept.json"),
+		PendingPath: filepath.Join(s.opts.Paths.GroupDir(roster.GroupID().String()), "pending-shares.json"),
 		Append: func(ctx context.Context, signed cosl.Signed) error {
 			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
 			defer cancel()

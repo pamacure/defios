@@ -21,6 +21,7 @@ type result struct {
 // run executes the CLI in-process against dir with the given env.
 func run(t *testing.T, env map[string]string, stdin string, args ...string) result {
 	t.Helper()
+	env = withPreparamSkip(env)
 	var out, errb bytes.Buffer
 	app := cli.App{
 		Stdin:  strings.NewReader(stdin),
@@ -34,6 +35,20 @@ func run(t *testing.T, env map[string]string, stdin string, args ...string) resu
 }
 
 var withPass = map[string]string{"DEFIOS_PASSPHRASE": "hunter2hunter2"}
+
+// withPreparamSkip keeps init from generating Paillier preparams. A test
+// that wants generation omits the helper and leaves DEFIOS_ECDSA_PREPARAMS
+// unset. "skip" is the test hook.
+func withPreparamSkip(env map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range env {
+		out[k] = v
+	}
+	if _, ok := out["DEFIOS_ECDSA_PREPARAMS"]; !ok {
+		out["DEFIOS_ECDSA_PREPARAMS"] = "skip"
+	}
+	return out
+}
 
 func mustInit(t *testing.T, dir string, extra ...string) result {
 	t.Helper()
