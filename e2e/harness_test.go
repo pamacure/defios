@@ -239,6 +239,7 @@ type node struct {
 	env  map[string]string
 	sock string
 	stop func() // stops the running serve; nil when none runs
+	logs *safeBuf
 }
 
 func newNode(t *testing.T, hs *headscale, name string) *node {
@@ -253,6 +254,7 @@ func newNode(t *testing.T, hs *headscale, name string) *node {
 		},
 	}
 	n.sock = filepath.Join(n.dir, "serve.sock")
+	n.logs = &safeBuf{}
 	r := n.run(context.Background(), "init", "--name", name, "--hostname", "defios-"+name, "--headscale-url", hs.url)
 	if r.code != 0 {
 		t.Fatalf("%s init: exit %d: %s", name, r.code, r.stderr)
@@ -271,7 +273,7 @@ func (n *node) run(ctx context.Context, args ...string) result {
 	app := cli.App{
 		Stdin:  strings.NewReader(""),
 		Stdout: &out,
-		Stderr: io.MultiWriter(&errb, testWriter{n.t, n.name}),
+		Stderr: io.MultiWriter(&errb, n.logs, testWriter{n.t, n.name}),
 		Getenv: func(k string) string { return n.env[k] },
 		Home:   n.dir,
 	}
@@ -474,6 +476,24 @@ func (n *node) nodeList(t *testing.T, until func([]serve.NodeSummary) bool) []se
 	}
 	t.Fatalf("%s node list never satisfied the predicate; last = %+v", n.name, last)
 	return nil
+}
+
+// safeBuf is the concurrent stderr buffer a background serve writes.
+type safeBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *safeBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *safeBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // testWriter forwards serve's stderr to the test log, one line at a time.

@@ -3,11 +3,13 @@ package serve
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"time"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/raftx"
+	"defios.com/internal/session"
 )
 
 // joinRetry paces membership.join attempts while the other Node is still
@@ -51,7 +53,42 @@ func (s *server) startReplica() {
 	}
 	s.replica, s.store = replica, store
 	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(gid.String()))
+	s.startSessions(replica, store, rec.Roster())
 	go s.join(s.ctx, replica, store, gid)
+}
+
+// startSessions runs the keygen Session layer for this replica. A nil
+// engine means this process is not driving Sessions (tests that only
+// form a Group).
+func (s *server) startSessions(replica *raftx.Replica, store *cosl.Store, roster group.Roster) {
+	if s.opts.NewEngine == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(s.ctx)
+	svc, err := session.New(session.Config{
+		Node:       s.opts.Node,
+		Roster:     roster,
+		Store:      store,
+		Preparams:  s.opts.Preparams,
+		WaitingFor: s.opts.SessionWaitingFor,
+		NewEngine:  s.opts.NewEngine,
+		Logf:       s.opts.Logf,
+		AcceptPath: filepath.Join(s.opts.Paths.GroupDir(roster.GroupID().String()), "local-accept.json"),
+		Append: func(ctx context.Context, signed cosl.Signed) error {
+			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
+			defer cancel()
+			_, err := replica.Append(ctx, signed)
+			return err
+		},
+	})
+	if err != nil {
+		cancel()
+		s.opts.Logf("serve: session layer: %v", err)
+		return
+	}
+	s.sessions, s.sessionCancel = svc, cancel
+	s.sessionDone = make(chan struct{})
+	go func() { svc.Run(ctx); close(s.sessionDone) }()
 }
 
 // stopReplica shuts Raft down and closes the COSL.
@@ -60,6 +97,12 @@ func (s *server) stopReplica() {
 	defer s.replicaMu.Unlock()
 	if s.replica == nil {
 		return
+	}
+	if s.sessionCancel != nil {
+		s.sessionCancel()
+		<-s.sessionDone
+		s.sessionCancel = nil
+		s.sessions = nil
 	}
 	if err := s.replica.Close(); err != nil {
 		s.opts.Logf("serve: stopping Raft: %v", err)

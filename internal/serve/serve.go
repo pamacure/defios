@@ -21,6 +21,7 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/raftx"
+	"defios.com/internal/session"
 	groupv1 "defios.com/proto/group/v1"
 )
 
@@ -60,6 +61,12 @@ type Options struct {
 	Config  config.Config
 	Tailnet Tailnet
 	Logf    func(format string, args ...any)
+	// Preparams are the unlocked Vault's ECDSA preparams, passed into
+	// engine Start. SessionWaitingFor overrides the 2-minute wait when
+	// non-zero. NewEngine nil means this serve does not run Sessions.
+	Preparams         []byte
+	SessionWaitingFor time.Duration
+	NewEngine         func() session.Engine
 }
 
 // Run binds the socket and answers the local API at once, then joins the
@@ -134,6 +141,10 @@ type server struct {
 	replicaMu sync.Mutex
 	replica   *raftx.Replica // nil until the Group is valid
 	store     *cosl.Store    // the replica's COSL
+
+	sessions      *session.Service
+	sessionCancel context.CancelFunc
+	sessionDone   chan struct{}
 }
 
 // bindSocket listens on path with mode 0600. A live listener there means

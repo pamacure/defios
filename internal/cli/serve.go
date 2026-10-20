@@ -63,6 +63,14 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	}
 
 	logf := func(format string, args ...any) { fmt.Fprintf(g.app.Stderr, format+"\n", args...) }
+	wait, err := sessionTimeout(g.app.Getenv)
+	if err != nil {
+		return exitOperational(err)
+	}
+	engine, err := sessionEngine(g.app.Getenv, node.NodeID)
+	if err != nil {
+		return exitOperational(err)
+	}
 	authKey := g.app.Getenv("TS_AUTHKEY")
 	if authKey == "" {
 		authKey = cfg.AuthKey
@@ -75,11 +83,14 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 		Logf:       logf,
 	})
 	err = serve.Run(cmd.Context(), serve.Options{
-		Paths:   p,
-		Node:    node,
-		Config:  cfg,
-		Tailnet: tailnet,
-		Logf:    logf,
+		Paths:             p,
+		Node:              node,
+		Config:            cfg,
+		Tailnet:           tailnet,
+		Logf:              logf,
+		Preparams:         contents.EcdsaPreparams,
+		SessionWaitingFor: wait,
+		NewEngine:         engine,
 	})
 	if err != nil {
 		return exitOperational(err)

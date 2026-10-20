@@ -19,6 +19,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/raftx"
+	"defios.com/internal/session"
 )
 
 // Status is what the local API reports about this serve.
@@ -166,6 +167,7 @@ func (s *server) localHandler() http.Handler {
 		s.answer(w, v, err)
 	})
 	s.conversationRoutes(mux)
+	s.sessionRoutes(mux)
 	s.snapshotRoutes(mux)
 	return mux
 }
@@ -211,6 +213,10 @@ var errorKinds = []struct {
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
 	{ErrNoReplica, "no-replica", http.StatusConflict},
 	{cosl.ErrBadText, "bad-text", http.StatusBadRequest},
+	{session.ErrBadCurve, "bad-curve", http.StatusBadRequest},
+	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},
+	{session.ErrNotParticipant, "not-participant", http.StatusForbidden},
+	{session.ErrClosedSession, "closed-session", http.StatusConflict},
 	{raftx.ErrNoLeader, "no-leader", http.StatusServiceUnavailable},
 	{raftx.ErrNotInserted, "not-inserted", http.StatusUnprocessableEntity},
 }
