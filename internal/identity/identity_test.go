@@ -73,7 +73,7 @@ func TestGenerateMintsDistinctNodes(t *testing.T) {
 		t.Fatal("two Generate calls produced the same Node ID")
 	}
 	if len(a.EncryptionPrivateKey) != 32 || len(a.EncryptionPublicKey) != 32 {
-		t.Fatalf("encryption key sizes %d/%d", len(a.EncryptionPrivateKey), len(a.EncryptionPublicKey))
+		t.Fatalf("Encryption keypair sizes %d/%d", len(a.EncryptionPrivateKey), len(a.EncryptionPublicKey))
 	}
 }
 

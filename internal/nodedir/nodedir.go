@@ -50,11 +50,11 @@ func Resolve(l Lookup) Paths {
 	}
 
 	// $XDG_RUNTIME_DIR/defios/serve.sock. macOS has no XDG_RUNTIME_DIR and
-	// falls back to the data dir; Linux without one does the same.
+	// falls back to $XDG_DATA_HOME/defios; Linux without one does the same.
 	if runtime := l.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
 		p.Socket = filepath.Join(runtime, "defios", "serve.sock")
 	} else {
-		p.Socket = filepath.Join(p.Data, "serve.sock")
+		p.Socket = filepath.Join(xdgData, "defios", "serve.sock")
 	}
 	return p
 }

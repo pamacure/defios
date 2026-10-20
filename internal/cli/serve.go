@@ -27,16 +27,16 @@ func serveCommand(g *globals) *cobra.Command {
 			if _, err := vault.Open(p.VaultFile(), passphrase); err != nil {
 				switch {
 				case errors.Is(err, vault.ErrBadPassphrase):
-					return verify(err)
+					return exitVerify(err)
 				case errors.Is(err, os.ErrNotExist):
-					return operationalf("no Node at %s; run `defios init`", p.Data)
+					return errNoNode(p)
 				default:
-					return operational(err)
+					return exitOperational(err)
 				}
 			}
-			return operationalf("serve: Vault unlocked, but tailnet, formation, and Raft are not implemented yet")
+			return exitOperationalf("serve: Vault unlocked, but tailnet, formation, and Raft are not implemented yet")
 		},
 	}
-	cmd.Flags().StringVar(&pass.file, "passphrase-file", "", "read the Vault passphrase from this file")
+	pass.bind(cmd)
 	return cmd
 }

@@ -17,39 +17,25 @@ import (
 	vaultv1 "defios.com/proto/vault/v1"
 )
 
+type initOptions struct {
+	name, hostname, headscaleURL, authKeyHex string
+	pass                                     passphraseSource
+}
+
 func initCommand(g *globals) *cobra.Command {
-	var (
-		name         string
-		hostname     string
-		headscaleURL string
-		authKeyHex   string
-		pass         passphraseSource
-	)
+	var o initOptions
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create this Node: keys, Vault, identity, config",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runInit(g, initOptions{
-				name:         name,
-				hostname:     hostname,
-				headscaleURL: headscaleURL,
-				authKeyHex:   authKeyHex,
-				pass:         pass,
-			})
-		},
+		RunE:  func(*cobra.Command, []string) error { return runInit(g, o) },
 	}
-	cmd.Flags().StringVar(&name, "name", "", "display name (default: machine hostname)")
-	cmd.Flags().StringVar(&hostname, "hostname", "", "tsnet hostname (default: defios-<first 8 hex of Node ID>)")
-	cmd.Flags().StringVar(&headscaleURL, "headscale-url", "", "headscale control URL written to config.toml")
-	cmd.Flags().StringVar(&authKeyHex, "auth-key", "", "restore from a 32-byte hex Ed25519 seed instead of minting one")
-	cmd.Flags().StringVar(&pass.file, "passphrase-file", "", "read the Vault passphrase from this file")
+	cmd.Flags().StringVar(&o.name, "name", "", "display name (default: machine hostname)")
+	cmd.Flags().StringVar(&o.hostname, "hostname", "", "tsnet hostname (default: defios-<first 8 hex of Node ID>)")
+	cmd.Flags().StringVar(&o.headscaleURL, "headscale-url", "", "headscale control URL written to config.toml")
+	cmd.Flags().StringVar(&o.authKeyHex, "auth-key", "", "restore from a 32-byte hex Ed25519 seed instead of minting one")
+	o.pass.bind(cmd)
 	return cmd
-}
-
-type initOptions struct {
-	name, hostname, headscaleURL, authKeyHex string
-	pass                                     passphraseSource
 }
 
 // runInit mints or restores the Node and lays out its files. Order: refuse
@@ -58,9 +44,9 @@ type initOptions struct {
 func runInit(g *globals, o initOptions) error {
 	p := g.paths()
 	if existing, err := nodeExists(p); err != nil {
-		return operational(err)
+		return exitOperational(err)
 	} else if existing {
-		return operationalf("a Node already exists at %s; refusing to overwrite", p.Data)
+		return exitOperationalf("a Node already exists at %s; refusing to overwrite", p.Data)
 	}
 
 	name, err := displayName(o.name)
@@ -72,14 +58,14 @@ func runInit(g *globals, o initOptions) error {
 	if o.authKeyHex != "" {
 		seed, err := hex.DecodeString(o.authKeyHex)
 		if err != nil || len(seed) != ed25519.SeedSize {
-			return usagef("--auth-key must be %d bytes of hex", ed25519.SeedSize)
+			return exitUsagef("--auth-key must be %d bytes of hex", ed25519.SeedSize)
 		}
 		node, err = identity.FromSeed(seed)
 		if err != nil {
-			return usagef("--auth-key: %w", err)
+			return exitUsagef("--auth-key: %w", err)
 		}
 	} else if node, err = identity.Generate(); err != nil {
-		return operationalf("generating keys: %w", err)
+		return exitOperationalf("generating keys: %w", err)
 	}
 
 	hostname := o.hostname
@@ -93,8 +79,8 @@ func runInit(g *globals, o initOptions) error {
 	}
 
 	for _, dir := range []string{p.Config, p.Data} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return operational(err)
+		if err := mkdirPrivate(dir); err != nil {
+			return exitOperational(err)
 		}
 	}
 	contents := &vaultv1.VaultContents{
@@ -104,16 +90,16 @@ func runInit(g *globals, o initOptions) error {
 	}
 	if err := vault.Seal(p.VaultFile(), contents, passphrase); err != nil {
 		if errors.Is(err, vault.ErrEmptyPassphrase) {
-			return usagef("%w", err)
+			return exitUsagef("%w", err)
 		}
-		return operational(err)
+		return exitOperational(err)
 	}
 	if err := identity.WriteFile(p.IdentityFile(), node.Public); err != nil {
-		return operational(err)
+		return exitOperational(err)
 	}
 	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname}
 	if err := config.WriteFile(p.ConfigFile(), cfg); err != nil {
-		return operational(err)
+		return exitOperational(err)
 	}
 
 	if g.json {
@@ -131,9 +117,18 @@ func runInit(g *globals, o initOptions) error {
 	return nil
 }
 
-// nodeExists reports whether identity or vault is already on disk.
+// mkdirPrivate creates dir and forces 0700 on it even when it already
+// existed with a looser mode (spec §3.1: directories 0700).
+func mkdirPrivate(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+// nodeExists reports whether any of this Node's files is already on disk.
 func nodeExists(p nodedir.Paths) (bool, error) {
-	for _, f := range []string{p.IdentityFile(), p.VaultFile()} {
+	for _, f := range []string{p.IdentityFile(), p.VaultFile(), p.ConfigFile()} {
 		if _, err := os.Stat(f); err == nil {
 			return true, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -143,19 +138,25 @@ func nodeExists(p nodedir.Paths) (bool, error) {
 	return false, nil
 }
 
-// displayName applies the MembershipJoin constraints: 1–64 chars, no
-// newlines. Default is the machine hostname.
+// errNoNode is the operational error for a data dir with no Node in it.
+func errNoNode(p nodedir.Paths) error {
+	return exitOperationalf("no Node at %s; run `defios init`", p.Data)
+}
+
+// displayName applies the spec §5.3 display_name constraints (1–64 chars,
+// no newlines) so init cannot mint a name membership.join would reject.
+// Default is the machine hostname.
 func displayName(flag string) (string, error) {
 	name := flag
 	if name == "" {
 		host, err := os.Hostname()
 		if err != nil || host == "" {
-			return "", usagef("--name is required when the machine hostname is unavailable")
+			return "", exitUsagef("--name is required when the machine hostname is unavailable")
 		}
 		name = host
 	}
 	if n := len([]rune(name)); n < 1 || n > 64 || strings.ContainsAny(name, "\r\n") {
-		return "", usagef("--name must be 1–64 characters with no newlines")
+		return "", exitUsagef("--name must be 1–64 characters with no newlines")
 	}
 	return name, nil
 }

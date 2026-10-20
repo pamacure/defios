@@ -42,13 +42,13 @@ func runNodeInspect(g *globals) error {
 	p := g.paths()
 	pub, err := identity.ReadFile(p.IdentityFile())
 	if errors.Is(err, os.ErrNotExist) {
-		return operationalf("no Node at %s; run `defios init`", p.Data)
+		return errNoNode(p)
 	} else if err != nil {
-		return operational(err)
+		return exitOperational(err)
 	}
 	cfg, err := config.ReadFile(p.ConfigFile())
 	if err != nil {
-		return operational(err)
+		return exitOperational(err)
 	}
 	v := nodeView{
 		NodeID:              pub.NodeID.String(),

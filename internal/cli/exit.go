@@ -20,14 +20,18 @@ type ExitError struct {
 func (e *ExitError) Error() string { return e.Err.Error() }
 func (e *ExitError) Unwrap() error { return e.Err }
 
-func usagef(format string, args ...any) error {
+// exitUsagef tags err with ExitUsage.
+func exitUsagef(format string, args ...any) error {
 	return &ExitError{Code: ExitUsage, Err: fmt.Errorf(format, args...)}
 }
 
-func operational(err error) error { return &ExitError{Code: ExitOperational, Err: err} }
+// exitOperational tags err with ExitOperational.
+func exitOperational(err error) error { return &ExitError{Code: ExitOperational, Err: err} }
 
-func operationalf(format string, args ...any) error {
-	return operational(fmt.Errorf(format, args...))
+// exitOperationalf is exitOperational over a formatted error.
+func exitOperationalf(format string, args ...any) error {
+	return exitOperational(fmt.Errorf(format, args...))
 }
 
-func verify(err error) error { return &ExitError{Code: ExitVerify, Err: err} }
+// exitVerify tags err with ExitVerify.
+func exitVerify(err error) error { return &ExitError{Code: ExitVerify, Err: err} }

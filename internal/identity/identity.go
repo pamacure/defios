@@ -56,24 +56,17 @@ func Generate() (*Node, error) {
 	return FromSeed(seed)
 }
 
-// FromSeed restores the auth keypair (and so the Node ID) from a 32-byte
-// seed and mints a fresh Encryption keypair.
+// FromSeed restores the auth keypair from a 32-byte seed and mints a fresh
+// Encryption keypair. This is the one place a Node ID is computed: init.
+// Later readers take it from the identity file (ADR 0005), so a rotated
+// auth key never changes it.
 func FromSeed(seed []byte) (*Node, error) {
-	encPriv, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	return FromSecrets(seed, encPriv.Bytes())
-}
-
-// FromSecrets rebuilds a Node from the secrets stored in the Vault.
-func FromSecrets(seed, encryptionPrivateKey []byte) (*Node, error) {
 	if len(seed) != ed25519.SeedSize {
 		return nil, fmt.Errorf("auth seed is %d bytes, want %d", len(seed), ed25519.SeedSize)
 	}
-	encPriv, err := ecdh.X25519().NewPrivateKey(encryptionPrivateKey)
+	encPriv, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("encryption private key: %w", err)
+		return nil, err
 	}
 	authPub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
 	return &Node{

@@ -37,6 +37,10 @@ func TestEnvOverridesBeatXDG(t *testing.T) {
 	if p.Config != "/etc/defios" || p.Data != "/var/lib/defios" {
 		t.Fatalf("config=%q data=%q", p.Config, p.Data)
 	}
+	// The socket fallback is $XDG_DATA_HOME/defios, not DEFIOS_DATA_DIR.
+	if p.Socket != "/ignored/defios/serve.sock" {
+		t.Fatalf("socket=%q", p.Socket)
+	}
 }
 
 func TestXDGVarsWhenSet(t *testing.T) {
