@@ -24,6 +24,8 @@ type Status struct {
 	NodeID    string `json:"node_id"`
 	Hostname  string `json:"hostname"`
 	TailnetUp bool   `json:"tailnet_up"`
+	RaftUp    bool   `json:"raft_up"`          // a valid Group's replica is running
+	Leader    string `json:"leader,omitempty"` // Node ID of the current Raft leader, if known
 }
 
 // ErrTailnetNotUp is returned for tailnet operations before Up completes.
@@ -81,11 +83,18 @@ type (
 func (s *server) localHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, Status{
+		st := Status{
 			NodeID:    s.opts.Node.NodeID.String(),
 			Hostname:  s.opts.Config.Hostname,
 			TailnetUp: s.tailnetUp.Load(),
-		})
+		}
+		if replica, _, ok := s.current(); ok {
+			st.RaftUp = true
+			if leader, ok := replica.Leader(); ok {
+				st.Leader = leader.String()
+			}
+		}
+		writeJSON(w, st)
 	})
 	mux.HandleFunc("GET /v1/nodes", func(w http.ResponseWriter, r *http.Request) {
 		if !s.tailnetUp.Load() {

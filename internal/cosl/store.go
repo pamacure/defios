@@ -172,6 +172,24 @@ func (s *Store) ByMsgIDPrefix(prefix []byte) (Row, error) {
 	}
 }
 
+// VacuumInto writes a consistent copy of the replica to path, which must
+// not exist. This is the snapshot source; the live file is never rewritten.
+func (s *Store) VacuumInto(path string) error {
+	if _, err := s.db.Exec("VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("cosl: vacuum into: %w", err)
+	}
+	return nil
+}
+
+// Has reports whether a row with this msg_id is committed.
+func (s *Store) Has(msgID [32]byte) (bool, error) {
+	var n int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM cosl WHERE msg_id = ?", msgID[:]).Scan(&n); err != nil {
+		return false, fmt.Errorf("cosl: %w", err)
+	}
+	return n > 0, nil
+}
+
 // Meta reads cosl_meta; a fresh replica reports zeroes and a genesis head.
 func (s *Store) Meta() (Meta, error) {
 	return readMeta(s.db)

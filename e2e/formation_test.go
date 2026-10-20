@@ -11,10 +11,11 @@ import (
 	"defios.com/internal/serve"
 )
 
-// TestFormation (§12): alice proposes, bob accepts, both `group
-// inspect` outputs agree on Roster and Group ID with status valid (§6.2,
-// §11.5). A second proposal into the occupied slot is refused. The
-// §11.5 clause "both append membership.join" lands with Raft (#17).
+// TestFormation (§12, §11.5): alice proposes, bob accepts, both `group
+// inspect` outputs agree on Roster and Group ID with status valid; Raft
+// starts on valid, both membership.join rows land on both replicas, and
+// `cosl log` is identical on both Nodes. A second proposal into the
+// occupied slot is refused.
 func TestFormation(t *testing.T) {
 	hs := startHeadscale(t)
 	alice := newNode(t, hs, "alice")
@@ -87,9 +88,6 @@ func TestFormation(t *testing.T) {
 			a.DisplayName != b.DisplayName || a.Hostname != b.Hostname {
 			t.Fatalf("roster row %d differs:\n%+v\n%+v", i, a, b)
 		}
-		if a.Joined {
-			t.Fatalf("joined before Raft exists: %+v", a)
-		}
 		if !a.Reachable {
 			t.Fatalf("alice sees %s unreachable while both serve", a.DisplayName)
 		}
@@ -101,6 +99,35 @@ func TestFormation(t *testing.T) {
 	}
 	if gid := alice.run(context.Background(), "node", "inspect"); !strings.Contains(gid.stdout, created.GroupID) {
 		t.Fatalf("node inspect does not show the Group:\n%s", gid.stdout)
+	}
+
+	// Raft on valid: both membership.join rows reach both replicas (§6.2
+	// step 6) and the logs are identical (§11.5).
+	bothJoined := func(rows []coslLine) bool {
+		if len(rows) != 2 {
+			return false
+		}
+		for _, r := range rows {
+			if r.TypeName != "membership.join" {
+				return false
+			}
+		}
+		return true
+	}
+	la, lb := alice.coslLog(t, bothJoined), bob.coslLog(t, bothJoined)
+	if mustMarshal(t, la) != mustMarshal(t, lb) {
+		t.Fatalf("cosl log differs:\nalice %s\nbob   %s", mustMarshal(t, la), mustMarshal(t, lb))
+	}
+	senders := map[string]string{la[0].Sender: la[0].SenderDisplayName, la[1].Sender: la[1].SenderDisplayName}
+	if senders[aliceID] != "alice" || senders[bobID] != "bob" {
+		t.Fatalf("join senders = %v", senders)
+	}
+	for _, n := range []*node{alice, bob} {
+		for _, row := range n.groupInspect(t).Roster {
+			if !row.Joined {
+				t.Fatalf("%s group inspect: %s joined=no after both joins committed", n.name, row.DisplayName)
+			}
+		}
 	}
 }
 

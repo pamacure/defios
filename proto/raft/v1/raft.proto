@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package defios.raft.v1;
+
+option go_package = "defios.com/proto/raft/v1;raftv1";
+
+// Forward gate on tsnet :4633 (docs/spec/mvp.md §4.3): a follower hands a
+// signed envelope to the leader, which Applies it.
+
+message ForwardRequest {
+  bytes envelope = 1;                 // canonical signed Envelope bytes
+}
+
+message ForwardResponse {
+  uint64 index = 1;                   // raft log index the envelope committed at
+  uint64 term = 2;
+  string error = 3;                   // empty on success
+}

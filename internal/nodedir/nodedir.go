@@ -71,7 +71,10 @@ func (p Paths) VaultFile() string { return filepath.Join(p.Data, "vault") }
 // GroupsDir holds one subdirectory per Group, named by Group ID hex.
 func (p Paths) GroupsDir() string { return filepath.Join(p.Data, "group") }
 
+// GroupDir is group/<groupID>/: roster.json, cosl.sqlite, raft.db, raft-snap/.
+func (p Paths) GroupDir(groupID string) string { return filepath.Join(p.GroupsDir(), groupID) }
+
 // CoslFile is the COSL replica for the Group whose ID hex is groupID.
 func (p Paths) CoslFile(groupID string) string {
-	return filepath.Join(p.GroupsDir(), groupID, "cosl.sqlite")
+	return filepath.Join(p.GroupDir(groupID), "cosl.sqlite")
 }

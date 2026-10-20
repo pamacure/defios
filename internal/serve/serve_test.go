@@ -24,17 +24,29 @@ import (
 	groupv1 "defios.com/proto/group/v1"
 )
 
-// fakeTailnet hands out loopback listeners and routes fake tailnet IPs to
-// them, so two serve.Run instances can discover each other in-process.
+// fakeNet is one in-process tailnet: every fakeTailnet on it registers
+// its listeners as "<hostname>:<port>", so Raft and the forward gate can
+// dial by hostname the way tsnet does.
+type fakeNet struct {
+	mu     sync.Mutex
+	byName map[string]string // "defios-bob:4632" -> real addr
+}
+
+func newFakeNet() *fakeNet { return &fakeNet{byName: map[string]string{}} }
+
+// fakeTailnet is one Node's view: loopback listeners, routes from fake
+// tailnet IPs to them (formation HTTP), and the peers it is told about.
 type fakeTailnet struct {
+	net       *fakeNet
+	hostname  string
 	mu        sync.Mutex
 	listeners map[string]net.Listener // ":4634" -> listener
 	routes    map[string]string       // "100.64.0.2:4634" -> real addr
 	peers     []serve.Peer
 }
 
-func newFakeTailnet() *fakeTailnet {
-	return &fakeTailnet{listeners: map[string]net.Listener{}, routes: map[string]string{}}
+func newFakeTailnet(n *fakeNet, hostname string) *fakeTailnet {
+	return &fakeTailnet{net: n, hostname: hostname, listeners: map[string]net.Listener{}, routes: map[string]string{}}
 }
 
 func (f *fakeTailnet) Up(context.Context) error { return nil }
@@ -45,10 +57,30 @@ func (f *fakeTailnet) Listen(network, addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, port, _ := net.SplitHostPort(addr)
 	f.mu.Lock()
 	f.listeners[addr] = l
 	f.mu.Unlock()
+	f.net.mu.Lock()
+	f.net.byName[f.hostname+":"+port] = l.Addr().String()
+	f.net.mu.Unlock()
 	return l, nil
+}
+
+// Dial resolves "<hostname>:<port>" on the shared net, else a routed IP.
+func (f *fakeTailnet) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	f.net.mu.Lock()
+	real, ok := f.net.byName[addr]
+	f.net.mu.Unlock()
+	if !ok {
+		f.mu.Lock()
+		real, ok = f.routes[addr]
+		f.mu.Unlock()
+	}
+	if !ok {
+		return nil, errors.New("fake tailnet: no route to " + addr)
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, real)
 }
 
 // formationAddr is where this fake's :4634 listener really is.
@@ -75,17 +107,7 @@ func (f *fakeTailnet) route(fakeIP, real string) {
 }
 
 func (f *fakeTailnet) HTTPClient() *http.Client {
-	return &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			f.mu.Lock()
-			real, ok := f.routes[addr]
-			f.mu.Unlock()
-			if !ok {
-				return nil, errors.New("fake tailnet: no route to " + addr)
-			}
-			return (&net.Dialer{}).DialContext(ctx, network, real)
-		},
-	}}
+	return &http.Client{Transport: &http.Transport{DialContext: f.Dial}}
 }
 
 func (f *fakeTailnet) Peers(context.Context) ([]serve.Peer, error) {
@@ -99,16 +121,29 @@ type node struct {
 	paths   nodedir.Paths
 	tailnet *fakeTailnet
 	name    string
+	stop    func() // stops the running serve; set by start
 }
 
-func newNode(t *testing.T, name string) *node {
+func newNode(t *testing.T, name string) *node { return newNodeOn(t, newFakeNet(), name) }
+
+// newNodeOn mints a Node on a shared fake tailnet.
+func newNodeOn(t *testing.T, n *fakeNet, name string) *node {
 	t.Helper()
 	id, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), name)
-	return &node{id: id, paths: nodedir.Resolve(nodedir.Lookup{Dir: dir}), tailnet: newFakeTailnet(), name: name}
+	return &node{id: id, paths: nodedir.Resolve(nodedir.Lookup{Dir: dir}), tailnet: newFakeTailnet(n, "defios-"+name), name: name}
+}
+
+// restart reuses this Node's dir and identity with a fresh fake tailnet
+// view on the same net, as a new serve process would.
+func (n *node) restart(t *testing.T) {
+	t.Helper()
+	n.stop()
+	n.tailnet = newFakeTailnet(n.tailnet.net, n.tailnet.hostname)
+	n.start(t)
 }
 
 func (n *node) options() serve.Options {
@@ -122,22 +157,28 @@ func (n *node) options() serve.Options {
 }
 
 // start runs serve in the background and waits for the socket to answer.
-func (n *node) start(t *testing.T) context.CancelFunc {
+// The returned func stops it and waits; the test's cleanup calls it too.
+func (n *node) start(t *testing.T) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- serve.Run(ctx, n.options()) }()
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("serve.Run returned %v", err)
+			}
+		})
+	}
 	client := serve.Client{Socket: n.paths.Socket}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if st, err := client.Status(ctx); err == nil && st.TailnetUp {
-			t.Cleanup(func() {
-				cancel()
-				if err := <-done; err != nil {
-					t.Errorf("serve.Run returned %v", err)
-				}
-			})
-			return cancel
+			t.Cleanup(stop)
+			n.stop = stop
+			return stop
 		}
 		select {
 		case err := <-done:
@@ -147,7 +188,7 @@ func (n *node) start(t *testing.T) context.CancelFunc {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("serve never came up")
-	return cancel
+	return stop
 }
 
 func TestStatusOverSocketAndSocketMode(t *testing.T) {

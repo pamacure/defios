@@ -28,8 +28,9 @@ func NewFSM(store *Store, roster group.Roster) *FSM {
 // Result is what Apply reports to the Raft layer. Not inserting is not an
 // error: the entry still occupies its raft index on every replica.
 type Result struct {
-	Inserted bool
-	Reason   string // why nothing was inserted; empty when Inserted
+	Inserted  bool
+	Duplicate bool   // msg_id already had a row; the entry was otherwise valid
+	Reason    string // why nothing was inserted; empty when Inserted
 }
 
 func skip(format string, args ...any) Result {
@@ -52,7 +53,7 @@ func (f *FSM) Apply(index, term uint64, data []byte) (Result, error) {
 		return Result{}, err
 	}
 	if !inserted {
-		return skip("duplicate msg_id"), nil
+		return Result{Duplicate: true, Reason: "duplicate msg_id"}, nil
 	}
 	return Result{Inserted: true}, nil
 }
@@ -82,5 +83,26 @@ func (f *FSM) verify(data []byte) (*coslv1.Envelope, Result) {
 	if err := Verify(&env, node.AuthPublicKey); err != nil {
 		return nil, skip("signature does not verify for sender %s", sender)
 	}
+	if env.MsgType == TypeMembershipJoin {
+		if reason := selfAsserted(env.Payload, node); reason != "" {
+			return nil, skip("membership.join is not self-asserted: %s", reason)
+		}
+	}
 	return &env, Result{}
+}
+
+// selfAsserted checks a membership.join names the sender's own pinned
+// keys (§5.4). It adds no one: the sender is already on the Roster.
+func selfAsserted(payload []byte, sender group.RosterNode) string {
+	var join coslv1.MembershipJoin
+	if err := proto.Unmarshal(payload, &join); err != nil {
+		return "unreadable payload"
+	}
+	if !bytes.Equal(join.AuthPublicKey, sender.AuthPublicKey) {
+		return "auth_public_key is not the sender's"
+	}
+	if !bytes.Equal(join.EncryptionPublicKey, sender.EncryptionPublicKey) {
+		return "encryption_public_key is not the sender's"
+	}
+	return ""
 }

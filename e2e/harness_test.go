@@ -363,6 +363,37 @@ func (n *node) groupInspect(t *testing.T) groupInspect {
 	return v
 }
 
+// coslLine is one `cosl log --json` row.
+type coslLine struct {
+	Seq               uint64 `json:"seq"`
+	Term              uint64 `json:"term"`
+	Sender            string `json:"sender"`
+	SenderDisplayName string `json:"sender_display_name"`
+	TypeName          string `json:"type_name"`
+	MsgID             string `json:"msg_id"`
+	Summary           string `json:"summary"`
+}
+
+// coslLog polls `cosl log --json` (no serve needed) until the predicate
+// holds.
+func (n *node) coslLog(t *testing.T, until func([]coslLine) bool) []coslLine {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	var last []coslLine
+	for time.Now().Before(deadline) {
+		r := n.run(context.Background(), "cosl", "log", "--json")
+		if r.code == 0 {
+			last = nil
+			if err := json.Unmarshal([]byte(r.stdout), &last); err == nil && until(last) {
+				return last
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("%s cosl log never satisfied the predicate; last = %+v", n.name, last)
+	return nil
+}
+
 // nodeList polls `node list --json` until the predicate holds.
 func (n *node) nodeList(t *testing.T, until func([]serve.NodeSummary) bool) []serve.NodeSummary {
 	t.Helper()

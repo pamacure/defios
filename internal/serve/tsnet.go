@@ -47,6 +47,11 @@ func (t *tsnetTailnet) Listen(network, addr string) (net.Listener, error) {
 	return t.srv.Listen(network, addr)
 }
 
+// Dial reaches "<tsnet hostname>:<port>"; MagicDNS resolves the name.
+func (t *tsnetTailnet) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	return t.srv.Dial(ctx, network, addr)
+}
+
 func (t *tsnetTailnet) HTTPClient() *http.Client { return t.srv.HTTPClient() }
 
 func (t *tsnetTailnet) Close() error { return t.srv.Close() }

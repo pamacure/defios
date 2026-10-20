@@ -54,7 +54,7 @@ func replica(t *testing.T, dir string) (gid string, msgIDs []string) {
 		payload proto.Message
 		conv    []byte
 	}{
-		{0, cosl.TypeMembershipJoin, &coslv1.MembershipJoin{DisplayName: "alice", TsnetHostname: "defios-alice"}, nil},
+		{0, cosl.TypeMembershipJoin, cosl.MembershipJoin(nodes[0], "alice", "defios-alice"), nil},
 		{0, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "hello group"}, nil},
 		{1, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "scoped\nline"}, make([]byte, 32)},
 	}

@@ -11,10 +11,11 @@ import (
 	"defios.com/internal/serve"
 )
 
-// pair starts alice and bob on fake tailnets that route to each other.
+// pair starts alice and bob on one fake tailnet, routed to each other.
 func pair(t *testing.T) (a, b *node) {
 	t.Helper()
-	a, b = newNode(t, "alice"), newNode(t, "bob")
+	n := newFakeNet()
+	a, b = newNodeOn(t, n, "alice"), newNodeOn(t, n, "bob")
 	a.start(t)
 	b.start(t)
 	a.tailnet.route("100.64.0.2", b.tailnet.formationAddr(t))

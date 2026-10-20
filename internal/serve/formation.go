@@ -70,6 +70,7 @@ func (s *server) formationRoutes(mux *http.ServeMux) {
 		}
 		s.logStatus("accept from " + who.String()[:8])
 		w.WriteHeader(http.StatusOK)
+		s.onValid()
 	})
 	mux.HandleFunc("POST /v1/group/decline", func(w http.ResponseWriter, r *http.Request) {
 		var d groupv1.CreateDecline
@@ -206,6 +207,7 @@ func (s *server) groupAccept(ctx context.Context, gid group.ID) (GroupView, erro
 		}
 	}
 	s.logStatus("accepted")
+	s.onValid()
 	return s.view(undelivered), nil
 }
 

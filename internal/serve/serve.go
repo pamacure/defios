@@ -11,20 +11,23 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"defios.com/internal/config"
+	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/raftx"
 	groupv1 "defios.com/proto/group/v1"
 )
 
-// Ports on tsnet (§4.1).
+// Ports on tsnet (§4.1). Raft and the forward gate are raftx's.
 const (
-	RaftPort      = 4632
-	ForwardPort   = 4633
+	RaftPort      = raftx.RaftPort
+	ForwardPort   = raftx.ForwardPort
 	FormationPort = 4634
 )
 
@@ -43,6 +46,7 @@ type Peer struct {
 type Tailnet interface {
 	Up(ctx context.Context) error
 	Listen(network, addr string) (net.Listener, error)
+	Dial(ctx context.Context, network, addr string) (net.Conn, error) // "<tsnet hostname>:<port>"
 	HTTPClient() *http.Client
 	Peers(ctx context.Context) ([]Peer, error)
 	Close() error
@@ -101,6 +105,8 @@ func Run(ctx context.Context, o Options) error {
 	go func() { errc <- formationSrv.Serve(formation) }()
 	s.tailnetUp.Store(true)
 	o.Logf("serve: tailnet up; formation HTTP on :%d", FormationPort)
+	s.ctx = ctx
+	s.onValid() // a valid Group from before this serve started resumes Raft
 
 	select {
 	case <-ctx.Done():
@@ -114,6 +120,7 @@ func Run(ctx context.Context, o Options) error {
 	defer cancel()
 	formationSrv.Shutdown(shutdownCtx)
 	localSrv.Shutdown(shutdownCtx)
+	s.stopReplica()
 	return err
 }
 
@@ -123,6 +130,11 @@ type server struct {
 	self      *groupv1.Identity // signed once at startup
 	slot      *group.Slot       // this Node's one Group (§1.2)
 	tailnetUp atomic.Bool       // set once Up and the formation listener succeed
+	ctx       context.Context   // Run's; bounds background work such as the join
+
+	replicaMu sync.Mutex
+	replica   *raftx.Replica // nil until the Group is valid
+	store     *cosl.Store    // the replica's COSL
 }
 
 // bindSocket listens on path with mode 0600. A live listener there means

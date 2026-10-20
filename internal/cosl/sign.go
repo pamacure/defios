@@ -38,6 +38,15 @@ func Sign(env *coslv1.Envelope, priv ed25519.PrivateKey) ([]byte, error) {
 	return signed, nil
 }
 
+// Unmarshal parses envelope bytes without verifying anything.
+func Unmarshal(b []byte) (*coslv1.Envelope, error) {
+	var env coslv1.Envelope
+	if err := proto.Unmarshal(b, &env); err != nil {
+		return nil, fmt.Errorf("cosl: envelope: %w", err)
+	}
+	return &env, nil
+}
+
 // Verify checks env.Sig against pub over the canonical bytes.
 func Verify(env *coslv1.Envelope, pub ed25519.PublicKey) error {
 	if len(env.Sig) != ed25519.SignatureSize || len(pub) != ed25519.PublicKeySize {
