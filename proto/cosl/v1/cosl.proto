@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package defios.cosl.v1;
+
+option go_package = "defios.com/proto/cosl/v1;coslv1";
+
+// Envelope is the signed unit the COSL stores (docs/spec/mvp.md §5.1).
+// No maps anywhere in this file: every message is signed over its
+// deterministic serialization.
+message Envelope {
+  uint32 version = 1;                 // 1
+  bytes group_id = 2;                 // 32
+  uint32 msg_type = 3;                // registry
+  bytes sender = 4;                   // Node ID, 32
+  bytes msg_id = 5;                   // 32 random, signature-covered
+  optional bytes conversation_id = 6; // unset = Group-level; else 32 derived
+  int64 created_at = 7;               // unix nanos, advisory, never ordering
+  bytes payload = 8;                  // type-specific protobuf
+  bytes sig = 9;                      // 64-byte Ed25519
+}
+
+// Payloads (docs/spec/mvp.md §5.3).
+
+message MembershipJoin {
+  string display_name = 1;            // UTF-8, 1–64 chars, no newlines
+  string tsnet_hostname = 2;
+  bytes encryption_public_key = 3;    // 32-byte X25519
+  bytes auth_public_key = 4;          // 32-byte Ed25519
+}
+
+message SealedBox {
+  bytes to = 1;                       // recipient Node ID
+  bytes ephemeral_public_key = 2;     // 32
+  bytes nonce = 3;                    // 24
+  bytes ciphertext = 4;
+}
+
+message SessionStart {
+  bytes session_id = 1;               // 32
+  string curve = 2;                   // ecdsa | eddsa
+  uint32 t = 3;                       // DeFiOS min-signers
+  uint32 n = 4;                       // |Roster|
+  repeated bytes participants = 5;    // Node IDs, sorted; must equal the Roster
+  repeated SealedBox nonce_boxes = 6; // one per participant
+}
+
+message SessionAbort {
+  bytes session_id = 1;
+  string reason = 2;
+}
+
+message SessionComplete {
+  bytes session_id = 1;
+  string curve = 2;
+  bytes public_key = 3;               // canonical export
+}
+
+message TssSession {
+  bytes session_id = 1;
+  bytes routing_tag = 2;              // empty = broadcast; else recipient Node ID
+  bytes ephemeral_public_key = 3;     // empty iff broadcast
+  bytes nonce = 4;                    // empty iff broadcast
+  bytes data = 5;                     // broadcast: engine bytes; p2p: box ciphertext
+}
+
+message AppFreeform {
+  string text = 1;                    // UTF-8, max 65536 bytes
+  string content_type = 2;            // default text/plain
+}
