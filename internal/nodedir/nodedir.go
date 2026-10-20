@@ -67,3 +67,11 @@ func (p Paths) IdentityFile() string { return filepath.Join(p.Data, "identity") 
 
 // VaultFile is the age-encrypted Vault.
 func (p Paths) VaultFile() string { return filepath.Join(p.Data, "vault") }
+
+// GroupsDir holds one subdirectory per Group, named by Group ID hex.
+func (p Paths) GroupsDir() string { return filepath.Join(p.Data, "group") }
+
+// CoslFile is the COSL replica for the Group whose ID hex is groupID.
+func (p Paths) CoslFile(groupID string) string {
+	return filepath.Join(p.GroupsDir(), groupID, "cosl.sqlite")
+}

@@ -92,4 +92,7 @@ func TestFilePaths(t *testing.T) {
 	if p.VaultFile() != "/tmp/n1/vault" {
 		t.Fatalf("vault file %q", p.VaultFile())
 	}
+	if p.GroupsDir() != "/tmp/n1/group" || p.CoslFile("abcd") != "/tmp/n1/group/abcd/cosl.sqlite" {
+		t.Fatalf("group paths %q %q", p.GroupsDir(), p.CoslFile("abcd"))
+	}
 }
