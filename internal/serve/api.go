@@ -212,6 +212,7 @@ var errorKinds = []struct {
 	{group.ErrBadDecline, "bad-decline", http.StatusBadRequest},
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
 	{ErrNoReplica, "no-replica", http.StatusConflict},
+	{ErrNoConversation, "no-conversation", http.StatusUnprocessableEntity},
 	{cosl.ErrBadText, "bad-text", http.StatusBadRequest},
 	{session.ErrBadCurve, "bad-curve", http.StatusBadRequest},
 	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},

@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -8,12 +9,18 @@ import (
 	"net/http"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/key"
 	"defios.com/internal/raftx"
 )
 
-// ErrNoReplica means this Node has no valid Group yet, so there is no COSL
-// to append to.
-var ErrNoReplica = errors.New("serve: this Node has no valid Group; nothing to append to")
+var (
+	// ErrNoReplica means this Node has no valid Group yet, so there is no COSL
+	// to append to.
+	ErrNoReplica = errors.New("serve: this Node has no valid Group; nothing to append to")
+	// ErrNoConversation means the id is not the Conversation ID of a Key this
+	// replica has minted. A Conversation exists iff the Key exists (§8).
+	ErrNoConversation = errors.New("serve: no such Conversation; the Key has not been minted")
+)
 
 // SendView is the local API's report of a committed COSL append.
 type SendView struct {
@@ -38,10 +45,13 @@ func (s *server) conversationSend(ctx context.Context, text string, conversation
 	if conversationID != nil && len(conversationID) != 32 {
 		return SendView{}, fmt.Errorf("serve: conversation id is %d bytes, want 32", len(conversationID))
 	}
-	replica, _, running := s.current()
+	replica, store, running := s.current()
 	rec, held := s.slot.Current()
 	if !running || !held {
 		return SendView{}, ErrNoReplica
+	}
+	if err := requireConversation(store, conversationID); err != nil {
+		return SendView{}, err
 	}
 	author := cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}
 	signed, err := author.Sign(cosl.TypeAppFreeform, conversationID, payload)
@@ -55,6 +65,30 @@ func (s *server) conversationSend(ctx context.Context, text string, conversation
 		return SendView{}, err
 	}
 	return SendView{Seq: pos.Index, Term: pos.Term, MsgID: hex.EncodeToString(signed.MsgID[:])}, nil
+}
+
+// requireConversation allows Group-level talk (a nil id) and a Conversation
+// whose id is derived from a Key already on this replica. The check is the
+// writer's: §5.4 does not put Session or Conversation policy in the FSM.
+func requireConversation(store *cosl.Store, conversationID []byte) error {
+	if conversationID == nil {
+		return nil
+	}
+	rows, err := store.Log(cosl.Query{})
+	if err != nil {
+		return err
+	}
+	keys, err := key.List(rows)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		id := key.ConversationID(k.Curve, k.PublicKey)
+		if bytes.Equal(id[:], conversationID) {
+			return nil
+		}
+	}
+	return ErrNoConversation
 }
 
 func (s *server) conversationRoutes(mux *http.ServeMux) {
