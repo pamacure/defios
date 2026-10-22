@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
@@ -18,8 +19,25 @@ import (
 func groupCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "group",
-		Short: "Form and inspect this Node's Group",
+		Short: "Scaffold, select, form, and inspect this Node's Groups",
 	}
+	var newOpts groupNewOptions
+	newCmd := &cobra.Command{
+		Use:   "new <alias> --headscale <url>",
+		Short: "Scaffold a Group under a local alias and make it the Current Group",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(_ *cobra.Command, args []string) error { return runGroupNew(g, args[0], newOpts) },
+	}
+	newCmd.Flags().StringVar(&newOpts.headscaleURL, "headscale", "", "headscale control URL for this Group's tailnet (required)")
+	newCmd.Flags().StringVar(&newOpts.hostname, "hostname", "", "tsnet hostname (default: defios-<first 8 hex of Node ID>-<alias>)")
+	newCmd.Flags().StringVar(&newOpts.name, "name", "", "display name for this Group (default: the init --name default)")
+	root.AddCommand(newCmd)
+	root.AddCommand(&cobra.Command{
+		Use:   "use <alias>",
+		Short: "Set the Current Group that serve and read verbs default to",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(_ *cobra.Command, args []string) error { return runGroupUse(g, args[0]) },
+	})
 	root.AddCommand(&cobra.Command{
 		Use:   "create <node-id>...",
 		Short: "Propose a Group of these Nodes, this Node included (requires serve)",
@@ -54,6 +72,106 @@ func groupCommand(g *globals) *cobra.Command {
 		RunE:  func(cmd *cobra.Command, args []string) error { return runGroupInspect(cmd, g, args) },
 	})
 	return root
+}
+
+type groupNewOptions struct {
+	headscaleURL, hostname, name string
+}
+
+// runGroupNew scaffolds a Group under a local alias: its config and data
+// subtrees and a per-Group config.toml, before any network, then focuses it
+// as the Current Group (ADR 0007). It needs the device (identity) but no
+// serve. The at-most-one-Group guard stays for now (#24): a second Group is
+// refused.
+func runGroupNew(g *globals, alias string, o groupNewOptions) error {
+	if err := group.ValidateAlias(alias); err != nil {
+		return exitUsagef("%v", err)
+	}
+	if o.headscaleURL == "" {
+		return exitUsagef("--headscale is required")
+	}
+	p := g.paths()
+	pub, err := identity.ReadFile(p.IdentityFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return errNoNode(p)
+	} else if err != nil {
+		return exitOperational(err)
+	}
+	existing, err := configGroupAliases(p)
+	if err != nil {
+		return exitOperational(err)
+	}
+	if contains(existing, alias) {
+		return exitOperationalf("Group alias %q already exists on this Node", alias)
+	}
+	if len(existing) > 0 {
+		return exitOperationalf("this Node already has Group %q; the MVP serves one Group at a time", existing[0])
+	}
+
+	name := o.name
+	if name == "" {
+		if name, err = deviceDisplayName(p); err != nil {
+			return exitOperational(err)
+		}
+	}
+	name, err = validateDisplayName(name)
+	if err != nil {
+		return err
+	}
+	hostname := o.hostname
+	if hostname == "" {
+		hostname = "defios-" + pub.NodeID.String()[:8] + "-" + alias
+	}
+
+	for _, dir := range []string{p.GroupConfigDir(alias), p.GroupDir(alias)} {
+		if err := mkdirPrivate(dir); err != nil {
+			return exitOperational(err)
+		}
+	}
+	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname}
+	if err := config.WriteFile(p.GroupConfigFile(alias), cfg); err != nil {
+		return exitOperational(err)
+	}
+	if err := writeCurrentGroup(p, alias); err != nil {
+		return exitOperational(err)
+	}
+	if g.json {
+		return g.emitJSON(map[string]any{
+			"alias":         alias,
+			"display_name":  name,
+			"hostname":      hostname,
+			"headscale_url": o.headscaleURL,
+			"current":       true,
+		})
+	}
+	fmt.Fprintf(g.app.Stdout, "Group %q scaffolded and now current\n  display name: %s\n  hostname:     %s\n", alias, name, hostname)
+	return nil
+}
+
+// runGroupUse sets the Current Group pointer to an already-scaffolded Group.
+func runGroupUse(g *globals, alias string) error {
+	if err := group.ValidateAlias(alias); err != nil {
+		return exitUsagef("%v", err)
+	}
+	p := g.paths()
+	aliases, err := configGroupAliases(p)
+	if err != nil {
+		return exitOperational(err)
+	}
+	if !contains(aliases, alias) {
+		if len(aliases) == 0 {
+			return exitOperationalf("no Group %q; run `defios group new %s --headscale <url>` first", alias, alias)
+		}
+		return exitOperationalf("no Group %q; have: %s", alias, strings.Join(aliases, ", "))
+	}
+	if err := writeCurrentGroup(p, alias); err != nil {
+		return exitOperational(err)
+	}
+	if g.json {
+		return g.emitJSON(map[string]any{"alias": alias, "current": true})
+	}
+	fmt.Fprintf(g.app.Stdout, "Current Group is now %q\n", alias)
+	return nil
 }
 
 // loadGroup reads this Node's Record from disk; no serve needed. A Record
@@ -244,7 +362,11 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 		}
 	}
 	self, _ := identity.ReadFile(p.IdentityFile())
-	joined, err := joinedNodes(p.CoslFile(group.ImplicitAlias))
+	alias, err := soleGroupDataAlias(p)
+	if err != nil {
+		return exitOperational(err)
+	}
+	joined, err := joinedNodes(p.CoslFile(alias))
 	if err != nil {
 		return exitOperational(err)
 	}

@@ -24,6 +24,7 @@ import (
 	"tailscale.com/envknob"
 
 	"defios.com/internal/cli"
+	"defios.com/internal/group"
 	"defios.com/internal/serve"
 )
 
@@ -265,9 +266,15 @@ func newNodeOpts(t *testing.T, hs *headscale, name string, skipPreparams bool) *
 	}
 	n.sock = filepath.Join(n.dir, "serve.sock")
 	n.logs = &safeBuf{}
-	r := n.run(context.Background(), "init", "--name", name, "--hostname", "defios-"+name, "--headscale-url", hs.url)
+	r := n.run(context.Background(), "init", "--name", name)
 	if r.code != 0 {
 		t.Fatalf("%s init: exit %d: %s", name, r.code, r.stderr)
+	}
+	// Scaffold and focus the one Group the MVP flow uses, under the implicit
+	// alias so the harness's replica paths (ADR 0007) stay stable.
+	r = n.run(context.Background(), "group", "new", group.ImplicitAlias, "--headscale", hs.url, "--hostname", "defios-"+name)
+	if r.code != 0 {
+		t.Fatalf("%s group new: exit %d: %s", name, r.code, r.stderr)
 	}
 	return n
 }

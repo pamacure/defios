@@ -54,14 +54,35 @@ func runNodeInspect(g *globals) error {
 	} else if err != nil {
 		return exitOperational(err)
 	}
-	cfg, err := config.ReadFile(p.GroupConfigFile(group.ImplicitAlias))
+	// Display name and hostname come from the current Group's config when one
+	// is scaffolded; before any `group new`, the display name falls back to
+	// the device-level default and there is no per-Group hostname (ADR 0007).
+	displayName, err := deviceDisplayName(p)
 	if err != nil {
 		return exitOperational(err)
 	}
+	hostname := ""
+	aliases, err := configGroupAliases(p)
+	if err != nil {
+		return exitOperational(err)
+	}
+	if len(aliases) > 0 {
+		// Prefer the Current Group; fall back to the sole Group when the
+		// pointer is unset or stale (inspect must not error without one).
+		alias := aliases[0]
+		if current, err := readCurrentGroup(p); err == nil && contains(aliases, current) {
+			alias = current
+		}
+		cfg, err := config.ReadFile(p.GroupConfigFile(alias))
+		if err != nil {
+			return exitOperational(err)
+		}
+		displayName, hostname = cfg.DisplayName, cfg.Hostname
+	}
 	v := nodeView{
 		NodeID:              pub.NodeID.String(),
-		DisplayName:         cfg.DisplayName,
-		Hostname:            cfg.Hostname,
+		DisplayName:         displayName,
+		Hostname:            hostname,
 		AuthPublicKey:       hex.EncodeToString(pub.AuthPublicKey),
 		EncryptionPublicKey: hex.EncodeToString(pub.EncryptionPublicKey),
 		ServeUp:             serve.IsUp(p.Socket),

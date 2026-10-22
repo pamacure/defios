@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
-	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
@@ -36,7 +35,10 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	} else if err != nil {
 		return exitOperational(err)
 	}
-	alias := group.ImplicitAlias
+	alias, err := currentAlias(p)
+	if err != nil {
+		return err
+	}
 	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
 	if err != nil {
 		return exitOperational(err)

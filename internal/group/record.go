@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"google.golang.org/protobuf/proto"
 
@@ -83,10 +84,23 @@ func (r *Record) Status() Status {
 	return Valid
 }
 
-// ImplicitAlias is the single Group alias a Node uses until multiple Groups
-// per Node land (#24). Storage is already alias-keyed (ADR 0007); for now
-// exactly one implicit Group exists under this alias.
+// ImplicitAlias is the Group alias `group new` scaffolds in the single-Group
+// MVP flow and the one the test harness uses. Storage is alias-keyed
+// (ADR 0007); for now a Node holds at most one Group.
 const ImplicitAlias = "default"
+
+// aliasPattern is the validation for a Group alias (ADR 0007): lowercase,
+// filesystem-safe, 1–64 chars, starting with a letter or digit. Aliases are
+// local and never appear on the wire.
+var aliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// ValidateAlias reports whether alias is a well-formed Group alias.
+func ValidateAlias(alias string) error {
+	if !aliasPattern.MatchString(alias) {
+		return fmt.Errorf("group: %q is not a valid alias; use 1–64 chars matching [a-z0-9][a-z0-9_-]*", alias)
+	}
+	return nil
+}
 
 // recordFileName is the on-disk Record, group/<alias>/roster.json (ADR 0007),
 // which binds the alias to its Group ID: the signed wire messages, re-verified

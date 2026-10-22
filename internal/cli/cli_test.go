@@ -61,6 +61,18 @@ func mustInit(t *testing.T, dir string, extra ...string) result {
 	return r
 }
 
+// mustGroupNew scaffolds a Group under the implicit alias and focuses it, as
+// the init && group new flow does. extra flags append to the defaults.
+func mustGroupNew(t *testing.T, dir string, extra ...string) result {
+	t.Helper()
+	args := append([]string{"--dir", dir, "group", "new", group.ImplicitAlias, "--headscale", "https://hs.example"}, extra...)
+	r := run(t, nil, "", args...)
+	if r.code != 0 {
+		t.Fatalf("group new exit %d\nstdout: %s\nstderr: %s", r.code, r.stdout, r.stderr)
+	}
+	return r
+}
+
 func inspectJSON(t *testing.T, dir string) map[string]any {
 	t.Helper()
 	r := run(t, nil, "", "--dir", dir, "node", "inspect", "--json")
@@ -77,10 +89,13 @@ func inspectJSON(t *testing.T, dir string) map[string]any {
 func TestInitCreatesTreeWithStrictModes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "node")
 	mustInit(t, dir)
+	mustGroupNew(t, dir)
 
 	for _, name := range []string{
 		"identity",
 		filepath.Join("vault", "shared"),
+		"display-name",
+		"current-group",
 		filepath.Join("group", group.ImplicitAlias, "config.toml"),
 	} {
 		info, err := os.Stat(filepath.Join(dir, name))
@@ -100,7 +115,7 @@ func TestInitCreatesTreeWithStrictModes(t *testing.T) {
 	}
 }
 
-func TestInitWritesIdentityVaultAndConfig(t *testing.T) {
+func TestInitWritesIdentityVaultAndName(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 
@@ -129,26 +144,117 @@ func TestInitWritesIdentityVaultAndConfig(t *testing.T) {
 		t.Fatalf("vault is not an age scrypt/18 file:\n%q", vault[:min(len(vault), 80)])
 	}
 
+	// init writes no config.toml; it persists only the device-level default
+	// display name for `group new` to use.
+	if _, err := os.Stat(filepath.Join(dir, "group")); !os.IsNotExist(err) {
+		t.Errorf("init scaffolded a Group subtree: %v", err)
+	}
+	name, err := os.ReadFile(filepath.Join(dir, "display-name"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(name)) != "laptop" {
+		t.Errorf("display-name = %q, want laptop", name)
+	}
+}
+
+func TestGroupNewWritesConfigAndFocuses(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	id := inspectJSON(t, dir)["node_id"].(string)
+	mustGroupNew(t, dir)
+
 	cfg, err := os.ReadFile(filepath.Join(dir, "group", group.ImplicitAlias, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantHost := `hostname = "defios-` + id.NodeID[:8] + `"`
-	for _, line := range []string{`display_name = "laptop"`, wantHost, `headscale_url = `} {
+	wantHost := `hostname = "defios-` + id[:8] + `-` + group.ImplicitAlias + `"`
+	for _, line := range []string{`display_name = "laptop"`, wantHost, `headscale_url = "https://hs.example"`} {
+		if !strings.Contains(string(cfg), line) {
+			t.Errorf("config.toml missing %q:\n%s", line, cfg)
+		}
+	}
+	cur, err := os.ReadFile(filepath.Join(dir, "current-group"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(cur)) != group.ImplicitAlias {
+		t.Errorf("current-group = %q, want %q", cur, group.ImplicitAlias)
+	}
+}
+
+func TestGroupNewHonoursHostnameAndName(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	mustGroupNew(t, dir, "--hostname", "box", "--name", "custody")
+	cfg, _ := os.ReadFile(filepath.Join(dir, "group", group.ImplicitAlias, "config.toml"))
+	for _, line := range []string{`hostname = "box"`, `display_name = "custody"`, `headscale_url = "https://hs.example"`} {
 		if !strings.Contains(string(cfg), line) {
 			t.Errorf("config.toml missing %q:\n%s", line, cfg)
 		}
 	}
 }
 
-func TestInitHonoursHostnameAndHeadscaleFlags(t *testing.T) {
+func TestGroupNewRequiresHeadscale(t *testing.T) {
 	dir := t.TempDir()
-	mustInit(t, dir, "--hostname", "box", "--headscale-url", "https://hs.example")
-	cfg, _ := os.ReadFile(filepath.Join(dir, "group", group.ImplicitAlias, "config.toml"))
-	for _, line := range []string{`hostname = "box"`, `headscale_url = "https://hs.example"`} {
-		if !strings.Contains(string(cfg), line) {
-			t.Errorf("config.toml missing %q:\n%s", line, cfg)
+	mustInit(t, dir)
+	r := run(t, nil, "", "--dir", dir, "group", "new", group.ImplicitAlias)
+	if r.code != 1 || !strings.Contains(r.stderr, "--headscale") {
+		t.Fatalf("exit %d, stderr %q; want 1 mentioning --headscale", r.code, r.stderr)
+	}
+}
+
+func TestGroupNewRejectsBadAlias(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	for _, bad := range []string{"Bad", "has space", strings.Repeat("a", 65), "_x"} {
+		r := run(t, nil, "", "--dir", dir, "group", "new", bad, "--headscale", "https://hs.example")
+		if r.code != 1 || !strings.Contains(r.stderr, "alias") {
+			t.Errorf("%q: exit %d, stderr %q; want 1 mentioning alias", bad, r.code, r.stderr)
 		}
+	}
+}
+
+func TestGroupNewRejectsDuplicateAndSecond(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	mustGroupNew(t, dir)
+	// Same alias again: duplicate.
+	r := run(t, nil, "", "--dir", dir, "group", "new", group.ImplicitAlias, "--headscale", "https://hs.example")
+	if r.code != 2 || !strings.Contains(r.stderr, "already exists") {
+		t.Fatalf("duplicate: exit %d, stderr %q", r.code, r.stderr)
+	}
+	// Different alias while one Group exists: one-group guard.
+	r = run(t, nil, "", "--dir", dir, "group", "new", "other", "--headscale", "https://hs.example")
+	if r.code != 2 || !strings.Contains(r.stderr, "one Group at a time") {
+		t.Fatalf("second group: exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+func TestGroupUseSetsAndValidates(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	// No Group yet: points at group new.
+	r := run(t, nil, "", "--dir", dir, "group", "use", group.ImplicitAlias)
+	if r.code != 2 || !strings.Contains(r.stderr, "group new") {
+		t.Fatalf("use before new: exit %d, stderr %q", r.code, r.stderr)
+	}
+	mustGroupNew(t, dir)
+	// Clearing the pointer leaves a Group present but none current.
+	if err := os.Remove(filepath.Join(dir, "current-group")); err != nil {
+		t.Fatal(err)
+	}
+	r = run(t, nil, "", "--dir", dir, "serve")
+	if r.code != 2 || !strings.Contains(r.stderr, "group use") {
+		t.Fatalf("serve with no current: exit %d, stderr %q", r.code, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "group", "use", group.ImplicitAlias)
+	if r.code != 0 {
+		t.Fatalf("group use exit %d: %s", r.code, r.stderr)
+	}
+	cur, _ := os.ReadFile(filepath.Join(dir, "current-group"))
+	if strings.TrimSpace(string(cur)) != group.ImplicitAlias {
+		t.Errorf("current-group = %q", cur)
 	}
 }
 
@@ -215,6 +321,7 @@ func TestNoPassphraseSourceWithoutTerminalIsUsageError(t *testing.T) {
 func TestNodeInspectHumanOutput(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
+	mustGroupNew(t, dir)
 	doc := inspectJSON(t, dir)
 
 	r := run(t, nil, "", "--dir", dir, "node", "inspect")
@@ -225,7 +332,7 @@ func TestNodeInspectHumanOutput(t *testing.T) {
 		"Node ID",
 		doc["node_id"].(string),
 		"laptop",
-		"defios-" + doc["node_id"].(string)[:8],
+		"defios-" + doc["node_id"].(string)[:8] + "-" + group.ImplicitAlias,
 		doc["auth_public_key"].(string),
 		doc["encryption_public_key"].(string),
 		"Serve",
@@ -239,7 +346,8 @@ func TestNodeInspectHumanOutput(t *testing.T) {
 
 func TestNodeInspectJSONFields(t *testing.T) {
 	dir := t.TempDir()
-	mustInit(t, dir, "--hostname", "box")
+	mustInit(t, dir)
+	mustGroupNew(t, dir, "--hostname", "box")
 	doc := inspectJSON(t, dir)
 	if doc["display_name"] != "laptop" || doc["hostname"] != "box" {
 		t.Fatalf("display_name/hostname wrong: %v", doc)
@@ -274,7 +382,8 @@ func TestUsageErrors(t *testing.T) {
 
 func TestServeWrongPassphraseIsVerifyFailure(t *testing.T) {
 	dir := t.TempDir()
-	mustInit(t, dir, "--headscale-url", "http://headscale.invalid")
+	mustInit(t, dir)
+	mustGroupNew(t, dir, "--headscale", "http://headscale.invalid")
 	r := run(t, map[string]string{"DEFIOS_PASSPHRASE": "not-it"}, "", "--dir", dir, "serve")
 	if r.code != 4 {
 		t.Fatalf("exit %d, want 4; stderr: %s", r.code, r.stderr)
@@ -292,8 +401,8 @@ func TestDirectoryLookupFallsBackToEnvThenXDG(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("init exit %d: %s", r.code, r.stderr)
 	}
-	if _, err := os.Stat(filepath.Join(cfgDir, "group", group.ImplicitAlias, "config.toml")); err != nil {
-		t.Errorf("config.toml not under DEFIOS_CONFIG_DIR: %v", err)
+	if _, err := os.Stat(filepath.Join(cfgDir, "display-name")); err != nil {
+		t.Errorf("display-name not under DEFIOS_CONFIG_DIR: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "identity")); err != nil {
 		t.Errorf("identity not under DEFIOS_DATA_DIR: %v", err)
@@ -309,8 +418,8 @@ func TestDirectoryLookupFallsBackToEnvThenXDG(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("init exit %d: %s", r.code, r.stderr)
 	}
-	if _, err := os.Stat(filepath.Join(xdg, "cfg", "defios", "group", group.ImplicitAlias, "config.toml")); err != nil {
-		t.Errorf("config.toml not under XDG_CONFIG_HOME/defios: %v", err)
+	if _, err := os.Stat(filepath.Join(xdg, "cfg", "defios", "display-name")); err != nil {
+		t.Errorf("display-name not under XDG_CONFIG_HOME/defios: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(xdg, "data", "defios", "vault", "shared")); err != nil {
 		t.Errorf("vault not under XDG_DATA_HOME/defios: %v", err)

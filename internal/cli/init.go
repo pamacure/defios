@@ -10,9 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"defios.com/internal/config"
 	"defios.com/internal/engine/tssl"
-	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/vault"
@@ -20,29 +18,29 @@ import (
 )
 
 type initOptions struct {
-	name, hostname, headscaleURL, authKeyHex string
-	pass                                     passphraseSource
+	name, authKeyHex string
+	pass             passphraseSource
 }
 
 func initCommand(g *globals) *cobra.Command {
 	var o initOptions
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Create this Node: keys, Vault, identity, config",
+		Short: "Create this device: identity and Vault (no Group yet)",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runInit(g, o) },
 	}
-	cmd.Flags().StringVar(&o.name, "name", "", "display name (default: machine hostname)")
-	cmd.Flags().StringVar(&o.hostname, "hostname", "", "tsnet hostname (default: defios-<first 8 hex of Node ID>)")
-	cmd.Flags().StringVar(&o.headscaleURL, "headscale-url", "", "headscale control URL written to config.toml")
+	cmd.Flags().StringVar(&o.name, "name", "", "default display name for Groups (default: machine hostname)")
 	cmd.Flags().StringVar(&o.authKeyHex, "auth-key", "", "restore from a 32-byte hex Ed25519 seed instead of minting one")
 	o.pass.bind(cmd)
 	return cmd
 }
 
-// runInit mints or restores the Node and lays out its files. Order: refuse
-// an existing Node, collect inputs (passphrase last so a bad flag fails
-// before any prompt), then write vault, identity, config.
+// runInit mints or restores the device and lays out its files: identity and
+// the Vault only, no Group (ADR 0007). A Group is scaffolded later by
+// `group new`. Order: refuse an existing Node, collect inputs (passphrase
+// last so a bad flag fails before any prompt), then write vault, identity,
+// and the device-level default display name.
 func runInit(g *globals, o initOptions) error {
 	p := g.paths()
 	if existing, err := nodeExists(p); err != nil {
@@ -70,19 +68,14 @@ func runInit(g *globals, o initOptions) error {
 		return exitOperationalf("generating keys: %w", err)
 	}
 
-	hostname := o.hostname
-	if hostname == "" {
-		hostname = "defios-" + node.NodeID.String()[:8]
-	}
-
 	passphrase, err := o.pass.read(g, true)
 	if err != nil {
 		return err
 	}
 
-	// Scaffold the Node root, the Vault directory, and the implicit Group's
-	// config and data subtrees (ADR 0007).
-	dirs := []string{p.Config, p.Data, p.VaultDir(), p.GroupConfigDir(group.ImplicitAlias), p.GroupDir(group.ImplicitAlias)}
+	// Scaffold the device: the config and data roots and the Vault directory.
+	// No Group subtree yet — `group new` lays that out (ADR 0007).
+	dirs := []string{p.Config, p.Data, p.VaultDir()}
 	for _, dir := range dirs {
 		if err := mkdirPrivate(dir); err != nil {
 			return exitOperational(err)
@@ -109,8 +102,9 @@ func runInit(g *globals, o initOptions) error {
 	if err := identity.WriteFile(p.IdentityFile(), node.Public); err != nil {
 		return exitOperational(err)
 	}
-	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname}
-	if err := config.WriteFile(p.GroupConfigFile(group.ImplicitAlias), cfg); err != nil {
+	// Persist the default display name device-wide so `group new` can derive
+	// each Group's display_name from it (ADR 0007).
+	if err := os.WriteFile(p.DisplayNameFile(), []byte(name+"\n"), 0o600); err != nil {
 		return exitOperational(err)
 	}
 
@@ -120,7 +114,6 @@ func runInit(g *globals, o initOptions) error {
 			"auth_public_key":       hex.EncodeToString(node.AuthPublicKey),
 			"encryption_public_key": hex.EncodeToString(node.EncryptionPublicKey),
 			"display_name":          name,
-			"hostname":              hostname,
 			"config_dir":            p.Config,
 			"data_dir":              p.Data,
 		})
@@ -156,9 +149,10 @@ func mkdirPrivate(dir string) error {
 	return os.Chmod(dir, 0o700)
 }
 
-// nodeExists reports whether any of this Node's files is already on disk.
+// nodeExists reports whether this device's identity or Vault is already on
+// disk. A Group subtree is not part of the device (ADR 0007).
 func nodeExists(p nodedir.Paths) (bool, error) {
-	for _, f := range []string{p.IdentityFile(), p.VaultSharedFile(), p.GroupConfigFile(group.ImplicitAlias)} {
+	for _, f := range []string{p.IdentityFile(), p.VaultSharedFile()} {
 		if _, err := os.Stat(f); err == nil {
 			return true, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -185,8 +179,14 @@ func displayName(flag string) (string, error) {
 		}
 		name = host
 	}
+	return validateDisplayName(name)
+}
+
+// validateDisplayName applies the spec §5.3 display_name constraints (1–64
+// chars, no newlines), shared by `init --name` and `group new --name`.
+func validateDisplayName(name string) (string, error) {
 	if n := len([]rune(name)); n < 1 || n > 64 || strings.ContainsAny(name, "\r\n") {
-		return "", exitUsagef("--name must be 1–64 characters with no newlines")
+		return "", exitUsagef("display name must be 1–64 characters with no newlines")
 	}
 	return name, nil
 }

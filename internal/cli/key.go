@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/cosl"
-	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
@@ -149,7 +148,14 @@ func shareRefs(ctx context.Context, g *globals, pass passphraseSource) (map[stri
 	if !ok {
 		return out, nil
 	}
-	shares, err := vault.OpenShares(g.paths().VaultSharesFile(group.ImplicitAlias), phrase)
+	sharesFile, err := soleSharesFile(g.paths())
+	if err != nil {
+		return nil, exitOperational(err)
+	}
+	if sharesFile == "" {
+		return out, nil // no Key minted for any Group yet
+	}
+	shares, err := vault.OpenShares(sharesFile, phrase)
 	if errors.Is(err, os.ErrNotExist) {
 		return out, nil // no Key minted for this Group yet
 	}

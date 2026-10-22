@@ -76,6 +76,17 @@ func (p Paths) VaultSharesFile(alias string) string {
 	return filepath.Join(p.VaultDir(), "shares-"+alias)
 }
 
+// CurrentGroupFile is the plaintext Current Group pointer at the config root:
+// one line holding the local alias of the Group a serve serves and read verbs
+// default to (ADR 0006). `group use` writes it; `group new` auto-focuses by
+// writing it.
+func (p Paths) CurrentGroupFile() string { return filepath.Join(p.Config, "current-group") }
+
+// DisplayNameFile is the plaintext device-level default display name at the
+// config root, written once by `init --name`. `group new` uses it as the
+// per-Group display_name default (ADR 0007).
+func (p Paths) DisplayNameFile() string { return filepath.Join(p.Config, "display-name") }
+
 // GroupsConfigDir holds one per-Group config subdirectory under the config
 // tree.
 func (p Paths) GroupsConfigDir() string { return filepath.Join(p.Config, "group") }

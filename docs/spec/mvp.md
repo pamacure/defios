@@ -615,15 +615,17 @@ Verbs that write the COSL, unseal, or sign require `serve` (except `init`). Read
 
 | Command | Requires serve | Behavior |
 |---|---|---|
-| `init [--name] [--auth-key <32-byte-hex-seed>] [--hostname]` | no | Creates config + data trees, mints (or imports) auth seed and Encryption keypair, writes `identity` + `vault` + `config.toml`, generates ECDSA preparams. Prompts for passphrase twice unless `DEFIOS_PASSPHRASE` / `--passphrase-file`. |
-| `serve [--passphrase-file]` | — | Unlocks Vault, starts tsnet, formation HTTP, Raft if a valid Group exists. Refuses if socket bound. |
-| `node inspect` | no | Node ID, display name, hostname, auth public key, encryption public key, serve up? Group ID if any. |
-| `node list` | yes | Discovered Identities: Node ID, display name, hostname. |
+| `init [--name] [--auth-key <32-byte-hex-seed>]` | no | Creates the device: config + data roots, mints (or imports) auth seed and Encryption keypair, writes `identity` + `vault/` + the device-level default display name, generates ECDSA preparams. Writes no `config.toml` and no Group (ADR 0007). Prompts for passphrase twice unless `DEFIOS_PASSPHRASE` / `--passphrase-file`. |
+| `serve [--passphrase-file]` | — | Serves the Current Group: unlocks Vault, starts tsnet, formation HTTP, Raft if a valid Group exists. Refuses if socket bound. Errors to `group new`/`group use` if no Group / no Current Group. |
+| `node inspect` | no | Node ID, display name, hostname, auth public key, encryption public key, serve up? Group ID if any. Display name/hostname come from the Current Group's config; before any `group new`, the display name is the device default and there is no hostname. |
+| `node list` | yes | Discovered Identities on the Current Group's tailnet: Node ID, display name, hostname. |
 
 ### 9.2 Group
 
 | Command | Requires serve | Behavior |
 |---|---|---|
+| `group new <alias> --headscale <url> [--hostname] [--name]` | no | Scaffolds a Group under a local alias (its config + data subtrees and per-Group `config.toml`) before any network, and makes it the Current Group. Alias: `^[a-z0-9][a-z0-9_-]{0,63}$`, unique on the Node, never on the wire. Hostname default `defios-<first 8 hex of Node ID>-<alias>`; display name default the `init --name` device default. MVP: at most one Group. |
+| `group use <alias>` | no | Sets the Current Group (a plaintext pointer at the config root) that `serve` and read verbs default to. |
 | `group create <node-id>…` | yes | Self must be included. MVP: exactly one other Node. |
 | `group accept <group-id>` | yes | |
 | `group decline <group-id>` | yes | |

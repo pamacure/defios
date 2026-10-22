@@ -39,13 +39,21 @@ That binary is static. Copy it to the other machine when `GOARCH` matches, and p
 
 ### 3. Init
 
-`init` generates ECDSA preparams before it returns. Stderr prints `generating ECDSA preparams`. That step is CPU-heavy and can take several minutes. Run it on both machines.
+`init` sets up the device only — identity and Vault — and generates ECDSA preparams before it returns. Stderr prints `generating ECDSA preparams`. That step is CPU-heavy and can take several minutes. Run it on both machines.
 
 ```bash
-defios init --name laptop --headscale-url https://headscale.example
+defios init --name laptop
 ```
 
-The passphrase is prompted twice and must be non-empty. `DEFIOS_PASSPHRASE` or `--passphrase-file` skips the prompt. `serve` must unlock the Vault with that same passphrase.
+The passphrase is prompted twice and must be non-empty. `DEFIOS_PASSPHRASE` or `--passphrase-file` skips the prompt. `serve` must unlock the Vault with that same passphrase. `--name` is the default display name Groups inherit.
+
+Then scaffold a Group under a local alias and point it at the headscale control URL. This creates the Group's config and makes it the Current Group that `serve` and read verbs default to:
+
+```bash
+defios group new personal --headscale https://headscale.example
+```
+
+The alias (`personal` here) is local to this machine, must match `[a-z0-9][a-z0-9_-]{0,63}`, and never travels on the wire. Switch the Current Group later with `defios group use <alias>`.
 
 ```bash
 defios node inspect
