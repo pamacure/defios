@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/internal/group"
 	"defios.com/internal/serve"
@@ -51,10 +52,10 @@ func TestFocusSwitchReconvergence(t *testing.T) {
 	alice.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "still on A after group use")
 	// bob (Current Group A) sees the new row: the live serve ignored the moved
 	// pointer. alice reads the same A log via --group default, not its pointer.
+	// Both are polled: a send returns on commit, and the follower's FSM apply
+	// (the sqlite row `cosl log` reads) can lag that by a beat.
 	bob.coslLog(t, func(rows []coslLine) bool { return len(rows) == 4 })
-	if n := len(alice.coslGroup(t, group.ImplicitAlias)); n != 4 {
-		t.Fatalf("alice --group default has %d rows; want 4 (serve did not hot-switch off A)", n)
-	}
+	alice.waitCoslGroup(t, group.ImplicitAlias, 4)
 
 	// Switch focus to B: stop A's serve and start one for backup. The pointer
 	// (backup) takes effect on this next serve, and the single socket means
@@ -101,19 +102,26 @@ func TestFocusSwitchReconvergence(t *testing.T) {
 	}
 }
 
-// coslGroup reads one Group's COSL rows by alias via `cosl log --group`, so a
-// Node can read a Group that is not its current one. No serve needed.
-func (n *node) coslGroup(t *testing.T, alias string) []coslLine {
+// waitCoslGroup polls `cosl log --group alias` until that Group's COSL has at
+// least want rows, so a Node can wait on a Group that is not its current one
+// (its FSM apply can lag a committed send). No serve needed.
+func (n *node) waitCoslGroup(t *testing.T, alias string, want int) {
 	t.Helper()
-	r := n.run(context.Background(), "cosl", "log", "--group", alias, "--json")
-	if r.code != 0 {
-		t.Fatalf("%s cosl log --group %s: exit %d: %s", n.name, alias, r.code, r.stderr)
+	deadline := time.Now().Add(60 * time.Second)
+	var last int
+	for time.Now().Before(deadline) {
+		r := n.run(context.Background(), "cosl", "log", "--group", alias, "--json")
+		if r.code == 0 {
+			var rows []coslLine
+			if err := json.Unmarshal([]byte(r.stdout), &rows); err == nil {
+				if last = len(rows); last >= want {
+					return
+				}
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	var rows []coslLine
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
-		t.Fatalf("%s cosl log --group %s: %v\n%s", n.name, alias, err, r.stdout)
-	}
-	return rows
+	t.Fatalf("%s cosl log --group %s has %d rows; want >= %d (serve did not hot-switch off A)", n.name, alias, last, want)
 }
 
 // conversationTexts returns the Group-level conversation message texts in order.
