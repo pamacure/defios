@@ -1,6 +1,6 @@
 # DeFiOS
 
-A self-hosted multi-party computation wallet: a person's devices form a Group that jointly custodies threshold Keys and coordinates over the COSL.
+A self-hosted multi-party computation wallet: Nodes form a Group that jointly custodies threshold Keys and coordinates over the COSL. A Group's Nodes may all be one operator's own devices or may belong to different parties sharing custody, and one Node may belong to several Groups at once, each on its own tailnet.
 
 ## Language
 
@@ -16,8 +16,16 @@ _Avoid_: network id, cluster id
 The Group's set of Nodes, fixed at formation.
 _Avoid_: member list, peer list, cluster membership
 
+**Group alias**:
+A local, human-chosen label a Node gives one of its Groups (e.g. `personal`, `custody-with-b`), used to name and select that Group on this machine — before the Group ID exists, and ever after. Purely local: it never appears on the wire, and two Nodes may label the same Group differently.
+_Avoid_: group name, label, nickname
+
+**Current Group**:
+The one of a Node's Groups currently in focus: the Group a running serve serves, and the one local commands act on when none is named. A Node focuses one Group at a time; switching focus stops serving one Group and starts the other.
+_Avoid_: active group, default group, selected group
+
 **Node**:
-One device running one DeFiOS CLI instance, holding one auth keypair. It may belong to a Group; it exists before it does.
+One device running one DeFiOS CLI instance, holding one auth keypair. It may belong to one or more Groups, presenting that same identity in each; it exists before it does.
 _Avoid_: peer, member, client
 
 **Node ID**:
@@ -37,7 +45,7 @@ A per-Node X25519 keypair, held by that Node alone, used to seal point-to-point 
 _Avoid_: encryption key, box key, crypto key
 
 **Vault**:
-This Node's passphrase-encrypted file of secrets: the auth private key, the encryption private key, ECDSA preparams, and this Node's shares of Keys. Distinct from the COSL replica, which is plaintext sqlite.
+This Node's passphrase-encrypted store of secrets, and the only thing a Node keeps encrypted at rest: the auth private key, the encryption private key, and ECDSA preparams shared across all the Node's Groups, together with this Node's shares of each Group's Keys held separately per Group. Everything else — Identity, Group and Roster records, tailnet config, and the COSL replica — is plaintext, so a Group that is not currently being served can still be inspected.
 _Avoid_: keystore, wallet, keyring, container
 
 **Key**:
