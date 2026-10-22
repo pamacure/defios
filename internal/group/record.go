@@ -84,9 +84,9 @@ func (r *Record) Status() Status {
 	return Valid
 }
 
-// ImplicitAlias is the Group alias `group new` scaffolds in the single-Group
-// MVP flow and the one the test harness uses. Storage is alias-keyed
-// (ADR 0007); for now a Node holds at most one Group.
+// ImplicitAlias is the Group alias the test harness and single-Group tests
+// use. Storage is alias-keyed (ADR 0007); a Node may now hold several Groups
+// at once (#27), each under its own alias.
 const ImplicitAlias = "default"
 
 // aliasPattern is the validation for a Group alias (ADR 0007): lowercase,
@@ -113,10 +113,23 @@ type recordFileV1 struct {
 	Accepts  [][]byte `json:"accepts"`  // CreateAccept bytes
 }
 
+// LoadAlias reads the Record in the alias subtree under groupsDir. ErrNoGroup
+// if that Group is scaffolded but not yet formed (no roster.json). This is the
+// per-Group read now that a Node may hold several Groups at once (#27).
+func LoadAlias(groupsDir, alias string) (*Record, error) {
+	path := filepath.Join(groupsDir, alias, recordFileName)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNoGroup
+	} else if err != nil {
+		return nil, err
+	}
+	return loadRecord(path)
+}
+
 // Load reads the one Record under groupsDir, whatever alias subtree it lives
-// in. ErrNoGroup if there is none; an error if more than one is found, since a
-// Node still holds exactly one implicit Group (#25). Multiple Groups per Node
-// (#24) will make this read the subtree for a given alias.
+// in, for callers that still assume a single Group (some tests, the formation
+// helpers). ErrNoGroup if there is none; an error if more than one is found.
+// Per-Group callers use LoadAlias instead (#27).
 func Load(groupsDir string) (*Record, error) {
 	matches, err := filepath.Glob(filepath.Join(groupsDir, "*", recordFileName))
 	if err != nil {
@@ -127,7 +140,7 @@ func Load(groupsDir string) (*Record, error) {
 		return nil, ErrNoGroup
 	case 1:
 	default:
-		return nil, fmt.Errorf("group: found %d Groups under %s; a Node has at most one", len(matches), groupsDir)
+		return nil, fmt.Errorf("group: found %d Groups under %s; Load expects a single Group, use LoadAlias", len(matches), groupsDir)
 	}
 	return loadRecord(matches[0])
 }

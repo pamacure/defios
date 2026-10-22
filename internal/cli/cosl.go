@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -49,25 +48,22 @@ func coslCommand(g *globals) *cobra.Command {
 	return root
 }
 
-// openReplica finds this Node's one Group and opens its COSL. Reads work
-// without serve: WAL readers see the FSM's committed rows.
+// openReplica opens the Current Group's COSL (#27). Reads work without serve:
+// WAL readers see the FSM's committed rows.
 func openReplica(g *globals) (*cosl.Store, error) {
 	p := g.paths()
-	matches, err := filepath.Glob(filepath.Join(p.GroupsDir(), "*", "cosl.sqlite"))
+	if _, err := os.Stat(p.Data); errors.Is(err, os.ErrNotExist) {
+		return nil, errNoNode(p)
+	}
+	alias, err := readAlias(p)
 	if err != nil {
-		return nil, exitOperational(err)
+		return nil, err
 	}
-	switch len(matches) {
-	case 0:
-		if _, err := os.Stat(p.Data); errors.Is(err, os.ErrNotExist) {
-			return nil, errNoNode(p)
-		}
-		return nil, exitOperationalf("this Node has no COSL replica yet; it is created once a Group is valid and Raft starts")
-	case 1:
-	default:
-		return nil, exitOperationalf("found %d Groups under %s; a Node has at most one", len(matches), p.GroupsDir())
+	path := p.CoslFile(alias)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, exitOperationalf("this Node has no COSL replica for Group %q yet; it is created once the Group is valid and Raft starts", alias)
 	}
-	store, err := cosl.Open(matches[0])
+	store, err := cosl.Open(path)
 	if err != nil {
 		return nil, exitOperational(err)
 	}

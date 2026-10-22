@@ -144,7 +144,7 @@ func Run(ctx context.Context, o Options) error {
 type server struct {
 	opts      Options
 	self      *groupv1.Identity // signed once at startup
-	slot      *group.Slot       // this Node's one Group (§1.2)
+	slot      *group.Slot       // the Current Group this serve serves (§1.2)
 	tailnetUp atomic.Bool       // set once Up and the formation listener succeed
 	ctx       context.Context   // Run's, set before any handler runs; bounds the join
 

@@ -34,26 +34,34 @@ func configGroupAliases(p nodedir.Paths) ([]string, error) {
 	return aliases, nil
 }
 
-// soleGroupDataAlias returns the alias of the one Group data subtree that
-// holds a roster.json. With a Node limited to one Group this is that Group's
-// alias; "" when no Group has a Record on disk.
-func soleGroupDataAlias(p nodedir.Paths) (string, error) {
-	matches, err := filepath.Glob(filepath.Join(p.GroupsDir(), "*", "roster.json"))
-	if err != nil || len(matches) == 0 {
-		return "", err
+// groupAliases lists every Group on this Node: the union of the alias
+// subdirectories under the config and data trees (`group new` creates both,
+// so an unformed Group appears here before it has a Record). Sorted. In
+// --dir mode the two trees coincide. Unlike configGroupAliases this does not
+// require a config.toml, so a Group set up data-first (as some tests do) is
+// still seen.
+func groupAliases(p nodedir.Paths) ([]string, error) {
+	seen := map[string]struct{}{}
+	for _, root := range []string{p.GroupsConfigDir(), p.GroupsDir()} {
+		entries, err := os.ReadDir(root)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				seen[e.Name()] = struct{}{}
+			}
+		}
 	}
-	return filepath.Base(filepath.Dir(matches[0])), nil
-}
-
-// soleSharesFile returns the one per-Group shares file in the Vault. With a
-// Node limited to one Group this is that Group's shares; "" when no Group has
-// minted a Key yet.
-func soleSharesFile(p nodedir.Paths) (string, error) {
-	matches, err := filepath.Glob(p.VaultSharesFile("*"))
-	if err != nil || len(matches) == 0 {
-		return "", err
+	aliases := make([]string, 0, len(seen))
+	for a := range seen {
+		aliases = append(aliases, a)
 	}
-	return matches[0], nil
+	sort.Strings(aliases)
+	return aliases, nil
 }
 
 // readCurrentGroup reads the Current Group pointer. "" means unset.
@@ -90,6 +98,33 @@ func currentAlias(p nodedir.Paths) (string, error) {
 	}
 	if contains(aliases, current) {
 		return current, nil
+	}
+	return "", exitOperationalf("no Current Group; run `defios group use <alias>` (have: %s)", strings.Join(aliases, ", "))
+}
+
+// readAlias resolves the Group a read or local verb acts on when none is
+// named: the Current Group when the pointer names a Group on this Node, else
+// the sole Group when there is exactly one (so reads work before `group
+// use`), else an error naming the choices (#27). Callers that must not error
+// for a Node with no Group (e.g. `node inspect` printing "none") check
+// groupAliases first.
+func readAlias(p nodedir.Paths) (string, error) {
+	aliases, err := groupAliases(p)
+	if err != nil {
+		return "", exitOperational(err)
+	}
+	if len(aliases) == 0 {
+		return "", exitOperationalf("this Node has no Group; run `defios group new <alias> --headscale <url>`")
+	}
+	current, err := readCurrentGroup(p)
+	if err != nil {
+		return "", exitOperational(err)
+	}
+	if contains(aliases, current) {
+		return current, nil
+	}
+	if len(aliases) == 1 {
+		return aliases[0], nil
 	}
 	return "", exitOperationalf("no Current Group; run `defios group use <alias>` (have: %s)", strings.Join(aliases, ", "))
 }

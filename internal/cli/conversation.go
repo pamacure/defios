@@ -97,7 +97,7 @@ func runConversationLog(g *globals, keyQuery string, limit int) error {
 	if limit < 0 {
 		return exitUsagef("--limit must be >= 0")
 	}
-	rec, err := loadGroup(g)
+	_, rec, err := loadGroup(g)
 	if err != nil {
 		return err
 	}

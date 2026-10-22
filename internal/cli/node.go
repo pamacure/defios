@@ -88,14 +88,22 @@ func runNodeInspect(g *globals) error {
 		ServeUp:             serve.IsUp(p.Socket),
 	}
 	groupState := "none"
-	switch rec, err := group.Load(p.GroupsDir()); {
-	case err == nil:
-		gid := rec.GroupID().String()
-		v.GroupID = &gid
-		groupState = fmt.Sprintf("%s (%s)", gid, rec.Status())
-	case errors.Is(err, group.ErrNoGroup):
-	default:
+	if ga, err := groupAliases(p); err != nil {
 		return exitOperational(err)
+	} else if len(ga) > 0 {
+		alias, err := readAlias(p)
+		if err != nil {
+			return err
+		}
+		switch rec, err := group.LoadAlias(p.GroupsDir(), alias); {
+		case err == nil:
+			gid := rec.GroupID().String()
+			v.GroupID = &gid
+			groupState = fmt.Sprintf("%s (%s)", gid, rec.Status())
+		case errors.Is(err, group.ErrNoGroup):
+		default:
+			return exitOperational(err)
+		}
 	}
 	if g.json {
 		return g.emitJSON(v)

@@ -18,9 +18,10 @@ var (
 	ErrAlreadyValid = errors.New("group: the Group is already valid")
 )
 
-// Slot is this Node's one Group (§1.2): empty, pending, or valid. It signs
-// this Node's own formation messages, verifies the ones it receives, and
-// persists the Record under groupsDir so a restarted serve resumes.
+// Slot is one of this Node's Groups (§1.2), the one a serve is serving:
+// empty, pending, or valid. It signs this Node's own formation messages,
+// verifies the ones it receives, and persists the Record under its alias
+// subtree of groupsDir so a restarted serve resumes.
 type Slot struct {
 	mu    sync.Mutex
 	dir   string // groupsDir (holds one subtree per alias)
@@ -32,7 +33,7 @@ type Slot struct {
 // OpenSlot loads whatever Record groupsDir already holds under alias, and
 // persists this Node's formation state back under that alias.
 func OpenSlot(groupsDir, alias string, self *identity.Node) (*Slot, error) {
-	rec, err := Load(groupsDir)
+	rec, err := LoadAlias(groupsDir, alias)
 	if err != nil && !errors.Is(err, ErrNoGroup) {
 		return nil, err
 	}

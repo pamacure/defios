@@ -61,7 +61,7 @@ func groupCommand(g *globals) *cobra.Command {
 	root.AddCommand(decline)
 	root.AddCommand(&cobra.Command{
 		Use:   "list",
-		Short: "Print this Node's Group ID and status",
+		Short: "List this Node's Groups: alias, status, Group ID, and which is current",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runGroupList(g) },
 	})
@@ -81,8 +81,8 @@ type groupNewOptions struct {
 // runGroupNew scaffolds a Group under a local alias: its config and data
 // subtrees and a per-Group config.toml, before any network, then focuses it
 // as the Current Group (ADR 0007). It needs the device (identity) but no
-// serve. The at-most-one-Group guard stays for now (#24): a second Group is
-// refused.
+// serve. A Node may hold any number of Groups at once (#27); only the alias
+// must be unique.
 func runGroupNew(g *globals, alias string, o groupNewOptions) error {
 	if err := group.ValidateAlias(alias); err != nil {
 		return exitUsagef("%v", err)
@@ -103,9 +103,6 @@ func runGroupNew(g *globals, alias string, o groupNewOptions) error {
 	}
 	if contains(existing, alias) {
 		return exitOperationalf("Group alias %q already exists on this Node", alias)
-	}
-	if len(existing) > 0 {
-		return exitOperationalf("this Node already has Group %q; the MVP serves one Group at a time", existing[0])
 	}
 
 	name := o.name
@@ -174,12 +171,21 @@ func runGroupUse(g *globals, alias string) error {
 	return nil
 }
 
-// loadGroup reads this Node's Record from disk; no serve needed. A Record
-// whose signatures no longer check is a verify failure (4), not a missing
-// file (2).
-func loadGroup(g *globals) (*group.Record, error) {
+// loadGroup reads the Current Group's Record from disk; no serve needed.
+func loadGroup(g *globals) (string, *group.Record, error) {
+	alias, err := readAlias(g.paths())
+	if err != nil {
+		return "", nil, err
+	}
+	rec, err := loadAliasRecord(g, alias)
+	return alias, rec, err
+}
+
+// loadAliasRecord reads one Group's Record by its alias. A Record whose
+// signatures no longer check is a verify failure (4), not a missing file (2).
+func loadAliasRecord(g *globals, alias string) (*group.Record, error) {
 	p := g.paths()
-	rec, err := group.Load(p.GroupsDir())
+	rec, err := group.LoadAlias(p.GroupsDir(), alias)
 	switch {
 	case err == nil:
 		return rec, nil
@@ -192,6 +198,33 @@ func loadGroup(g *globals) (*group.Record, error) {
 		return nil, exitVerify(err)
 	}
 	return nil, exitOperational(err)
+}
+
+// findGroupByID resolves the alias and Record of the Group with this ID,
+// across every Group on this Node, so `group inspect <group-id>` reaches a
+// Group that is not the current one (#27). Unformed Groups are skipped; a
+// Record that fails to verify is a verify failure (4).
+func findGroupByID(g *globals, gid group.ID) (string, *group.Record, error) {
+	p := g.paths()
+	aliases, err := groupAliases(p)
+	if err != nil {
+		return "", nil, exitOperational(err)
+	}
+	for _, alias := range aliases {
+		rec, err := group.LoadAlias(p.GroupsDir(), alias)
+		switch {
+		case errors.Is(err, group.ErrNoGroup):
+			continue
+		case errors.Is(err, group.ErrBadProposal), errors.Is(err, group.ErrBadAccept):
+			return "", nil, exitVerify(err)
+		case err != nil:
+			return "", nil, exitOperational(err)
+		}
+		if rec.GroupID() == gid {
+			return alias, rec, nil
+		}
+	}
+	return "", nil, exitOperationalf("%w: %s", group.ErrUnknownGroup, gid)
 }
 
 func parseGroupID(s string) (group.ID, error) {
@@ -288,27 +321,62 @@ func runGroupDecline(cmd *cobra.Command, g *globals, arg, reason string) error {
 	return printView(g, v)
 }
 
-// groupLine is one `group list` row.
+// group list status values (#27): pending/valid come from group.Status;
+// unformed is a scaffolded Group with no Record yet; error is a Record that
+// no longer verifies, surfaced per row so one bad Group does not hide the
+// rest.
+const (
+	statusUnformed = "unformed"
+	statusError    = "error"
+)
+
+// groupLine is one `group list` row: one of this Node's Groups by its local
+// alias, its status, its Group ID once formed, and whether it is current.
 type groupLine struct {
-	GroupID string       `json:"group_id"`
-	Status  group.Status `json:"status"`
+	Alias   string `json:"alias"`
+	Status  string `json:"status"` // unformed | pending | valid | error
+	GroupID string `json:"group_id,omitempty"`
+	Current bool   `json:"current"`
 }
 
+// runGroupList prints one row per Group scaffolded on this Node (#27). An
+// unformed Group (scaffolded, no Record yet) shows "unformed" and no Group
+// ID. Works without serve: the status comes from disk.
 func runGroupList(g *globals) error {
-	rec, err := loadGroup(g)
+	p := g.paths()
+	aliases, err := groupAliases(p)
+	if err != nil {
+		return exitOperational(err)
+	}
+	current, err := readCurrentGroup(p)
+	if err != nil {
+		return exitOperational(err)
+	}
 	lines := []groupLine{}
-	switch {
-	case err == nil:
-		lines = append(lines, groupLine{GroupID: rec.GroupID().String(), Status: rec.Status()})
-	case errors.Is(err, group.ErrNoGroup):
-	default:
-		return err
+	for _, alias := range aliases {
+		l := groupLine{Alias: alias, Status: statusUnformed, Current: alias == current}
+		switch rec, err := group.LoadAlias(p.GroupsDir(), alias); {
+		case err == nil:
+			l.Status, l.GroupID = rec.Status().String(), rec.GroupID().String()
+		case errors.Is(err, group.ErrNoGroup):
+		default:
+			l.Status = statusError // a corrupt Group must not hide the others
+		}
+		lines = append(lines, l)
 	}
 	if g.json {
 		return g.emitJSON(lines)
 	}
 	for _, l := range lines {
-		fmt.Fprintf(g.app.Stdout, "%s  %s\n", l.GroupID, l.Status)
+		marker := " "
+		if l.Current {
+			marker = "*"
+		}
+		gid := l.GroupID
+		if gid == "" {
+			gid = "-"
+		}
+		fmt.Fprintf(g.app.Stdout, "%s %s  %s  %s\n", marker, l.Alias, l.Status, gid)
 	}
 	return nil
 }
@@ -331,20 +399,22 @@ type groupView struct {
 }
 
 func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
-	var want *group.ID
+	// With no argument inspect the Current Group; with a Group ID inspect
+	// whichever of this Node's Groups has it, current or not (#27).
+	var alias string
+	var rec *group.Record
+	var err error
 	if len(args) == 1 {
-		gid, err := parseGroupID(args[0])
-		if err != nil {
-			return err
+		gid, perr := parseGroupID(args[0])
+		if perr != nil {
+			return perr
 		}
-		want = &gid
+		alias, rec, err = findGroupByID(g, gid)
+	} else {
+		alias, rec, err = loadGroup(g)
 	}
-	rec, err := loadGroup(g)
 	if err != nil {
 		return err
-	}
-	if want != nil && *want != rec.GroupID() {
-		return exitOperationalf("%w: this Node's Group is %s", group.ErrUnknownGroup, rec.GroupID())
 	}
 	p := g.paths()
 
@@ -362,10 +432,6 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 		}
 	}
 	self, _ := identity.ReadFile(p.IdentityFile())
-	alias, err := soleGroupDataAlias(p)
-	if err != nil {
-		return exitOperational(err)
-	}
 	joined, err := joinedNodes(p.CoslFile(alias))
 	if err != nil {
 		return exitOperational(err)

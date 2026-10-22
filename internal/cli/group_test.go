@@ -21,11 +21,19 @@ import (
 // valid=false leaves it pending (bob has not accepted).
 func formGroup(t *testing.T, dir string, valid bool) (gid group.ID, alice, bob *identity.Node) {
 	t.Helper()
+	return formGroupAlias(t, dir, group.ImplicitAlias, valid)
+}
+
+// formGroupAlias writes a Group record under dir/group/<alias> the way a
+// serve would, so multi-Group list/inspect can be tested without one. Each
+// call mints fresh Nodes, so distinct aliases hold distinct Groups.
+func formGroupAlias(t *testing.T, dir, alias string, valid bool) (gid group.ID, alice, bob *identity.Node) {
+	t.Helper()
 	alice, _ = identity.Generate()
 	bob, _ = identity.Generate()
 	ia, _ := group.SignIdentity(alice, "alice", "defios-alice")
 	ib, _ := group.SignIdentity(bob, "bob", "defios-bob")
-	slot, err := group.OpenSlot(filepath.Join(dir, "group"), group.ImplicitAlias, alice)
+	slot, err := group.OpenSlot(filepath.Join(dir, "group"), alias, alice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +49,82 @@ func formGroup(t *testing.T, dir string, valid bool) (gid group.ID, alice, bob *
 		}
 	}
 	return prop.GroupID, alice, bob
+}
+
+func TestMultipleGroupsIsolatedAndListed(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	mustGroupNew(t, dir) // "default", becomes current
+	if r := run(t, nil, "", "--dir", dir, "group", "new", "custody", "--headscale", "https://hs.example"); r.code != 0 {
+		t.Fatalf("group new custody: exit %d, stderr %q", r.code, r.stderr)
+	}
+	// custody is now current (group new auto-focuses). Form a distinct Group
+	// under each alias.
+	gidDefault, _, _ := formGroupAlias(t, dir, group.ImplicitAlias, true)
+	gidCustody, _, _ := formGroupAlias(t, dir, "custody", false)
+
+	// list shows both Groups, custody marked current, with per-Group status.
+	r := run(t, nil, "", "--dir", dir, "group", "list", "--json")
+	if r.code != 0 {
+		t.Fatalf("group list: exit %d, stderr %q", r.code, r.stderr)
+	}
+	var rows []groupRow
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 2 {
+		t.Fatalf("group list json: %v\n%s", err, r.stdout)
+	}
+	byAlias := map[string]groupRow{}
+	for _, row := range rows {
+		byAlias[row.Alias] = row
+	}
+	if d := byAlias[group.ImplicitAlias]; d.Status != "valid" || d.GroupID != gidDefault.String() || d.Current {
+		t.Fatalf("default row = %+v", d)
+	}
+	if c := byAlias["custody"]; c.Status != "pending" || c.GroupID != gidCustody.String() || !c.Current {
+		t.Fatalf("custody row = %+v", c)
+	}
+
+	// Reads default to the Current Group (custody).
+	if doc := inspectJSON(t, dir); doc["group_id"] != gidCustody.String() {
+		t.Fatalf("inspect current=custody: group_id = %v, want %s", doc["group_id"], gidCustody)
+	}
+	// Switching focus switches which Group reads see; the other is untouched.
+	if r := run(t, nil, "", "--dir", dir, "group", "use", group.ImplicitAlias); r.code != 0 {
+		t.Fatalf("group use default: exit %d, stderr %q", r.code, r.stderr)
+	}
+	if doc := inspectJSON(t, dir); doc["group_id"] != gidDefault.String() {
+		t.Fatalf("inspect current=default: group_id = %v, want %s", doc["group_id"], gidDefault)
+	}
+	// A non-current Group is still inspectable by its Group ID (#27).
+	r = run(t, nil, "", "--dir", dir, "group", "inspect", gidCustody.String(), "--json")
+	if r.code != 0 {
+		t.Fatalf("inspect custody by id: exit %d, stderr %q", r.code, r.stderr)
+	}
+	var gv map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &gv); err != nil || gv["group_id"] != gidCustody.String() {
+		t.Fatalf("inspect custody by id: %v, group_id = %v", err, gv["group_id"])
+	}
+}
+
+// groupRow mirrors one `group list --json` row for tests.
+type groupRow struct {
+	Alias   string `json:"alias"`
+	Status  string `json:"status"`
+	GroupID string `json:"group_id"`
+	Current bool   `json:"current"`
+}
+
+func TestGroupListShowsUnformedScaffold(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	mustGroupNew(t, dir) // scaffolded, not yet formed
+	r := run(t, nil, "", "--dir", dir, "group", "list", "--json")
+	var rows []groupRow
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 1 {
+		t.Fatalf("group list json: %v\n%s", err, r.stdout)
+	}
+	if rows[0].Status != "unformed" || rows[0].GroupID != "" || !rows[0].Current {
+		t.Fatalf("row = %+v", rows[0])
+	}
 }
 
 func TestGroupListWithoutGroupIsEmpty(t *testing.T) {
@@ -61,7 +145,7 @@ func TestGroupListShowsStatusWithoutServe(t *testing.T) {
 	mustInit(t, dir)
 	gid, _, _ := formGroup(t, dir, false)
 	r := run(t, nil, "", "--dir", dir, "group", "list")
-	if r.code != 0 || !strings.Contains(r.stdout, gid.String()+"  pending") {
+	if r.code != 0 || !strings.Contains(r.stdout, group.ImplicitAlias+"  pending  "+gid.String()) {
 		t.Fatalf("exit %d, stdout %q", r.code, r.stdout)
 	}
 
@@ -73,7 +157,7 @@ func TestGroupListShowsStatusWithoutServe(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil || len(doc) != 1 {
 		t.Fatalf("json: %v\n%s", err, r.stdout)
 	}
-	if doc[0]["group_id"] != gid2.String() || doc[0]["status"] != "valid" {
+	if doc[0]["alias"] != group.ImplicitAlias || doc[0]["group_id"] != gid2.String() || doc[0]["status"] != "valid" {
 		t.Fatalf("doc = %v", doc[0])
 	}
 }
@@ -134,10 +218,12 @@ func TestGroupInspectErrors(t *testing.T) {
 	if r.code != 2 || !strings.Contains(r.stderr, "no Group") {
 		t.Fatalf("no group: exit %d, %q", r.code, r.stderr)
 	}
-	gid, _, _ := formGroup(t, dir, true)
+	formGroup(t, dir, true)
+	// A Group ID this Node does not hold is ErrUnknownGroup, naming the ID
+	// asked for (#27: any held Group is inspectable by ID, not just current).
 	other := group.GroupID([]identity.ID{{1}})
 	r = run(t, nil, "", "--dir", dir, "group", "inspect", other.String())
-	if r.code != 2 || !strings.Contains(r.stderr, gid.String()[:8]) {
+	if r.code != 2 || !strings.Contains(r.stderr, "not this Node's Group") || !strings.Contains(r.stderr, other.String()) {
 		t.Fatalf("other group: exit %d, %q", r.code, r.stderr)
 	}
 	r = run(t, nil, "", "--dir", dir, "group", "inspect", "zz")

@@ -65,9 +65,9 @@ proto/
 e2e/
 ```
 
-### 1.2 One Group per Node
+### 1.2 Multiple Groups per Node
 
-A Node belongs to at most one Group at MVP. A valid Group rejects further Create proposals. A pending proposal occupies that slot until it becomes valid or is declined.
+A Node may belong to any number of Groups at once, each under its own local alias and fully isolated: its own COSL, Roster, Raft state, and tsnet identity (ADR 0007). The Node acts on one at a time — the **Current Group** — which `serve` serves and which read and local verbs default to when none is named. Each Group is a slot of its own: a valid Group rejects further Create proposals, and a pending proposal occupies its alias's slot until it becomes valid or is declined; proposals for other aliases are unaffected.
 
 ### 1.3 Environment
 
@@ -501,7 +501,7 @@ message CreateDecline {
 
 Roster is membership; tailnet is reachability. A tailnet machine not on the Roster is ignored. A Roster Node that is offline stays on the Roster and shows unreachable. Hostname and display name may refresh from a live Identity; Node ID, auth public key, and encryption public key do not.
 
-`group list` prints Group IDs and status (`pending` | `valid`). `group inspect` prints status and, for each Roster Node: Node ID, display name, tsnet hostname, reachable, whether `membership.join` is on the COSL, auth public key, encryption public key.
+`group list` prints one row per Group on this Node: its local alias, status (`unformed` | `pending` | `valid`), Group ID once formed, and which is the Current Group. `group inspect` acts on the Current Group and prints status and, for each Roster Node: Node ID, display name, tsnet hostname, reachable, whether `membership.join` is on the COSL, auth public key, encryption public key.
 
 ---
 
@@ -624,13 +624,13 @@ Verbs that write the COSL, unseal, or sign require `serve` (except `init`). Read
 
 | Command | Requires serve | Behavior |
 |---|---|---|
-| `group new <alias> --headscale <url> [--hostname] [--name]` | no | Scaffolds a Group under a local alias (its config + data subtrees and per-Group `config.toml`) before any network, and makes it the Current Group. Alias: `^[a-z0-9][a-z0-9_-]{0,63}$`, unique on the Node, never on the wire. Hostname default `defios-<first 8 hex of Node ID>-<alias>`; display name default the `init --name` device default. MVP: at most one Group. |
+| `group new <alias> --headscale <url> [--hostname] [--name]` | no | Scaffolds a Group under a local alias (its config + data subtrees and per-Group `config.toml`) before any network, and makes it the Current Group. Alias: `^[a-z0-9][a-z0-9_-]{0,63}$`, unique on the Node, never on the wire. Hostname default `defios-<first 8 hex of Node ID>-<alias>`; display name default the `init --name` device default. Runnable repeatedly for distinct aliases; a Node may hold several Groups at once (#27). |
 | `group use <alias>` | no | Sets the Current Group (a plaintext pointer at the config root) that `serve` and read verbs default to. |
 | `group create <node-id>…` | yes | Self must be included. MVP: exactly one other Node. |
 | `group accept <group-id>` | yes | |
 | `group decline <group-id>` | yes | |
-| `group list` | no | Group IDs + `pending`/`valid`. |
-| `group inspect [group-id]` | no | Roster rows as in §6.2. Default: this Node's Group. |
+| `group list` | no | One row per Group: alias, status (`unformed`/`pending`/`valid`), Group ID once formed, and which is current. |
+| `group inspect [group-id]` | no | Roster rows as in §6.2. Default: the Current Group. |
 
 ### 9.3 Session and Key
 

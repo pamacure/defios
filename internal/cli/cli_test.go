@@ -215,7 +215,7 @@ func TestGroupNewRejectsBadAlias(t *testing.T) {
 	}
 }
 
-func TestGroupNewRejectsDuplicateAndSecond(t *testing.T) {
+func TestGroupNewRejectsDuplicateAllowsSecond(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	mustGroupNew(t, dir)
@@ -224,10 +224,14 @@ func TestGroupNewRejectsDuplicateAndSecond(t *testing.T) {
 	if r.code != 2 || !strings.Contains(r.stderr, "already exists") {
 		t.Fatalf("duplicate: exit %d, stderr %q", r.code, r.stderr)
 	}
-	// Different alias while one Group exists: one-group guard.
+	// A distinct alias is a second Group (#27), accepted and now current.
 	r = run(t, nil, "", "--dir", dir, "group", "new", "other", "--headscale", "https://hs.example")
-	if r.code != 2 || !strings.Contains(r.stderr, "one Group at a time") {
+	if r.code != 0 {
 		t.Fatalf("second group: exit %d, stderr %q", r.code, r.stderr)
+	}
+	cur, err := os.ReadFile(filepath.Join(dir, "current-group"))
+	if err != nil || strings.TrimSpace(string(cur)) != "other" {
+		t.Fatalf("current-group = %q, err %v; want \"other\"", cur, err)
 	}
 }
 

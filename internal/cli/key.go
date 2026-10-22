@@ -148,14 +148,11 @@ func shareRefs(ctx context.Context, g *globals, pass passphraseSource) (map[stri
 	if !ok {
 		return out, nil
 	}
-	sharesFile, err := soleSharesFile(g.paths())
+	alias, err := readAlias(g.paths())
 	if err != nil {
-		return nil, exitOperational(err)
+		return nil, err
 	}
-	if sharesFile == "" {
-		return out, nil // no Key minted for any Group yet
-	}
-	shares, err := vault.OpenShares(sharesFile, phrase)
+	shares, err := vault.OpenShares(g.paths().VaultSharesFile(alias), phrase)
 	if errors.Is(err, os.ErrNotExist) {
 		return out, nil // no Key minted for this Group yet
 	}
