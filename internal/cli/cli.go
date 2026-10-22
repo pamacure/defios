@@ -28,6 +28,10 @@ type globals struct {
 	app  App
 	dir  string
 	json bool
+	// group is the --group override read verbs set (#28): target this Group
+	// by alias instead of the Current Group. "" means use the Current Group.
+	// Only the read commands that call bindGroupFlag can set it.
+	group string
 }
 
 // paths resolves the Node layout for this invocation.

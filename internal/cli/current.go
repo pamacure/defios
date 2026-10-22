@@ -6,8 +6,44 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spf13/cobra"
+
+	"defios.com/internal/group"
 	"defios.com/internal/nodedir"
 )
+
+// bindGroupFlag registers --group on a read command (#28). Because every
+// command shares one globals, only the commands that call this can set the
+// override; the rest always read the Current Group.
+func bindGroupFlag(g *globals, cmd *cobra.Command) {
+	cmd.Flags().StringVar(&g.group, "group", "", "read this Group by alias instead of the Current Group")
+}
+
+// resolveAlias picks the Group a read verb targets: the --group alias when
+// one was given, else the Current Group (readAlias). All non-secret state is
+// plaintext, so a --group read reaches any Group regardless of which is
+// current or served (#28). An unknown alias errors clearly, naming the
+// Groups this Node does hold.
+func (g *globals) resolveAlias() (string, error) {
+	p := g.paths()
+	if g.group == "" {
+		return readAlias(p)
+	}
+	if err := group.ValidateAlias(g.group); err != nil {
+		return "", exitUsagef("%v", err)
+	}
+	aliases, err := groupAliases(p)
+	if err != nil {
+		return "", exitOperational(err)
+	}
+	if !contains(aliases, g.group) {
+		if len(aliases) == 0 {
+			return "", exitOperationalf("no Group %q on this Node", g.group)
+		}
+		return "", exitOperationalf("no Group %q on this Node; have: %s", g.group, strings.Join(aliases, ", "))
+	}
+	return g.group, nil
+}
 
 // contains reports whether aliases holds x.
 func contains(aliases []string, x string) bool {

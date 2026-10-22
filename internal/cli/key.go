@@ -38,6 +38,8 @@ func keyCommand(g *globals) *cobra.Command {
 	}
 	pass.bind(list)
 	pass.bind(inspect)
+	bindGroupFlag(g, list)
+	bindGroupFlag(g, inspect)
 	root.AddCommand(list, inspect)
 	return root
 }
@@ -125,14 +127,23 @@ func loadKeys(ctx context.Context, g *globals, pass passphraseSource) ([]key.Key
 	return keys, have, nil
 }
 
-// shareRefs is the set of curve:hex this Node holds. A running serve wins,
-// because that process has the unlocked Vault. Otherwise a provided
-// passphrase opens the file. No prompt: an absent passphrase means no share
-// is visible.
+// shareRefs is the set of curve:hex this Node holds for the Group being read.
+// A running serve wins, because that process has the unlocked Vault — but it
+// serves only the Current Group, so it can answer only when the read targets
+// that Group. A --group read of another Group (#28) falls back to the
+// passphrase route against that Group's own shares file (ADR 0007). Otherwise
+// a provided passphrase opens the file. No prompt: an absent passphrase means
+// no share is visible.
 func shareRefs(ctx context.Context, g *globals, pass passphraseSource) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
-	if serve.IsUp(g.paths().Socket) {
-		refs, err := (serve.Client{Socket: g.paths().Socket}).KeyShares(ctx)
+	p := g.paths()
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return nil, err
+	}
+	served, _ := currentAlias(p) // what a running serve would hold; err means no Current Group, so no match below
+	if serve.IsUp(p.Socket) && alias == served {
+		refs, err := (serve.Client{Socket: p.Socket}).KeyShares(ctx)
 		if err != nil {
 			return nil, serveError(err)
 		}
@@ -148,11 +159,7 @@ func shareRefs(ctx context.Context, g *globals, pass passphraseSource) (map[stri
 	if !ok {
 		return out, nil
 	}
-	alias, err := readAlias(g.paths())
-	if err != nil {
-		return nil, err
-	}
-	shares, err := vault.OpenShares(g.paths().VaultSharesFile(alias), phrase)
+	shares, err := vault.OpenShares(p.VaultSharesFile(alias), phrase)
 	if errors.Is(err, os.ErrNotExist) {
 		return out, nil // no Key minted for this Group yet
 	}

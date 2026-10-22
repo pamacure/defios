@@ -503,6 +503,8 @@ Roster is membership; tailnet is reachability. A tailnet machine not on the Rost
 
 `group list` prints one row per Group on this Node: its local alias, status (`unformed` | `pending` | `valid`), Group ID once formed, and which is the Current Group. `group inspect` acts on the Current Group and prints status and, for each Roster Node: Node ID, display name, tsnet hostname, reachable, whether `membership.join` is on the COSL, auth public key, encryption public key.
 
+Because all non-secret state is plaintext on disk, every read verb (`group inspect`, `cosl log` / `decode`, `key list` / `inspect`, `conversation log`, `session list` / `inspect`) takes `--group <alias>` to read any Group on this Node by its local alias, without `serve` and regardless of which Group is current. Omitting `--group` falls back to the Current Group. An unknown alias errors clearly, naming the Groups this Node does hold. A running `serve` holds only the Current Group's unlocked Vault, so for a `--group` read of another Group, Key share presence comes from that Group's own shares file over the passphrase (ADR 0007), not the running `serve`.
+
 ---
 
 ## 7. Keygen Session orchestration
@@ -630,7 +632,7 @@ Verbs that write the COSL, unseal, or sign require `serve` (except `init`). Read
 | `group accept <group-id>` | yes | |
 | `group decline <group-id>` | yes | |
 | `group list` | no | One row per Group: alias, status (`unformed`/`pending`/`valid`), Group ID once formed, and which is current. |
-| `group inspect [group-id]` | no | Roster rows as in §6.2. Default: the Current Group. |
+| `group inspect [group-id] [--group <alias>]` | no | Roster rows as in §6.2. Default: the Current Group; `--group <alias>` reads any Group on this Node by alias. `[group-id]` and `--group` are two ways to name a non-current Group and may not be combined. |
 
 ### 9.3 Session and Key
 
@@ -639,19 +641,19 @@ Verbs that write the COSL, unseal, or sign require `serve` (except `init`). Read
 | `session start --curve ecdsa\|eddsa [--t 2]` | yes | n is `|Roster|`, not a flag. This Node's local accept. |
 | `session accept <session-id>` | yes | Local engine gate only. |
 | `session abort <session-id> [--reason]` | yes | Appends `session.abort`. |
-| `session list` | no | Open / aborted / complete; Session ID, curve, t, n. |
-| `session inspect <session-id>` | no | Participants, status, completes seen. |
-| `key list` | no | Each minted Key: `curve:hex`, t, n, share present? |
-| `key inspect <key>` | no | Canonical hex, Conversation ID, minting Session ID, t, n, share present. |
+| `session list [--group <alias>]` | no | Open / aborted / complete; Session ID, curve, t, n. |
+| `session inspect <session-id> [--group <alias>]` | no | Participants, status, completes seen. |
+| `key list [--group <alias>]` | no | Each minted Key: `curve:hex`, t, n, share present? |
+| `key inspect <key> [--group <alias>]` | no | Canonical hex, Conversation ID, minting Session ID, t, n, share present. |
 
 ### 9.4 Conversation and COSL
 
 | Command | Requires serve | Behavior |
 |---|---|---|
 | `conversation send [--key <id>] <text>` | yes | |
-| `conversation log [--key <id>] [--limit N]` | no | `seq`, RFC3339 `created_at`, display name, text. |
-| `cosl log [--type] [--limit N]` | no | All types; payload summarized. |
-| `cosl decode <msg-id-or-hex>` | no | Full envelope + payload. |
+| `conversation log [--key <id>] [--limit N] [--group <alias>]` | no | `seq`, RFC3339 `created_at`, display name, text. |
+| `cosl log [--type] [--limit N] [--group <alias>]` | no | All types; payload summarized. |
+| `cosl decode <msg-id-or-hex> [--group <alias>]` | no | Full envelope + payload. |
 
 Human `conversation log` line: `<seq> <time> <display_name>  <text>`.
 

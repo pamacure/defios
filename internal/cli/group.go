@@ -65,12 +65,14 @@ func groupCommand(g *globals) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runGroupList(g) },
 	})
-	root.AddCommand(&cobra.Command{
+	inspect := &cobra.Command{
 		Use:   "inspect [group-id]",
 		Short: "Print the Group's status and Roster",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  func(cmd *cobra.Command, args []string) error { return runGroupInspect(cmd, g, args) },
-	})
+	}
+	bindGroupFlag(g, inspect)
+	root.AddCommand(inspect)
 	return root
 }
 
@@ -173,7 +175,7 @@ func runGroupUse(g *globals, alias string) error {
 
 // loadGroup reads the Current Group's Record from disk; no serve needed.
 func loadGroup(g *globals) (string, *group.Record, error) {
-	alias, err := readAlias(g.paths())
+	alias, err := g.resolveAlias()
 	if err != nil {
 		return "", nil, err
 	}
@@ -399,11 +401,16 @@ type groupView struct {
 }
 
 func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
-	// With no argument inspect the Current Group; with a Group ID inspect
-	// whichever of this Node's Groups has it, current or not (#27).
+	// With no argument inspect the Current Group (or the --group alias);
+	// with a Group ID inspect whichever of this Node's Groups has it,
+	// current or not (#27). The Group ID arg and --group alias are two ways
+	// to name a non-current Group, so refuse both at once.
 	var alias string
 	var rec *group.Record
 	var err error
+	if len(args) == 1 && g.group != "" {
+		return exitUsagef("give a Group ID or --group <alias>, not both")
+	}
 	if len(args) == 1 {
 		gid, perr := parseGroupID(args[0])
 		if perr != nil {

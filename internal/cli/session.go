@@ -58,18 +58,22 @@ func sessionCommand(g *globals) *cobra.Command {
 	abort.Flags().StringVar(&reason, "reason", "", "why the Session is aborted")
 	root.AddCommand(abort)
 
-	root.AddCommand(&cobra.Command{
+	list := &cobra.Command{
 		Use:   "list",
 		Short: "List Sessions on this replica: id, status, curve, t, n",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runSessionList(g) },
-	})
-	root.AddCommand(&cobra.Command{
+	}
+	bindGroupFlag(g, list)
+	root.AddCommand(list)
+	inspect := &cobra.Command{
 		Use:   "inspect <session-id>",
 		Short: "Show one Session's participants, status, and completes",
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(_ *cobra.Command, args []string) error { return runSessionInspect(g, args[0]) },
-	})
+	}
+	bindGroupFlag(g, inspect)
+	root.AddCommand(inspect)
 	return root
 }
 

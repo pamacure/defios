@@ -39,6 +39,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	}
 	log.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	log.Flags().IntVar(&limit, "limit", 0, "only the latest N messages")
+	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	return root
 }

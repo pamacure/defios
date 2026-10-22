@@ -36,6 +36,7 @@ func coslCommand(g *globals) *cobra.Command {
 	}
 	log.Flags().StringVar(&typeFlag, "type", "", "only this registry type (name or id)")
 	log.Flags().IntVar(&limit, "limit", 0, "only the latest N rows")
+	bindGroupFlag(g, log)
 
 	decode := &cobra.Command{
 		Use:   "decode <msg-id>",
@@ -43,6 +44,7 @@ func coslCommand(g *globals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(_ *cobra.Command, args []string) error { return runCoslDecode(g, args[0]) },
 	}
+	bindGroupFlag(g, decode)
 
 	root.AddCommand(log, decode)
 	return root
@@ -55,7 +57,7 @@ func openReplica(g *globals) (*cosl.Store, error) {
 	if _, err := os.Stat(p.Data); errors.Is(err, os.ErrNotExist) {
 		return nil, errNoNode(p)
 	}
-	alias, err := readAlias(p)
+	alias, err := g.resolveAlias()
 	if err != nil {
 		return nil, err
 	}

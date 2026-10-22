@@ -105,6 +105,50 @@ func TestMultipleGroupsIsolatedAndListed(t *testing.T) {
 	}
 }
 
+// TestGroupFlagTargetsNonCurrentGroup checks that --group reads a Group by
+// alias regardless of which is current, that omitting it falls back to the
+// Current Group, and that an unknown alias errors clearly (#28).
+func TestGroupFlagTargetsNonCurrentGroup(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	mustGroupNew(t, dir) // "default", current
+	if r := run(t, nil, "", "--dir", dir, "group", "new", "custody", "--headscale", "https://hs.example"); r.code != 0 {
+		t.Fatalf("group new custody: exit %d, stderr %q", r.code, r.stderr)
+	}
+	gidDefault, _, _ := formGroupAlias(t, dir, group.ImplicitAlias, true)
+	gidCustody, _, _ := formGroupAlias(t, dir, "custody", true)
+	// custody is current (group new auto-focused it); make default current so
+	// the --group read genuinely targets a non-current Group.
+	if r := run(t, nil, "", "--dir", dir, "group", "use", group.ImplicitAlias); r.code != 0 {
+		t.Fatalf("group use default: exit %d, stderr %q", r.code, r.stderr)
+	}
+
+	// group inspect --group reads the named Group, not the current one.
+	r := run(t, nil, "", "--dir", dir, "group", "inspect", "--group", "custody", "--json")
+	if r.code != 0 {
+		t.Fatalf("inspect --group custody: exit %d, stderr %q", r.code, r.stderr)
+	}
+	var gv map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &gv); err != nil || gv["group_id"] != gidCustody.String() {
+		t.Fatalf("inspect --group custody: %v, group_id = %v, want %s", err, gv["group_id"], gidCustody)
+	}
+	// Omitting --group falls back to the Current Group (default).
+	if doc := inspectJSON(t, dir); doc["group_id"] != gidDefault.String() {
+		t.Fatalf("inspect without --group: group_id = %v, want %s", doc["group_id"], gidDefault)
+	}
+
+	// An unknown alias errors clearly, naming the Groups this Node holds.
+	r = run(t, nil, "", "--dir", dir, "group", "inspect", "--group", "nope")
+	if r.code == 0 || !strings.Contains(r.stderr, `no Group "nope"`) || !strings.Contains(r.stderr, "custody") {
+		t.Fatalf("unknown alias: exit %d, stderr %q", r.code, r.stderr)
+	}
+	// A Group ID arg and --group together is a usage error.
+	r = run(t, nil, "", "--dir", dir, "group", "inspect", gidCustody.String(), "--group", "custody")
+	if r.code == 0 || !strings.Contains(r.stderr, "not both") {
+		t.Fatalf("id + --group: exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
 // groupRow mirrors one `group list --json` row for tests.
 type groupRow struct {
 	Alias   string `json:"alias"`

@@ -23,6 +23,13 @@ import (
 // scoped to a Conversation. Returns the msg_id hex of each row in seq order.
 func replica(t *testing.T, dir string) (gid string, msgIDs []string) {
 	t.Helper()
+	return replicaAlias(t, dir, group.ImplicitAlias)
+}
+
+// replicaAlias is replica scoped to a named Group alias, so a Node holding
+// more than one Group can be read per-Group with --group (#28).
+func replicaAlias(t *testing.T, dir, alias string) (gid string, msgIDs []string) {
+	t.Helper()
 	var nodes []*identity.Node
 	var members []group.RosterNode
 	for _, name := range []string{"alice", "bob"} {
@@ -36,7 +43,7 @@ func replica(t *testing.T, dir string) (gid string, msgIDs []string) {
 	roster := group.NewRoster(members...)
 	g := roster.GroupID()
 	gid = g.String()
-	gdir := filepath.Join(dir, "group", group.ImplicitAlias)
+	gdir := filepath.Join(dir, "group", alias)
 	if err := os.MkdirAll(gdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +120,37 @@ func TestCoslLogHumanLines(t *testing.T) {
 	// newlines in text never break the one-line format.
 	if strings.Contains(lines[2], "bob") || !strings.Contains(lines[2], `scoped\nline`) {
 		t.Errorf("line 3: %s", lines[2])
+	}
+}
+
+// TestCoslGroupFlagReadsNamedReplica checks cosl log/decode read the --group
+// Group's own replica, not the sole/current one (#28).
+func TestCoslGroupFlagReadsNamedReplica(t *testing.T) {
+	dir := t.TempDir()
+	replicaAlias(t, dir, group.ImplicitAlias)
+	custodyGID, custodyIDs := replicaAlias(t, dir, "custody")
+
+	// Two Groups with no Current Group pointer: a bare read is ambiguous,
+	// but --group names one unambiguously.
+	r := run(t, nil, "", "--dir", dir, "cosl", "log", "--group", "custody", "--json")
+	if r.code != 0 {
+		t.Fatalf("cosl log --group custody: exit %d, stderr %q", r.code, r.stderr)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 3 {
+		t.Fatalf("rows: %v\n%s", err, r.stdout)
+	}
+	if rows[0]["msg_id"] != custodyIDs[0] {
+		t.Fatalf("read the wrong replica: msg_id %v, want %v", rows[0]["msg_id"], custodyIDs[0])
+	}
+	// decode reaches a row that only exists in custody's replica.
+	r = run(t, nil, "", "--dir", dir, "cosl", "decode", custodyIDs[0][:12], "--group", "custody")
+	if r.code != 0 || !strings.Contains(r.stdout, custodyGID) {
+		t.Fatalf("cosl decode --group custody: exit %d, stderr %q", r.code, r.stderr)
+	}
+	// That same row is absent from default's replica.
+	if r := run(t, nil, "", "--dir", dir, "cosl", "decode", custodyIDs[0][:12], "--group", group.ImplicitAlias); r.code == 0 {
+		t.Fatalf("custody row should not decode under default: stdout %q", r.stdout)
 	}
 }
 

@@ -78,6 +78,37 @@ func TestKeyListAndInspectWithoutServe(t *testing.T) {
 	}
 }
 
+// TestKeyGroupFlagReadsNamedGroup checks key list/inspect --group read the
+// named Group's Keys and its own shares file, not the current/sole one (#28).
+func TestKeyGroupFlagReadsNamedGroup(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	// Two Groups' replicas on one Node; each mints its own ECDSA Keys.
+	seedMintedAlias(t, dir, group.ImplicitAlias)
+	custodyPK, _ := seedMintedAlias(t, dir, "custody")
+	// Only custody's shares file holds a share for custody's Key.
+	shares := vault.NewStore(filepath.Join(dir, "vault", "shares-custody"), "hunter2hunter2", nil)
+	if err := shares.Put("ecdsa", custodyPK, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	custodyRef := "ecdsa:" + hex.EncodeToString(custodyPK)
+
+	// With no Current Group pointer, a bare read is ambiguous; --group names
+	// custody and the passphrase route sees custody's share.
+	r := run(t, withPass, "", "--dir", dir, "key", "list", "--group", "custody")
+	if r.code != 0 {
+		t.Fatalf("key list --group custody: exit %d, stderr %q", r.code, r.stderr)
+	}
+	if !strings.Contains(r.stdout, custodyRef+"  t=2 n=2  share=yes") {
+		t.Fatalf("list --group custody:\n%s", r.stdout)
+	}
+	// The default Group's Keys never carry a share here.
+	r = run(t, withPass, "", "--dir", dir, "key", "list", "--group", group.ImplicitAlias)
+	if r.code != 0 || strings.Contains(r.stdout, "share=yes") {
+		t.Fatalf("list --group default exit %d:\n%s", r.code, r.stdout)
+	}
+}
+
 func TestInitStoresPreparamFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "node")
 	blob := []byte(`{"test":"preparams"}`)
@@ -108,6 +139,13 @@ func TestInitStoresPreparamFile(t *testing.T) {
 // seedMinted writes two agreeing 2-of-2 ECDSA Keys into dir's replica.
 func seedMinted(t *testing.T, dir string) (pk, other []byte) {
 	t.Helper()
+	return seedMintedAlias(t, dir, group.ImplicitAlias)
+}
+
+// seedMintedAlias is seedMinted scoped to a named Group alias, so a Node with
+// several Groups can be read per-Group with --group (#28).
+func seedMintedAlias(t *testing.T, dir, alias string) (pk, other []byte) {
+	t.Helper()
 	alice, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +159,7 @@ func seedMinted(t *testing.T, dir string) (pk, other []byte) {
 		group.RosterNode{Public: bob.Public, DisplayName: "bob", TsnetHostname: "defios-bob"},
 	)
 	gid := roster.GroupID()
-	path := filepath.Join(dir, "group", group.ImplicitAlias, "cosl.sqlite")
+	path := filepath.Join(dir, "group", alias, "cosl.sqlite")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
