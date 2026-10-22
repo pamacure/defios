@@ -10,7 +10,7 @@ Files land in `$XDG_CONFIG_HOME/defios` and `$XDG_DATA_HOME/defios` (`~/.config/
 
 ## Usage
 
-Call the two machines A and B. Use a different `--name` on each. Leave `--hostname` unset; the default is `defios-` plus the first 8 hex characters of the Node ID.
+Call the two machines A and B. Use a different `--name` on each. Leave `group new --hostname` unset; the default is `defios-`, the first 8 hex characters of the Node ID, and the Group alias (e.g. `defios-1a2b3c4d-personal`), so one device presents a distinct hostname on each Group's tailnet.
 
 ### 1. Headscale
 
@@ -53,7 +53,9 @@ Then scaffold a Group under a local alias and point it at the headscale control 
 defios group new personal --headscale https://headscale.example
 ```
 
-The alias (`personal` here) is local to this machine, must match `[a-z0-9][a-z0-9_-]{0,63}`, and never travels on the wire. Switch the Current Group later with `defios group use <alias>`.
+The alias (`personal` here) is local to this machine, must match `[a-z0-9][a-z0-9_-]{0,63}`, and never travels on the wire. A Node may hold any number of Groups, each on its own tailnet and with its own isolated state; `group new` focuses the one it creates. Switch the Current Group later with `defios group use <alias>` — it takes effect on the next `serve`, so a running `serve` keeps serving the Group it started on. `defios group list` shows every Group's alias, status, Group ID, and which is current (`*`).
+
+Read verbs (`group inspect`, `cosl log`, `conversation log`, `key list`, `key inspect`) accept `--group <alias>` to read any Group off disk regardless of which is current or served — all non-secret state is plaintext, and a Key's `share=yes` comes from that Group's own encrypted shares over the passphrase.
 
 ```bash
 defios node inspect
@@ -70,7 +72,7 @@ export TS_AUTHKEY='<preauth key for this machine>'
 defios serve
 ```
 
-`serve` prompts for the passphrase once unless `DEFIOS_PASSPHRASE` or `--passphrase-file` is set. A second `serve` for the same Node exits 2. The first successful join stores tailnet state under the data directory; later serves reuse it.
+`serve` prompts for the passphrase once unless `DEFIOS_PASSPHRASE` or `--passphrase-file` is set. It serves the Current Group. One Node has one socket, so only one Group is live at a time: a second `serve` — for any Group — exits 2 with an "already running" message while the first keeps running. The first successful join stores that Group's tailnet state under its subtree; later serves reuse it.
 
 From the other terminal on each machine:
 
@@ -180,3 +182,5 @@ defios conversation send --key ff "nope"
 There is no threshold signing and no chain integration.
 
 A 2-Node Group appends only while both Nodes are reachable. With one `serve` stopped, the other cannot commit. The stopped Node's replica stays at the last applied row and resumes when `serve` starts again.
+
+Because only one Group is live at a time, a Group you switch focus away from is offline to its peers until you refocus it: it cannot append, keygen, or receive Conversation messages meanwhile. Refocusing (`group use <other>` then `serve`) reconverges it through Raft catch-up automatically, with no manual resync.
