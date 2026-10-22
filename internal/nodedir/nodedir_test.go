@@ -83,16 +83,40 @@ func TestSocketWithoutRuntimeDirFallsBackToDataDir(t *testing.T) {
 
 func TestFilePaths(t *testing.T) {
 	p := nodedir.Resolve(nodedir.Lookup{Dir: "/tmp/n1", Getenv: envOf(nil), Home: "/h"})
-	if p.ConfigFile() != "/tmp/n1/config.toml" {
-		t.Fatalf("config file %q", p.ConfigFile())
-	}
 	if p.IdentityFile() != "/tmp/n1/identity" {
 		t.Fatalf("identity file %q", p.IdentityFile())
 	}
-	if p.VaultFile() != "/tmp/n1/vault" {
-		t.Fatalf("vault file %q", p.VaultFile())
+	if p.VaultDir() != "/tmp/n1/vault" || p.VaultSharedFile() != "/tmp/n1/vault/shared" {
+		t.Fatalf("vault paths %q %q", p.VaultDir(), p.VaultSharedFile())
 	}
-	if p.GroupsDir() != "/tmp/n1/group" || p.CoslFile("abcd") != "/tmp/n1/group/abcd/cosl.sqlite" {
-		t.Fatalf("group paths %q %q", p.GroupsDir(), p.CoslFile("abcd"))
+	if p.VaultSharesFile("home") != "/tmp/n1/vault/shares-home" {
+		t.Fatalf("vault shares file %q", p.VaultSharesFile("home"))
+	}
+	if p.GroupConfigFile("home") != "/tmp/n1/group/home/config.toml" {
+		t.Fatalf("group config file %q", p.GroupConfigFile("home"))
+	}
+	if p.GroupsDir() != "/tmp/n1/group" || p.GroupDir("home") != "/tmp/n1/group/home" {
+		t.Fatalf("group dirs %q %q", p.GroupsDir(), p.GroupDir("home"))
+	}
+	if p.CoslFile("home") != "/tmp/n1/group/home/cosl.sqlite" || p.TsnetDir("home") != "/tmp/n1/group/home/tsnet" {
+		t.Fatalf("group paths %q %q", p.CoslFile("home"), p.TsnetDir("home"))
+	}
+}
+
+// Under XDG, a Group's config lives under the config tree and its data under
+// the data tree, both at group/<alias>/.
+func TestAliasPathsSplitConfigAndData(t *testing.T) {
+	p := nodedir.Resolve(nodedir.Lookup{
+		Getenv: envOf(map[string]string{"XDG_CONFIG_HOME": "/x/cfg", "XDG_DATA_HOME": "/x/data"}),
+		Home:   "/home/op",
+	})
+	if p.GroupConfigFile("work") != "/x/cfg/defios/group/work/config.toml" {
+		t.Fatalf("group config file %q", p.GroupConfigFile("work"))
+	}
+	if p.GroupDir("work") != "/x/data/defios/group/work" {
+		t.Fatalf("group dir %q", p.GroupDir("work"))
+	}
+	if p.VaultDir() != "/x/data/defios/vault" {
+		t.Fatalf("vault dir %q", p.VaultDir())
 	}
 }

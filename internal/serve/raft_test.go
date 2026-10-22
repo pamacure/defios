@@ -34,7 +34,7 @@ func (n *node) joins(t *testing.T, gid group.ID, want int) []cosl.Row {
 	deadline := time.Now().Add(20 * time.Second)
 	var rows []cosl.Row
 	for time.Now().Before(deadline) {
-		store, err := cosl.Open(n.paths.CoslFile(gid.String()))
+		store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
 		if err == nil {
 			typ := cosl.TypeMembershipJoin
 			rows, err = store.Log(cosl.Query{MsgType: &typ})
@@ -95,7 +95,7 @@ func TestWipedReplicaCatchesUpWithoutRejoining(t *testing.T) {
 
 	b.stop()
 	for _, name := range []string{"cosl.sqlite", "cosl.sqlite-wal", "cosl.sqlite-shm", "raft.db", "raft-snap"} {
-		if err := os.RemoveAll(filepath.Join(b.paths.GroupDir(gid.String()), name)); err != nil {
+		if err := os.RemoveAll(filepath.Join(b.paths.GroupDir(group.ImplicitAlias), name)); err != nil {
 			t.Fatal(err)
 		}
 	}

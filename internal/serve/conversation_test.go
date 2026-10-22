@@ -28,7 +28,7 @@ func (n *node) groupLevelRows(t *testing.T, gid group.ID, want int) []cosl.Row {
 	deadline := time.Now().Add(20 * time.Second)
 	var rows []cosl.Row
 	for time.Now().Before(deadline) {
-		store, err := cosl.Open(n.paths.CoslFile(gid.String()))
+		store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
 		if err == nil {
 			typ := cosl.TypeAppFreeform
 			rows, err = store.Log(cosl.Query{MsgType: &typ, GroupLevel: true})
@@ -204,7 +204,7 @@ func commitEnvelope(t *testing.T, a, b *node, signed cosl.Signed) {
 
 func conversationRows(t *testing.T, n *node, gid group.ID, conv []byte) []cosl.Row {
 	t.Helper()
-	store, err := cosl.Open(n.paths.CoslFile(gid.String()))
+	store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func waitMinted(t *testing.T, n *node, gid group.ID, conv []byte) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		store, err := cosl.Open(n.paths.CoslFile(gid.String()))
+		store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
 		if err == nil {
 			rows, err := store.Log(cosl.Query{})
 			store.Close()

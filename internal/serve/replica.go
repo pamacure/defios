@@ -33,13 +33,13 @@ func (s *server) startReplica() {
 		return
 	}
 	gid := rec.GroupID()
-	store, err := cosl.Open(s.opts.Paths.CoslFile(gid.String()))
+	store, err := cosl.Open(s.opts.Paths.CoslFile(s.opts.Alias))
 	if err != nil {
 		s.opts.Logf("serve: opening COSL replica: %v", err)
 		return
 	}
 	replica, err := raftx.Open(raftx.Options{
-		Dir:       s.opts.Paths.GroupDir(gid.String()),
+		Dir:       s.opts.Paths.GroupDir(s.opts.Alias),
 		Self:      s.opts.Node.NodeID,
 		Roster:    rec.Roster(),
 		Store:     store,
@@ -52,7 +52,7 @@ func (s *server) startReplica() {
 		return
 	}
 	s.replica, s.store = replica, store
-	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(gid.String()))
+	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(s.opts.Alias))
 	s.startSessions(replica, store, rec.Roster())
 	go s.join(s.ctx, replica, store, gid)
 }
@@ -74,8 +74,8 @@ func (s *server) startSessions(replica *raftx.Replica, store *cosl.Store, roster
 		NewEngine:   s.opts.NewEngine,
 		Logf:        s.opts.Logf,
 		Shares:      s.opts.Vault,
-		AcceptPath:  filepath.Join(s.opts.Paths.GroupDir(roster.GroupID().String()), "local-accept.json"),
-		PendingPath: filepath.Join(s.opts.Paths.GroupDir(roster.GroupID().String()), "pending-shares.json"),
+		AcceptPath:  filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "local-accept.json"),
+		PendingPath: filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "pending-shares.json"),
 		Append: func(ctx context.Context, signed cosl.Signed) error {
 			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
 			defer cancel()

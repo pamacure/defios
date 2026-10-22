@@ -17,8 +17,8 @@ type Lookup struct {
 
 // Paths is a resolved Node layout.
 type Paths struct {
-	Config string // holds config.toml
-	Data   string // holds identity, vault, tsnet/, group/
+	Config string // holds group/<alias>/config.toml
+	Data   string // holds identity, vault/, group/<alias>/
 	Socket string // serve.sock
 }
 
@@ -59,22 +59,53 @@ func Resolve(l Lookup) Paths {
 	return p
 }
 
-// ConfigFile is config.toml.
-func (p Paths) ConfigFile() string { return filepath.Join(p.Config, "config.toml") }
-
-// IdentityFile is the plaintext identity JSON.
+// IdentityFile is the plaintext identity JSON, at the Node root.
 func (p Paths) IdentityFile() string { return filepath.Join(p.Data, "identity") }
 
-// VaultFile is the age-encrypted Vault.
-func (p Paths) VaultFile() string { return filepath.Join(p.Data, "vault") }
+// VaultDir is the Vault, now a directory (ADR 0007): the Node's shared
+// secrets at its root plus one age file per Group for that Group's shares.
+func (p Paths) VaultDir() string { return filepath.Join(p.Data, "vault") }
 
-// GroupsDir holds one subdirectory per Group, named by Group ID hex.
+// VaultSharedFile holds the Node's shared secrets (auth seed, encryption
+// private key, ECDSA preparams), the same on every Group.
+func (p Paths) VaultSharedFile() string { return filepath.Join(p.VaultDir(), "shared") }
+
+// VaultSharesFile holds one Group's Key shares, keyed by its local alias, so
+// a serve opens only the shared file plus its own Group's shares (ADR 0007).
+func (p Paths) VaultSharesFile(alias string) string {
+	return filepath.Join(p.VaultDir(), "shares-"+alias)
+}
+
+// GroupsConfigDir holds one per-Group config subdirectory under the config
+// tree.
+func (p Paths) GroupsConfigDir() string { return filepath.Join(p.Config, "group") }
+
+// GroupConfigDir is the per-Group config subtree, config/group/<alias>/.
+func (p Paths) GroupConfigDir(alias string) string {
+	return filepath.Join(p.GroupsConfigDir(), alias)
+}
+
+// GroupConfigFile is a Group's config.toml, now per-Group (ADR 0007): no
+// longer at the config root.
+func (p Paths) GroupConfigFile(alias string) string {
+	return filepath.Join(p.GroupConfigDir(alias), "config.toml")
+}
+
+// GroupsDir holds one subdirectory per Group under the data tree, named by
+// the Group's local alias (ADR 0007), not its Group ID.
 func (p Paths) GroupsDir() string { return filepath.Join(p.Data, "group") }
 
-// GroupDir is group/<groupID>/: roster.json, cosl.sqlite, raft.db, raft-snap/.
-func (p Paths) GroupDir(groupID string) string { return filepath.Join(p.GroupsDir(), groupID) }
+// GroupDir is group/<alias>/: roster.json, cosl.sqlite, raft.db, raft-snap/,
+// tsnet/.
+func (p Paths) GroupDir(alias string) string { return filepath.Join(p.GroupsDir(), alias) }
 
-// CoslFile is the COSL replica for the Group whose ID hex is groupID.
-func (p Paths) CoslFile(groupID string) string {
-	return filepath.Join(p.GroupDir(groupID), "cosl.sqlite")
+// CoslFile is the COSL replica for the Group with this alias.
+func (p Paths) CoslFile(alias string) string {
+	return filepath.Join(p.GroupDir(alias), "cosl.sqlite")
+}
+
+// TsnetDir is a Group's tsnet state, per-Group so one device presents its
+// own tsnet identity on each tailnet.
+func (p Paths) TsnetDir(alias string) string {
+	return filepath.Join(p.GroupDir(alias), "tsnet")
 }

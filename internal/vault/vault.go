@@ -1,6 +1,7 @@
-// Package vault seals and opens the Node's secrets file: a binary age file,
-// scrypt work factor 18, sole recipient, protobuf VaultContents inside
-// (docs/spec/mvp.md §3.4).
+// Package vault seals and opens the Node's secrets. The Vault is a directory
+// (ADR 0007) of binary age files, scrypt work factor 18, sole recipient,
+// protobuf VaultContents inside: one shared-secrets file for the Node and one
+// shares file per Group, all under the same passphrase (docs/spec/mvp.md §3.4).
 package vault
 
 import (
@@ -91,4 +92,16 @@ func Open(path string, passphrase string) (*vaultv1.VaultContents, error) {
 		return nil, fmt.Errorf("vault: unsupported version %d", contents.Version)
 	}
 	return &contents, nil
+}
+
+// OpenShares decrypts the Group shares file at path. A shares file that does
+// not exist yet (no Key minted) yields no shares, not an error; os.ErrNotExist
+// is returned so the caller can tell the two apart. A wrong passphrase yields
+// ErrBadPassphrase.
+func OpenShares(path, passphrase string) ([]*vaultv1.KeyShare, error) {
+	contents, err := Open(path, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	return contents.Shares, nil
 }

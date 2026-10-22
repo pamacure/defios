@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
+	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
@@ -36,12 +36,13 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	} else if err != nil {
 		return exitOperational(err)
 	}
-	cfg, err := config.ReadFile(p.ConfigFile())
+	alias := group.ImplicitAlias
+	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
 	if err != nil {
 		return exitOperational(err)
 	}
 	if cfg.HeadscaleURL == "" {
-		return exitOperationalf("headscale_url is not set in %s", p.ConfigFile())
+		return exitOperationalf("headscale_url is not set in %s", p.GroupConfigFile(alias))
 	}
 	if serve.IsUp(p.Socket) {
 		return exitOperational(serve.ErrAlreadyRunning)
@@ -51,13 +52,23 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	if err != nil {
 		return err
 	}
-	contents, err := vault.Open(p.VaultFile(), passphrase)
+	// Unlock the Node's shared secrets plus only this Group's shares; another
+	// Group's shares file is never opened (ADR 0007).
+	shared, err := vault.Open(p.VaultSharedFile(), passphrase)
 	if errors.Is(err, vault.ErrBadPassphrase) {
 		return exitVerify(err)
 	} else if err != nil {
 		return exitOperational(err)
 	}
-	node, err := identity.Unlock(pub, contents.AuthSeed, contents.EncryptionPrivateKey)
+	shares, err := vault.OpenShares(p.VaultSharesFile(alias), passphrase)
+	if errors.Is(err, os.ErrNotExist) {
+		shares = nil // no Key minted for this Group yet
+	} else if errors.Is(err, vault.ErrBadPassphrase) {
+		return exitVerify(err)
+	} else if err != nil {
+		return exitOperational(err)
+	}
+	node, err := identity.Unlock(pub, shared.AuthSeed, shared.EncryptionPrivateKey)
 	if err != nil {
 		return exitVerify(err)
 	}
@@ -76,7 +87,7 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 		authKey = cfg.AuthKey
 	}
 	tailnet := serve.NewTsnet(serve.TsnetOptions{
-		Dir:        filepath.Join(p.Data, "tsnet"),
+		Dir:        p.TsnetDir(alias),
 		Hostname:   cfg.Hostname,
 		ControlURL: cfg.HeadscaleURL,
 		AuthKey:    authKey,
@@ -84,12 +95,13 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	})
 	err = serve.Run(cmd.Context(), serve.Options{
 		Paths:             p,
+		Alias:             alias,
 		Node:              node,
 		Config:            cfg,
 		Tailnet:           tailnet,
 		Logf:              logf,
-		Preparams:         contents.EcdsaPreparams,
-		Vault:             vault.NewStore(p.VaultFile(), passphrase, contents),
+		Preparams:         shared.EcdsaPreparams,
+		Vault:             vault.NewStore(p.VaultSharesFile(alias), passphrase, shares),
 		SessionWaitingFor: wait,
 		NewEngine:         engine,
 	})

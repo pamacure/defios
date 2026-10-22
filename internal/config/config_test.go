@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"defios.com/internal/config"
+	"defios.com/internal/nodedir"
 )
 
 func TestWriteUsesSpecKeysAndReadsBack(t *testing.T) {
@@ -41,5 +42,33 @@ func TestWriteUsesSpecKeysAndReadsBack(t *testing.T) {
 	}
 	if out != in {
 		t.Fatalf("read %+v, want %+v", out, in)
+	}
+}
+
+// config.toml is now per-Group (ADR 0007): it round-trips at the
+// alias-parameterized path nodedir resolves, independent of any other Group's
+// config.
+func TestPerGroupConfigRoundTrips(t *testing.T) {
+	p := nodedir.Resolve(nodedir.Lookup{Dir: t.TempDir()})
+	for _, tc := range []struct {
+		alias string
+		cfg   config.Config
+	}{
+		{"home", config.Config{HeadscaleURL: "https://home.example", DisplayName: "laptop", Hostname: "defios-home"}},
+		{"work", config.Config{HeadscaleURL: "https://work.example", DisplayName: "laptop", Hostname: "defios-work"}},
+	} {
+		if err := os.MkdirAll(p.GroupConfigDir(tc.alias), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := config.WriteFile(p.GroupConfigFile(tc.alias), tc.cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := config.ReadFile(p.GroupConfigFile("home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HeadscaleURL != "https://home.example" || got.Hostname != "defios-home" {
+		t.Fatalf("home config = %+v; a Group's config.toml must be keyed by its alias", got)
 	}
 }

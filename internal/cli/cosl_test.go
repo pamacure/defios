@@ -36,7 +36,7 @@ func replica(t *testing.T, dir string) (gid string, msgIDs []string) {
 	roster := group.NewRoster(members...)
 	g := roster.GroupID()
 	gid = g.String()
-	gdir := filepath.Join(dir, "group", gid)
+	gdir := filepath.Join(dir, "group", group.ImplicitAlias)
 	if err := os.MkdirAll(gdir, 0o700); err != nil {
 		t.Fatal(err)
 	}

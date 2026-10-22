@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
@@ -147,14 +149,17 @@ func shareRefs(ctx context.Context, g *globals, pass passphraseSource) (map[stri
 	if !ok {
 		return out, nil
 	}
-	contents, err := vault.Open(g.paths().VaultFile(), phrase)
+	shares, err := vault.OpenShares(g.paths().VaultSharesFile(group.ImplicitAlias), phrase)
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil // no Key minted for this Group yet
+	}
 	if errors.Is(err, vault.ErrBadPassphrase) {
 		return nil, exitVerify(err)
 	}
 	if err != nil {
 		return nil, exitOperational(err)
 	}
-	for _, sh := range contents.Shares {
+	for _, sh := range shares {
 		out[sh.Curve+":"+hex.EncodeToString(sh.PublicKey)] = struct{}{}
 	}
 	return out, nil

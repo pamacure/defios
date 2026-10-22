@@ -57,7 +57,11 @@ type Tailnet interface {
 // Options is everything Run needs; the Vault has already been unlocked
 // into Node by the caller.
 type Options struct {
-	Paths   nodedir.Paths
+	Paths nodedir.Paths
+	// Alias is the Group this serve serves; it keys the Group's storage
+	// subtree and shares file (ADR 0007). Empty defaults to the implicit
+	// Group (group.ImplicitAlias).
+	Alias   string
 	Node    *identity.Node
 	Config  config.Config
 	Tailnet Tailnet
@@ -79,6 +83,9 @@ func Run(ctx context.Context, o Options) error {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
 	}
+	if o.Alias == "" {
+		o.Alias = group.ImplicitAlias
+	}
 	self, err := group.SignIdentity(o.Node, o.Config.DisplayName, o.Config.Hostname)
 	if err != nil {
 		return err
@@ -88,7 +95,7 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	defer socket.Close()
-	slot, err := group.OpenSlot(o.Paths.GroupsDir(), o.Node)
+	slot, err := group.OpenSlot(o.Paths.GroupsDir(), o.Alias, o.Node)
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}

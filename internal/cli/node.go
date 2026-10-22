@@ -54,7 +54,7 @@ func runNodeInspect(g *globals) error {
 	} else if err != nil {
 		return exitOperational(err)
 	}
-	cfg, err := config.ReadFile(p.ConfigFile())
+	cfg, err := config.ReadFile(p.GroupConfigFile(group.ImplicitAlias))
 	if err != nil {
 		return exitOperational(err)
 	}

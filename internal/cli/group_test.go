@@ -25,7 +25,7 @@ func formGroup(t *testing.T, dir string, valid bool) (gid group.ID, alice, bob *
 	bob, _ = identity.Generate()
 	ia, _ := group.SignIdentity(alice, "alice", "defios-alice")
 	ib, _ := group.SignIdentity(bob, "bob", "defios-bob")
-	slot, err := group.OpenSlot(filepath.Join(dir, "group"), alice)
+	slot, err := group.OpenSlot(filepath.Join(dir, "group"), group.ImplicitAlias, alice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,8 +150,8 @@ func TestGroupInspectErrors(t *testing.T) {
 func TestGroupInspectTamperedRecordIsVerifyFailure(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
-	gid, _, _ := formGroup(t, dir, true)
-	path := filepath.Join(dir, "group", gid.String(), "roster.json")
+	formGroup(t, dir, true)
+	path := filepath.Join(dir, "group", group.ImplicitAlias, "roster.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

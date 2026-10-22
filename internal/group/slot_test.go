@@ -15,7 +15,7 @@ import (
 func openSlot(t *testing.T, n *identity.Node) (*group.Slot, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "group")
-	s, err := group.OpenSlot(dir, n)
+	s, err := group.OpenSlot(dir, group.ImplicitAlias, n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +78,8 @@ func TestSlotsReachValidWithSameGroupID(t *testing.T) {
 		t.Fatal("group id not derived from the roster")
 	}
 
-	// Persisted under group/<gid>/ and reloadable without the signing key.
-	if _, err := os.Stat(filepath.Join(aliceDir, ra.GroupID().String())); err != nil {
+	// Persisted under group/<alias>/ and reloadable without the signing key.
+	if _, err := os.Stat(filepath.Join(aliceDir, group.ImplicitAlias, "roster.json")); err != nil {
 		t.Fatal(err)
 	}
 	again, err := group.Load(aliceDir)
@@ -187,7 +187,7 @@ func TestSlotReopensPendingState(t *testing.T) {
 	p, _ := sa.Propose(ids, time.Now())
 
 	// A restarted serve picks up where it left off and can still complete.
-	sa2, err := group.OpenSlot(aliceDir, alice)
+	sa2, err := group.OpenSlot(aliceDir, group.ImplicitAlias, alice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,8 +211,7 @@ func TestRecordFilesAreOwnerOnly(t *testing.T) {
 	if _, err := sa.Propose(ids, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	r, _ := sa.Current()
-	gdir := filepath.Join(dir, r.GroupID().String())
+	gdir := filepath.Join(dir, group.ImplicitAlias)
 	info, err := os.Stat(gdir)
 	if err != nil {
 		t.Fatal(err)

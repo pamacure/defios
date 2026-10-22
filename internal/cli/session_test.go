@@ -118,7 +118,7 @@ func seedSessions(t *testing.T, dir string) (alice, bob *identity.Node, aborted,
 		group.RosterNode{Public: bob.Public, DisplayName: "bob", TsnetHostname: "defios-bob"},
 	)
 	gid := roster.GroupID()
-	path := filepath.Join(dir, "group", gid.String(), "cosl.sqlite")
+	path := filepath.Join(dir, "group", group.ImplicitAlias, "cosl.sqlite")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}

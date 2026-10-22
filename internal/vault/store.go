@@ -7,8 +7,10 @@ import (
 	vaultv1 "defios.com/proto/vault/v1"
 )
 
-// Store is an unlocked Vault. Put and Delete reseal the file before they
-// return, so a crash cannot leave a share only in memory.
+// Store is one Group's unlocked shares file. Put and Delete reseal the file
+// before they return, so a crash cannot leave a share only in memory. The
+// Node's shared secrets live in a separate file and never pass through here,
+// so resealing one Group's shares never touches another's (ADR 0007).
 type Store struct {
 	mu         sync.Mutex
 	path       string
@@ -16,9 +18,15 @@ type Store struct {
 	contents   *vaultv1.VaultContents
 }
 
-// NewStore keeps contents, already decrypted, and reseals them to path.
-func NewStore(path, passphrase string, contents *vaultv1.VaultContents) *Store {
-	return &Store{path: path, passphrase: passphrase, contents: contents}
+// NewStore keeps shares, already decrypted, and reseals them to path. The
+// shares file is written on the first Put, so it appears only once a Key is
+// minted.
+func NewStore(path, passphrase string, shares []*vaultv1.KeyShare) *Store {
+	return &Store{
+		path:       path,
+		passphrase: passphrase,
+		contents:   &vaultv1.VaultContents{Version: 1, Shares: shares},
+	}
 }
 
 // Put writes or replaces the share for curve and the canonical public key.

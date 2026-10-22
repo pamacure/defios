@@ -3,6 +3,7 @@ package group
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -21,20 +22,25 @@ var (
 // this Node's own formation messages, verifies the ones it receives, and
 // persists the Record under groupsDir so a restarted serve resumes.
 type Slot struct {
-	mu   sync.Mutex
-	dir  string
-	self *identity.Node
-	rec  *Record // nil when empty
+	mu    sync.Mutex
+	dir   string // groupsDir (holds one subtree per alias)
+	alias string // this Slot's Group alias; its subtree is dir/<alias>/
+	self  *identity.Node
+	rec   *Record // nil when empty
 }
 
-// OpenSlot loads whatever Record groupsDir already holds.
-func OpenSlot(groupsDir string, self *identity.Node) (*Slot, error) {
+// OpenSlot loads whatever Record groupsDir already holds under alias, and
+// persists this Node's formation state back under that alias.
+func OpenSlot(groupsDir, alias string, self *identity.Node) (*Slot, error) {
 	rec, err := Load(groupsDir)
 	if err != nil && !errors.Is(err, ErrNoGroup) {
 		return nil, err
 	}
-	return &Slot{dir: groupsDir, self: self, rec: rec}, nil
+	return &Slot{dir: groupsDir, alias: alias, self: self, rec: rec}, nil
 }
+
+// groupDir is this Slot's alias subtree under the groups dir.
+func (s *Slot) groupDir() string { return filepath.Join(s.dir, s.alias) }
 
 // Current is the held Record, if any.
 func (s *Slot) Current() (*Record, bool) {
@@ -196,7 +202,7 @@ func (s *Slot) check(gid ID) error {
 // holdProposal persists prop as this Node's pending Group. Caller holds mu.
 func (s *Slot) holdProposal(prop Proposal) error {
 	rec := &Record{proposal: prop, accepts: map[identity.ID]*groupv1.CreateAccept{}}
-	if err := rec.save(s.dir); err != nil {
+	if err := rec.save(s.groupDir()); err != nil {
 		return err
 	}
 	s.rec = rec
@@ -206,7 +212,7 @@ func (s *Slot) holdProposal(prop Proposal) error {
 // hold persists one more Accept. Caller holds mu.
 func (s *Slot) hold(who identity.ID, a *groupv1.CreateAccept) error {
 	s.rec.accepts[who] = a
-	if err := s.rec.save(s.dir); err != nil {
+	if err := s.rec.save(s.groupDir()); err != nil {
 		delete(s.rec.accepts, who)
 		return err
 	}
@@ -215,7 +221,7 @@ func (s *Slot) hold(who identity.ID, a *groupv1.CreateAccept) error {
 
 // drop removes the held Group from disk and memory. Caller holds mu.
 func (s *Slot) drop() error {
-	if err := s.rec.remove(s.dir); err != nil {
+	if err := s.rec.remove(s.groupDir()); err != nil {
 		return err
 	}
 	s.rec = nil

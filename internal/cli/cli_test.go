@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"defios.com/internal/cli"
+	"defios.com/internal/group"
 )
 
 type result struct {
@@ -77,7 +78,11 @@ func TestInitCreatesTreeWithStrictModes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "node")
 	mustInit(t, dir)
 
-	for _, name := range []string{"identity", "vault", "config.toml"} {
+	for _, name := range []string{
+		"identity",
+		filepath.Join("vault", "shared"),
+		filepath.Join("group", group.ImplicitAlias, "config.toml"),
+	} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -116,7 +121,7 @@ func TestInitWritesIdentityVaultAndConfig(t *testing.T) {
 		t.Fatalf("identity shape wrong: %+v", id)
 	}
 
-	vault, err := os.ReadFile(filepath.Join(dir, "vault"))
+	vault, err := os.ReadFile(filepath.Join(dir, "vault", "shared"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +129,7 @@ func TestInitWritesIdentityVaultAndConfig(t *testing.T) {
 		t.Fatalf("vault is not an age scrypt/18 file:\n%q", vault[:min(len(vault), 80)])
 	}
 
-	cfg, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+	cfg, err := os.ReadFile(filepath.Join(dir, "group", group.ImplicitAlias, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +144,7 @@ func TestInitWritesIdentityVaultAndConfig(t *testing.T) {
 func TestInitHonoursHostnameAndHeadscaleFlags(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir, "--hostname", "box", "--headscale-url", "https://hs.example")
-	cfg, _ := os.ReadFile(filepath.Join(dir, "config.toml"))
+	cfg, _ := os.ReadFile(filepath.Join(dir, "group", group.ImplicitAlias, "config.toml"))
 	for _, line := range []string{`hostname = "box"`, `headscale_url = "https://hs.example"`} {
 		if !strings.Contains(string(cfg), line) {
 			t.Errorf("config.toml missing %q:\n%s", line, cfg)
@@ -287,7 +292,7 @@ func TestDirectoryLookupFallsBackToEnvThenXDG(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("init exit %d: %s", r.code, r.stderr)
 	}
-	if _, err := os.Stat(filepath.Join(cfgDir, "config.toml")); err != nil {
+	if _, err := os.Stat(filepath.Join(cfgDir, "group", group.ImplicitAlias, "config.toml")); err != nil {
 		t.Errorf("config.toml not under DEFIOS_CONFIG_DIR: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "identity")); err != nil {
@@ -304,10 +309,10 @@ func TestDirectoryLookupFallsBackToEnvThenXDG(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("init exit %d: %s", r.code, r.stderr)
 	}
-	if _, err := os.Stat(filepath.Join(xdg, "cfg", "defios", "config.toml")); err != nil {
+	if _, err := os.Stat(filepath.Join(xdg, "cfg", "defios", "group", group.ImplicitAlias, "config.toml")); err != nil {
 		t.Errorf("config.toml not under XDG_CONFIG_HOME/defios: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(xdg, "data", "defios", "vault")); err != nil {
+	if _, err := os.Stat(filepath.Join(xdg, "data", "defios", "vault", "shared")); err != nil {
 		t.Errorf("vault not under XDG_DATA_HOME/defios: %v", err)
 	}
 }

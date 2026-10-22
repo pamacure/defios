@@ -244,7 +244,7 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 		}
 	}
 	self, _ := identity.ReadFile(p.IdentityFile())
-	joined, err := joinedNodes(p.CoslFile(rec.GroupID().String()))
+	joined, err := joinedNodes(p.CoslFile(group.ImplicitAlias))
 	if err != nil {
 		return exitOperational(err)
 	}

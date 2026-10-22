@@ -17,19 +17,15 @@ import (
 	"defios.com/internal/session"
 	"defios.com/internal/vault"
 	coslv1 "defios.com/proto/cosl/v1"
-	vaultv1 "defios.com/proto/vault/v1"
 )
 
 func TestKeyListAndInspectWithoutServe(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	pk, other := seedMinted(t, dir)
-	contents, err := vault.Open(filepath.Join(dir, "vault"), "hunter2hunter2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	contents.Shares = []*vaultv1.KeyShare{{Curve: "ecdsa", PublicKey: pk, SaveData: []byte{1}}}
-	if err := vault.Seal(filepath.Join(dir, "vault"), contents, "hunter2hunter2"); err != nil {
+	// The Group's share lives in its own shares file inside the Vault dir.
+	shares := vault.NewStore(filepath.Join(dir, "vault", "shares-"+group.ImplicitAlias), "hunter2hunter2", nil)
+	if err := shares.Put("ecdsa", pk, []byte{1}); err != nil {
 		t.Fatal(err)
 	}
 	ref := "ecdsa:" + hex.EncodeToString(pk)
@@ -100,7 +96,7 @@ func TestInitStoresPreparamFile(t *testing.T) {
 	if strings.Contains(r.stderr, "generating ECDSA preparams") {
 		t.Fatalf("file preparams were regenerated: %s", r.stderr)
 	}
-	contents, err := vault.Open(filepath.Join(dir, "vault"), "hunter2hunter2")
+	contents, err := vault.Open(filepath.Join(dir, "vault", "shared"), "hunter2hunter2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +121,7 @@ func seedMinted(t *testing.T, dir string) (pk, other []byte) {
 		group.RosterNode{Public: bob.Public, DisplayName: "bob", TsnetHostname: "defios-bob"},
 	)
 	gid := roster.GroupID()
-	path := filepath.Join(dir, "group", gid.String(), "cosl.sqlite")
+	path := filepath.Join(dir, "group", group.ImplicitAlias, "cosl.sqlite")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}

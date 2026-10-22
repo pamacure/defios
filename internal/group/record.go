@@ -83,8 +83,14 @@ func (r *Record) Status() Status {
 	return Valid
 }
 
-// recordFileName is the on-disk Record, group/<gid>/roster.json (§3.1):
-// the signed wire messages, re-verified on load.
+// ImplicitAlias is the single Group alias a Node uses until multiple Groups
+// per Node land (#24). Storage is already alias-keyed (ADR 0007); for now
+// exactly one implicit Group exists under this alias.
+const ImplicitAlias = "default"
+
+// recordFileName is the on-disk Record, group/<alias>/roster.json (ADR 0007),
+// which binds the alias to its Group ID: the signed wire messages, re-verified
+// on load.
 const recordFileName = "roster.json"
 
 type recordFileV1 struct {
@@ -93,7 +99,10 @@ type recordFileV1 struct {
 	Accepts  [][]byte `json:"accepts"`  // CreateAccept bytes
 }
 
-// Load reads the one Record under groupsDir. ErrNoGroup if there is none.
+// Load reads the one Record under groupsDir, whatever alias subtree it lives
+// in. ErrNoGroup if there is none; an error if more than one is found, since a
+// Node still holds exactly one implicit Group (#25). Multiple Groups per Node
+// (#24) will make this read the subtree for a given alias.
 func Load(groupsDir string) (*Record, error) {
 	matches, err := filepath.Glob(filepath.Join(groupsDir, "*", recordFileName))
 	if err != nil {
@@ -129,9 +138,6 @@ func loadRecord(path string) (*Record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("group: %s: %w", path, err)
 	}
-	if filepath.Base(filepath.Dir(path)) != prop.GroupID.String() {
-		return nil, fmt.Errorf("group: %s holds Group %s", path, prop.GroupID)
-	}
 	r := &Record{proposal: prop, accepts: map[identity.ID]*groupv1.CreateAccept{}}
 	for _, b := range f.Accepts {
 		var a groupv1.CreateAccept
@@ -147,10 +153,10 @@ func loadRecord(path string) (*Record, error) {
 	return r, nil
 }
 
-// save writes r under groupsDir/<gid>/ atomically, 0700/0600.
-func (r *Record) save(groupsDir string) error {
-	dir := filepath.Join(groupsDir, r.GroupID().String())
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+// save writes r under groupDir (the Group's alias subtree) atomically,
+// 0700/0600.
+func (r *Record) save(groupDir string) error {
+	if err := os.MkdirAll(groupDir, 0o700); err != nil {
 		return err
 	}
 	f := recordFileV1{Version: 1}
@@ -171,7 +177,7 @@ func (r *Record) save(groupsDir string) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, recordFileName)
+	path := filepath.Join(groupDir, recordFileName)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
@@ -179,8 +185,14 @@ func (r *Record) save(groupsDir string) error {
 	return os.Rename(tmp, path)
 }
 
-// remove deletes the Group's directory. Only formation state lives there
-// before a Group is valid, so a cancelled proposal leaves nothing behind.
-func (r *Record) remove(groupsDir string) error {
-	return os.RemoveAll(filepath.Join(groupsDir, r.GroupID().String()))
+// remove deletes the Record file under groupDir, freeing the Slot. Only the
+// roster.json is removed: the alias subtree also holds the Group's tsnet
+// state, which outlives a cancelled proposal (a Group is never dropped once
+// valid, so no replica state is present). A missing file is success.
+func (r *Record) remove(groupDir string) error {
+	err := os.Remove(filepath.Join(groupDir, recordFileName))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }

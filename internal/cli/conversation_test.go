@@ -33,7 +33,7 @@ func groupWithTalk(t *testing.T, dir string) (alice, bob *identity.Node) {
 	bob, _ = identity.Generate()
 	ia, _ := group.SignIdentity(alice, "alice", "defios-alice")
 	ib, _ := group.SignIdentity(bob, "bob", "defios-bob")
-	slot, err := group.OpenSlot(filepath.Join(dir, "group"), alice)
+	slot, err := group.OpenSlot(filepath.Join(dir, "group"), group.ImplicitAlias, alice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func groupWithTalk(t *testing.T, dir string) (alice, bob *identity.Node) {
 	}
 	rec, _ := slot.Current()
 
-	gdir := filepath.Join(dir, "group", prop.GroupID.String())
+	gdir := filepath.Join(dir, "group", group.ImplicitAlias)
 	if err := os.MkdirAll(gdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func groupWithKeys(t *testing.T, dir string) (ecdsaPK, eddsaPK []byte) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	rec, err := group.OpenSlot(filepath.Join(dir, "group"), alice)
+	rec, err := group.OpenSlot(filepath.Join(dir, "group"), group.ImplicitAlias, alice)
 	if err != nil {
 		t.Fatal(err)
 	}

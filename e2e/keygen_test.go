@@ -27,7 +27,7 @@ func TestKeygenECDSA_2of2(t *testing.T) {
 		if !strings.Contains(n.logs.String(), "generating ECDSA preparams") {
 			t.Fatalf("%s init did not report preparam generation", n.name)
 		}
-		contents, err := vault.Open(filepath.Join(n.dir, "vault"), passphrase)
+		contents, err := vault.Open(filepath.Join(n.dir, "vault", "shared"), passphrase)
 		if err != nil {
 			t.Fatal(err)
 		}

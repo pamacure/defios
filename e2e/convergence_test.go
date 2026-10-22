@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"defios.com/internal/group"
 	"defios.com/internal/serve"
 )
 
@@ -82,7 +83,7 @@ func mustConverge(t *testing.T, a, b *node, n int) []coslLine {
 // once it has fallen beyond the retained log.
 func TestCOSLConvergence(t *testing.T) {
 	hs := startHeadscale(t)
-	alice, bob, gid := formValidPair(t, hs)
+	alice, bob, _ := formValidPair(t, hs)
 	mintCurve(t, alice, bob, "ecdsa")
 	mintCurve(t, alice, bob, "eddsa")
 	alice.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "both up")
@@ -126,7 +127,7 @@ func TestCOSLConvergence(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	bob.stopServe(t)
-	bob.wipeReplica(t, gid)
+	bob.wipeReplica(t, group.ImplicitAlias)
 	bob.startServe(t)
 	restored := mustConverge(t, alice, bob, len(rows))
 	if len(restored) != len(rows) {

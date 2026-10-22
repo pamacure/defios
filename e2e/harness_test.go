@@ -341,17 +341,20 @@ func (n *node) stopServe(t *testing.T) {
 }
 
 // wipeReplica removes the Group's replica state (cosl.sqlite, raft.db,
-// raft-snap/) but keeps roster.json: the Node still knows its Group and
-// relies on the leader to restore the COSL (§4.4).
-func (n *node) wipeReplica(t *testing.T, gid string) {
+// raft-snap/) but keeps roster.json and tsnet/: the Node still knows its
+// Group and relies on the leader to restore the COSL (§4.4). The Group's
+// subtree is keyed by its local alias (ADR 0007).
+func (n *node) wipeReplica(t *testing.T, alias string) {
 	t.Helper()
-	dir := filepath.Join(n.dir, "group", gid)
+	dir := filepath.Join(n.dir, "group", alias)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() == "roster.json" {
+		// Keep roster.json (the Node still knows its Group) and tsnet/ (its
+		// tailnet identity on this Group), which now live in the alias subtree.
+		if e.Name() == "roster.json" || e.Name() == "tsnet" {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {

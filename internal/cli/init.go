@@ -12,6 +12,7 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/engine/tssl"
+	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/vault"
@@ -79,7 +80,10 @@ func runInit(g *globals, o initOptions) error {
 		return err
 	}
 
-	for _, dir := range []string{p.Config, p.Data} {
+	// Scaffold the Node root, the Vault directory, and the implicit Group's
+	// config and data subtrees (ADR 0007).
+	dirs := []string{p.Config, p.Data, p.VaultDir(), p.GroupConfigDir(group.ImplicitAlias), p.GroupDir(group.ImplicitAlias)}
+	for _, dir := range dirs {
 		if err := mkdirPrivate(dir); err != nil {
 			return exitOperational(err)
 		}
@@ -88,13 +92,15 @@ func runInit(g *globals, o initOptions) error {
 	if err != nil {
 		return exitOperational(err)
 	}
-	contents := &vaultv1.VaultContents{
+	// The shared-secrets file carries no Key shares: each Group's shares go
+	// in their own file, written only once a Key is minted (ADR 0007).
+	shared := &vaultv1.VaultContents{
 		Version:              1,
 		AuthSeed:             node.AuthSeed,
 		EncryptionPrivateKey: node.EncryptionPrivateKey,
 		EcdsaPreparams:       preparams,
 	}
-	if err := vault.Seal(p.VaultFile(), contents, passphrase); err != nil {
+	if err := vault.Seal(p.VaultSharedFile(), shared, passphrase); err != nil {
 		if errors.Is(err, vault.ErrEmptyPassphrase) {
 			return exitUsagef("%w", err)
 		}
@@ -104,7 +110,7 @@ func runInit(g *globals, o initOptions) error {
 		return exitOperational(err)
 	}
 	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname}
-	if err := config.WriteFile(p.ConfigFile(), cfg); err != nil {
+	if err := config.WriteFile(p.GroupConfigFile(group.ImplicitAlias), cfg); err != nil {
 		return exitOperational(err)
 	}
 
@@ -152,7 +158,7 @@ func mkdirPrivate(dir string) error {
 
 // nodeExists reports whether any of this Node's files is already on disk.
 func nodeExists(p nodedir.Paths) (bool, error) {
-	for _, f := range []string{p.IdentityFile(), p.VaultFile(), p.ConfigFile()} {
+	for _, f := range []string{p.IdentityFile(), p.VaultSharedFile(), p.GroupConfigFile(group.ImplicitAlias)} {
 		if _, err := os.Stat(f); err == nil {
 			return true, nil
 		} else if !errors.Is(err, os.ErrNotExist) {

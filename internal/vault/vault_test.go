@@ -72,6 +72,64 @@ func TestWrongPassphraseIsErrBadPassphrase(t *testing.T) {
 	}
 }
 
+// The Vault directory keeps shares in a file separate from the shared
+// secrets: the Store reseals only its own Group's shares, and opening one
+// Group's shares never reads another's.
+func TestStoreSealsSharesIntoTheirOwnFile(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "shared")
+	sharesHome := filepath.Join(dir, "shares-home")
+	sharesWork := filepath.Join(dir, "shares-work")
+
+	// Shared secrets are sealed with no shares.
+	if err := vault.Seal(shared, sample(), "pw"); err != nil {
+		t.Fatal(err)
+	}
+
+	home := vault.NewStore(sharesHome, "pw", nil)
+	if err := home.Put("ecdsa", []byte{0xaa}, []byte{0x01}); err != nil {
+		t.Fatal(err)
+	}
+	work := vault.NewStore(sharesWork, "pw", nil)
+	if err := work.Put("eddsa", []byte{0xbb}, []byte{0x02}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The shared-secrets file holds no shares.
+	gotShared, err := vault.OpenShares(shared, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotShared) != 0 {
+		t.Fatalf("shared file carries %d shares, want 0", len(gotShared))
+	}
+
+	// Each Group's file holds only its own share.
+	gotHome, err := vault.OpenShares(sharesHome, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotHome) != 1 || gotHome[0].Curve != "ecdsa" {
+		t.Fatalf("home shares = %+v", gotHome)
+	}
+	gotWork, err := vault.OpenShares(sharesWork, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotWork) != 1 || gotWork[0].Curve != "eddsa" {
+		t.Fatalf("work shares = %+v", gotWork)
+	}
+}
+
+// A shares file that was never written (no Key minted) is not an error; the
+// caller sees os.ErrNotExist and treats it as no shares.
+func TestOpenSharesMissingFileIsNotExist(t *testing.T) {
+	_, err := vault.OpenShares(filepath.Join(t.TempDir(), "shares-home"), "pw")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("err = %v, want os.ErrNotExist", err)
+	}
+}
+
 func TestEmptyPassphraseRejectedOnSeal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault")
 	err := vault.Seal(path, sample(), "")
