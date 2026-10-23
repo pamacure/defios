@@ -172,6 +172,7 @@ func (s *server) localHandler() http.Handler {
 	s.conversationRoutes(mux)
 	s.networkRoutes(mux)
 	s.signRoutes(mux)
+	s.broadcastRoutes(mux)
 	s.sessionRoutes(mux)
 	s.snapshotRoutes(mux)
 	return mux
@@ -224,6 +225,7 @@ var errorKinds = []struct {
 	{signreq.ErrInvalid, "bad-sign-request", http.StatusBadRequest},
 	{signreq.ErrCurveMismatch, "curve-mismatch", http.StatusUnprocessableEntity},
 	{signreq.ErrUnknown, "no-sign-request", http.StatusNotFound},
+	{signreq.ErrNotSigned, "not-signed", http.StatusConflict},
 	{signreq.ErrAmbiguous, "ambiguous-sign-request", http.StatusConflict},
 	{key.ErrUnknown, "no-key", http.StatusNotFound},
 	{key.ErrAmbiguous, "ambiguous-key", http.StatusConflict},

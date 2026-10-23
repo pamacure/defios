@@ -116,3 +116,26 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
 - An aborted Session (timeout, decline, crash) still kills the request: retry is a
   new Sign Request, and accepts do not carry over. A request that never reaches t
   accepts before its deadline is `expired`.
+
+## As built (broadcasting Ethereum)
+
+- **`sign.broadcast`** (registry id 12), body `{ sign_request_id, transactions: [{ network_config_id, tx_hash }] }`,
+  scoped to the Key's Conversation. Its sender is the broadcasting Node and its
+  envelope `created_at` is the broadcast time, so the receipt adds no fields for them.
+  It is one entry per transaction of the request, in order.
+- `sign broadcast <msg-id>` (any Node, any number of times) takes the signatures of the
+  request's completed Session (`session.Signatures`: the first complete that verifies),
+  assembles each transaction (`signreq.AssembleEthereum`: the unsigned EIP-1559 field list
+  plus `y_parity, r, s`) and submits it to its Network with `eth_sendRawTransaction`,
+  then commits one receipt. The endpoints are this Node's local override for the alias if
+  it has one, else the Network's current `rpc_urls`; they are tried in order and only
+  http(s) ones can carry the call. A request with no verified signature is `not-signed`.
+- **Idempotent.** The same signatures give the same bytes and hash. A node that rejects the
+  submission but already has that hash (`eth_getTransactionByHash`), e.g. "already known" or
+  "nonce too low" after inclusion, counts as success and is reported as `already_known`. A
+  repeat broadcast therefore succeeds and commits one more receipt; receipts are never
+  deduplicated, so the repeat stays visible. A rejection the node does not recognise
+  fails the call before anything is committed, so retry is safe.
+- A multi-transaction request is all-or-error: if transaction *k* fails, 1…*k*−1 are on the
+  network but no receipt is written until a retry succeeds for all.
+- `sign list` shows a receipt count; `sign inspect` shows each receipt.

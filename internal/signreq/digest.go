@@ -19,19 +19,32 @@ import (
 // to, value, data, accessList])) and its keccak256 Digest. The access list is
 // always empty. Pure and deterministic, so every Node derives the same bytes.
 func EthereumDigest(chainID uint64, in *coslv1.EthereumIntent) (unsigned []byte, digest [32]byte, err error) {
+	fields, err := ethereumFields(chainID, in)
+	if err != nil {
+		return nil, digest, err
+	}
+	unsigned = append([]byte{0x02}, rlpList(fields)...)
+	h := sha3.NewLegacyKeccak256()
+	h.Write(unsigned)
+	h.Sum(digest[:0])
+	return unsigned, digest, nil
+}
+
+// ethereumFields is the RLP-encoded unsigned field list of the transaction.
+func ethereumFields(chainID uint64, in *coslv1.EthereumIntent) ([][]byte, error) {
 	value, err := amount(in.Value, true)
 	if err != nil {
-		return nil, digest, fmt.Errorf("value %q: %v", in.Value, err)
+		return nil, fmt.Errorf("value %q: %v", in.Value, err)
 	}
 	maxFee, err := amount(in.MaxFeePerGas, false)
 	if err != nil {
-		return nil, digest, fmt.Errorf("max_fee_per_gas %q: %v", in.MaxFeePerGas, err)
+		return nil, fmt.Errorf("max_fee_per_gas %q: %v", in.MaxFeePerGas, err)
 	}
 	tip, err := amount(in.MaxPriorityFeePerGas, true)
 	if err != nil {
-		return nil, digest, fmt.Errorf("max_priority_fee_per_gas %q: %v", in.MaxPriorityFeePerGas, err)
+		return nil, fmt.Errorf("max_priority_fee_per_gas %q: %v", in.MaxPriorityFeePerGas, err)
 	}
-	fields := [][]byte{
+	return [][]byte{
 		rlpUint(new(big.Int).SetUint64(chainID)),
 		rlpUint(new(big.Int).SetUint64(in.Nonce)),
 		rlpUint(tip),
@@ -41,12 +54,7 @@ func EthereumDigest(chainID uint64, in *coslv1.EthereumIntent) (unsigned []byte,
 		rlpUint(value),
 		rlpString(in.Data),
 		rlpList(nil), // access list
-	}
-	unsigned = append([]byte{0x02}, rlpList(fields)...)
-	h := sha3.NewLegacyKeccak256()
-	h.Write(unsigned)
-	h.Sum(digest[:0])
-	return unsigned, digest, nil
+	}, nil
 }
 
 // rlpUint encodes a non-negative integer as a big-endian string with no leading zeros.

@@ -90,6 +90,27 @@ func Inspect(rows []cosl.Row, id ID, opts ...ReadOption) (Detail, error) {
 	return r.detail(), nil
 }
 
+// Signatures are the signatures a signing Session for the sign.request
+// requestID completed with: the first session.complete that counts. ok is
+// false when no such Session has completed.
+func Signatures(rows []cosl.Row, requestID [32]byte, opts ...ReadOption) (sigs [][]byte, ok bool) {
+	recs, err := parse(rows, verifierOf(opts))
+	if err != nil {
+		return nil, false
+	}
+	for _, r := range recs {
+		if !r.isSign || r.signReq != requestID || !r.agreed {
+			continue
+		}
+		for _, c := range r.completes {
+			if c.seq == r.completeSeq {
+				return cloneAll(c.signatures), true
+			}
+		}
+	}
+	return nil, false
+}
+
 // rec is one Session reconstructed from the replica.
 type rec struct {
 	id           ID

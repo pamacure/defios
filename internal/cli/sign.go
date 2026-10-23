@@ -19,7 +19,7 @@ import (
 func signCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "sign",
-		Short: "Propose and inspect Sign Requests",
+		Short: "Propose, inspect and broadcast Sign Requests",
 		Long:  `A Sign Request asks the Group to sign one or more transactions with one of its Keys. Proposing it records your acceptance. The Key's first t Nodes to accept sign, then a signing Session starts.`,
 	}
 
@@ -77,7 +77,7 @@ Every referenced Network must be of the Key's curve.`,
 				return g.emitJSON(rows)
 			}
 			for _, s := range rows {
-				fmt.Fprintf(g.app.Stdout, "%s  %s  %d/%d accepted  txs=%d  %s\n", s.MsgID[:8], s.Status, len(s.Accepted), s.Needed, s.Transactions, s.Reason)
+				fmt.Fprintf(g.app.Stdout, "%s  %s  %d/%d accepted  txs=%d  broadcasts=%d  %s\n", s.MsgID[:8], s.Status, len(s.Accepted), s.Needed, s.Transactions, s.Broadcasts, s.Reason)
 			}
 			return nil
 		},
@@ -104,6 +104,12 @@ Every referenced Network must be of the Key's curve.`,
 			}
 			if d.Session != "" {
 				fmt.Fprintf(out, "session %s\n", d.Session)
+			}
+			for _, b := range d.BroadcastReceipts {
+				fmt.Fprintf(out, "broadcast by %s at %s (seq %d)\n", b.Broadcaster, b.At, b.Seq)
+				for _, t := range b.Transactions {
+					fmt.Fprintf(out, "  %s  %s\n", t.Network, t.TxHash)
+				}
 			}
 			if d.ReasonRef != "" {
 				fmt.Fprintf(out, "reason_ref %s\n", d.ReasonRef)
@@ -152,7 +158,35 @@ signature verifies against the Key. A Node that accepts after that is not a sign
 		},
 	}
 
-	root.AddCommand(propose, list, inspect, accept, decline)
+	broadcast := &cobra.Command{
+		Use:   "broadcast <msg-id>",
+		Short: "Broadcast a signed request's transactions and record a receipt (requires serve)",
+		Long: `Assembles each transaction of a signed Sign Request, submits it through its Network's rpc url (this Node's
+local override first, see network), and commits a sign.broadcast receipt. Any Node may broadcast; the proposer
+goes first by convention. Broadcasting twice is harmless: a node that already has the transaction is not an
+error, and the repeat shows as one more receipt. Only http(s) rpc urls are used.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			v, err := serve.Client{Socket: g.paths().Socket}.SignBroadcast(cmd.Context(), args[0])
+			if err != nil {
+				return signError(err)
+			}
+			if g.json {
+				return g.emitJSON(v)
+			}
+			for _, t := range v.Transactions {
+				repeat := ""
+				if t.AlreadyKnown {
+					repeat = " (already known to the network)"
+				}
+				fmt.Fprintf(g.app.Stdout, "%s  %s%s\n", t.Network, t.TxHash, repeat)
+			}
+			fmt.Fprintf(g.app.Stdout, "receipt recorded as seq %d (msg_id %s)\n", v.Seq, v.MsgID)
+			return nil
+		},
+	}
+
+	root.AddCommand(propose, list, inspect, accept, decline, broadcast)
 	return root
 }
 
@@ -178,7 +212,7 @@ func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {
 // operational, as the other write verbs do.
 func signError(err error) error {
 	for _, target := range []error{
-		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous,
+		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
 		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid,
 	} {
 		if errors.Is(err, target) {

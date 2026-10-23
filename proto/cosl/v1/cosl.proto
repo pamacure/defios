@@ -111,6 +111,21 @@ message SignAccept {
   bytes sign_request_id = 1;          // msg_id of the sign.request; 32
 }
 
+// SignBroadcast is the payload of sign.broadcast, a Broadcast Receipt
+// (docs/adr/0010-signing-session-semantics.md). The envelope's conversation_id
+// is the target Key's, its sender is the broadcasting Node, and its created_at
+// is the broadcast time. Any Node may broadcast, so a request can carry several
+// receipts; the same transactions broadcast twice carry the same hashes.
+message SignBroadcast {
+  bytes sign_request_id = 1;                  // msg_id of the sign.request; 32
+  repeated BroadcastedTx transactions = 2;    // one per transaction of the request, in order
+}
+
+message BroadcastedTx {
+  bytes network_config_id = 1;        // msg_id of the config of the Network it was sent to; 32
+  bytes tx_hash = 2;                  // the transaction's hash; 32
+}
+
 message MessageRef {
   bytes conversation_id = 1;          // unset = Group-level, else 32
   bytes msg_id = 2;                   // 32

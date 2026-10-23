@@ -277,3 +277,73 @@ func TestAccepts(t *testing.T) {
 		}
 	}
 }
+
+func broadcastRow(t *testing.T, seq uint64, sender byte, created time.Time, conv []byte, request [32]byte, hash byte) cosl.Row {
+	t.Helper()
+	payload, err := proto.Marshal(&coslv1.SignBroadcast{SignRequestId: request[:], Transactions: []*coslv1.BroadcastedTx{
+		{NetworkConfigId: ethID[:], TxHash: append(make([]byte, 31), hash)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := proto.Marshal(&coslv1.Envelope{Version: 1, MsgType: cosl.TypeSignBroadcast, Payload: payload, ConversationId: conv, CreatedAt: created.UnixNano()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cosl.Row{Seq: seq, MsgType: cosl.TypeSignBroadcast, MsgID: [32]byte{0xbb, byte(seq)}, Sender: identity.ID{sender}, ConversationID: conv, CreatedAt: created.UnixNano(), Envelope: env}
+}
+
+// Receipts for the request, in log order, each carrying its broadcaster, time
+// and per-transaction hashes; another request's or Key's receipts are not its own.
+// They show in list (as a count) and inspect (in full).
+func TestBroadcastReceipts(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	other := key.ConversationID("ecdsa", []byte{1})
+	r := rowOf(t, 1, 0xa1, now, conv[:], req(ethTx()))
+	rows := []cosl.Row{
+		r,
+		broadcastRow(t, 2, 3, now.Add(time.Second), conv[:], r.MsgID, 1),
+		broadcastRow(t, 3, 4, now.Add(2*time.Second), other[:], r.MsgID, 2),       // another Key's Conversation
+		broadcastRow(t, 4, 5, now.Add(2*time.Second), conv[:], [32]byte{0x99}, 3), // another request
+		broadcastRow(t, 5, 6, now.Add(3*time.Second), conv[:], r.MsgID, 1),        // a second broadcast of the same tx
+		malformedBroadcast(t, 6, now.Add(4*time.Second), conv[:], r.MsgID),        // a hash of the wrong size
+	}
+	list, err := List(rows, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list[0].Broadcasts != 2 {
+		t.Errorf("list broadcasts = %d, want 2", list[0].Broadcasts)
+	}
+	d, err := Inspect(rows, "a1", map[[32]byte]network.Network{ethID: nets[0]}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.BroadcastReceipts) != 2 {
+		t.Fatalf("receipts = %+v", d.BroadcastReceipts)
+	}
+	got := d.BroadcastReceipts[0]
+	if got.Broadcaster != (identity.ID{3}).String() || got.At != now.Add(time.Second).UTC().Format(time.RFC3339) ||
+		len(got.Transactions) != 1 || got.Transactions[0].Network != "eth" ||
+		got.Transactions[0].TxHash != "0000000000000000000000000000000000000000000000000000000000000001" {
+		t.Errorf("receipt = %+v", got)
+	}
+	if d.BroadcastReceipts[1].Broadcaster != (identity.ID{6}).String() {
+		t.Errorf("second receipt = %+v", d.BroadcastReceipts[1])
+	}
+}
+
+func malformedBroadcast(t *testing.T, seq uint64, created time.Time, conv []byte, request [32]byte) cosl.Row {
+	t.Helper()
+	row := broadcastRow(t, seq, 7, created, conv, request, 1)
+	payload, err := proto.Marshal(&coslv1.SignBroadcast{SignRequestId: request[:], Transactions: []*coslv1.BroadcastedTx{{NetworkConfigId: ethID[:], TxHash: []byte{1}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row.Envelope, err = proto.Marshal(&coslv1.Envelope{Version: 1, MsgType: cosl.TypeSignBroadcast, Payload: payload, ConversationId: conv, CreatedAt: created.UnixNano()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}

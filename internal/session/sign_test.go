@@ -301,6 +301,28 @@ func TestSignSessionCompletesOnOneVerifiedSignature(t *testing.T) {
 	}
 }
 
+// Signatures reads the verified signatures a request's Session completed with,
+// and nothing for a request whose Session has not completed or has no valid complete.
+func TestSignaturesOfACompletedRequest(t *testing.T) {
+	f := newSignFixture(t)
+	c := f.c
+	if _, ok := session.Signatures(c.bob.rows(t), f.request, session.WithSignInfo(c.bob.lookupSign)); ok {
+		t.Fatal("signatures before any Session")
+	}
+	c.alice.finish = &session.Result{Signatures: [][]byte{f.sig}}
+	f.propose(t)
+	f.accept(t, c.bob)
+	sum := f.liveSession(t, c.alice)
+	wait(t, func() bool { return statusOf(t, c.bob, sum.SessionID) == session.Complete })
+	sigs, ok := session.Signatures(c.bob.rows(t), f.request, session.WithSignInfo(c.bob.lookupSign))
+	if !ok || len(sigs) != 1 || !bytes.Equal(sigs[0], f.sig) {
+		t.Fatalf("signatures = %x, %v", sigs, ok)
+	}
+	if _, ok := session.Signatures(c.bob.rows(t), [32]byte{0x01}, session.WithSignInfo(c.bob.lookupSign)); ok {
+		t.Fatal("signatures for another request")
+	}
+}
+
 // A signature that does not verify aborts the Node that produced it.
 func TestSignSessionRejectsSignaturesThatDoNotVerify(t *testing.T) {
 	f := newSignFixture(t)
