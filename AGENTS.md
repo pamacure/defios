@@ -2,7 +2,8 @@
 
 ### Issue tracker
 
-Issues are tracked as GitHub issues in this repo via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues are tracked as GitHub issues in this repo via the `gh` CLI. See `docs/agents/issue-tracker.md`. Close each GitHub issue after implementation.
+Unless otherwise instructed, commit ticket implementations to branch master.
 
 ### Triage labels
 
