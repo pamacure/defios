@@ -1,6 +1,8 @@
 # DeFiOS MVP spec
 
-This is the implementable spec for the DeFiOS MVP. Vocabulary is `GLOSSARY.md`. The *why* of each fork lives in `docs/adr/`; this file is the *what*. An implementing session is done when every acceptance criterion in [Acceptance](#acceptance) is green.
+> **Status: delivered.** The MVP described here is implemented and its [Acceptance](#acceptance) criteria are green. This document is retained as the historical record of the baseline system; it is no longer the object of active effort. New work is tracked as GitHub issues and recorded in `docs/adr/`, which extend or supersede parts of this spec — for example ADR 0006 and ADR 0007 generalize the one-Group-per-Node constraint in [§1.2](#12-multiple-groups-per-node).
+
+This was the implementable spec for the DeFiOS MVP. Vocabulary is `GLOSSARY.md`. The *why* of each fork lives in `docs/adr/`; this file is the *what*.
 
 The MVP is a Go CLI per Node, on Linux and macOS, against a user-provided stock headscale. A 2-Node Group forms in-band on an already-up tailnet. Two sequential 2-of-2 keygen Sessions mint one ECDSA Key and one Ed25519 Key. The COSL carries every Key-related message and every Conversation. There is no signing function and no chain integration.
 

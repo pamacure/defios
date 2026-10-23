@@ -12,6 +12,6 @@ The five canonical triage roles are used as-is: `needs-triage`, `needs-info`, `r
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
-### MVP spec
+### Spec history
 
-The implementable MVP spec is `docs/spec/mvp.md`.
+The MVP is delivered. `docs/spec/mvp.md` is kept as the historical baseline, not an active work item; new work is tracked as GitHub issues and recorded in `docs/adr/`.
