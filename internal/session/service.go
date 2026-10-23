@@ -28,6 +28,8 @@ const (
 	reasonWaitingAccept = "waiting for accept"
 	reasonTimedOut      = "timed out waiting for parties"
 	reasonDisagree      = "completes disagree"
+	reasonExpired       = "sign request expired"
+	reasonDeclined      = "declined"
 )
 
 // ShareStore is where a minted share is written before session.complete
@@ -35,6 +37,19 @@ const (
 type ShareStore interface {
 	Put(curve string, publicKey, saveData []byte) error
 	Delete(curve string, publicKey []byte) error
+	// Get is the save data of a held share, for a signing Session.
+	Get(curve string, publicKey []byte) ([]byte, bool)
+}
+
+// SignInfo is what a signing Session needs from its sign.request: the Key,
+// the Digests every Node derives from it, and when it lapses. The caller
+// reads it off the COSL; this package does not know transactions.
+type SignInfo struct {
+	Curve     string
+	PublicKey []byte
+	T         int // the Key's t
+	Digests   [][32]byte
+	Deadline  time.Time
 }
 
 // Config is one Node's Session layer.
@@ -45,6 +60,10 @@ type Config struct {
 	Append func(context.Context, cosl.Signed) error
 	// NewEngine is called once per Session, when this Node's engine starts.
 	NewEngine func() Engine
+	// NewSigner is called once per signing Session. Nil refuses to sign.
+	NewSigner func() Engine
+	// SignInfo resolves a sign.request by msg_id. Nil refuses to sign.
+	SignInfo func(requestID [32]byte) (SignInfo, error)
 	// Preparams are this Node's ECDSA preparams, already unlocked. They are
 	// passed through on an ecdsa Start and are not a COSL field.
 	Preparams []byte
@@ -79,6 +98,7 @@ type Service struct {
 	held     map[ID]shareRef // share in the Vault, Key not minted yet
 	parties  map[ID]*party
 	waitLog  map[ID]struct{}
+	signs    map[ID]SignInfo // resolved sign.requests, by Session
 }
 
 type shareRef struct {
@@ -155,6 +175,7 @@ func New(cfg Config) (*Service, error) {
 		held:     held,
 		parties:  map[ID]*party{},
 		waitLog:  map[ID]struct{}{},
+		signs:    map[ID]SignInfo{},
 	}, nil
 }
 
@@ -281,13 +302,13 @@ func (s *Service) poll(ctx context.Context) {
 		s.cfg.Logf("session: reading replica: %v", err)
 		return
 	}
-	recs, err := parse(rows)
+	recs, err := parse(rows, s.verifySigned)
 	if err != nil {
 		s.cfg.Logf("session: %v", err)
 		return
 	}
-	for _, r := range recs {
-		r.validate(s.cfg.Roster)
+	if !s.validateAll(recs) {
+		return
 	}
 	runnable, need := plan(recs)
 	var head uint64
@@ -316,6 +337,10 @@ func (s *Service) poll(ctx context.Context) {
 		}
 		if reason, ok := need[r.id]; ok {
 			s.giveUp(ctx, r.id, reason)
+			continue
+		}
+		if info, err := s.signInfo(r); err == nil && s.cfg.Now().After(info.Deadline) {
+			s.giveUp(ctx, r.id, reasonExpired)
 			continue
 		}
 		if s.lost(r) {
@@ -356,15 +381,37 @@ func (s *Service) ensureParty(ctx context.Context, r *rec, head uint64) {
 	if !s.pendingNow(r.id) {
 		return
 	}
-	eng := s.cfg.NewEngine()
-	if eng == nil {
-		s.giveUp(ctx, r.id, ErrNoEngine.Error())
-		return
-	}
-	nonce, err := unsealNonce(r.boxes, s.cfg.Node.NodeID, s.cfg.Node.EncryptionPrivateKey)
+	eng, params, err := s.engineFor(r)
 	if err != nil {
 		s.giveUp(ctx, r.id, err.Error())
 		return
+	}
+	pctx, cancel := context.WithCancel(ctx)
+	p := &party{engine: eng, cancel: cancel, head: head, replayDone: make(chan struct{})}
+	s.parties[r.id] = p
+	go s.pump(pctx, r.id, p)
+	if err := eng.Start(params); err != nil {
+		s.giveUp(ctx, r.id, err.Error())
+	}
+}
+
+// engineFor builds the engine and Params for a Session: keygen, or a signing
+// Session that loads this Node's share and the request's Digests.
+func (s *Service) engineFor(r *rec) (Engine, Params, error) {
+	var eng Engine
+	if r.isSign {
+		if s.cfg.NewSigner != nil {
+			eng = s.cfg.NewSigner()
+		}
+	} else {
+		eng = s.cfg.NewEngine()
+	}
+	if eng == nil {
+		return nil, Params{}, ErrNoEngine
+	}
+	nonce, err := unsealNonce(r.boxes, s.cfg.Node.NodeID, s.cfg.Node.EncryptionPrivateKey)
+	if err != nil {
+		return nil, Params{}, err
 	}
 	params := Params{
 		SessionID:    [32]byte(r.id),
@@ -374,16 +421,23 @@ func (s *Service) ensureParty(ctx context.Context, r *rec, head uint64) {
 		Participants: participants(r),
 		Nonce:        nonce,
 	}
-	if r.curve == "ecdsa" && len(s.cfg.Preparams) > 0 {
+	if r.isSign {
+		info, err := s.signInfo(r)
+		if err != nil {
+			return nil, Params{}, err
+		}
+		if s.cfg.Shares == nil {
+			return nil, Params{}, errors.New("session: no vault")
+		}
+		save, ok := s.cfg.Shares.Get(info.Curve, info.PublicKey)
+		if !ok {
+			return nil, Params{}, errors.New("session: this Node holds no share of the Key")
+		}
+		params.Digests, params.SaveData = info.Digests, save
+	} else if r.curve == "ecdsa" && len(s.cfg.Preparams) > 0 {
 		params.Preparams = append([]byte(nil), s.cfg.Preparams...)
 	}
-	pctx, cancel := context.WithCancel(ctx)
-	p := &party{engine: eng, cancel: cancel, head: head, replayDone: make(chan struct{})}
-	s.parties[r.id] = p
-	go s.pump(pctx, r.id, p)
-	if err := eng.Start(params); err != nil {
-		s.giveUp(ctx, r.id, err.Error())
-	}
+	return eng, params, nil
 }
 
 func (s *Service) feed(ctx context.Context, r *rec) {
@@ -413,7 +467,11 @@ func (s *Service) feed(ctx context.Context, r *rec) {
 			s.giveUp(ctx, r.id, res.Err.Error())
 			return
 		}
-		if !p.minted {
+		switch {
+		case p.minted:
+		case r.isSign:
+			s.finishSign(ctx, r, p, res)
+		default:
 			s.mint(ctx, r, p, res)
 		}
 	}
@@ -591,13 +649,11 @@ func (s *Service) records() ([]*rec, error) {
 	if err != nil {
 		return nil, err
 	}
-	recs, err := parse(rows)
+	recs, err := parse(rows, s.verifySigned)
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range recs {
-		r.validate(s.cfg.Roster)
-	}
+	s.validateAll(recs) // a sign.request that cannot be read leaves its Session unvalidated
 	return recs, nil
 }
 

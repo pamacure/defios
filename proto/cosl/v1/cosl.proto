@@ -42,6 +42,10 @@ message SessionStart {
   uint32 n = 4;                       // |Roster|
   repeated bytes participants = 5;    // Node IDs, sorted; must equal the Roster
   repeated SealedBox nonce_boxes = 6; // one per participant
+  // A signing Session (docs/adr/0010-signing-session-semantics.md) names the
+  // sign.request it signs. Its participants are the t signers, a subset of the
+  // Roster, and t is the Key's t. Unset for keygen.
+  bytes sign_request_id = 7;          // msg_id of the sign.request; 32
 }
 
 message SessionAbort {
@@ -53,6 +57,9 @@ message SessionComplete {
   bytes session_id = 1;
   string curve = 2;
   bytes public_key = 3;               // canonical export
+  // A signing Session carries one 65-byte r||s||v signature per Digest, in
+  // the order the Digests flatten across the request's transactions.
+  repeated bytes signatures = 4;
 }
 
 message TssSession {

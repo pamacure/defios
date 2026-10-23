@@ -122,6 +122,7 @@ type node struct {
 	tailnet *fakeTailnet
 	name    string
 	stop    func() // stops the running serve; set by start
+	tune    func(*serve.Options)
 }
 
 func newNode(t *testing.T, name string) *node { return newNodeOn(t, newFakeNet(), name) }
@@ -147,6 +148,14 @@ func (n *node) restart(t *testing.T) {
 }
 
 func (n *node) options() serve.Options {
+	o := n.baseOptions()
+	if n.tune != nil {
+		n.tune(&o)
+	}
+	return o
+}
+
+func (n *node) baseOptions() serve.Options {
 	return serve.Options{
 		Paths:   n.paths,
 		Node:    n.id,

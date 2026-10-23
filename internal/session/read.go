@@ -20,6 +20,8 @@ type Summary struct {
 	Curve     string `json:"curve"`
 	T         uint32 `json:"t"`
 	N         uint32 `json:"n"`
+	// SignRequest is the msg_id of the sign.request a signing Session signs.
+	SignRequest string `json:"sign_request,omitempty"`
 }
 
 // Completion is one participant's session.complete, as `session inspect` shows it.
@@ -27,6 +29,8 @@ type Completion struct {
 	Sender    string `json:"sender"`
 	Curve     string `json:"curve"`
 	PublicKey string `json:"public_key"`
+	// Signatures are a signing Session's r||s||v hex, one per Digest.
+	Signatures []string `json:"signatures,omitempty"`
 }
 
 // Detail is `session inspect`: the summary plus participants and completes seen.
@@ -37,9 +41,32 @@ type Detail struct {
 	Reason       string       `json:"reason,omitempty"`
 }
 
+// ReadOption tunes how Sessions are read off replica rows.
+type ReadOption func(*verifier)
+
+// WithSignInfo makes a signing Session complete only on a session.complete
+// whose signatures verify against the Key and Digests lookup resolves. Without
+// it, readers trust a complete row.
+func WithSignInfo(lookup func(requestID [32]byte) (SignInfo, error)) ReadOption {
+	return func(v *verifier) {
+		*v = func(r *rec, c seen) bool {
+			info, err := lookup(r.signReq)
+			return err == nil && info.verifies(c.signatures)
+		}
+	}
+}
+
+func verifierOf(opts []ReadOption) verifier {
+	var v verifier
+	for _, o := range opts {
+		o(&v)
+	}
+	return v
+}
+
 // List reads Sessions off replica rows, in start order.
-func List(rows []cosl.Row) ([]Summary, error) {
-	recs, err := parse(rows)
+func List(rows []cosl.Row, opts ...ReadOption) ([]Summary, error) {
+	recs, err := parse(rows, verifierOf(opts))
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +78,8 @@ func List(rows []cosl.Row) ([]Summary, error) {
 }
 
 // Inspect reads one Session. ErrUnknownSession when id never started.
-func Inspect(rows []cosl.Row, id ID) (Detail, error) {
-	recs, err := parse(rows)
+func Inspect(rows []cosl.Row, id ID, opts ...ReadOption) (Detail, error) {
+	recs, err := parse(rows, verifierOf(opts))
 	if err != nil {
 		return Detail{}, err
 	}
@@ -73,6 +100,8 @@ type rec struct {
 	t, n         uint32
 	participants []identity.ID
 	boxes        []*coslv1.SealedBox
+	isSign       bool // a signing Session; signReq is the sign.request's msg_id
+	signReq      [32]byte
 	abortAt      []uint64
 	abortReason  string
 	completes    []seen
@@ -87,10 +116,11 @@ type rec struct {
 }
 
 type seen struct {
-	seq       uint64
-	sender    identity.ID
-	curve     string
-	publicKey []byte
+	seq        uint64
+	sender     identity.ID
+	curve      string
+	publicKey  []byte
+	signatures [][]byte
 }
 
 type round struct {
@@ -100,7 +130,11 @@ type round struct {
 }
 
 func (r *rec) summary() Summary {
-	return Summary{SessionID: r.id.String(), Status: r.status, Curve: r.curve, T: r.t, N: r.n}
+	sum := Summary{SessionID: r.id.String(), Status: r.status, Curve: r.curve, T: r.t, N: r.n}
+	if r.isSign {
+		sum.SignRequest = hex.EncodeToString(r.signReq[:])
+	}
+	return sum
 }
 
 func (r *rec) detail() Detail {
@@ -115,11 +149,18 @@ func (r *rec) detail() Detail {
 			Curve:     c.curve,
 			PublicKey: hex.EncodeToString(c.publicKey),
 		}
+		for _, sig := range c.signatures {
+			completes[i].Signatures = append(completes[i].Signatures, hex.EncodeToString(sig))
+		}
 	}
 	return Detail{Summary: r.summary(), Participants: parts, Completes: completes, Reason: r.reason}
 }
 
-func parse(rows []cosl.Row) ([]*rec, error) {
+// verifier says whether a signing Session's session.complete carries valid
+// signatures. Nil trusts the row, as the read-only listings do.
+type verifier func(r *rec, c seen) bool
+
+func parse(rows []cosl.Row, verify verifier) ([]*rec, error) {
 	var order []ID
 	by := map[ID]*rec{}
 	for _, row := range rows {
@@ -150,6 +191,9 @@ func parse(rows []cosl.Row) ([]*rec, error) {
 				n:         p.N,
 				boxes:     p.NonceBoxes,
 				status:    Open,
+			}
+			if req, ok := idBytes(p.SignRequestId); ok {
+				r.isSign, r.signReq = true, req
 			}
 			for _, raw := range p.Participants {
 				pid, ok := idBytes(raw)
@@ -184,6 +228,7 @@ func parse(rows []cosl.Row) ([]*rec, error) {
 			}
 			r.completes = append(r.completes, seen{
 				seq: row.Seq, sender: row.Sender, curve: p.Curve, publicKey: append([]byte(nil), p.PublicKey...),
+				signatures: cloneAll(p.Signatures),
 			})
 		case *coslv1.TssSession:
 			id, ok := idBytes(p.SessionId)
@@ -200,14 +245,18 @@ func parse(rows []cosl.Row) ([]*rec, error) {
 	out := make([]*rec, 0, len(order))
 	for _, id := range order {
 		r := by[id]
-		r.recompute()
+		r.recompute(verify)
 		out = append(out, r)
 	}
 	return out, nil
 }
 
-func (r *rec) recompute() {
-	r.agreed, r.completeSeq, r.conflict = agreement(r)
+func (r *rec) recompute(verify verifier) {
+	if r.isSign {
+		r.agreed, r.completeSeq = signed(r, verify)
+	} else {
+		r.agreed, r.completeSeq, r.conflict = agreement(r)
+	}
 	switch {
 	case r.agreed:
 		r.status = Complete
@@ -217,6 +266,30 @@ func (r *rec) recompute() {
 	default:
 		r.status = Open
 	}
+}
+
+// signed reports whether a signer has completed with valid signatures. A
+// signature proves itself, so the first one that verifies completes the
+// Session: no n-of-n agreement (docs/adr/0010-signing-session-semantics.md).
+func signed(r *rec, verify verifier) (bool, uint64) {
+	for _, c := range r.completes {
+		if !slices.Contains(r.participants, c.sender) || len(c.signatures) == 0 {
+			continue
+		}
+		if verify != nil && !verify(r, c) {
+			continue
+		}
+		return true, c.seq
+	}
+	return false, 0
+}
+
+func cloneAll(in [][]byte) [][]byte {
+	out := make([][]byte, len(in))
+	for i, b := range in {
+		out[i] = append([]byte(nil), b...)
+	}
+	return out
 }
 
 // agreement reports whether n distinct participants have completed with
@@ -260,13 +333,13 @@ type Completed struct {
 
 // CompletedSessions reads minted Keys off the replica. There is no keys table.
 func CompletedSessions(rows []cosl.Row) ([]Completed, error) {
-	recs, err := parse(rows)
+	recs, err := parse(rows, nil)
 	if err != nil {
 		return nil, err
 	}
 	var out []Completed
 	for _, r := range recs {
-		if r.status != Complete || len(r.completes) == 0 {
+		if r.isSign || r.status != Complete || len(r.completes) == 0 {
 			continue
 		}
 		out = append(out, Completed{

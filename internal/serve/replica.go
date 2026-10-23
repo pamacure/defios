@@ -72,6 +72,8 @@ func (s *server) startSessions(replica *raftx.Replica, store *cosl.Store, roster
 		Preparams:   s.opts.Preparams,
 		WaitingFor:  s.opts.SessionWaitingFor,
 		NewEngine:   s.opts.NewEngine,
+		NewSigner:   s.opts.NewSigner,
+		SignInfo:    signInfoFrom(store),
 		Logf:        s.opts.Logf,
 		Shares:      s.opts.Vault,
 		AcceptPath:  filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "local-accept.json"),

@@ -357,28 +357,15 @@ func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 // Inspect decodes the one Sign Request whose msg id starts with query.
 // history resolves each transaction's Network, even if since edited.
 func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network, now time.Time) (Detail, error) {
-	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
-		return Detail{}, ErrUnknown
-	}
-	var match []cosl.Row
-	for _, r := range rows {
-		if r.MsgType == cosl.TypeSignRequest && strings.HasPrefix(hex.EncodeToString(r.MsgID[:]), query) {
-			match = append(match, r)
-		}
-	}
-	switch len(match) {
-	case 0:
-		return Detail{}, ErrUnknown
-	case 1:
-	default:
-		return Detail{}, ErrAmbiguous
-	}
-	req, err := decodeRow(match[0])
+	m, err := match(rows, query)
 	if err != nil {
 		return Detail{}, err
 	}
-	d := Detail{Summary: summarise(match[0], req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}}
+	req, err := decodeRow(m)
+	if err != nil {
+		return Detail{}, err
+	}
+	d := Detail{Summary: summarise(m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}}
 	if ref := req.ReasonRef; ref != nil {
 		d.ReasonRef = fmt.Sprintf("%x/%x", ref.ConversationId, ref.MsgId)
 	}
@@ -409,6 +396,28 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 		d.Details = append(d.Details, td)
 	}
 	return d, nil
+}
+
+// match is the one sign.request row whose msg id starts with query.
+func match(rows []cosl.Row, query string) (cosl.Row, error) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return cosl.Row{}, ErrUnknown
+	}
+	var found []cosl.Row
+	for _, r := range rows {
+		if r.MsgType == cosl.TypeSignRequest && strings.HasPrefix(hex.EncodeToString(r.MsgID[:]), query) {
+			found = append(found, r)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return cosl.Row{}, ErrUnknown
+	case 1:
+		return found[0], nil
+	default:
+		return cosl.Row{}, ErrAmbiguous
+	}
 }
 
 func describeEthereum(n network.Network, in *coslv1.EthereumIntent) []string {

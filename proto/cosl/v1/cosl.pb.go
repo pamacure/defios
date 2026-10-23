@@ -269,13 +269,17 @@ func (x *SealedBox) GetCiphertext() []byte {
 }
 
 type SessionStart struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     []byte                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`    // 32
-	Curve         string                 `protobuf:"bytes,2,opt,name=curve,proto3" json:"curve,omitempty"`                             // ecdsa | eddsa
-	T             uint32                 `protobuf:"varint,3,opt,name=t,proto3" json:"t,omitempty"`                                    // DeFiOS min-signers
-	N             uint32                 `protobuf:"varint,4,opt,name=n,proto3" json:"n,omitempty"`                                    // |Roster|
-	Participants  [][]byte               `protobuf:"bytes,5,rep,name=participants,proto3" json:"participants,omitempty"`               // Node IDs, sorted; must equal the Roster
-	NonceBoxes    []*SealedBox           `protobuf:"bytes,6,rep,name=nonce_boxes,json=nonceBoxes,proto3" json:"nonce_boxes,omitempty"` // one per participant
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	SessionId    []byte                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`    // 32
+	Curve        string                 `protobuf:"bytes,2,opt,name=curve,proto3" json:"curve,omitempty"`                             // ecdsa | eddsa
+	T            uint32                 `protobuf:"varint,3,opt,name=t,proto3" json:"t,omitempty"`                                    // DeFiOS min-signers
+	N            uint32                 `protobuf:"varint,4,opt,name=n,proto3" json:"n,omitempty"`                                    // |Roster|
+	Participants [][]byte               `protobuf:"bytes,5,rep,name=participants,proto3" json:"participants,omitempty"`               // Node IDs, sorted; must equal the Roster
+	NonceBoxes   []*SealedBox           `protobuf:"bytes,6,rep,name=nonce_boxes,json=nonceBoxes,proto3" json:"nonce_boxes,omitempty"` // one per participant
+	// A signing Session (docs/adr/0010-signing-session-semantics.md) names the
+	// sign.request it signs. Its participants are the t signers, a subset of the
+	// Roster, and t is the Key's t. Unset for keygen.
+	SignRequestId []byte `protobuf:"bytes,7,opt,name=sign_request_id,json=signRequestId,proto3" json:"sign_request_id,omitempty"` // msg_id of the sign.request; 32
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -352,6 +356,13 @@ func (x *SessionStart) GetNonceBoxes() []*SealedBox {
 	return nil
 }
 
+func (x *SessionStart) GetSignRequestId() []byte {
+	if x != nil {
+		return x.SignRequestId
+	}
+	return nil
+}
+
 type SessionAbort struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     []byte                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -405,10 +416,13 @@ func (x *SessionAbort) GetReason() string {
 }
 
 type SessionComplete struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     []byte                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Curve         string                 `protobuf:"bytes,2,opt,name=curve,proto3" json:"curve,omitempty"`
-	PublicKey     []byte                 `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"` // canonical export
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId []byte                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Curve     string                 `protobuf:"bytes,2,opt,name=curve,proto3" json:"curve,omitempty"`
+	PublicKey []byte                 `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"` // canonical export
+	// A signing Session carries one 65-byte r||s||v signature per Digest, in
+	// the order the Digests flatten across the request's transactions.
+	Signatures    [][]byte `protobuf:"bytes,4,rep,name=signatures,proto3" json:"signatures,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -460,6 +474,13 @@ func (x *SessionComplete) GetCurve() string {
 func (x *SessionComplete) GetPublicKey() []byte {
 	if x != nil {
 		return x.PublicKey
+	}
+	return nil
+}
+
+func (x *SessionComplete) GetSignatures() [][]byte {
+	if x != nil {
+		return x.Signatures
 	}
 	return nil
 }
@@ -1445,7 +1466,7 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\x05nonce\x18\x03 \x01(\fR\x05nonce\x12\x1e\n" +
 	"\n" +
 	"ciphertext\x18\x04 \x01(\fR\n" +
-	"ciphertext\"\xbf\x01\n" +
+	"ciphertext\"\xe7\x01\n" +
 	"\fSessionStart\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\fR\tsessionId\x12\x14\n" +
@@ -1454,17 +1475,21 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\x01n\x18\x04 \x01(\rR\x01n\x12\"\n" +
 	"\fparticipants\x18\x05 \x03(\fR\fparticipants\x12:\n" +
 	"\vnonce_boxes\x18\x06 \x03(\v2\x19.defios.cosl.v1.SealedBoxR\n" +
-	"nonceBoxes\"E\n" +
+	"nonceBoxes\x12&\n" +
+	"\x0fsign_request_id\x18\a \x01(\fR\rsignRequestId\"E\n" +
 	"\fSessionAbort\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\fR\tsessionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"e\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x85\x01\n" +
 	"\x0fSessionComplete\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\fR\tsessionId\x12\x14\n" +
 	"\x05curve\x18\x02 \x01(\tR\x05curve\x12\x1d\n" +
 	"\n" +
-	"public_key\x18\x03 \x01(\fR\tpublicKey\"\xa8\x01\n" +
+	"public_key\x18\x03 \x01(\fR\tpublicKey\x12\x1e\n" +
+	"\n" +
+	"signatures\x18\x04 \x03(\fR\n" +
+	"signatures\"\xa8\x01\n" +
 	"\n" +
 	"TssSession\x12\x1d\n" +
 	"\n" +

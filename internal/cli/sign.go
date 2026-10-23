@@ -12,6 +12,7 @@ import (
 	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/serve"
+	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 )
 
@@ -113,7 +114,36 @@ Every referenced Network must be of the Key's curve.`,
 		},
 	}
 
-	root.AddCommand(propose, list, inspect)
+	accept := &cobra.Command{
+		Use:   "accept <msg-id>",
+		Short: "Join the signing Session for a Sign Request (requires serve)",
+		Long: `Accepting lets this Node's engine take part in signing. Nothing is written to the COSL.
+The proposer's accept is implied by proposing. Once the Key's t signers have accepted, the Session
+signs each Digest and completes as soon as a signature verifies against the Key.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := (serve.Client{Socket: g.paths().Socket}).SignAccept(cmd.Context(), args[0]); err != nil {
+				return signError(err)
+			}
+			fmt.Fprintf(g.app.Stdout, "accepted %s\n", args[0])
+			return nil
+		},
+	}
+
+	decline := &cobra.Command{
+		Use:   "decline <msg-id>",
+		Short: "Abort the signing Session for a Sign Request (requires serve)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := (serve.Client{Socket: g.paths().Socket}).SignDecline(cmd.Context(), args[0]); err != nil {
+				return signError(err)
+			}
+			fmt.Fprintf(g.app.Stdout, "declined %s\n", args[0])
+			return nil
+		},
+	}
+
+	root.AddCommand(propose, list, inspect, accept, decline)
 	return root
 }
 
@@ -139,7 +169,7 @@ func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {
 // operational, as the other write verbs do.
 func signError(err error) error {
 	for _, target := range []error{
-		signreq.ErrInvalid, signreq.ErrCurveMismatch, signreq.ErrUnknown, signreq.ErrAmbiguous,
+		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous,
 		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid,
 	} {
 		if errors.Is(err, target) {

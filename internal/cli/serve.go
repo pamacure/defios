@@ -106,6 +106,7 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 		Vault:             vault.NewStore(p.VaultSharesFile(alias), passphrase, shares),
 		SessionWaitingFor: wait,
 		NewEngine:         engine,
+		NewSigner:         signEngine(g.app.Getenv, node.NodeID),
 	})
 	if err != nil {
 		return exitOperational(err)

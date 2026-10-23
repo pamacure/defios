@@ -12,10 +12,17 @@ import (
 )
 
 // pair starts alice and bob on one fake tailnet, routed to each other.
-func pair(t *testing.T) (a, b *node) {
+func pair(t *testing.T) (a, b *node) { return pairWith(t, nil) }
+
+// pairWith lets prep configure each Node before serve starts.
+func pairWith(t *testing.T, prep func(*node)) (a, b *node) {
 	t.Helper()
 	n := newFakeNet()
 	a, b = newNodeOn(t, n, "alice"), newNodeOn(t, n, "bob")
+	if prep != nil {
+		prep(a)
+		prep(b)
+	}
 	a.start(t)
 	b.start(t)
 	a.tailnet.route("100.64.0.2", b.tailnet.formationAddr(t))

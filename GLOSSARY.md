@@ -53,8 +53,12 @@ One threshold public key held jointly by a Group, together with the per-Node sha
 _Avoid_: keypair, wallet, wallet key
 
 **Session**:
-One run of a threshold protocol (keygen, later signing) coordinated among a Group's Nodes over the COSL.
+One run of a threshold protocol (keygen or signing) coordinated among a Group's Nodes over the COSL. A signing Session signs one Sign Request's Digests; it completes as soon as a signature verifies against the Key, not when every Node agrees.
 _Avoid_: ceremony, run
+
+**Signer**:
+One of the t Nodes that run a signing Session: the proposer plus t−1 others, fixed when the Session starts. Each signer accepts locally before its engine runs.
+_Avoid_: participant (that is every Node in a keygen Session)
 
 **Session ID**:
 A Session's 32-byte identity, minted at random by the initiator when the Session starts. Identifies the run, not the Key it may mint.

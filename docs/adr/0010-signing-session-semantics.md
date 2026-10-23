@@ -51,3 +51,30 @@ tickets to follow.
 - The signing `session.Engine` adapter lives alongside the `tssl` keygen engine
   behind the same seam, so a future Lockness `cggmp24` / `givre` signer swaps in
   the same way keygen does ([ADR 0003](0003-keygen-session-orchestration.md)).
+
+## As built (signing one Ethereum transaction)
+
+- A signing Session is a `session.start` with `sign_request_id` set (the
+  `sign.request`'s msg_id). Its `participants` are the **t** signers — the
+  proposer plus the first t−1 other Roster Nodes, sorted — not the whole Roster;
+  `t` is the Key's t and `n` the Roster size. Nonce boxes are sealed to the
+  signers only. A start whose signers are not distinct Roster Nodes, omit the
+  proposer, or mismatch the Key is invalid and aborted by every Node. Choosing a
+  different signer set means a new Sign Request.
+- `sign propose` appends the request and then the start, which is the proposer's
+  accept. `sign accept <msg-id>` is another signer's local accept (nothing is
+  written to the COSL); `sign decline <msg-id>` aborts the Session. A signing
+  Session shares the one-open-Session slot with keygen.
+- The engine (`tssl.NewSigner`) runs `ecdsa/signing` once per Digest in parallel
+  inside one engine, prefixing each message with the Digest's index so the COSL
+  carries a single `tss.session` stream. Each Digest's party gets its own session
+  nonce, derived from the sealed one. EdDSA signing is not wired yet.
+- `session.complete` carries `signatures`: one 65-byte `r||s||v` per Digest
+  (low-s, `v` the recovery id 0/1, as an Ethereum transaction wants it). A
+  complete counts only if every signature verifies against the Key's public key
+  and the Digests derived from the request, and its sender is a signer; the first
+  such complete finishes the Session. A Node whose own signatures do not verify
+  aborts instead of appending. A signing Session never mints or deletes a share.
+- A Session still open past the request's deadline is aborted
+  (`sign request expired`). Only Ethereum transactions on an ECDSA Key start a
+  Session; any other request stays proposed without one.

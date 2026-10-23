@@ -14,6 +14,7 @@ import (
 	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 )
 
 func sessionCommand(g *globals) *cobra.Command {
@@ -143,7 +144,7 @@ func runSessionList(g *globals) error {
 	if err != nil {
 		return exitOperational(err)
 	}
-	list, err := session.List(rows)
+	list, err := session.List(rows, signInfoOf(rows))
 	if err != nil {
 		return exitOperational(err)
 	}
@@ -170,7 +171,7 @@ func runSessionInspect(g *globals, hexID string) error {
 	if err != nil {
 		return exitOperational(err)
 	}
-	detail, err := session.Inspect(rows, id)
+	detail, err := session.Inspect(rows, id, signInfoOf(rows))
 	if errors.Is(err, session.ErrUnknownSession) {
 		return exitOperational(err)
 	}
@@ -246,4 +247,26 @@ func sessionEngine(getenv func(string) string, self identity.ID) (func() session
 	default:
 		return nil, fmt.Errorf("DEFIOS_SESSION_ENGINE %q is unknown", getenv("DEFIOS_SESSION_ENGINE"))
 	}
+}
+
+// signEngine is the signing engine for the same DEFIOS_SESSION_ENGINE
+// setting. Only the tss-lib adapter signs; the test engines do not.
+func signEngine(getenv func(string) string, self identity.ID) func() session.Engine {
+	switch getenv("DEFIOS_SESSION_ENGINE") {
+	case "", "tss":
+		return func() session.Engine { return tssl.NewSigner([32]byte(self)) }
+	}
+	return nil
+}
+
+// signInfoOf lets the listings verify a signing Session's completes against
+// the Key and Digests its sign.request implies, as serve does.
+func signInfoOf(rows []cosl.Row) session.ReadOption {
+	return session.WithSignInfo(func(id [32]byte) (session.SignInfo, error) {
+		sg, err := signreq.Lookup(rows, id)
+		if err != nil {
+			return session.SignInfo{}, err
+		}
+		return session.SignInfo{Curve: sg.Curve, PublicKey: sg.PublicKey, T: sg.T, Digests: sg.Digests, Deadline: sg.Deadline}, nil
+	})
 }

@@ -14,7 +14,13 @@ var (
 	ErrUnknownSession = errors.New("session: no such session")
 	ErrNotParticipant = errors.New("session: this Node is not a participant")
 	ErrClosedSession  = errors.New("session: session is not open")
-	ErrNoEngine       = errors.New("session: no keygen engine")
+	ErrNoEngine       = errors.New("session: no engine")
+	// ErrUnsupported is a signing Session for a curve or transaction that
+	// cannot be signed yet.
+	ErrUnsupported = errors.New("session: signing is not supported for this Key")
+	// ErrBadSignRequest is a sign.request that is definitively missing or
+	// invalid, as opposed to one that could not be read this time.
+	ErrBadSignRequest = errors.New("session: bad sign request")
 )
 
 // Unavailable is the engine serve uses until a curve adapter is wired.
@@ -90,6 +96,11 @@ type Params struct {
 	Participants [][32]byte
 	Nonce        [32]byte // unsealed preimage
 	Preparams    []byte   // ECDSA only
+
+	// A signing Session sets these. Participants are then the t signers, T
+	// is the Key's t, and N is the Roster size.
+	Digests  [][32]byte // one signature each, in order
+	SaveData []byte     // this Node's share of the Key
 }
 
 // Outgoing is one engine message. A nil To is a broadcast.
@@ -103,5 +114,7 @@ type Outgoing struct {
 type Result struct {
 	PublicKey []byte
 	SaveData  []byte
-	Err       error
+	// Signatures is a signing Session's output: 65-byte r||s||v, one per Digest.
+	Signatures [][]byte
+	Err        error
 }

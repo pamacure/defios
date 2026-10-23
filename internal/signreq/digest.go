@@ -1,11 +1,16 @@
 package signreq
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
+	"time"
 
 	"golang.org/x/crypto/sha3"
 
+	"defios.com/internal/cosl"
+	"defios.com/internal/key"
+	"defios.com/internal/network"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -72,4 +77,83 @@ func rlpLength(n int, offset byte) []byte {
 		be = append([]byte{byte(n)}, be...)
 	}
 	return append([]byte{offset + 55 + byte(len(be))}, be...)
+}
+
+// Signable is what signing a sign.request needs: the Key, the Digests every
+// Node derives from the request, and when it lapses.
+type Signable struct {
+	Curve     string
+	PublicKey []byte
+	T         int // the Key's t
+	Digests   [][32]byte
+	Deadline  time.Time
+}
+
+// Lookup reads the sign.request with msgID off rows and derives its Digests,
+// flattened across its transactions in order. Only Ethereum transactions can
+// be signed yet. Every Node reaches the same answer from the same log.
+func Lookup(rows []cosl.Row, msgID [32]byte) (Signable, error) {
+	var row *cosl.Row
+	for i := range rows {
+		if rows[i].MsgType == cosl.TypeSignRequest && rows[i].MsgID == msgID {
+			row = &rows[i]
+			break
+		}
+	}
+	if row == nil {
+		return Signable{}, ErrUnknown
+	}
+	req, err := decodeRow(*row)
+	if err != nil {
+		return Signable{}, err
+	}
+	keys, err := key.List(rows)
+	if err != nil {
+		return Signable{}, err
+	}
+	var k key.Key
+	found := false
+	for _, c := range keys {
+		if conv := key.ConversationID(c.Curve, c.PublicKey); bytes.Equal(conv[:], row.ConversationID) {
+			k, found = c, true
+			break
+		}
+	}
+	if !found {
+		return Signable{}, key.ErrUnknown
+	}
+	history, err := network.History(rows)
+	if err != nil {
+		return Signable{}, err
+	}
+	out := Signable{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T}
+	for i, tx := range req.Transactions {
+		var id [32]byte
+		copy(id[:], tx.NetworkConfigId)
+		n, known := history[id]
+		in, isEth := tx.Intent.(*coslv1.SignTransaction_Ethereum)
+		switch {
+		case !known:
+			return Signable{}, fmt.Errorf("%w: transaction %d: unknown network config", ErrInvalid, i)
+		case !isEth:
+			return Signable{}, fmt.Errorf("%w: transaction %d: only ethereum can be signed", ErrInvalid, i)
+		}
+		_, dg, err := EthereumDigest(n.ChainID, in.Ethereum)
+		if err != nil {
+			return Signable{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
+		}
+		out.Digests = append(out.Digests, dg)
+	}
+	window := min(req.DeadlineSeconds, MaxDeadlineSeconds)
+	out.Deadline = time.Unix(0, row.CreatedAt).Add(time.Duration(window) * time.Second)
+	return out, nil
+}
+
+// Resolve finds the one sign.request whose msg id starts with prefix.
+func Resolve(rows []cosl.Row, prefix string) ([32]byte, error) {
+	m, err := match(rows, prefix)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return m.MsgID, nil
 }

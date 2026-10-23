@@ -74,6 +74,8 @@ type Options struct {
 	Vault             *vault.Store
 	SessionWaitingFor time.Duration
 	NewEngine         func() session.Engine
+	// NewSigner is the signing engine; nil means this serve does not sign.
+	NewSigner func() session.Engine
 }
 
 // Run binds the socket and answers the local API at once, then joins the

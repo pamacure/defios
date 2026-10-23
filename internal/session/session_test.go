@@ -104,6 +104,7 @@ type node struct {
 	acceptPath  string
 	pendingPath string
 	shares      session.ShareStore
+	signInfo    func([32]byte) (session.SignInfo, error)
 	finish      *session.Result
 	clock       func() time.Time
 	append      func(context.Context, cosl.Signed) error
@@ -190,7 +191,7 @@ func (n *node) start() {
 	n.t.Helper()
 	svc, err := session.New(session.Config{
 		Node: n.id, Roster: n.roster, Store: n.store, Append: n.append,
-		NewEngine: n.engine, Preparams: []byte("ecdsa-preparams"),
+		NewEngine: n.engine, NewSigner: n.engine, SignInfo: n.lookupSign, Preparams: []byte("ecdsa-preparams"),
 		WaitingFor: n.waitingFor, Now: n.clock, Logf: n.logf, AcceptPath: n.acceptPath,
 		Shares: n.shares, PendingPath: n.pendingPath,
 		Tick: 5 * time.Millisecond,
@@ -203,6 +204,13 @@ func (n *node) start() {
 	n.cancel = cancel
 	n.done = make(chan struct{})
 	go func() { svc.Run(ctx); close(n.done) }()
+}
+
+func (n *node) lookupSign(id [32]byte) (session.SignInfo, error) {
+	if n.signInfo == nil {
+		return session.SignInfo{}, errors.New("no sign request")
+	}
+	return n.signInfo(id)
 }
 
 func (n *node) stop() {
@@ -979,6 +987,13 @@ func (m *memShares) Delete(curve string, publicKey []byte) error {
 	defer m.mu.Unlock()
 	delete(m.shares, m.key(curve, publicKey))
 	return nil
+}
+
+func (m *memShares) Get(curve string, publicKey []byte) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.shares[m.key(curve, publicKey)]
+	return v, ok
 }
 
 func (m *memShares) has(curve string, publicKey []byte) bool {

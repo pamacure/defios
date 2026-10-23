@@ -80,6 +80,18 @@ func (s *Store) Present(curve string, publicKey []byte) bool {
 	return false
 }
 
+// Get returns a copy of the save data held for curve and public key.
+func (s *Store) Get(curve string, publicKey []byte) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sh := range s.contents.Shares {
+		if sh.Curve == curve && bytes.Equal(sh.PublicKey, publicKey) {
+			return append([]byte(nil), sh.SaveData...), true
+		}
+	}
+	return nil, false
+}
+
 // ShareRef is a public key this Vault holds a share of. Save data stays put.
 type ShareRef struct {
 	Curve     string
