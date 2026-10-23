@@ -20,6 +20,10 @@ const (
 	TypeSessionComplete uint32 = 4
 	TypeTssSession      uint32 = 5
 	TypeAppFreeform     uint32 = 6
+	// 7 is reserved for sign.request (ADR 0009).
+	TypeNetworkCreate uint32 = 8
+	TypeNetworkUpdate uint32 = 9
+	TypeNetworkRemove uint32 = 10
 )
 
 // kind is one registry entry: its wire name and its payload schema.
@@ -37,6 +41,9 @@ var registry = map[uint32]kind{
 	TypeSessionComplete: {"session.complete", func() proto.Message { return &coslv1.SessionComplete{} }},
 	TypeTssSession:      {"tss.session", func() proto.Message { return &coslv1.TssSession{} }},
 	TypeAppFreeform:     {"app.freeform", func() proto.Message { return &coslv1.AppFreeform{} }},
+	TypeNetworkCreate:   {"network.create", func() proto.Message { return &coslv1.NetworkConfig{} }},
+	TypeNetworkUpdate:   {"network.update", func() proto.Message { return &coslv1.NetworkConfig{} }},
+	TypeNetworkRemove:   {"network.remove", func() proto.Message { return &coslv1.NetworkRemove{} }},
 }
 
 // ErrUnknownType is returned by DecodePayload for ids outside the registry.

@@ -18,6 +18,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/network"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
 )
@@ -167,6 +168,7 @@ func (s *server) localHandler() http.Handler {
 		s.answer(w, v, err)
 	})
 	s.conversationRoutes(mux)
+	s.networkRoutes(mux)
 	s.sessionRoutes(mux)
 	s.snapshotRoutes(mux)
 	return mux
@@ -213,6 +215,9 @@ var errorKinds = []struct {
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
 	{ErrNoReplica, "no-replica", http.StatusConflict},
 	{ErrNoConversation, "no-conversation", http.StatusUnprocessableEntity},
+	{network.ErrInvalid, "bad-network", http.StatusBadRequest},
+	{network.ErrExists, "network-exists", http.StatusConflict},
+	{network.ErrUnknown, "no-network", http.StatusNotFound},
 	{cosl.ErrBadText, "bad-text", http.StatusBadRequest},
 	{session.ErrBadCurve, "bad-curve", http.StatusBadRequest},
 	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},

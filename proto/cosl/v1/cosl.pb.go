@@ -592,6 +592,145 @@ func (x *AppFreeform) GetContentType() string {
 	return ""
 }
 
+// NetworkConfig is the payload of network.create and network.update
+// (docs/adr/0008-networks-on-cosl.md). An update carries the whole config and
+// supersedes the alias's current one. Only the fields of `type` may be set.
+type NetworkConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Alias         string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`                                // ^[a-z0-9][a-z0-9_-]{0,63}$
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`                                  // bitcoin | ethereum | solana
+	RpcUrls       []string               `protobuf:"bytes,3,rep,name=rpc_urls,json=rpcUrls,proto3" json:"rpc_urls,omitempty"`             // failover order; a Node may override
+	ChainId       uint64                 `protobuf:"varint,4,opt,name=chain_id,json=chainId,proto3" json:"chain_id,omitempty"`            // ethereum, > 0
+	Network       string                 `protobuf:"bytes,5,opt,name=network,proto3" json:"network,omitempty"`                            // bitcoin: mainnet | testnet | signet | regtest
+	Cluster       string                 `protobuf:"bytes,6,opt,name=cluster,proto3" json:"cluster,omitempty"`                            // solana: mainnet-beta | devnet | testnet | localnet
+	GenesisHash   string                 `protobuf:"bytes,7,opt,name=genesis_hash,json=genesisHash,proto3" json:"genesis_hash,omitempty"` // solana, optional, base58
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkConfig) Reset() {
+	*x = NetworkConfig{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkConfig) ProtoMessage() {}
+
+func (x *NetworkConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkConfig.ProtoReflect.Descriptor instead.
+func (*NetworkConfig) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *NetworkConfig) GetAlias() string {
+	if x != nil {
+		return x.Alias
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetRpcUrls() []string {
+	if x != nil {
+		return x.RpcUrls
+	}
+	return nil
+}
+
+func (x *NetworkConfig) GetChainId() uint64 {
+	if x != nil {
+		return x.ChainId
+	}
+	return 0
+}
+
+func (x *NetworkConfig) GetNetwork() string {
+	if x != nil {
+		return x.Network
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *NetworkConfig) GetGenesisHash() string {
+	if x != nil {
+		return x.GenesisHash
+	}
+	return ""
+}
+
+type NetworkRemove struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Alias         string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkRemove) Reset() {
+	*x = NetworkRemove{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkRemove) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkRemove) ProtoMessage() {}
+
+func (x *NetworkRemove) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkRemove.ProtoReflect.Descriptor instead.
+func (*NetworkRemove) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *NetworkRemove) GetAlias() string {
+	if x != nil {
+		return x.Alias
+	}
+	return ""
+}
+
 var File_cosl_v1_cosl_proto protoreflect.FileDescriptor
 
 const file_cosl_v1_cosl_proto_rawDesc = "" +
@@ -651,7 +790,17 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\x04data\x18\x05 \x01(\fR\x04data\"D\n" +
 	"\vAppFreeform\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12!\n" +
-	"\fcontent_type\x18\x02 \x01(\tR\vcontentTypeB!Z\x1fdefios.com/proto/cosl/v1;coslv1b\x06proto3"
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\"\xc6\x01\n" +
+	"\rNetworkConfig\x12\x14\n" +
+	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x19\n" +
+	"\brpc_urls\x18\x03 \x03(\tR\arpcUrls\x12\x19\n" +
+	"\bchain_id\x18\x04 \x01(\x04R\achainId\x12\x18\n" +
+	"\anetwork\x18\x05 \x01(\tR\anetwork\x12\x18\n" +
+	"\acluster\x18\x06 \x01(\tR\acluster\x12!\n" +
+	"\fgenesis_hash\x18\a \x01(\tR\vgenesisHash\"%\n" +
+	"\rNetworkRemove\x12\x14\n" +
+	"\x05alias\x18\x01 \x01(\tR\x05aliasB!Z\x1fdefios.com/proto/cosl/v1;coslv1b\x06proto3"
 
 var (
 	file_cosl_v1_cosl_proto_rawDescOnce sync.Once
@@ -665,7 +814,7 @@ func file_cosl_v1_cosl_proto_rawDescGZIP() []byte {
 	return file_cosl_v1_cosl_proto_rawDescData
 }
 
-var file_cosl_v1_cosl_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_cosl_v1_cosl_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_cosl_v1_cosl_proto_goTypes = []any{
 	(*Envelope)(nil),        // 0: defios.cosl.v1.Envelope
 	(*MembershipJoin)(nil),  // 1: defios.cosl.v1.MembershipJoin
@@ -675,6 +824,8 @@ var file_cosl_v1_cosl_proto_goTypes = []any{
 	(*SessionComplete)(nil), // 5: defios.cosl.v1.SessionComplete
 	(*TssSession)(nil),      // 6: defios.cosl.v1.TssSession
 	(*AppFreeform)(nil),     // 7: defios.cosl.v1.AppFreeform
+	(*NetworkConfig)(nil),   // 8: defios.cosl.v1.NetworkConfig
+	(*NetworkRemove)(nil),   // 9: defios.cosl.v1.NetworkRemove
 }
 var file_cosl_v1_cosl_proto_depIdxs = []int32{
 	2, // 0: defios.cosl.v1.SessionStart.nonce_boxes:type_name -> defios.cosl.v1.SealedBox
@@ -697,7 +848,7 @@ func file_cosl_v1_cosl_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cosl_v1_cosl_proto_rawDesc), len(file_cosl_v1_cosl_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

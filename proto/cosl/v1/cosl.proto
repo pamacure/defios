@@ -67,3 +67,20 @@ message AppFreeform {
   string text = 1;                    // UTF-8, max 65536 bytes
   string content_type = 2;            // default text/plain
 }
+
+// NetworkConfig is the payload of network.create and network.update
+// (docs/adr/0008-networks-on-cosl.md). An update carries the whole config and
+// supersedes the alias's current one. Only the fields of `type` may be set.
+message NetworkConfig {
+  string alias = 1;                   // ^[a-z0-9][a-z0-9_-]{0,63}$
+  string type = 2;                    // bitcoin | ethereum | solana
+  repeated string rpc_urls = 3;       // failover order; a Node may override
+  uint64 chain_id = 4;                // ethereum, > 0
+  string network = 5;                 // bitcoin: mainnet | testnet | signet | regtest
+  string cluster = 6;                 // solana: mainnet-beta | devnet | testnet | localnet
+  string genesis_hash = 7;            // solana, optional, base58
+}
+
+message NetworkRemove {
+  string alias = 1;
+}

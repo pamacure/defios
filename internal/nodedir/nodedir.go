@@ -120,3 +120,10 @@ func (p Paths) CoslFile(alias string) string {
 func (p Paths) TsnetDir(alias string) string {
 	return filepath.Join(p.GroupDir(alias), "tsnet")
 }
+
+// NetworkOverridesFile holds this Node's local RPC endpoints for a Group's
+// Networks, by Network alias. Config, not Vault or log: provider URLs often
+// embed API keys that must not replicate (ADR 0008).
+func (p Paths) NetworkOverridesFile(alias string) string {
+	return filepath.Join(p.GroupConfigDir(alias), "networks.toml")
+}

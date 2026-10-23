@@ -30,8 +30,8 @@ tickets to follow.
 ## Consequences
 
 - Three new COSL registry types (`network.create` / `network.update` /
-  `network.remove`); ids assigned alongside the signing types in
-  [ADR 0009](0009-sign-request-on-cosl.md). Each is one line in
+  `network.remove`); ids 8, 9, 10 (id 7 stays
+  reserved for `sign.request`, [ADR 0009](0009-sign-request-on-cosl.md)). Each is one line in
   `internal/cosl/registry.go` plus a Summary case.
 - A Network's `type` fixes the curve a signing Key must use for it
   (bitcoin/ethereum → secp256k1, solana → Ed25519). Sign Request creation
@@ -41,7 +41,15 @@ tickets to follow.
   Node), with an array permitted for failover. Because provider URLs often embed
   API keys that would then replicate in plaintext to every Node, a Node may set
   a **local override** that wins when it broadcasts. The override lives in the
-  Node's config directory (`$XDG_CONFIG_HOME`), not the Vault and not the log.
+  Node's config directory (`$XDG_CONFIG_HOME`), not the Vault and not the log:
+  `group/<group-alias>/networks.toml`, one `[<network-alias>]` table with
+  `rpc_urls = [...]`.
+- The fold is deterministic and skips messages that do not apply to the state
+  they meet: a create of a live alias (first committed wins), an update of an
+  absent alias, an update that changes the Network's type, a remove of an absent
+  alias, and invalid configs. The writer checks the same preconditions so an
+  operator gets an error instead of a silent skip. A removed alias may be
+  created again.
 - Alias follows the Group-alias convention (`^[a-z0-9][a-z0-9_-]{0,63}$`,
   [ADR 0007](0007-group-scoped-storage-alias.md)) and is local naming only; the
   Network's on-wire identity is its config fields, not the alias.
