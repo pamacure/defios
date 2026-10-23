@@ -219,6 +219,9 @@ func TestListAndInspect(t *testing.T) {
 	if eth.Network != "eth" || eth.Type != "ethereum" || !strings.Contains(strings.Join(eth.Lines, "\n"), "value 1000 wei") {
 		t.Errorf("eth = %+v", eth)
 	}
+	if want := "f923d8beba74c0b9fc1f63b03cab5faf4102f8c2eab0ea5ce52b75af013ab595"; len(eth.Digests) != 1 || eth.Digests[0] != want {
+		t.Errorf("eth digests = %v, want [%s]", eth.Digests, want)
+	}
 	if !strings.Contains(strings.Join(btc.Lines, "\n"), "fee 1000 sats") {
 		t.Errorf("btc = %+v", btc)
 	}

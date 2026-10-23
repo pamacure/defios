@@ -299,6 +299,7 @@ type TxDetail struct {
 	Network string   `json:"network"`
 	Type    string   `json:"type"`
 	Lines   []string `json:"lines"`
+	Digests []string `json:"digests,omitempty"` // hex, one per signature the transaction needs
 }
 
 // Detail is `sign inspect`.
@@ -395,6 +396,11 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
 			td.Lines = describeEthereum(n, in.Ethereum)
+			if _, dg, err := EthereumDigest(n.ChainID, in.Ethereum); err != nil {
+				td.Lines = append(td.Lines, "digest unavailable: "+err.Error())
+			} else {
+				td.Digests = []string{hex.EncodeToString(dg[:])}
+			}
 		case *coslv1.SignTransaction_Bitcoin:
 			td.Lines = describeBitcoin(in.Bitcoin)
 		case *coslv1.SignTransaction_Solana:

@@ -105,6 +105,9 @@ Every referenced Network must be of the Key's curve.`,
 				for _, l := range t.Lines {
 					fmt.Fprintf(out, "  %s\n", l)
 				}
+				for j, dg := range t.Digests {
+					fmt.Fprintf(out, "  digest %d %s\n", j, dg)
+				}
 			}
 			return nil
 		},
