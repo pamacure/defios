@@ -71,3 +71,19 @@ _Avoid_: chat, channel, room, thread
 **Conversation ID**:
 A Conversation's 32-byte identity, derived as SHA-256("defios-conversation-id-v1" || curve || joint public key). Identical to the Key's identity, hashed; not minted, not a Session ID. A nil conversation id on a COSL message marks Group-level talk, not a Conversation.
 _Avoid_: chat id, channel id, thread id
+
+**Network**:
+A blockchain a Group may broadcast a signed transaction to, described by a config the Group maintains on its COSL and recalls by a local alias (e.g. `ethereum-mainnet`). Each Network is of one type — Bitcoin, Ethereum, or Solana — which fixes the curve a signing Key must use for it.
+_Avoid_: chain config, blockchain configuration, RPC, endpoint
+
+**Sign Request**:
+One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several Networks of the Key's curve, but each signed transaction is broadcastable on exactly one Network. The proposing Node's signature on the request is its own acceptance.
+_Avoid_: transaction request, signing job, order
+
+**Digest**:
+The exact bytes a Key signs for one transaction — one per Bitcoin input, one per Ethereum or single-signer Solana transaction. Every Node derives the same Digests from a Sign Request independently.
+_Avoid_: hash, message, sighash
+
+**Broadcast Receipt**:
+A Node's record on the COSL that it submitted a signed transaction to its Network, carrying the resulting transaction hash, so broadcasting is provable and visible to the Group. Any Node may broadcast and record one.
+_Avoid_: confirmation, txid record, acknowledgement
