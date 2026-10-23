@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,7 +92,9 @@ func (c *chain) sends() int {
 
 // signedRequest is a two-Node Group with a Key, an Ethereum Network at rpcURL
 // and a Sign Request proposed by b, accepted by a, whose Session has completed.
-func signedRequest(t *testing.T, rpcURL string) (a, b *node, gid group.ID, msgID string, conv []byte) {
+// With otherURL it is a multi-transaction request over two Networks of the same
+// curve: nonce 0 on eth, one on eth2 (chain 10) at otherURL, then nonce 1 on eth.
+func signedRequest(t *testing.T, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
 	t.Helper()
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -139,11 +142,17 @@ func signedRequest(t *testing.T, rpcURL string) (a, b *node, gid group.ID, msgID
 	if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "eth", Type: "ethereum", ChainId: 1, RpcUrls: []string{rpcURL}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range []*node{a, b} {
-		waitNetworks(t, n, 1)
+	txs := []signreq.TxSpec{{Network: "eth", Ethereum: ethIntent(0)}}
+	if len(otherURL) > 0 {
+		if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "eth2", Type: "ethereum", ChainId: 10, RpcUrls: otherURL}); err != nil {
+			t.Fatal(err)
+		}
+		txs = append(txs, signreq.TxSpec{Network: "eth2", Ethereum: ethIntent(0)}, signreq.TxSpec{Network: "eth", Ethereum: ethIntent(1)})
 	}
-	eth := json.RawMessage(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","gasLimit":"21000","maxFeePerGas":"30"}`)
-	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}})
+	for _, n := range []*node{a, b} {
+		waitNetworks(t, n, 1+len(otherURL))
+	}
+	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: txs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,6 +175,10 @@ func signedRequest(t *testing.T, rpcURL string) (a, b *node, gid group.ID, msgID
 	}
 	t.Fatal("the signing Session never completed")
 	return
+}
+
+func ethIntent(nonce int) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","nonce":"%d","gasLimit":"21000","maxFeePerGas":"30"}`, nonce))
 }
 
 func signed(t *testing.T, n *node, msgID string) bool {
@@ -250,6 +263,44 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 	}
 	if got != 2 {
 		t.Fatalf("%d sign.broadcast rows in the Key's Conversation, want 2", got)
+	}
+}
+
+// A multi-transaction request over two Networks of one curve signs every
+// Digest under one Session and broadcasts each transaction to its own
+// Network, recording them all in one receipt.
+func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
+	one, other := newChain(t), newChain(t)
+	a, _, _, msgID, _ := signedRequest(t, one.srv.URL, other.srv.URL)
+	ctx := context.Background()
+
+	v, err := a.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Transactions) != 3 || v.Transactions[0].Network != "eth" || v.Transactions[1].Network != "eth2" || v.Transactions[2].Network != "eth" {
+		t.Fatalf("view = %+v", v.Transactions)
+	}
+	if one.sends() != 2 || other.sends() != 1 {
+		t.Fatalf("sends: eth %d, eth2 %d", one.sends(), other.sends())
+	}
+	for i, tx := range v.Transactions {
+		want := one
+		if tx.Network == "eth2" {
+			want = other
+		}
+		if !want.has("0x" + tx.TxHash) {
+			t.Errorf("transaction %d (%s) never reached its own Network", i, tx.Network)
+		}
+	}
+	waitReceipts(t, a, msgID, 1)
+	d, err := a.client().SignInspect(ctx, msgID[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := d.BroadcastReceipts[0]
+	if len(r.Transactions) != 3 || r.Transactions[1].Network != "eth2" || r.Transactions[1].TxHash != v.Transactions[1].TxHash {
+		t.Fatalf("receipt = %+v", r)
 	}
 }
 

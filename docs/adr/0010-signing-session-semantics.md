@@ -139,3 +139,11 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
 - A multi-transaction request is all-or-error: if transaction *k* fails, 1…*k*−1 are on the
   network but no receipt is written until a retry succeeds for all.
 - `sign list` shows a receipt count; `sign inspect` shows each receipt.
+
+## As built (multi-transaction requests)
+
+- A request's `transactions[]` needs no special path: Digests are flattened in
+  transaction order under one Session, each transaction is bound to its own
+  Network's chain id, and `sign broadcast` sends each to its own Network's rpc
+  urls and records all of them in one `sign.broadcast` receipt. Tests cover
+  ordered nonces on one Network mixed with a second Network of the same curve.

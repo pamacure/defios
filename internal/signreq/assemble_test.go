@@ -73,3 +73,38 @@ func TestSignedTransactions(t *testing.T) {
 		t.Errorf("unknown network: %v", err)
 	}
 }
+
+// Several transactions on different Networks of one curve assemble in order,
+// each bound to its own Network (chain id) and signature.
+func TestSignedMultipleTransactionsAcrossNetworks(t *testing.T) {
+	const otherID = byte(7)
+	history := map[[32]byte]network.Network{
+		ethID:     nets[0],
+		{otherID}: {Alias: "op", ConfigID: [32]byte{otherID}, Type: "ethereum", ChainID: 10},
+	}
+	second := ethTx()
+	second.NetworkConfigId = append([]byte{otherID}, make([]byte, 31)...)
+	third := ethTx()
+	third.Intent.(*coslv1.SignTransaction_Ethereum).Ethereum.Nonce = 1
+
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	r := rowOf(t, 1, 0xa1, time.Unix(10_000, 0), conv[:], req(ethTx(), second, third))
+	sigs := [][]byte{append(bytes.Repeat([]byte{1}, 64), 0), append(bytes.Repeat([]byte{2}, 64), 1), append(bytes.Repeat([]byte{3}, 64), 0)}
+
+	got, err := Signed([]cosl.Row{r}, r.MsgID, sigs, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].Network.Alias != "eth" || got[1].Network.Alias != "op" || got[2].Network.Alias != "eth" {
+		t.Fatalf("signed = %+v", got)
+	}
+	for i, tx := range []*coslv1.SignTransaction{ethTx(), second, third} {
+		raw, _, _ := AssembleEthereum(history[[32]byte(tx.NetworkConfigId)].ChainID, tx.Intent.(*coslv1.SignTransaction_Ethereum).Ethereum, sigs[i])
+		if !bytes.Equal(got[i].Raw, raw) {
+			t.Errorf("transaction %d is not bound to its own Network and signature", i)
+		}
+	}
+	if bytes.Equal(got[0].Raw, got[2].Raw) {
+		t.Error("distinct nonces must give distinct transactions")
+	}
+}
