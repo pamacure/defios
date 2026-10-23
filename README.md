@@ -1,4 +1,6 @@
-<img src="assets/3_2/DeFiOS_text_whitebg-977x651.png" height="512"/>
+<div align="center">
+  <img src="assets/3_2/DeFiOS_text_whitebg-977x651.png" height="400"/>
+</div>
 
 A self-hosted multi-party wallet. Two machines each run one Node, form a Group on a headscale tailnet, and mint a 2-of-2 ECDSA Key and a 2-of-2 Ed25519 Key. Talk between them is carried on the COSL.
 
