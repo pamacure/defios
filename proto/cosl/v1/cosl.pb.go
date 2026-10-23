@@ -731,6 +731,692 @@ func (x *NetworkRemove) GetAlias() string {
 	return ""
 }
 
+// SignRequest is the payload of sign.request (docs/adr/0009-sign-request-on-cosl.md).
+// The envelope's conversation_id is the target Key's Conversation ID. Every
+// consensus-critical field is carried here, so each Node derives the same
+// Digests without any chain RPC.
+type SignRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Transactions    []*SignTransaction     `protobuf:"bytes,1,rep,name=transactions,proto3" json:"transactions,omitempty"`                               // ordered, at least one
+	Reason          string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                                           // UTF-8, required
+	DeadlineSeconds uint64                 `protobuf:"varint,3,opt,name=deadline_seconds,json=deadlineSeconds,proto3" json:"deadline_seconds,omitempty"` // after the envelope's created_at; > 0
+	ReasonRef       *MessageRef            `protobuf:"bytes,4,opt,name=reason_ref,json=reasonRef,proto3" json:"reason_ref,omitempty"`                    // optional pointer to the talk behind the reason
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SignRequest) Reset() {
+	*x = SignRequest{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignRequest) ProtoMessage() {}
+
+func (x *SignRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignRequest.ProtoReflect.Descriptor instead.
+func (*SignRequest) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SignRequest) GetTransactions() []*SignTransaction {
+	if x != nil {
+		return x.Transactions
+	}
+	return nil
+}
+
+func (x *SignRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *SignRequest) GetDeadlineSeconds() uint64 {
+	if x != nil {
+		return x.DeadlineSeconds
+	}
+	return 0
+}
+
+func (x *SignRequest) GetReasonRef() *MessageRef {
+	if x != nil {
+		return x.ReasonRef
+	}
+	return nil
+}
+
+type MessageRef struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ConversationId []byte                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"` // unset = Group-level, else 32
+	MsgId          []byte                 `protobuf:"bytes,2,opt,name=msg_id,json=msgId,proto3" json:"msg_id,omitempty"`                            // 32
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *MessageRef) Reset() {
+	*x = MessageRef{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MessageRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MessageRef) ProtoMessage() {}
+
+func (x *MessageRef) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MessageRef.ProtoReflect.Descriptor instead.
+func (*MessageRef) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *MessageRef) GetConversationId() []byte {
+	if x != nil {
+		return x.ConversationId
+	}
+	return nil
+}
+
+func (x *MessageRef) GetMsgId() []byte {
+	if x != nil {
+		return x.MsgId
+	}
+	return nil
+}
+
+type SignTransaction struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	NetworkConfigId []byte                 `protobuf:"bytes,1,opt,name=network_config_id,json=networkConfigId,proto3" json:"network_config_id,omitempty"` // msg_id of the network.create/update row that defines the Network
+	// Types that are valid to be assigned to Intent:
+	//
+	//	*SignTransaction_Ethereum
+	//	*SignTransaction_Bitcoin
+	//	*SignTransaction_Solana
+	Intent        isSignTransaction_Intent `protobuf_oneof:"intent"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignTransaction) Reset() {
+	*x = SignTransaction{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignTransaction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignTransaction) ProtoMessage() {}
+
+func (x *SignTransaction) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignTransaction.ProtoReflect.Descriptor instead.
+func (*SignTransaction) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SignTransaction) GetNetworkConfigId() []byte {
+	if x != nil {
+		return x.NetworkConfigId
+	}
+	return nil
+}
+
+func (x *SignTransaction) GetIntent() isSignTransaction_Intent {
+	if x != nil {
+		return x.Intent
+	}
+	return nil
+}
+
+func (x *SignTransaction) GetEthereum() *EthereumIntent {
+	if x != nil {
+		if x, ok := x.Intent.(*SignTransaction_Ethereum); ok {
+			return x.Ethereum
+		}
+	}
+	return nil
+}
+
+func (x *SignTransaction) GetBitcoin() *BitcoinIntent {
+	if x != nil {
+		if x, ok := x.Intent.(*SignTransaction_Bitcoin); ok {
+			return x.Bitcoin
+		}
+	}
+	return nil
+}
+
+func (x *SignTransaction) GetSolana() *SolanaIntent {
+	if x != nil {
+		if x, ok := x.Intent.(*SignTransaction_Solana); ok {
+			return x.Solana
+		}
+	}
+	return nil
+}
+
+type isSignTransaction_Intent interface {
+	isSignTransaction_Intent()
+}
+
+type SignTransaction_Ethereum struct {
+	Ethereum *EthereumIntent `protobuf:"bytes,2,opt,name=ethereum,proto3,oneof"`
+}
+
+type SignTransaction_Bitcoin struct {
+	Bitcoin *BitcoinIntent `protobuf:"bytes,3,opt,name=bitcoin,proto3,oneof"`
+}
+
+type SignTransaction_Solana struct {
+	Solana *SolanaIntent `protobuf:"bytes,4,opt,name=solana,proto3,oneof"`
+}
+
+func (*SignTransaction_Ethereum) isSignTransaction_Intent() {}
+
+func (*SignTransaction_Bitcoin) isSignTransaction_Intent() {}
+
+func (*SignTransaction_Solana) isSignTransaction_Intent() {}
+
+// EthereumIntent is an EIP-1559 transaction; the chain id is the Network's.
+// Amounts are base-10 integer strings (wei).
+type EthereumIntent struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	To                   []byte                 `protobuf:"bytes,1,opt,name=to,proto3" json:"to,omitempty"` // 20 bytes
+	Value                string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Data                 []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	Nonce                uint64                 `protobuf:"varint,4,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	GasLimit             uint64                 `protobuf:"varint,5,opt,name=gas_limit,json=gasLimit,proto3" json:"gas_limit,omitempty"`                // > 0
+	MaxFeePerGas         string                 `protobuf:"bytes,6,opt,name=max_fee_per_gas,json=maxFeePerGas,proto3" json:"max_fee_per_gas,omitempty"` // > 0
+	MaxPriorityFeePerGas string                 `protobuf:"bytes,7,opt,name=max_priority_fee_per_gas,json=maxPriorityFeePerGas,proto3" json:"max_priority_fee_per_gas,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *EthereumIntent) Reset() {
+	*x = EthereumIntent{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EthereumIntent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EthereumIntent) ProtoMessage() {}
+
+func (x *EthereumIntent) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EthereumIntent.ProtoReflect.Descriptor instead.
+func (*EthereumIntent) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *EthereumIntent) GetTo() []byte {
+	if x != nil {
+		return x.To
+	}
+	return nil
+}
+
+func (x *EthereumIntent) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *EthereumIntent) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *EthereumIntent) GetNonce() uint64 {
+	if x != nil {
+		return x.Nonce
+	}
+	return 0
+}
+
+func (x *EthereumIntent) GetGasLimit() uint64 {
+	if x != nil {
+		return x.GasLimit
+	}
+	return 0
+}
+
+func (x *EthereumIntent) GetMaxFeePerGas() string {
+	if x != nil {
+		return x.MaxFeePerGas
+	}
+	return ""
+}
+
+func (x *EthereumIntent) GetMaxPriorityFeePerGas() string {
+	if x != nil {
+		return x.MaxPriorityFeePerGas
+	}
+	return ""
+}
+
+// BitcoinIntent is a transaction signed per input; the fee is the inputs
+// minus the outputs.
+type BitcoinIntent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Inputs        []*BitcoinInput        `protobuf:"bytes,1,rep,name=inputs,proto3" json:"inputs,omitempty"`
+	Outputs       []*BitcoinOutput       `protobuf:"bytes,2,rep,name=outputs,proto3" json:"outputs,omitempty"`
+	LockTime      uint32                 `protobuf:"varint,3,opt,name=lock_time,json=lockTime,proto3" json:"lock_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BitcoinIntent) Reset() {
+	*x = BitcoinIntent{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BitcoinIntent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BitcoinIntent) ProtoMessage() {}
+
+func (x *BitcoinIntent) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BitcoinIntent.ProtoReflect.Descriptor instead.
+func (*BitcoinIntent) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *BitcoinIntent) GetInputs() []*BitcoinInput {
+	if x != nil {
+		return x.Inputs
+	}
+	return nil
+}
+
+func (x *BitcoinIntent) GetOutputs() []*BitcoinOutput {
+	if x != nil {
+		return x.Outputs
+	}
+	return nil
+}
+
+func (x *BitcoinIntent) GetLockTime() uint32 {
+	if x != nil {
+		return x.LockTime
+	}
+	return 0
+}
+
+type BitcoinInput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Txid          string                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"` // 64 hex
+	Vout          uint32                 `protobuf:"varint,2,opt,name=vout,proto3" json:"vout,omitempty"`
+	AmountSats    uint64                 `protobuf:"varint,3,opt,name=amount_sats,json=amountSats,proto3" json:"amount_sats,omitempty"`
+	ScriptPubkey  []byte                 `protobuf:"bytes,4,opt,name=script_pubkey,json=scriptPubkey,proto3" json:"script_pubkey,omitempty"` // the spent output's script
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BitcoinInput) Reset() {
+	*x = BitcoinInput{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BitcoinInput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BitcoinInput) ProtoMessage() {}
+
+func (x *BitcoinInput) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BitcoinInput.ProtoReflect.Descriptor instead.
+func (*BitcoinInput) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *BitcoinInput) GetTxid() string {
+	if x != nil {
+		return x.Txid
+	}
+	return ""
+}
+
+func (x *BitcoinInput) GetVout() uint32 {
+	if x != nil {
+		return x.Vout
+	}
+	return 0
+}
+
+func (x *BitcoinInput) GetAmountSats() uint64 {
+	if x != nil {
+		return x.AmountSats
+	}
+	return 0
+}
+
+func (x *BitcoinInput) GetScriptPubkey() []byte {
+	if x != nil {
+		return x.ScriptPubkey
+	}
+	return nil
+}
+
+type BitcoinOutput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Address       string                 `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	AmountSats    uint64                 `protobuf:"varint,2,opt,name=amount_sats,json=amountSats,proto3" json:"amount_sats,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BitcoinOutput) Reset() {
+	*x = BitcoinOutput{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BitcoinOutput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BitcoinOutput) ProtoMessage() {}
+
+func (x *BitcoinOutput) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BitcoinOutput.ProtoReflect.Descriptor instead.
+func (*BitcoinOutput) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *BitcoinOutput) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *BitcoinOutput) GetAmountSats() uint64 {
+	if x != nil {
+		return x.AmountSats
+	}
+	return 0
+}
+
+type SolanaIntent struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	FeePayer        string                 `protobuf:"bytes,1,opt,name=fee_payer,json=feePayer,proto3" json:"fee_payer,omitempty"`                      // base58
+	RecentBlockhash string                 `protobuf:"bytes,2,opt,name=recent_blockhash,json=recentBlockhash,proto3" json:"recent_blockhash,omitempty"` // base58
+	Instructions    []*SolanaInstruction   `protobuf:"bytes,3,rep,name=instructions,proto3" json:"instructions,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SolanaIntent) Reset() {
+	*x = SolanaIntent{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SolanaIntent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SolanaIntent) ProtoMessage() {}
+
+func (x *SolanaIntent) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SolanaIntent.ProtoReflect.Descriptor instead.
+func (*SolanaIntent) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SolanaIntent) GetFeePayer() string {
+	if x != nil {
+		return x.FeePayer
+	}
+	return ""
+}
+
+func (x *SolanaIntent) GetRecentBlockhash() string {
+	if x != nil {
+		return x.RecentBlockhash
+	}
+	return ""
+}
+
+func (x *SolanaIntent) GetInstructions() []*SolanaInstruction {
+	if x != nil {
+		return x.Instructions
+	}
+	return nil
+}
+
+type SolanaInstruction struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProgramId     string                 `protobuf:"bytes,1,opt,name=program_id,json=programId,proto3" json:"program_id,omitempty"` // base58
+	Accounts      []*SolanaAccount       `protobuf:"bytes,2,rep,name=accounts,proto3" json:"accounts,omitempty"`
+	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SolanaInstruction) Reset() {
+	*x = SolanaInstruction{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SolanaInstruction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SolanaInstruction) ProtoMessage() {}
+
+func (x *SolanaInstruction) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SolanaInstruction.ProtoReflect.Descriptor instead.
+func (*SolanaInstruction) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SolanaInstruction) GetProgramId() string {
+	if x != nil {
+		return x.ProgramId
+	}
+	return ""
+}
+
+func (x *SolanaInstruction) GetAccounts() []*SolanaAccount {
+	if x != nil {
+		return x.Accounts
+	}
+	return nil
+}
+
+func (x *SolanaInstruction) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type SolanaAccount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pubkey        string                 `protobuf:"bytes,1,opt,name=pubkey,proto3" json:"pubkey,omitempty"` // base58
+	Signer        bool                   `protobuf:"varint,2,opt,name=signer,proto3" json:"signer,omitempty"`
+	Writable      bool                   `protobuf:"varint,3,opt,name=writable,proto3" json:"writable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SolanaAccount) Reset() {
+	*x = SolanaAccount{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SolanaAccount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SolanaAccount) ProtoMessage() {}
+
+func (x *SolanaAccount) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SolanaAccount.ProtoReflect.Descriptor instead.
+func (*SolanaAccount) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SolanaAccount) GetPubkey() string {
+	if x != nil {
+		return x.Pubkey
+	}
+	return ""
+}
+
+func (x *SolanaAccount) GetSigner() bool {
+	if x != nil {
+		return x.Signer
+	}
+	return false
+}
+
+func (x *SolanaAccount) GetWritable() bool {
+	if x != nil {
+		return x.Writable
+	}
+	return false
+}
+
 var File_cosl_v1_cosl_proto protoreflect.FileDescriptor
 
 const file_cosl_v1_cosl_proto_rawDesc = "" +
@@ -800,7 +1486,58 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\acluster\x18\x06 \x01(\tR\acluster\x12!\n" +
 	"\fgenesis_hash\x18\a \x01(\tR\vgenesisHash\"%\n" +
 	"\rNetworkRemove\x12\x14\n" +
-	"\x05alias\x18\x01 \x01(\tR\x05aliasB!Z\x1fdefios.com/proto/cosl/v1;coslv1b\x06proto3"
+	"\x05alias\x18\x01 \x01(\tR\x05alias\"\xd0\x01\n" +
+	"\vSignRequest\x12C\n" +
+	"\ftransactions\x18\x01 \x03(\v2\x1f.defios.cosl.v1.SignTransactionR\ftransactions\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
+	"\x10deadline_seconds\x18\x03 \x01(\x04R\x0fdeadlineSeconds\x129\n" +
+	"\n" +
+	"reason_ref\x18\x04 \x01(\v2\x1a.defios.cosl.v1.MessageRefR\treasonRef\"L\n" +
+	"\n" +
+	"MessageRef\x12'\n" +
+	"\x0fconversation_id\x18\x01 \x01(\fR\x0econversationId\x12\x15\n" +
+	"\x06msg_id\x18\x02 \x01(\fR\x05msgId\"\xf8\x01\n" +
+	"\x0fSignTransaction\x12*\n" +
+	"\x11network_config_id\x18\x01 \x01(\fR\x0fnetworkConfigId\x12<\n" +
+	"\bethereum\x18\x02 \x01(\v2\x1e.defios.cosl.v1.EthereumIntentH\x00R\bethereum\x129\n" +
+	"\abitcoin\x18\x03 \x01(\v2\x1d.defios.cosl.v1.BitcoinIntentH\x00R\abitcoin\x126\n" +
+	"\x06solana\x18\x04 \x01(\v2\x1c.defios.cosl.v1.SolanaIntentH\x00R\x06solanaB\b\n" +
+	"\x06intent\"\xdc\x01\n" +
+	"\x0eEthereumIntent\x12\x0e\n" +
+	"\x02to\x18\x01 \x01(\fR\x02to\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\x12\x14\n" +
+	"\x05nonce\x18\x04 \x01(\x04R\x05nonce\x12\x1b\n" +
+	"\tgas_limit\x18\x05 \x01(\x04R\bgasLimit\x12%\n" +
+	"\x0fmax_fee_per_gas\x18\x06 \x01(\tR\fmaxFeePerGas\x126\n" +
+	"\x18max_priority_fee_per_gas\x18\a \x01(\tR\x14maxPriorityFeePerGas\"\x9b\x01\n" +
+	"\rBitcoinIntent\x124\n" +
+	"\x06inputs\x18\x01 \x03(\v2\x1c.defios.cosl.v1.BitcoinInputR\x06inputs\x127\n" +
+	"\aoutputs\x18\x02 \x03(\v2\x1d.defios.cosl.v1.BitcoinOutputR\aoutputs\x12\x1b\n" +
+	"\tlock_time\x18\x03 \x01(\rR\blockTime\"|\n" +
+	"\fBitcoinInput\x12\x12\n" +
+	"\x04txid\x18\x01 \x01(\tR\x04txid\x12\x12\n" +
+	"\x04vout\x18\x02 \x01(\rR\x04vout\x12\x1f\n" +
+	"\vamount_sats\x18\x03 \x01(\x04R\n" +
+	"amountSats\x12#\n" +
+	"\rscript_pubkey\x18\x04 \x01(\fR\fscriptPubkey\"J\n" +
+	"\rBitcoinOutput\x12\x18\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x1f\n" +
+	"\vamount_sats\x18\x02 \x01(\x04R\n" +
+	"amountSats\"\x9d\x01\n" +
+	"\fSolanaIntent\x12\x1b\n" +
+	"\tfee_payer\x18\x01 \x01(\tR\bfeePayer\x12)\n" +
+	"\x10recent_blockhash\x18\x02 \x01(\tR\x0frecentBlockhash\x12E\n" +
+	"\finstructions\x18\x03 \x03(\v2!.defios.cosl.v1.SolanaInstructionR\finstructions\"\x81\x01\n" +
+	"\x11SolanaInstruction\x12\x1d\n" +
+	"\n" +
+	"program_id\x18\x01 \x01(\tR\tprogramId\x129\n" +
+	"\baccounts\x18\x02 \x03(\v2\x1d.defios.cosl.v1.SolanaAccountR\baccounts\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\"[\n" +
+	"\rSolanaAccount\x12\x16\n" +
+	"\x06pubkey\x18\x01 \x01(\tR\x06pubkey\x12\x16\n" +
+	"\x06signer\x18\x02 \x01(\bR\x06signer\x12\x1a\n" +
+	"\bwritable\x18\x03 \x01(\bR\bwritableB!Z\x1fdefios.com/proto/cosl/v1;coslv1b\x06proto3"
 
 var (
 	file_cosl_v1_cosl_proto_rawDescOnce sync.Once
@@ -814,26 +1551,45 @@ func file_cosl_v1_cosl_proto_rawDescGZIP() []byte {
 	return file_cosl_v1_cosl_proto_rawDescData
 }
 
-var file_cosl_v1_cosl_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_cosl_v1_cosl_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_cosl_v1_cosl_proto_goTypes = []any{
-	(*Envelope)(nil),        // 0: defios.cosl.v1.Envelope
-	(*MembershipJoin)(nil),  // 1: defios.cosl.v1.MembershipJoin
-	(*SealedBox)(nil),       // 2: defios.cosl.v1.SealedBox
-	(*SessionStart)(nil),    // 3: defios.cosl.v1.SessionStart
-	(*SessionAbort)(nil),    // 4: defios.cosl.v1.SessionAbort
-	(*SessionComplete)(nil), // 5: defios.cosl.v1.SessionComplete
-	(*TssSession)(nil),      // 6: defios.cosl.v1.TssSession
-	(*AppFreeform)(nil),     // 7: defios.cosl.v1.AppFreeform
-	(*NetworkConfig)(nil),   // 8: defios.cosl.v1.NetworkConfig
-	(*NetworkRemove)(nil),   // 9: defios.cosl.v1.NetworkRemove
+	(*Envelope)(nil),          // 0: defios.cosl.v1.Envelope
+	(*MembershipJoin)(nil),    // 1: defios.cosl.v1.MembershipJoin
+	(*SealedBox)(nil),         // 2: defios.cosl.v1.SealedBox
+	(*SessionStart)(nil),      // 3: defios.cosl.v1.SessionStart
+	(*SessionAbort)(nil),      // 4: defios.cosl.v1.SessionAbort
+	(*SessionComplete)(nil),   // 5: defios.cosl.v1.SessionComplete
+	(*TssSession)(nil),        // 6: defios.cosl.v1.TssSession
+	(*AppFreeform)(nil),       // 7: defios.cosl.v1.AppFreeform
+	(*NetworkConfig)(nil),     // 8: defios.cosl.v1.NetworkConfig
+	(*NetworkRemove)(nil),     // 9: defios.cosl.v1.NetworkRemove
+	(*SignRequest)(nil),       // 10: defios.cosl.v1.SignRequest
+	(*MessageRef)(nil),        // 11: defios.cosl.v1.MessageRef
+	(*SignTransaction)(nil),   // 12: defios.cosl.v1.SignTransaction
+	(*EthereumIntent)(nil),    // 13: defios.cosl.v1.EthereumIntent
+	(*BitcoinIntent)(nil),     // 14: defios.cosl.v1.BitcoinIntent
+	(*BitcoinInput)(nil),      // 15: defios.cosl.v1.BitcoinInput
+	(*BitcoinOutput)(nil),     // 16: defios.cosl.v1.BitcoinOutput
+	(*SolanaIntent)(nil),      // 17: defios.cosl.v1.SolanaIntent
+	(*SolanaInstruction)(nil), // 18: defios.cosl.v1.SolanaInstruction
+	(*SolanaAccount)(nil),     // 19: defios.cosl.v1.SolanaAccount
 }
 var file_cosl_v1_cosl_proto_depIdxs = []int32{
-	2, // 0: defios.cosl.v1.SessionStart.nonce_boxes:type_name -> defios.cosl.v1.SealedBox
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2,  // 0: defios.cosl.v1.SessionStart.nonce_boxes:type_name -> defios.cosl.v1.SealedBox
+	12, // 1: defios.cosl.v1.SignRequest.transactions:type_name -> defios.cosl.v1.SignTransaction
+	11, // 2: defios.cosl.v1.SignRequest.reason_ref:type_name -> defios.cosl.v1.MessageRef
+	13, // 3: defios.cosl.v1.SignTransaction.ethereum:type_name -> defios.cosl.v1.EthereumIntent
+	14, // 4: defios.cosl.v1.SignTransaction.bitcoin:type_name -> defios.cosl.v1.BitcoinIntent
+	17, // 5: defios.cosl.v1.SignTransaction.solana:type_name -> defios.cosl.v1.SolanaIntent
+	15, // 6: defios.cosl.v1.BitcoinIntent.inputs:type_name -> defios.cosl.v1.BitcoinInput
+	16, // 7: defios.cosl.v1.BitcoinIntent.outputs:type_name -> defios.cosl.v1.BitcoinOutput
+	18, // 8: defios.cosl.v1.SolanaIntent.instructions:type_name -> defios.cosl.v1.SolanaInstruction
+	19, // 9: defios.cosl.v1.SolanaInstruction.accounts:type_name -> defios.cosl.v1.SolanaAccount
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_cosl_v1_cosl_proto_init() }
@@ -842,13 +1598,18 @@ func file_cosl_v1_cosl_proto_init() {
 		return
 	}
 	file_cosl_v1_cosl_proto_msgTypes[0].OneofWrappers = []any{}
+	file_cosl_v1_cosl_proto_msgTypes[12].OneofWrappers = []any{
+		(*SignTransaction_Ethereum)(nil),
+		(*SignTransaction_Bitcoin)(nil),
+		(*SignTransaction_Solana)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cosl_v1_cosl_proto_rawDesc), len(file_cosl_v1_cosl_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

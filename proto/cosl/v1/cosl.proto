@@ -84,3 +84,78 @@ message NetworkConfig {
 message NetworkRemove {
   string alias = 1;
 }
+
+// SignRequest is the payload of sign.request (docs/adr/0009-sign-request-on-cosl.md).
+// The envelope's conversation_id is the target Key's Conversation ID. Every
+// consensus-critical field is carried here, so each Node derives the same
+// Digests without any chain RPC.
+message SignRequest {
+  repeated SignTransaction transactions = 1;  // ordered, at least one
+  string reason = 2;                          // UTF-8, required
+  uint64 deadline_seconds = 3;                // after the envelope's created_at; > 0
+  MessageRef reason_ref = 4;                  // optional pointer to the talk behind the reason
+}
+
+message MessageRef {
+  bytes conversation_id = 1;          // unset = Group-level, else 32
+  bytes msg_id = 2;                   // 32
+}
+
+message SignTransaction {
+  bytes network_config_id = 1;        // msg_id of the network.create/update row that defines the Network
+  oneof intent {
+    EthereumIntent ethereum = 2;
+    BitcoinIntent bitcoin = 3;
+    SolanaIntent solana = 4;
+  }
+}
+
+// EthereumIntent is an EIP-1559 transaction; the chain id is the Network's.
+// Amounts are base-10 integer strings (wei).
+message EthereumIntent {
+  bytes to = 1;                       // 20 bytes
+  string value = 2;
+  bytes data = 3;
+  uint64 nonce = 4;
+  uint64 gas_limit = 5;               // > 0
+  string max_fee_per_gas = 6;         // > 0
+  string max_priority_fee_per_gas = 7;
+}
+
+// BitcoinIntent is a transaction signed per input; the fee is the inputs
+// minus the outputs.
+message BitcoinIntent {
+  repeated BitcoinInput inputs = 1;
+  repeated BitcoinOutput outputs = 2;
+  uint32 lock_time = 3;
+}
+
+message BitcoinInput {
+  string txid = 1;                    // 64 hex
+  uint32 vout = 2;
+  uint64 amount_sats = 3;
+  bytes script_pubkey = 4;            // the spent output's script
+}
+
+message BitcoinOutput {
+  string address = 1;
+  uint64 amount_sats = 2;
+}
+
+message SolanaIntent {
+  string fee_payer = 1;               // base58
+  string recent_blockhash = 2;        // base58
+  repeated SolanaInstruction instructions = 3;
+}
+
+message SolanaInstruction {
+  string program_id = 1;              // base58
+  repeated SolanaAccount accounts = 2;
+  bytes data = 3;
+}
+
+message SolanaAccount {
+  string pubkey = 1;                  // base58
+  bool signer = 2;
+  bool writable = 3;
+}

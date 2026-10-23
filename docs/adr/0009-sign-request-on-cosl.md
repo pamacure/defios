@@ -42,8 +42,7 @@ tickets to follow.
 ## Consequences
 
 - New COSL registry type `sign.request` (id 7), with the `network.*` types from
-  [ADR 0008](0008-networks-on-cosl.md) taking the ids around it; final numbering
-  assigned when the registry entries land.
+  [ADR 0008](0008-networks-on-cosl.md) at ids 8–10.
 - Body: `transactions[]` (each with its own `network_config_id` + per-network
   intent, discriminated by Network type), a **required** `reason` (free text,
   with an optional `{conversation_id, msg_id}` pointer to a Key-scoped
@@ -56,3 +55,22 @@ tickets to follow.
   no chain RPC to fill them — the chain-connected initiator supplies them.
 - Per-network Digest rules: Ethereum RLP → keccak256 (EIP-1559); Bitcoin
   BIP-143/341 sighash per input; Solana compiled message bytes.
+
+## As built (proposing and inspecting)
+
+- `network_config_id` is the `msg_id` of the `network.create` / `network.update`
+  row that defines the Network's config, so a request pins the exact config it
+  was proposed against; inspect still resolves it after the alias is edited.
+  A new request must reference a *live* config.
+- `deadline` is stored as `deadline_seconds`, a window after the envelope's
+  `created_at` (the proposer's default of 300 is written into the payload, so
+  every Node reads the same value). Until signing exists, status is `open` or
+  `expired` by that window alone.
+- `reason_ref` is an optional `{conversation_id, msg_id}` pointer.
+- The proposer's envelope signature is its acceptance: one append, no separate
+  accept message.
+- Intents are `EthereumIntent` (EIP-1559; amounts as base-10 strings),
+  `BitcoinIntent` (inputs with amount + scriptPubKey, outputs; fee implied) and
+  `SolanaIntent` (fee payer, blockhash, instructions), enforced to match the
+  Network's type. The writer rejects a request unless every field the Digest
+  needs is present.

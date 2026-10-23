@@ -43,6 +43,7 @@ var (
 // Network is one live Network in the folded state.
 type Network struct {
 	Alias          string
+	ConfigID       [32]byte // msg_id of the create/update row that defines this config
 	Type           string
 	RPCURLs        []string
 	ChainID        uint64 // ethereum
@@ -67,9 +68,9 @@ func (n Network) Config() *coslv1.NetworkConfig {
 	}
 }
 
-func fromConfig(c *coslv1.NetworkConfig) Network {
+func fromConfig(c *coslv1.NetworkConfig, id [32]byte) Network {
 	return Network{
-		Alias: c.Alias, Type: c.Type, RPCURLs: c.RpcUrls, ChainID: c.ChainId,
+		ConfigID: id, Alias: c.Alias, Type: c.Type, RPCURLs: c.RpcUrls, ChainID: c.ChainId,
 		BitcoinNetwork: c.Network, Cluster: c.Cluster, GenesisHash: c.GenesisHash,
 	}
 }
@@ -147,6 +148,32 @@ func contains(set []string, s string) bool {
 // absent alias, an update that changes the type, a remove of an absent alias,
 // and any invalid config. A removed alias may be created again.
 func Fold(rows []cosl.Row) ([]Network, error) {
+	live, err := replay(rows, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Network, 0, len(live))
+	for _, n := range live {
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Alias < out[j].Alias })
+	return out, nil
+}
+
+// History is every config the fold ever applied, live or since superseded
+// or removed, by ConfigID: a Sign Request pins the exact config it was
+// proposed against, which inspect must still resolve afterwards.
+func History(rows []cosl.Row) (map[[32]byte]Network, error) {
+	out := map[[32]byte]Network{}
+	if _, err := replay(rows, func(n Network) { out[n.ConfigID] = n }); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// replay is the fold itself: the live set by alias, calling applied for each
+// config that took effect.
+func replay(rows []cosl.Row, applied func(Network)) (map[string]Network, error) {
 	live := map[string]Network{}
 	for _, r := range rows {
 		switch r.MsgType {
@@ -168,22 +195,19 @@ func Fold(rows []cosl.Row) ([]Network, error) {
 				continue
 			}
 			cur, exists := live[p.Alias]
-			switch {
-			case env.MsgType == cosl.TypeNetworkCreate && !exists:
-				live[p.Alias] = fromConfig(p)
-			case env.MsgType == cosl.TypeNetworkUpdate && exists && cur.Type == p.Type:
-				live[p.Alias] = fromConfig(p)
+			if (env.MsgType == cosl.TypeNetworkCreate && !exists) ||
+				(env.MsgType == cosl.TypeNetworkUpdate && exists && cur.Type == p.Type) {
+				n := fromConfig(p, r.MsgID)
+				live[p.Alias] = n
+				if applied != nil {
+					applied(n)
+				}
 			}
 		case *coslv1.NetworkRemove:
 			delete(live, p.Alias)
 		}
 	}
-	out := make([]Network, 0, len(live))
-	for _, n := range live {
-		out = append(out, n)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Alias < out[j].Alias })
-	return out, nil
+	return live, nil
 }
 
 // Get finds a live Network by alias.

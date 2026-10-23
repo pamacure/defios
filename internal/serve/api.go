@@ -18,9 +18,11 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 )
 
 // Status is what the local API reports about this serve.
@@ -169,6 +171,7 @@ func (s *server) localHandler() http.Handler {
 	})
 	s.conversationRoutes(mux)
 	s.networkRoutes(mux)
+	s.signRoutes(mux)
 	s.sessionRoutes(mux)
 	s.snapshotRoutes(mux)
 	return mux
@@ -218,6 +221,12 @@ var errorKinds = []struct {
 	{network.ErrInvalid, "bad-network", http.StatusBadRequest},
 	{network.ErrExists, "network-exists", http.StatusConflict},
 	{network.ErrUnknown, "no-network", http.StatusNotFound},
+	{signreq.ErrInvalid, "bad-sign-request", http.StatusBadRequest},
+	{signreq.ErrCurveMismatch, "curve-mismatch", http.StatusUnprocessableEntity},
+	{signreq.ErrUnknown, "no-sign-request", http.StatusNotFound},
+	{signreq.ErrAmbiguous, "ambiguous-sign-request", http.StatusConflict},
+	{key.ErrUnknown, "no-key", http.StatusNotFound},
+	{key.ErrAmbiguous, "ambiguous-key", http.StatusConflict},
 	{cosl.ErrBadText, "bad-text", http.StatusBadRequest},
 	{session.ErrBadCurve, "bad-curve", http.StatusBadRequest},
 	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},
