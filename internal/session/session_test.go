@@ -126,32 +126,49 @@ type pair struct {
 	fan    *fanout
 	alice  *node
 	bob    *node
+	carol  *node // nil unless newTrio
 	nowMu  sync.Mutex
 	now    time.Time
 }
 
-func newPair(t *testing.T, waitingFor time.Duration) *pair {
+func newPair(t *testing.T, waitingFor time.Duration) *pair { return newCluster(t, waitingFor, false) }
+
+// newTrio is a Roster of three, for Sessions that sign with a subset.
+func newTrio(t *testing.T, waitingFor time.Duration) *pair { return newCluster(t, waitingFor, true) }
+
+func newCluster(t *testing.T, waitingFor time.Duration, withCarol bool) *pair {
 	t.Helper()
-	aliceNode, err := identity.Generate()
-	if err != nil {
-		t.Fatal(err)
+	ids := make([]*identity.Node, 3)
+	for i := range ids {
+		n, err := identity.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = n
 	}
-	bobNode, err := identity.Generate()
-	if err != nil {
-		t.Fatal(err)
+	nodes := []group.RosterNode{
+		{Public: ids[0].Public, DisplayName: "alice", TsnetHostname: "defios-alice"},
+		{Public: ids[1].Public, DisplayName: "bob", TsnetHostname: "defios-bob"},
 	}
-	roster := group.NewRoster(
-		group.RosterNode{Public: aliceNode.Public, DisplayName: "alice", TsnetHostname: "defios-alice"},
-		group.RosterNode{Public: bobNode.Public, DisplayName: "bob", TsnetHostname: "defios-bob"},
-	)
+	if withCarol {
+		nodes = append(nodes, group.RosterNode{Public: ids[2].Public, DisplayName: "carol", TsnetHostname: "defios-carol"})
+	}
+	roster := group.NewRoster(nodes...)
 	c := &pair{t: t, roster: roster, fan: &fanout{}, now: time.Now()}
-	c.alice = c.open(aliceNode, "alice", waitingFor)
-	c.bob = c.open(bobNode, "bob", waitingFor)
+	c.alice = c.open(ids[0], "alice", waitingFor)
+	c.bob = c.open(ids[1], "bob", waitingFor)
+	all := []*node{c.alice, c.bob}
+	if withCarol {
+		c.carol = c.open(ids[2], "carol", waitingFor)
+		all = append(all, c.carol)
+	}
 	t.Cleanup(func() {
-		c.alice.stop()
-		c.bob.stop()
-		c.alice.store.Close()
-		c.bob.store.Close()
+		for _, n := range all {
+			n.stop()
+		}
+		for _, n := range all {
+			n.store.Close()
+		}
 	})
 	return c
 }
@@ -390,6 +407,16 @@ func mustID(t *testing.T, hexID string) []byte {
 func (c *pair) sign(n *node, typ uint32, payload proto.Message) cosl.Signed {
 	c.t.Helper()
 	signed, err := (cosl.Author{Node: n.id, GroupID: c.roster.GroupID()}).Sign(typ, nil, payload)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return signed
+}
+
+// signIn is sign with a conversation id, as a sign.accept needs.
+func (c *pair) signIn(n *node, typ uint32, conv []byte, payload proto.Message) cosl.Signed {
+	c.t.Helper()
+	signed, err := (cosl.Author{Node: n.id, GroupID: c.roster.GroupID()}).Sign(typ, conv, payload)
 	if err != nil {
 		c.t.Fatal(err)
 	}

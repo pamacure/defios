@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -231,5 +232,48 @@ func TestListAndInspect(t *testing.T) {
 	}
 	if _, err := Inspect([]cosl.Row{open, old}, "", history, now); !errors.Is(err, ErrUnknown) {
 		t.Errorf("empty: %v", err)
+	}
+}
+
+func acceptRow(t *testing.T, seq uint64, sender byte, created time.Time, conv []byte, request [32]byte) cosl.Row {
+	t.Helper()
+	payload, err := proto.Marshal(&coslv1.SignAccept{SignRequestId: request[:]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := proto.Marshal(&coslv1.Envelope{Version: 1, MsgType: cosl.TypeSignAccept, Payload: payload, ConversationId: conv, CreatedAt: created.UnixNano()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cosl.Row{Seq: seq, MsgType: cosl.TypeSignAccept, MsgID: [32]byte{0xcc, byte(seq)}, Sender: identity.ID{sender}, ConversationID: conv, CreatedAt: created.UnixNano(), Envelope: env}
+}
+
+// The proposer's request is its accept; later accepts count once each, in log
+// order, only for this request and Key, and only within the deadline.
+func TestAccepts(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	other := key.ConversationID("ecdsa", []byte{1})
+	r := rowOf(t, 1, 0xa1, now, conv[:], req(ethTx())) // 300s window
+	r.Sender = identity.ID{1}
+	rows := []cosl.Row{
+		r,
+		acceptRow(t, 2, 3, now.Add(time.Second), conv[:], r.MsgID),
+		acceptRow(t, 3, 3, now.Add(2*time.Second), conv[:], r.MsgID),        // duplicate
+		acceptRow(t, 4, 1, now.Add(2*time.Second), conv[:], r.MsgID),        // the proposer again
+		acceptRow(t, 5, 4, now.Add(2*time.Second), other[:], r.MsgID),       // another Key's Conversation
+		acceptRow(t, 6, 5, now.Add(2*time.Second), conv[:], [32]byte{0x99}), // another request
+		acceptRow(t, 7, 2, now.Add(time.Hour), conv[:], r.MsgID),            // past the deadline
+		acceptRow(t, 8, 6, now.Add(10*time.Second), conv[:], r.MsgID),
+	}
+	got := Accepts(rows, r, req(ethTx()))
+	want := []Accept{{identity.ID{1}, 1}, {identity.ID{3}, 2}, {identity.ID{6}, 8}}
+	if len(got) != len(want) {
+		t.Fatalf("accepts = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("accepts = %+v, want %+v", got, want)
+		}
 	}
 }

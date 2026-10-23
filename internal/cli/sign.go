@@ -20,7 +20,7 @@ func signCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "sign",
 		Short: "Propose and inspect Sign Requests",
-		Long:  `A Sign Request asks the Group to sign one or more transactions with one of its Keys. Proposing it records your acceptance; no signatures are produced yet.`,
+		Long:  `A Sign Request asks the Group to sign one or more transactions with one of its Keys. Proposing it records your acceptance. The Key's first t Nodes to accept sign, then a signing Session starts.`,
 	}
 
 	var (
@@ -77,7 +77,7 @@ Every referenced Network must be of the Key's curve.`,
 				return g.emitJSON(rows)
 			}
 			for _, s := range rows {
-				fmt.Fprintf(g.app.Stdout, "%s  %s  txs=%d  %s\n", s.MsgID[:8], s.Status, s.Transactions, s.Reason)
+				fmt.Fprintf(g.app.Stdout, "%s  %s  %d/%d accepted  txs=%d  %s\n", s.MsgID[:8], s.Status, len(s.Accepted), s.Needed, s.Transactions, s.Reason)
 			}
 			return nil
 		},
@@ -98,6 +98,13 @@ Every referenced Network must be of the Key's curve.`,
 			out := g.app.Stdout
 			fmt.Fprintf(out, "sign_request %s\nstatus %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
 				d.MsgID, d.Status, d.Proposer, d.CreatedAt, d.DeadlineSeconds, d.Conversation, d.Reason)
+			fmt.Fprintf(out, "accepted %d/%d\n", len(d.Accepted), d.Needed)
+			for _, a := range d.Accepted {
+				fmt.Fprintf(out, "  %s\n", a)
+			}
+			if d.Session != "" {
+				fmt.Fprintf(out, "session %s\n", d.Session)
+			}
 			if d.ReasonRef != "" {
 				fmt.Fprintf(out, "reason_ref %s\n", d.ReasonRef)
 			}
@@ -116,10 +123,11 @@ Every referenced Network must be of the Key's curve.`,
 
 	accept := &cobra.Command{
 		Use:   "accept <msg-id>",
-		Short: "Join the signing Session for a Sign Request (requires serve)",
-		Long: `Accepting lets this Node's engine take part in signing. Nothing is written to the COSL.
-The proposer's accept is implied by proposing. Once the Key's t signers have accepted, the Session
-signs each Digest and completes as soon as a signature verifies against the Key.`,
+		Short: "Accept a Sign Request, offering to sign it (requires serve)",
+		Long: `Accepting appends a sign.accept and lets this Node's engine take part in signing. The proposer's
+accept is implied by proposing. The first t Nodes to accept, in log order, are the signers: once they
+exist one of them starts the signing Session, which signs each Digest and completes as soon as a
+signature verifies against the Key. A Node that accepts after that is not a signer.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := (serve.Client{Socket: g.paths().Socket}).SignAccept(cmd.Context(), args[0]); err != nil {
@@ -133,6 +141,7 @@ signs each Digest and completes as soon as a signature verifies against the Key.
 	decline := &cobra.Command{
 		Use:   "decline <msg-id>",
 		Short: "Abort the signing Session for a Sign Request (requires serve)",
+		Long:  `Declining aborts the request's signing Session. Before one has started there is nothing to abort: not accepting is declining.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := (serve.Client{Socket: g.paths().Socket}).SignDecline(cmd.Context(), args[0]); err != nil {

@@ -103,6 +103,14 @@ message SignRequest {
   MessageRef reason_ref = 4;                  // optional pointer to the talk behind the reason
 }
 
+// SignAccept is the payload of sign.accept (docs/adr/0010-signing-session-semantics.md).
+// The envelope's conversation_id is the target Key's, as for sign.request, and
+// its sender is the accepting Node. The proposer's signature on the
+// sign.request counts as its accept, so it never appends one.
+message SignAccept {
+  bytes sign_request_id = 1;          // msg_id of the sign.request; 32
+}
+
 message MessageRef {
   bytes conversation_id = 1;          // unset = Group-level, else 32
   bytes msg_id = 2;                   // 32

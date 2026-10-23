@@ -10,61 +10,162 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
+	"defios.com/internal/identity"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// StartSign appends the session.start that signs a sign.request. The t
-// signers are this Node plus the first t-1 other Roster Nodes, and appending
-// is the proposer's local accept: proposing is a single step
-// (docs/adr/0010-signing-session-semantics.md).
-func (s *Service) StartSign(ctx context.Context, requestID [32]byte) (Summary, error) {
+// AcceptSign is this Node's accept of a sign.request. It appends a sign.accept
+// and opens the local gate its engine waits on: the engine runs only for a
+// request this Node accepted. The Node is a signer if it is among the first t
+// to accept; if t others got there first the accept is ignored and nothing is
+// appended. The proposer's accept is implied by proposing (AcceptProposed).
+func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte) error {
 	if s.cfg.SignInfo == nil {
-		return Summary{}, ErrNoEngine
+		return ErrNoEngine
 	}
 	info, err := s.cfg.SignInfo(requestID)
 	if err != nil {
-		return Summary{}, err
+		return err
 	}
-	nodes := s.cfg.Roster.Nodes()
 	self := s.cfg.Node.NodeID
-	signers := []group.RosterNode{}
-	for _, n := range nodes {
-		if n.NodeID == self {
-			signers = append(signers, n)
+	signers := info.signers(0)
+	if r, err := s.signSession(requestID); err != nil {
+		return err
+	} else if r != nil {
+		if !slices.Contains(r.participants, self) {
+			return ErrNotParticipant
 		}
-	}
-	if len(signers) == 0 {
-		return Summary{}, ErrNotParticipant
-	}
-	for _, n := range nodes {
-		if len(signers) < info.T && n.NodeID != self {
-			signers = append(signers, n)
+		if r.status != Open {
+			return ErrClosedSession
 		}
+		return s.remember(ID(requestID))
 	}
-	if len(signers) < info.T {
-		return Summary{}, fmt.Errorf("session: the Roster has %d Nodes, the Key needs %d signers", len(nodes), info.T)
+	if s.cfg.Now().After(info.Deadline) {
+		return ErrClosedSession
 	}
-	slices.SortFunc(signers, func(a, b group.RosterNode) int { return bytes.Compare(a.NodeID[:], b.NodeID[:]) })
+	if slices.ContainsFunc(info.Accepted, func(a SignAccept) bool { return a.Node == self }) {
+		return s.remember(ID(requestID))
+	}
+	if len(signers) >= info.T {
+		return ErrNotParticipant
+	}
+	if err := s.remember(ID(requestID)); err != nil {
+		return err
+	}
+	payload := &coslv1.SignAccept{SignRequestId: append([]byte(nil), requestID[:]...)}
+	signed, err := s.author().Sign(cosl.TypeSignAccept, info.Conversation, payload)
+	if err == nil {
+		err = s.cfg.Append(ctx, signed)
+	}
+	if err != nil {
+		s.forget(ID(requestID))
+	}
+	return err
+}
 
+// AcceptProposed is the proposer's local accept, made by proposing: its
+// signature on the sign.request is the accept the log sees, so nothing is
+// appended here.
+func (s *Service) AcceptProposed(requestID [32]byte) error {
+	return s.remember(ID(requestID))
+}
+
+// DeclineSign aborts the open signing Session for a sign.request. Before one
+// exists there is nothing to abort: declining is simply not accepting.
+func (s *Service) DeclineSign(ctx context.Context, requestID [32]byte) error {
+	r, err := s.signSession(requestID)
+	if err != nil || r == nil || r.status != Open {
+		return err
+	}
+	return s.Abort(ctx, r.id, reasonDeclined)
+}
+
+// signSession is the first Session started for a sign.request, or nil.
+func (s *Service) signSession(requestID [32]byte) (*rec, error) {
+	recs, err := s.records()
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range recs {
+		if r.isSign && r.signReq == requestID {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+// startAccepted appends the session.start for every request this Node has
+// accepted that now has t signers, this Node among them, and no Session yet.
+// Any signer may do it; if two race, the later start is a duplicate and every
+// Node aborts it. The Session slot must be free, or the start would only be
+// aborted.
+func (s *Service) startAccepted(ctx context.Context, recs []*rec) {
+	if s.cfg.SignInfo == nil || s.cfg.NewSigner == nil {
+		return
+	}
+	started := map[ID]struct{}{}
+	busy := false
+	for _, r := range recs {
+		if r.isSign {
+			started[ID(r.signReq)] = struct{}{}
+		}
+		busy = busy || r.status == Open
+	}
+	for _, id := range s.accepted() {
+		if _, ok := started[id]; ok {
+			continue
+		}
+		if _, ok := s.starting[id]; ok {
+			continue
+		}
+		info, err := s.cfg.SignInfo(id)
+		if err != nil {
+			continue // not a sign.request (a keygen Session id), or not readable yet
+		}
+		if s.cfg.Now().After(info.Deadline) {
+			s.forget(id)
+			continue
+		}
+		s.promote(id) // accepted before a restart, and no Session has been lost
+		signers := info.signers(0)
+		if busy || len(signers) < info.T || !slices.Contains(signers, s.cfg.Node.NodeID) || info.Curve != "ecdsa" {
+			continue
+		}
+		s.starting[id] = struct{}{}
+		if err := s.appendSignStart(ctx, id, info, signers); err != nil {
+			delete(s.starting, id)
+			s.cfg.Logf("session: starting %x: %v", id[:4], err)
+		}
+	}
+}
+
+// appendSignStart mints the Session's nonce and seals it to the signers.
+func (s *Service) appendSignStart(ctx context.Context, requestID ID, info SignInfo, signers []identity.ID) error {
+	nodes := s.cfg.Roster.Nodes()
+	slices.SortFunc(signers, func(a, b identity.ID) int { return bytes.Compare(a[:], b[:]) })
 	var id ID
 	var nonce [32]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return Summary{}, fmt.Errorf("session: %w", err)
+		return fmt.Errorf("session: %w", err)
 	}
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return Summary{}, fmt.Errorf("session: %w", err)
+		return fmt.Errorf("session: %w", err)
 	}
 	boxes := make([]*coslv1.SealedBox, 0, len(signers))
 	parts := make([][]byte, 0, len(signers))
-	for _, n := range signers {
-		eph, nn, ct, err := seal(nonce[:], n.EncryptionPublicKey)
-		if err != nil {
-			return Summary{}, err
+	for _, sg := range signers {
+		i := slices.IndexFunc(nodes, func(n group.RosterNode) bool { return n.NodeID == sg })
+		if i < 0 {
+			return fmt.Errorf("session: signer %s is not on the Roster", sg)
 		}
-		boxes = append(boxes, &coslv1.SealedBox{To: append([]byte(nil), n.NodeID[:]...), EphemeralPublicKey: eph, Nonce: nn, Ciphertext: ct})
-		parts = append(parts, append([]byte(nil), n.NodeID[:]...))
+		eph, nn, ct, err := seal(nonce[:], nodes[i].EncryptionPublicKey)
+		if err != nil {
+			return err
+		}
+		boxes = append(boxes, &coslv1.SealedBox{To: append([]byte(nil), sg[:]...), EphemeralPublicKey: eph, Nonce: nn, Ciphertext: ct})
+		parts = append(parts, append([]byte(nil), sg[:]...))
 	}
-	payload := &coslv1.SessionStart{
+	return s.signAndAppend(ctx, cosl.TypeSessionStart, &coslv1.SessionStart{
 		SessionId:     append([]byte(nil), id[:]...),
 		Curve:         info.Curve,
 		T:             uint32(info.T),
@@ -72,58 +173,51 @@ func (s *Service) StartSign(ctx context.Context, requestID [32]byte) (Summary, e
 		Participants:  parts,
 		NonceBoxes:    boxes,
 		SignRequestId: append([]byte(nil), requestID[:]...),
-	}
-	if err := s.remember(id); err != nil {
-		return Summary{}, err
-	}
-	if err := s.signAndAppend(ctx, cosl.TypeSessionStart, payload); err != nil {
-		s.forget(id)
-		return Summary{}, err
-	}
-	return Summary{SessionID: id.String(), Status: Open, Curve: info.Curve, T: uint32(info.T), N: uint32(len(nodes))}, nil
+	})
 }
 
-// AcceptSign is this Node's local accept of the open signing Session for a
-// sign.request. Nothing is written to the COSL.
-func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte) error {
-	id, err := s.openSignSession(requestID)
-	if err != nil {
-		return err
+// accepted are the ids this Node has locally accepted: Sessions, and
+// sign.requests that may not have a Session yet.
+func (s *Service) accepted() []ID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]ID, 0, len(s.onDisk)+len(s.pending))
+	for id := range s.onDisk {
+		ids = append(ids, id)
 	}
-	return s.Accept(ctx, id)
-}
-
-// DeclineSign aborts the open signing Session for a sign.request.
-func (s *Service) DeclineSign(ctx context.Context, requestID [32]byte) error {
-	id, err := s.openSignSession(requestID)
-	if err != nil {
-		return err
-	}
-	return s.Abort(ctx, id, reasonDeclined)
-}
-
-func (s *Service) openSignSession(requestID [32]byte) (ID, error) {
-	recs, err := s.records()
-	if err != nil {
-		return ID{}, err
-	}
-	for _, r := range recs {
-		if r.isSign && r.signReq == requestID && r.status == Open {
-			return r.id, nil
+	for id := range s.pending {
+		if _, ok := s.onDisk[id]; !ok {
+			ids = append(ids, id)
 		}
 	}
-	return ID{}, ErrUnknownSession
+	return ids
+}
+
+// promote makes a durable accept live in this process, for a request with no
+// Session: nothing was running, so nothing is lost by the restart.
+func (s *Service) promote(id ID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.onDisk[id]; ok {
+		s.pending[id] = struct{}{}
+	}
 }
 
 // validateAll applies Key policy to every Session. It reports false when a
 // sign.request could not be read this time, so the caller waits for the next
 // poll instead of aborting on a transient failure.
 func (s *Service) validateAll(recs []*rec) bool {
+	started := map[[32]byte]struct{}{}
 	for _, r := range recs {
 		if !r.isSign {
 			r.validate(s.cfg.Roster)
 			continue
 		}
+		if _, ok := started[r.signReq]; ok {
+			r.dup, r.invalid = true, "the request already has a session"
+			continue
+		}
+		started[r.signReq] = struct{}{}
 		info, err := s.signInfo(r)
 		switch {
 		case err == nil:
@@ -160,23 +254,28 @@ func (s *Service) signInfo(r *rec) (SignInfo, error) {
 	return info, nil
 }
 
-// validateSign is Key policy for a signing start: it signs with the Key's
-// own t signers, all on the Roster, one of them the proposer. An invalid
-// start still occupies the one-open slot until it is aborted.
+// validateSign is Key policy for a signing start: its participants are
+// exactly the first t Nodes to have accepted the request before the start, in
+// sorted order, and the sender is one of them. An invalid start still occupies
+// the one-open slot until it is aborted.
 func (r *rec) validateSign(roster group.Roster, info SignInfo) {
 	ids := roster.NodeIDs()
+	signers := info.signers(r.startSeq)
+	slices.SortFunc(signers, func(a, b identity.ID) int { return bytes.Compare(a[:], b[:]) })
 	switch {
 	case info.Curve != "ecdsa":
 		r.invalid = fmt.Sprintf("signing with a %s Key is not supported", info.Curve)
 	case r.curve != info.Curve || int(r.t) != info.T || int(r.n) != len(ids):
 		r.invalid = "start does not match the Key"
-	case len(r.participants) != info.T:
-		r.invalid = fmt.Sprintf("%d signers, the Key needs %d", len(r.participants), info.T)
+	case len(signers) < info.T:
+		r.invalid = fmt.Sprintf("%d of the Key's %d signers have accepted", len(signers), info.T)
+	case !slices.Equal(r.participants, signers):
+		r.invalid = "participants are not the first t Nodes to accept"
 	case !slices.Contains(r.participants, r.sender):
-		r.invalid = "the proposer is not a signer"
+		r.invalid = "the sender is not a signer"
 	default:
-		for i, id := range r.participants {
-			if !slices.Contains(ids, id) || (i > 0 && bytes.Compare(r.participants[i-1][:], id[:]) >= 0) {
+		for _, id := range r.participants {
+			if !slices.Contains(ids, id) {
 				r.invalid = "signers are not distinct Roster Nodes in order"
 				return
 			}

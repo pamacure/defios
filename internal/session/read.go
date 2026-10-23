@@ -102,6 +102,7 @@ type rec struct {
 	boxes        []*coslv1.SealedBox
 	isSign       bool // a signing Session; signReq is the sign.request's msg_id
 	signReq      [32]byte
+	dup          bool // a signing start for a request that already has one
 	abortAt      []uint64
 	abortReason  string
 	completes    []seen
@@ -127,6 +128,16 @@ type round struct {
 	seq    uint64
 	sender identity.ID
 	msg    *coslv1.TssSession
+}
+
+// gate is the key of this Node's local accept: a signing Session is accepted
+// per request, before any Session exists, so the request's msg_id stands in
+// for the Session id. A duplicate start has no accept of its own.
+func (r *rec) gate() ID {
+	if r.isSign && !r.dup {
+		return ID(r.signReq)
+	}
+	return r.id
 }
 
 func (r *rec) summary() Summary {

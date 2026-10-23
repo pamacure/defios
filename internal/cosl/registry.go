@@ -24,6 +24,7 @@ const (
 	TypeNetworkCreate   uint32 = 8
 	TypeNetworkUpdate   uint32 = 9
 	TypeNetworkRemove   uint32 = 10
+	TypeSignAccept      uint32 = 11
 )
 
 // kind is one registry entry: its wire name and its payload schema.
@@ -45,6 +46,7 @@ var registry = map[uint32]kind{
 	TypeNetworkCreate:   {"network.create", func() proto.Message { return &coslv1.NetworkConfig{} }},
 	TypeNetworkUpdate:   {"network.update", func() proto.Message { return &coslv1.NetworkConfig{} }},
 	TypeNetworkRemove:   {"network.remove", func() proto.Message { return &coslv1.NetworkRemove{} }},
+	TypeSignAccept:      {"sign.accept", func() proto.Message { return &coslv1.SignAccept{} }},
 }
 
 // ErrUnknownType is returned by DecodePayload for ids outside the registry.

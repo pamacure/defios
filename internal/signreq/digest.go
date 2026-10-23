@@ -87,6 +87,10 @@ type Signable struct {
 	T         int // the Key's t
 	Digests   [][32]byte
 	Deadline  time.Time
+	// Conversation is the Key's Conversation ID, where accepts are scoped.
+	Conversation []byte
+	// Accepted is who has accepted, in log order, the proposer first.
+	Accepted []Accept
 }
 
 // Lookup reads the sign.request with msgID off rows and derives its Digests,
@@ -126,7 +130,7 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (Signable, error) {
 	if err != nil {
 		return Signable{}, err
 	}
-	out := Signable{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T}
+	out := Signable{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, req)}
 	for i, tx := range req.Transactions {
 		var id [32]byte
 		copy(id[:], tx.NetworkConfigId)

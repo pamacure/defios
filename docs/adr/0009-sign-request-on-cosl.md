@@ -68,7 +68,8 @@ tickets to follow.
   `expired` by that window alone.
 - `reason_ref` is an optional `{conversation_id, msg_id}` pointer.
 - The proposer's envelope signature is its acceptance: one append, no separate
-  accept message.
+  accept message. This still stands: other Nodes accept with a `sign.accept`
+  ([ADR 0010](0010-signing-session-semantics.md)), the proposer never does.
 - Intents are `EthereumIntent` (EIP-1559; amounts as base-10 strings),
   `BitcoinIntent` (inputs with amount + scriptPubKey, outputs; fee implied) and
   `SolanaIntent` (fee payer, blockhash, instructions), enforced to match the

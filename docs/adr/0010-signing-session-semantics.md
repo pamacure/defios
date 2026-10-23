@@ -34,9 +34,10 @@ tickets to follow.
 
 ## Consequences
 
-- No new COSL accept type for signing, consistent with
-  [ADR 0003](0003-keygen-session-orchestration.md): membership gates on the
-  `sign.request` commit; Vault/engine use gates on local accept. Once **t**
+- ~~No new COSL accept type for signing, consistent with
+  [ADR 0003](0003-keygen-session-orchestration.md).~~ **Superseded** by the
+  `sign.accept` type below. Membership gates on the `sign.request` commit;
+  Vault/engine use gates on the Node's own accept. Once **t**
   participants (the proposer included) have accepted, the engine runs the
   tss-lib `ecdsa/signing` / `eddsa/signing` protocol once per Digest.
 - `session.complete` carries the assembled signature set; a Node that cannot
@@ -53,6 +54,8 @@ tickets to follow.
   the same way keygen does ([ADR 0003](0003-keygen-session-orchestration.md)).
 
 ## As built (signing one Ethereum transaction)
+
+_Signer selection and `sign propose` / `sign accept` below are superseded by the amendment at the end._
 
 - A signing Session is a `session.start` with `sign_request_id` set (the
   `sign.request`'s msg_id). Its `participants` are the **t** signers — the
@@ -78,3 +81,38 @@ tickets to follow.
 - A Session still open past the request's deadline is aborted
   (`sign request expired`). Only Ethereum transactions on an ECDSA Key start a
   Session; any other request stays proposed without one.
+
+## Amendment: signers are the first t to accept (`sign.accept`)
+
+The as-built rule above had the proposer pick the signers (itself plus the first
+t−1 other Roster Nodes, sorted) and name them in `session.start`. That made the
+Roster's order, not willingness, decide who signs, and an offline named Node timed
+the Session out while other Nodes were available. It also cannot express a
+signer set for t ≥ 3 that is not yet known when the request is proposed.
+
+- **A new COSL type, `sign.accept`** (registry id 11), body `{ sign_request_id }`,
+  scoped to the Key's Conversation like `sign.request`; its sender is the
+  accepting Node. [ADR 0003](0003-keygen-session-orchestration.md) rejected an
+  explicit COSL accept for **keygen** because (a) joining the Group was already
+  gated by Group formation, (b) the participant set is the whole Roster, so no
+  selection is needed, and (c) local presence is a separate job from membership.
+  Signing differs on (b): signers are chosen from a larger set, so the log must
+  record who agreed. (a) and (c) still hold, and the local-accept gate is kept —
+  `sign accept` is still the deliberate operator step; only now it is an append.
+  This supersedes "no new COSL accept type for signing".
+- **Signer set** = the first t distinct Nodes to have accepted, in COSL (Raft)
+  log order, the proposer first (its signature on the `sign.request` is its accept,
+  [ADR 0009](0009-sign-request-on-cosl.md), so `sign propose` appends only the
+  request). Later accepts are ignored. A duplicate accept, or one made after the
+  request's deadline, does not count; the FSM already drops non-Roster senders.
+- **`session.start`** is appended once t signers exist, by any signer that has
+  accepted locally; the first in log order counts, and a later start for the same
+  request is invalid and aborted by every Node (alongside the one-open-Session slot).
+  Whoever appends it mints the nonce and seals it to the t signers. A start is valid
+  only if its `participants` equal the first t accepts before it, in sorted order,
+  and its sender is one of them.
+- **Decline** before a start exists is a no-op: not accepting is declining, and an
+  append already made cannot be withdrawn. After a start exists it aborts the Session.
+- An aborted Session (timeout, decline, crash) still kills the request: retry is a
+  new Sign Request, and accepts do not carry over. A request that never reaches t
+  accepts before its deadline is `expired`.

@@ -27,7 +27,7 @@ type signInspectRequest struct {
 
 // signPropose commits a sign.request scoped to the Key's Conversation. The
 // proposer's envelope signature is its acceptance, so one append is both the
-// proposal and the accept. The writer validates against the folded Networks
+// proposal and the accept; no Session exists until t Nodes have accepted. The writer validates against the folded Networks
 // and Keys first, so a bad request fails loudly here (ADR 0009).
 func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendView, error) {
 	replica, store, running := s.current()
@@ -70,40 +70,15 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 	if err != nil {
 		return SendView{}, err
 	}
-	// Proposing is the proposer's accept: the signing Session starts in the
-	// same step (ADR 0010). A request that cannot be signed yet (not
-	// Ethereum) stays proposed without one.
+	// Proposing is the proposer's accept: its signature on the request is the
+	// accept the log sees, so only the local gate opens (ADR 0010). The
+	// signing Session starts once t Nodes have accepted.
 	if svc := s.sessionLayer(); svc != nil && s.opts.NewSigner != nil {
-		if err := waitApplied(ctx, store, signed.MsgID); err != nil {
+		if err := svc.AcceptProposed(signed.MsgID); err != nil {
 			return SendView{}, err
-		}
-		if _, err := svc.StartSign(ctx, signed.MsgID); err != nil {
-			if !errors.Is(err, session.ErrBadSignRequest) && !errors.Is(err, session.ErrUnsupported) {
-				return SendView{}, err
-			}
-			s.opts.Logf("serve: %x proposed without a signing session: %v", signed.MsgID[:4], err)
 		}
 	}
 	return SendView{Seq: pos.Index, Term: pos.Term, MsgID: hex.EncodeToString(signed.MsgID[:])}, nil
-}
-
-// waitApplied blocks until this replica has applied the sign.request: a
-// follower's Append returns on commit, ahead of its own apply.
-func waitApplied(ctx context.Context, store *cosl.Store, msgID [32]byte) error {
-	for {
-		rows, err := store.Log(cosl.Query{})
-		if err != nil {
-			return err
-		}
-		if _, err := signreq.Resolve(rows, hex.EncodeToString(msgID[:])); err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
 }
 
 // signInfoFrom is the Session layer's view of a sign.request, read off the log.
@@ -125,11 +100,15 @@ func signInfoFrom(store *cosl.Store) func([32]byte) (session.SignInfo, error) {
 		if sg.Curve != "ecdsa" {
 			return session.SignInfo{}, session.ErrUnsupported
 		}
-		return session.SignInfo{Curve: sg.Curve, PublicKey: sg.PublicKey, T: sg.T, Digests: sg.Digests, Deadline: sg.Deadline}, nil
+		info := session.SignInfo{Curve: sg.Curve, PublicKey: sg.PublicKey, T: sg.T, Digests: sg.Digests, Deadline: sg.Deadline, Conversation: sg.Conversation}
+		for _, a := range sg.Accepted {
+			info.Accepted = append(info.Accepted, session.SignAccept{Node: a.Node, Seq: a.Seq})
+		}
+		return info, nil
 	}
 }
 
-// signAnswer is the local accept or decline of a Sign Request's Session.
+// signAnswer is this Node's accept or decline of a Sign Request.
 func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(*session.Service, context.Context, [32]byte) error) {
 	var req signInspectRequest
 	if !s.readLocal(w, r, &req) {
@@ -196,6 +175,10 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
+		sessions := signSessions(rows)
+		for i := range list {
+			list[i].Session = sessions[list[i].MsgID]
+		}
 		writeJSON(w, list)
 	})
 	mux.HandleFunc("POST /v1/sign/inspect", func(w http.ResponseWriter, r *http.Request) {
@@ -223,8 +206,25 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
+		d.Session = signSessions(rows)[d.MsgID]
 		writeJSON(w, d)
 	})
+}
+
+// signSessions maps each Sign Request's msg id to the signing Session started
+// for it.
+func signSessions(rows []cosl.Row) map[string]string {
+	out := map[string]string{}
+	list, err := session.List(rows)
+	if err != nil {
+		return out
+	}
+	for _, sum := range list {
+		if _, ok := out[sum.SignRequest]; sum.SignRequest != "" && !ok {
+			out[sum.SignRequest] = sum.SessionID
+		}
+	}
+	return out
 }
 
 // SignPropose is `sign propose`: commit a sign.request for the Key.
@@ -234,12 +234,12 @@ func (c Client) SignPropose(ctx context.Context, keyQuery string, spec signreq.S
 	return v, err
 }
 
-// SignAccept is `sign accept`: this Node's local accept of the signing Session.
+// SignAccept is `sign accept`: append this Node's sign.accept.
 func (c Client) SignAccept(ctx context.Context, msgID string) error {
 	return c.do(ctx, "/v1/sign/accept", signInspectRequest{MsgID: msgID}, &struct{}{})
 }
 
-// SignDecline is `sign decline`: abort the signing Session.
+// SignDecline is `sign decline`: abort the signing Session, if one has started.
 func (c Client) SignDecline(ctx context.Context, msgID string) error {
 	return c.do(ctx, "/v1/sign/decline", signInspectRequest{MsgID: msgID}, &struct{}{})
 }

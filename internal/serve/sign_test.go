@@ -166,9 +166,9 @@ func (d *signerDouble) Done() <-chan session.Result          { return d.done }
 func (d *signerDouble) WaitingFor() [][32]byte               { return nil }
 func (d *signerDouble) Abort()                               {}
 
-// Proposing starts the signing Session and is the proposer's accept; the
-// other Node signs only after `sign accept`, and the Session completes with
-// signatures that verify against the Key.
+// Proposing is the proposer's accept and starts nothing; once the other Node
+// runs `sign accept` a Session starts, and it completes with signatures that
+// verify against the Key.
 func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -235,34 +235,29 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bobParams session.Params
+	waitConversation(t, a, gid, conv[:], 1)
+	// Proposing is bob's accept but starts nothing: t=2 Nodes must accept.
 	select {
-	case bobParams = <-started["bob"]:
-	case <-time.After(20 * time.Second):
-		t.Fatal("the proposer's engine did not start on propose")
-	}
-	select {
+	case <-started["bob"]:
+		t.Fatal("bob signed before a second Node accepted")
 	case <-started["alice"]:
 		t.Fatal("alice signed before accepting")
 	case <-time.After(300 * time.Millisecond):
 	}
-
-	waitConversation(t, a, gid, conv[:], 1)
-	// The session.start follows the sign.request; accept once it has replicated.
-	for end := time.Now().Add(20 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		err := a.client().SignAccept(ctx, v.MsgID[:8])
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, session.ErrUnknownSession) || time.Now().After(end) {
-			t.Fatal(err)
-		}
+	if d, err := a.client().SignInspect(ctx, v.MsgID[:8]); err != nil || len(d.Accepted) != 1 || d.Needed != 2 || d.Session != "" {
+		t.Fatalf("inspect before accept = %+v, %v", d, err)
 	}
-	var aliceParams session.Params
-	select {
-	case aliceParams = <-started["alice"]:
-	case <-time.After(20 * time.Second):
-		t.Fatal("alice's engine did not start on accept")
+
+	if err := a.client().SignAccept(ctx, v.MsgID[:8]); err != nil {
+		t.Fatal(err)
+	}
+	var aliceParams, bobParams session.Params
+	for name, dst := range map[string]*session.Params{"alice": &aliceParams, "bob": &bobParams} {
+		select {
+		case *dst = <-started[name]:
+		case <-time.After(20 * time.Second):
+			t.Fatalf("%s's engine did not start once t Nodes had accepted", name)
+		}
 	}
 	close(aliceJoined)
 	if string(aliceParams.SaveData) != "share-alice" || string(bobParams.SaveData) != "share-bob" || len(aliceParams.Digests) != 1 || aliceParams.Digests != nil && aliceParams.Digests[0] != bobParams.Digests[0] {
@@ -292,6 +287,10 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 		}
 		for _, s := range list {
 			if s.SignRequest == v.MsgID && s.Status == session.Complete {
+				d, err := a.client().SignInspect(ctx, v.MsgID[:8])
+				if err != nil || len(d.Accepted) != 2 || d.Session != s.SessionID {
+					t.Fatalf("inspect after accept = %+v, %v", d, err)
+				}
 				return
 			}
 		}

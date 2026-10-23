@@ -57,7 +57,7 @@ One run of a threshold protocol (keygen or signing) coordinated among a Group's 
 _Avoid_: ceremony, run
 
 **Signer**:
-One of the t Nodes that run a signing Session: the proposer plus t−1 others, fixed when the Session starts. Each signer accepts locally before its engine runs.
+One of the t Nodes that run a signing Session: the proposer plus the first t−1 others to append a Sign Accept, fixed by the COSL's log order. Each signer's engine runs only after that Node accepted.
 _Avoid_: participant (that is every Node in a keygen Session)
 
 **Session ID**:
@@ -83,6 +83,10 @@ _Avoid_: chain config, blockchain configuration, RPC, endpoint
 **Sign Request**:
 One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several Networks of the Key's curve, but each signed transaction is broadcastable on exactly one Network. The proposing Node's signature on the request is its own acceptance.
 _Avoid_: transaction request, signing job, order
+
+**Sign Accept**:
+A Node's COSL message (`sign.accept`) agreeing to sign one Sign Request. The first t Nodes to accept, the proposer counting first, are its Signers; once they exist one of them starts the signing Session. Later accepts are ignored.
+_Avoid_: approval, vote, signature (a Sign Accept is not a signature over a Digest)
 
 **Digest**:
 The exact bytes a Key signs for one transaction — one per Bitcoin input, one per Ethereum or single-signer Solana transaction. Every Node derives the same Digests from a Sign Request independently.

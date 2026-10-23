@@ -50,6 +50,32 @@ type SignInfo struct {
 	T         int // the Key's t
 	Digests   [][32]byte
 	Deadline  time.Time
+	// Conversation is the Key's Conversation ID, which a sign.accept is scoped to.
+	Conversation []byte
+	// Accepted is who has accepted the request, in log order, the proposer
+	// first. The first T of them are the signers.
+	Accepted []SignAccept
+}
+
+// SignAccept is one Node's accept of a sign.request, at its COSL position.
+type SignAccept struct {
+	Node identity.ID
+	Seq  uint64
+}
+
+// signers are the first t Nodes to have accepted before seq (0 = no bound),
+// or fewer while t have not.
+func (i SignInfo) signers(before uint64) []identity.ID {
+	var out []identity.ID
+	for _, a := range i.Accepted {
+		if len(out) == i.T {
+			break
+		}
+		if before == 0 || a.Seq < before {
+			out = append(out, a.Node)
+		}
+	}
+	return out
 }
 
 // Config is one Node's Session layer.
@@ -98,7 +124,8 @@ type Service struct {
 	held     map[ID]shareRef // share in the Vault, Key not minted yet
 	parties  map[ID]*party
 	waitLog  map[ID]struct{}
-	signs    map[ID]SignInfo // resolved sign.requests, by Session
+	signs    map[ID]SignInfo       // resolved sign.requests, by Session
+	starting map[[32]byte]struct{} // sign.requests this Node has appended a start for
 }
 
 type shareRef struct {
@@ -176,6 +203,7 @@ func New(cfg Config) (*Service, error) {
 		parties:  map[ID]*party{},
 		waitLog:  map[ID]struct{}{},
 		signs:    map[ID]SignInfo{},
+		starting: map[[32]byte]struct{}{},
 	}, nil
 }
 
@@ -310,6 +338,7 @@ func (s *Service) poll(ctx context.Context) {
 	if !s.validateAll(recs) {
 		return
 	}
+	s.startAccepted(ctx, recs)
 	runnable, need := plan(recs)
 	var head uint64
 	if len(rows) > 0 {
@@ -318,7 +347,7 @@ func (s *Service) poll(ctx context.Context) {
 	for _, r := range recs {
 		if r.status != Open {
 			s.stop(r.id)
-			s.forget(r.id)
+			s.forget(r.gate())
 			delete(s.aborting, r.id)
 			if r.status == Aborted {
 				s.dropShare(r.id)
@@ -350,7 +379,7 @@ func (s *Service) poll(ctx context.Context) {
 		if runnable == nil || *runnable != r.id {
 			continue
 		}
-		if !s.pendingNow(r.id) {
+		if !s.pendingNow(r.gate()) {
 			s.logWaiting(r)
 			if s.cfg.Now().Sub(time.Unix(0, r.createdAt)) > s.cfg.WaitingFor {
 				s.giveUp(ctx, r.id, reasonWaitingAccept)
@@ -378,7 +407,7 @@ func (s *Service) ensureParty(ctx context.Context, r *rec, head uint64) {
 	if _, ok := s.failed[r.id]; ok {
 		return
 	}
-	if !s.pendingNow(r.id) {
+	if !s.pendingNow(r.gate()) {
 		return
 	}
 	eng, params, err := s.engineFor(r)
@@ -670,7 +699,7 @@ func (s *Service) pendingNow(id ID) bool {
 func (s *Service) lost(r *rec) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.pending[r.id]; ok {
+	if _, ok := s.pending[r.gate()]; ok {
 		return false
 	}
 	if _, ok := s.parties[r.id]; ok {
@@ -679,7 +708,7 @@ func (s *Service) lost(r *rec) bool {
 	if r.sender == s.cfg.Node.NodeID {
 		return true
 	}
-	_, ok := s.onDisk[r.id]
+	_, ok := s.onDisk[r.gate()]
 	return ok
 }
 
