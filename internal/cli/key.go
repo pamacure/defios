@@ -53,6 +53,8 @@ type keyView struct {
 	T              int    `json:"t"`
 	N              int    `json:"n"`
 	Share          bool   `json:"share"`
+	// Address is the Ethereum address of an ECDSA Key, where it funds and spends.
+	Address string `json:"address,omitempty"`
 }
 
 func runKeyList(ctx context.Context, g *globals, pass passphraseSource) error {
@@ -94,16 +96,23 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 	}
 	fmt.Fprintf(g.app.Stdout, "key %s\npublic_key %s\nconversation %s\nsession %s\ncurve %s\nt %d\nn %d\nshare %s\n",
 		v.Key, v.PublicKey, v.ConversationID, v.SessionID, v.Curve, v.T, v.N, yesNo(v.Share))
+	if v.Address != "" {
+		fmt.Fprintf(g.app.Stdout, "ethereum_address %s\n", v.Address)
+	}
 	return nil
 }
 
 func viewOf(k key.Key, have map[string]struct{}) keyView {
 	_, share := have[k.Ref()]
-	return keyView{
+	v := keyView{
 		Key: k.Ref(), Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey),
 		ConversationID: k.Conversation(), SessionID: k.SessionID.String(),
 		T: k.T, N: k.N, Share: share,
 	}
+	if k.Curve == "ecdsa" {
+		v.Address, _ = key.EthereumAddress(k.PublicKey)
+	}
+	return v
 }
 
 func loadKeys(ctx context.Context, g *globals, pass passphraseSource) ([]key.Key, map[string]struct{}, error) {

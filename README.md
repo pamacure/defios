@@ -179,9 +179,71 @@ defios conversation log --key ff
 defios conversation send --key ff "nope"
 ```
 
-### 8. Limits
+### 8. Sign and broadcast on Linea Sepolia
 
-There is no threshold signing and no chain integration.
+Send a native-token transfer on Linea Sepolia (chain ID 59141) signed by the 2-of-2 ECDSA Key. The Key is a plain Ethereum account, so the chain sees an ordinary transaction. Sign Requests carry a transaction, not an arbitrary message.
+
+On A, register the Network. It replicates to B:
+
+```bash
+defios network add linea-sepolia --type ethereum --chain-id 59141 --rpc-url https://rpc.sepolia.linea.build
+defios network list
+```
+
+On either machine, get the Key's address and fund it from a Linea Sepolia faucet with a little test ETH:
+
+```bash
+defios key inspect ecdsa:<hex-from-key-list>
+```
+
+The `ethereum_address` line is the account. Check its balance on https://sepolia.lineascan.build/ before going on. The transaction's `nonce` is the account's transaction count, `0` for a fresh account.
+
+On A, write the transaction. `to` is a base64 20-byte address; this converts a hex one (here, send to yourself or any address you control):
+
+```bash
+echo 0x<recipient-address> | sed 's/^0x//' | xxd -r -p | base64
+```
+
+```bash
+cat > tx.json <<'EOF2'
+[{"network": "linea-sepolia",
+  "ethereum": {"to": "<base64-from-above>", "value": "1000000000000", "nonce": "0",
+               "gasLimit": "21000", "maxFeePerGas": "1000000000", "maxPriorityFeePerGas": "100000000"}}]
+EOF2
+```
+
+`value` is in wei (here 0.000001 ETH). Propose it, which also records A's acceptance. The request stays open for 5 minutes unless you pass `--deadline <seconds>`:
+
+```bash
+defios sign propose --key ecdsa:<hex> --reason "linea sepolia test" --transactions tx.json
+```
+
+On both machines:
+
+```bash
+defios sign list
+defios sign inspect <msg-id>
+```
+
+Status is `open` with `1/2 accepted`. `inspect` decodes the transaction (network, recipient, value, fee) and shows the digest every Node derived independently. Check that both machines show the same details and digest before accepting. Then on B:
+
+```bash
+defios sign accept <msg-id>
+```
+
+That is t=2, so the status becomes `waiting`, then `signing` once a signer starts the Session, then `signed` when a signature verifies against the Key. `waiting` can last a while if another Session (such as keygen) is still open. A request left `waiting` past its deadline becomes `expired`. A Session that aborts, for example by `sign decline` or a timeout, makes the request `aborted`; propose a new one to retry. A Node that accepts after two others did gets a `signer-set-full` error, which is not a failure of the request.
+
+Once `sign list` shows `signed`, broadcast from either machine:
+
+```bash
+defios sign broadcast <msg-id>
+```
+
+It prints the transaction hash and records a receipt on the COSL. Open `https://sepolia.lineascan.build/tx/<hash>` to confirm it was mined, and `sign list` on both machines shows `broadcasts=1 (fully broadcast)`. Running `sign broadcast` again is harmless.
+
+### 9. Limits
+
+Signing covers Ethereum, Bitcoin and Solana transactions, not arbitrary messages. There is no fee estimation or nonce lookup: set `nonce`, `maxFeePerGas` and the rest yourself.
 
 A 2-Node Group appends only while both Nodes are reachable. With one `serve` stopped, the other cannot commit. The stopped Node's replica stays at the last applied row and resumes when `serve` starts again.
 

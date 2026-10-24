@@ -255,7 +255,7 @@ func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {
 // operational, as the other write verbs do.
 func signError(err error) error {
 	for _, target := range []error{
-		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
+		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrSignerSetFull, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
 		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid,
 	} {
 		if errors.Is(err, target) {
