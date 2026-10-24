@@ -932,7 +932,7 @@ func (x *SignBroadcast) GetTransactions() []*BroadcastedTx {
 type BroadcastedTx struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	NetworkConfigId []byte                 `protobuf:"bytes,1,opt,name=network_config_id,json=networkConfigId,proto3" json:"network_config_id,omitempty"` // msg_id of the config of the Network it was sent to; 32
-	TxHash          []byte                 `protobuf:"bytes,2,opt,name=tx_hash,json=txHash,proto3" json:"tx_hash,omitempty"`                              // the transaction's hash; 32
+	TxHash          []byte                 `protobuf:"bytes,2,opt,name=tx_hash,json=txHash,proto3" json:"tx_hash,omitempty"`                              // the transaction's id: hash (32) or Solana signature (64)
 	TxIndex         uint32                 `protobuf:"varint,3,opt,name=tx_index,json=txIndex,proto3" json:"tx_index,omitempty"`                          // position in the request's transactions[]
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache

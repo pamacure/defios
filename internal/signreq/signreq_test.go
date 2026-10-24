@@ -29,7 +29,7 @@ var (
 		{Alias: "sol", ConfigID: solID, Type: "solana", Cluster: "devnet"},
 	}
 	ecdsaKey = key.Key{Curve: "ecdsa", PublicKey: []byte{9}}
-	eddsaKey = key.Key{Curve: "eddsa", PublicKey: []byte{8}}
+	eddsaKey = key.Key{Curve: "eddsa", PublicKey: make([]byte, 32)} // the address b58 spells
 )
 
 func ethTx() *coslv1.SignTransaction {

@@ -89,7 +89,7 @@ A Node's COSL message (`sign.accept`) agreeing to sign one Sign Request. The fir
 _Avoid_: approval, vote, signature (a Sign Accept is not a signature over a Digest)
 
 **Digest**:
-The exact bytes a Key signs for one transaction — one per Bitcoin input, one per Ethereum or single-signer Solana transaction. Every Node derives the same Digests from a Sign Request independently.
+The exact bytes a Key signs for one transaction — one per Bitcoin input, one per Ethereum or single-signer Solana transaction (the keccak256 of the Ethereum transaction, the compiled message itself for Solana, which Ed25519 signs unhashed). Every Node derives the same Digests from a Sign Request independently.
 _Avoid_: hash, message, sighash
 
 **Broadcast Receipt**:

@@ -3,6 +3,7 @@ package serve_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -135,6 +136,7 @@ func waitNetworks(t *testing.T, n *node, want int) {
 type signerDouble struct {
 	gate <-chan struct{} // nil signs at once; else after it closes
 	priv *btcec.PrivateKey
+	ed   ed25519.PrivateKey // set: sign each Digest with Ed25519 instead
 	done chan session.Result
 	got  chan session.Params
 }
@@ -151,7 +153,11 @@ func (d *signerDouble) sign(p session.Params) {
 	}
 	sigs := make([][]byte, len(p.Digests))
 	for i, dg := range p.Digests {
-		compact, err := btcecdsa.SignCompact(d.priv, dg[:], true)
+		if d.ed != nil {
+			sigs[i] = ed25519.Sign(d.ed, dg)
+			continue
+		}
+		compact, err := btcecdsa.SignCompact(d.priv, dg, true)
 		if err != nil {
 			d.done <- session.Result{Err: err}
 			return
@@ -260,7 +266,7 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 		}
 	}
 	close(aliceJoined)
-	if string(aliceParams.SaveData) != "share-alice" || string(bobParams.SaveData) != "share-bob" || len(aliceParams.Digests) != 1 || aliceParams.Digests != nil && aliceParams.Digests[0] != bobParams.Digests[0] {
+	if string(aliceParams.SaveData) != "share-alice" || string(bobParams.SaveData) != "share-bob" || len(aliceParams.Digests) != 1 || aliceParams.Digests != nil && !bytes.Equal(aliceParams.Digests[0], bobParams.Digests[0]) {
 		t.Fatalf("params alice %+v bob %+v", aliceParams, bobParams)
 	}
 

@@ -49,7 +49,7 @@ type SignInfo struct {
 	Curve     string
 	PublicKey []byte
 	T         int // the Key's t
-	Digests   [][32]byte
+	Digests   [][]byte
 	Deadline  time.Time
 	// Conversation is the Key's Conversation ID, which a sign.accept is scoped to.
 	Conversation []byte
@@ -64,11 +64,8 @@ type SignAccept struct {
 	Seq  uint64
 }
 
-// signingCurve is the one curve signing supports yet.
-const signingCurve = "ecdsa"
-
 // SupportsSigning is whether a Key of curve can sign.
-func SupportsSigning(curve string) bool { return curve == signingCurve }
+func SupportsSigning(curve string) bool { return curve == "ecdsa" || curve == "eddsa" }
 
 // hasAccepted is whether node is among the request's accepts.
 func (i SignInfo) hasAccepted(node identity.ID) bool {

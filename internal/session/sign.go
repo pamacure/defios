@@ -359,11 +359,22 @@ func (i SignInfo) verifies(sigs [][]byte) bool {
 		return false
 	}
 	for n, sig := range sigs {
-		if !VerifyECDSA(i.PublicKey, i.Digests[n], sig) {
+		if !i.verifyOne(i.Digests[n], sig) {
 			return false
 		}
 	}
 	return true
+}
+
+// verifyOne checks one signature of msg against the Key by its curve.
+func (i SignInfo) verifyOne(msg, sig []byte) bool {
+	switch i.Curve {
+	case "ecdsa":
+		return len(msg) == 32 && VerifyECDSA(i.PublicKey, [32]byte(msg), sig)
+	case "eddsa":
+		return VerifyEd25519(i.PublicKey, msg, sig)
+	}
+	return false
 }
 
 // finishSign appends session.complete once the engine's signatures verify. A

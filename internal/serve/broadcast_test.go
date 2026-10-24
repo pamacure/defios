@@ -1,7 +1,10 @@
 package serve_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +21,7 @@ import (
 	"golang.org/x/crypto/sha3"
 	"google.golang.org/protobuf/proto"
 
+	"defios.com/internal/base58"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/key"
@@ -82,6 +86,60 @@ func newChain(t *testing.T) *chain {
 	return c
 }
 
+// solanaChain is a fake Solana JSON-RPC node that remembers what it was sent.
+type solanaChain struct {
+	srv  *httptest.Server
+	mu   sync.Mutex
+	raws map[string][]byte // base58 signature -> raw tx
+	sent int
+}
+
+func newSolanaChain(t *testing.T) *solanaChain {
+	t.Helper()
+	c := &solanaChain{raws: map[string][]byte{}}
+	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params []any           `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+		switch req.Method {
+		case "sendTransaction":
+			c.sent++
+			raw, _ := base64.StdEncoding.DecodeString(req.Params[0].(string))
+			id := base58.Encode(raw[1:65])
+			if _, dup := c.raws[id]; dup {
+				resp["error"] = map[string]any{"code": -32002, "message": "This transaction has already been processed"}
+			} else {
+				c.raws[id] = raw
+				resp["result"] = id
+			}
+		case "getSignatureStatuses":
+			if _, ok := c.raws[req.Params[0].([]any)[0].(string)]; ok {
+				resp["result"] = map[string]any{"value": []any{map[string]any{"err": nil}}}
+			} else {
+				resp["result"] = map[string]any{"value": []any{nil}}
+			}
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(c.srv.Close)
+	return c
+}
+
+func (c *solanaChain) has(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.raws[id]
+	return ok
+}
+
 func (c *chain) has(hash string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -107,21 +165,42 @@ func (c *chain) sends() int {
 // curve: nonce 0 on eth, one on eth2 (chain 10) at otherURL, then nonce 1 on eth.
 func signedRequest(t *testing.T, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
 	t.Helper()
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
+	return signedRequestOn(t, false, rpcURL, otherURL...)
+}
+
+// signedRequestOn is signedRequest on an EdDSA Key and a Solana Network when
+// solana is set: one Solana transfer paid by the Key's address.
+func signedRequestOn(t *testing.T, solana bool, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
+	t.Helper()
+	curve := "ecdsa"
+	var pk []byte
+	var priv *btcec.PrivateKey
+	var edPriv ed25519.PrivateKey
+	if solana {
+		curve = "eddsa"
+		var edPub ed25519.PublicKey
+		var err error
+		if edPub, edPriv, err = ed25519.GenerateKey(nil); err != nil {
+			t.Fatal(err)
+		}
+		pk = edPub
+	} else {
+		var err error
+		if priv, err = btcec.NewPrivateKey(); err != nil {
+			t.Fatal(err)
+		}
+		pk = priv.PubKey().SerializeCompressed()
 	}
-	pk := priv.PubKey().SerializeCompressed()
 	a, b = pairWith(t, func(n *node) {
 		store := vault.NewStore(filepath.Join(t.TempDir(), "shares"), "pw", nil)
-		if err := store.Put("ecdsa", pk, []byte("share-"+n.name)); err != nil {
+		if err := store.Put(curve, pk, []byte("share-"+n.name)); err != nil {
 			t.Fatal(err)
 		}
 		n.tune = func(o *serve.Options) {
 			o.Vault = store
 			o.NewEngine = func() session.Engine { return session.Unavailable{} }
 			o.NewSigner = func() session.Engine {
-				return &signerDouble{priv: priv, done: make(chan session.Result, 1), got: make(chan session.Params, 1)}
+				return &signerDouble{priv: priv, ed: edPriv, done: make(chan session.Result, 1), got: make(chan session.Params, 1)}
 			}
 		}
 	})
@@ -140,20 +219,25 @@ func signedRequest(t *testing.T, rpcURL string, otherURL ...string) (a, b *node,
 		return s
 	}
 	commitEnvelope(t, a, b, sign(a, &coslv1.SessionStart{
-		SessionId: sid[:], Curve: "ecdsa", T: 2, N: 2, Participants: [][]byte{a.id.NodeID[:], b.id.NodeID[:]},
+		SessionId: sid[:], Curve: curve, T: 2, N: 2, Participants: [][]byte{a.id.NodeID[:], b.id.NodeID[:]},
 	}, cosl.TypeSessionStart))
-	complete := &coslv1.SessionComplete{SessionId: sid[:], Curve: "ecdsa", PublicKey: pk}
+	complete := &coslv1.SessionComplete{SessionId: sid[:], Curve: curve, PublicKey: pk}
 	commitEnvelope(t, a, b, sign(a, complete, cosl.TypeSessionComplete))
 	commitEnvelope(t, a, b, sign(b, complete, cosl.TypeSessionComplete))
-	c := key.ConversationID("ecdsa", pk)
+	c := key.ConversationID(curve, pk)
 	conv = c[:]
 	waitMinted(t, a, gid, conv)
 
 	ctx := context.Background()
-	if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "eth", Type: "ethereum", ChainId: 1, RpcUrls: []string{rpcURL}}); err != nil {
+	cfg := &coslv1.NetworkConfig{Alias: "eth", Type: "ethereum", ChainId: 1, RpcUrls: []string{rpcURL}}
+	txs := []signreq.TxSpec{{Network: "eth", Ethereum: ethIntent(0)}}
+	if solana {
+		cfg = &coslv1.NetworkConfig{Alias: "eth", Type: "solana", Cluster: "devnet", RpcUrls: []string{rpcURL}}
+		txs = []signreq.TxSpec{{Network: "eth", Solana: solanaIntent(pk)}}
+	}
+	if _, err := a.client().NetworkAdd(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	txs := []signreq.TxSpec{{Network: "eth", Ethereum: ethIntent(0)}}
 	if len(otherURL) > 0 {
 		if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "eth2", Type: "ethereum", ChainId: 10, RpcUrls: otherURL}); err != nil {
 			t.Fatal(err)
@@ -163,7 +247,7 @@ func signedRequest(t *testing.T, rpcURL string, otherURL ...string) (a, b *node,
 	for _, n := range []*node{a, b} {
 		waitNetworks(t, n, 1+len(otherURL))
 	}
-	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: txs})
+	v, err := b.client().SignPropose(ctx, curve+":"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: txs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +276,13 @@ func ethIntent(nonce int) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","nonce":"%d","gasLimit":"21000","maxFeePerGas":"30"}`, nonce))
 }
 
+// solanaIntent is a transfer of 1000 lamports from the Key's address.
+func solanaIntent(pk []byte) json.RawMessage {
+	payer := base58.Encode(pk)
+	return json.RawMessage(fmt.Sprintf(`{"feePayer":%q,"recentBlockhash":%q,"instructions":[{"programId":%q,"accounts":[{"pubkey":%q,"signer":true,"writable":true},{"pubkey":%q,"writable":true}],"data":"AgAAAOgDAAAAAAAA"}]}`,
+		payer, base58.Encode(bytes.Repeat([]byte{3}, 32)), base58.Encode(make([]byte, 32)), payer, base58.Encode(bytes.Repeat([]byte{2}, 32))))
+}
+
 func signed(t *testing.T, n *node, msgID string) bool {
 	t.Helper()
 	store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
@@ -212,6 +303,41 @@ func signed(t *testing.T, n *node, msgID string) bool {
 		return session.SignInfo{Curve: sg.Curve, PublicKey: sg.PublicKey, T: sg.T, Digests: sg.Digests}, nil
 	}))
 	return ok
+}
+
+// A Solana request signs the compiled message with Ed25519 and broadcasts a
+// transaction whose id is the signature: the cluster gets bytes that verify
+// against the Key, the receipt shows the base58 signature, and a repeat is harmless.
+func TestSignBroadcastSolana(t *testing.T) {
+	ch := newSolanaChain(t)
+	a, b, _, msgID, _ := signedRequestOn(t, true, ch.srv.URL)
+	ctx := context.Background()
+
+	first, err := a.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Failed() || len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil {
+		t.Fatalf("first = %+v", first)
+	}
+	id := first.Networks[0].Transactions[0].TxHash
+	if !ch.has(id) {
+		t.Fatalf("the cluster never got a transaction with signature %s", id)
+	}
+	d, err := a.client().SignInspect(ctx, msgID[:8])
+	if err != nil || len(d.Details) != 1 || len(d.Details[0].Digests) != 1 {
+		t.Fatalf("inspect = %+v, %v", d, err)
+	}
+	raw := ch.raws[id]
+	msg, _ := hex.DecodeString(d.Details[0].Digests[0])
+	if !bytes.Equal(raw[65:], msg) {
+		t.Errorf("the transaction carries a message other than the Digest")
+	}
+
+	second, err := b.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil || second.Failed() || !second.Networks[0].Transactions[0].AlreadyKnown || second.Networks[0].Transactions[0].TxHash != id {
+		t.Fatalf("second = %+v, %v", second, err)
+	}
 }
 
 // Any Node may broadcast a signed request: the transaction reaches its

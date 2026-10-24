@@ -6,6 +6,7 @@ package signreq
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	"defios.com/internal/base58"
 	"defios.com/internal/cosl"
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
@@ -45,6 +47,11 @@ var (
 // proposer names none.
 const DefaultDeadlineSeconds = 300
 
+// SolanaDeadlineSeconds is the tighter default for a request with a Solana
+// transaction: its recentBlockhash expires in about 60–90 seconds, so a
+// longer window could only collect signatures that can no longer land.
+const SolanaDeadlineSeconds = 60
+
 // MaxDeadlineSeconds bounds a request's window (one year), keeping deadline
 // arithmetic far from overflow.
 const MaxDeadlineSeconds = 365 * 24 * 3600
@@ -54,7 +61,6 @@ const MaxReasonBytes = 4096
 
 var (
 	decimal = regexp.MustCompile(`^[0-9]+$`)
-	base58  = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 	txid    = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 )
 
@@ -91,6 +97,9 @@ func Build(spec Spec, nets []network.Network) (*coslv1.SignRequest, error) {
 		n, err := network.Get(nets, t.Network)
 		if err != nil {
 			return nil, err
+		}
+		if n.Type == network.Solana && spec.DeadlineSeconds == 0 {
+			out.DeadlineSeconds = min(out.DeadlineSeconds, SolanaDeadlineSeconds)
 		}
 		tx := &coslv1.SignTransaction{NetworkConfigId: n.ConfigID[:]}
 		set := 0
@@ -164,7 +173,7 @@ func Validate(r *coslv1.SignRequest, k key.Key, nets []network.Network) error {
 		case *coslv1.SignTransaction_Bitcoin:
 			err = checkBitcoin(n, in.Bitcoin)
 		case *coslv1.SignTransaction_Solana:
-			err = checkSolana(n, in.Solana)
+			err = checkSolana(n, k, in.Solana)
 		default:
 			err = errors.New("no intent")
 		}
@@ -257,26 +266,20 @@ func checkBitcoin(n network.Network, in *coslv1.BitcoinIntent) error {
 	return nil
 }
 
-func checkSolana(n network.Network, in *coslv1.SolanaIntent) error {
+func checkSolana(n network.Network, k key.Key, in *coslv1.SolanaIntent) error {
+	payer, err := solanaKey(in.FeePayer)
 	switch {
 	case n.Type != network.Solana:
 		return fmt.Errorf("a solana intent on a %s network", n.Type)
-	case !base58.MatchString(in.FeePayer) || !base58.MatchString(in.RecentBlockhash):
-		return errors.New("fee_payer and recent_blockhash must be base58 32-byte values")
+	case err != nil:
+		return fmt.Errorf("fee_payer: %v", err)
+	case !bytes.Equal(payer, k.PublicKey):
+		return errors.New("fee_payer must be the Key's address")
 	case len(in.Instructions) == 0:
 		return errors.New("needs at least one instruction")
 	}
-	for i, ix := range in.Instructions {
-		if !base58.MatchString(ix.ProgramId) {
-			return fmt.Errorf("instruction %d needs a base58 program_id", i)
-		}
-		for _, a := range ix.Accounts {
-			if !base58.MatchString(a.Pubkey) {
-				return fmt.Errorf("instruction %d has a non-base58 account pubkey %q", i, a.Pubkey)
-			}
-		}
-	}
-	return nil
+	_, err = SolanaMessage(in)
+	return err
 }
 
 // Status of a request, derived from its deadline: nothing signs yet, so a
@@ -507,6 +510,11 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 			td.Lines = describeBitcoin(in.Bitcoin)
 		case *coslv1.SignTransaction_Solana:
 			td.Lines = describeSolana(in.Solana)
+			if msg, err := SolanaMessage(in.Solana); err != nil {
+				td.Lines = append(td.Lines, "digest unavailable: "+err.Error())
+			} else {
+				td.Digests = []string{hex.EncodeToString(msg)}
+			}
 		}
 		d.Details = append(d.Details, td)
 	}
@@ -517,12 +525,12 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 		for _, tx := range b.msg.Transactions {
 			var id [32]byte
 			copy(id[:], tx.NetworkConfigId)
-			name := fmt.Sprintf("unknown(%x)", tx.NetworkConfigId)
+			name, hash := fmt.Sprintf("unknown(%x)", tx.NetworkConfigId), hex.EncodeToString(tx.TxHash)
 			if n, known := history[id]; known {
-				name = n.Alias
+				name, hash = n.Alias, TxIDString(n, tx.TxHash)
 			}
 			rc.Transactions = append(rc.Transactions, BroadcastedTx{
-				Index: tx.TxIndex, Network: name, NetworkConfigID: hex.EncodeToString(tx.NetworkConfigId), TxHash: hex.EncodeToString(tx.TxHash),
+				Index: tx.TxIndex, Network: name, NetworkConfigID: hex.EncodeToString(tx.NetworkConfigId), TxHash: hash,
 			})
 		}
 		d.BroadcastReceipts = append(d.BroadcastReceipts, rc)
@@ -530,9 +538,18 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 	return d, nil
 }
 
+// TxIDString is how a Network writes a transaction id: base58 on Solana, else hex.
+func TxIDString(n network.Network, id []byte) string {
+	if n.Type == network.Solana {
+		return base58.Encode(id)
+	}
+	return hex.EncodeToString(id)
+}
+
 // wellFormed is a receipt covering a non-empty subset of the request's
-// transactions, each entry once, with a 32-byte hash and the Network the
-// request names for that transaction, all on one Network. Any Node may append
+// transactions, each entry once, with a transaction id (32 bytes, or a 64-byte
+// Solana signature) and the Network the request names for that transaction,
+// all on one Network. Any Node may append
 // one, so readers do not trust the shape.
 func wellFormed(b *coslv1.SignBroadcast, req *coslv1.SignRequest) bool {
 	if len(b.Transactions) == 0 {
@@ -540,7 +557,7 @@ func wellFormed(b *coslv1.SignBroadcast, req *coslv1.SignRequest) bool {
 	}
 	seen := map[uint32]bool{}
 	for _, t := range b.Transactions {
-		if len(t.TxHash) != 32 || int(t.TxIndex) >= len(req.Transactions) || seen[t.TxIndex] {
+		if (len(t.TxHash) != 32 && len(t.TxHash) != ed25519.SignatureSize) || int(t.TxIndex) >= len(req.Transactions) || seen[t.TxIndex] {
 			return false
 		}
 		seen[t.TxIndex] = true

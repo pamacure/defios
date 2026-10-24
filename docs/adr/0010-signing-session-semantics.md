@@ -71,7 +71,7 @@ _Signers are chosen by first-t accepts, as described in the amendment below._
 - The engine (`tssl.NewSigner`) runs `ecdsa/signing` once per Digest in parallel
   inside one engine, prefixing each message with the Digest's index so the COSL
   carries a single `tss.session` stream. Each Digest's party gets its own session
-  nonce, derived from the sealed one. EdDSA signing is not wired yet.
+  nonce, derived from the sealed one. EdDSA signing is wired too, see "As built (signing and broadcasting Solana)" below.
 - `session.complete` carries `signatures`: one 65-byte `r||s||v` per Digest
   (low-s, `v` the recovery id 0/1, as an Ethereum transaction wants it). A
   complete counts only if every signature verifies against the Key's public key
@@ -79,8 +79,8 @@ _Signers are chosen by first-t accepts, as described in the amendment below._
   such complete finishes the Session. A Node whose own signatures do not verify
   aborts instead of appending. A signing Session never mints or deletes a share.
 - A Session still open past the request's deadline is aborted
-  (`sign request expired`). Only Ethereum transactions on an ECDSA Key start a
-  Session; any other request stays proposed without one.
+  (`sign request expired`). Only Ethereum transactions on an ECDSA Key and Solana transactions on an EdDSA
+  Key start a Session (Solana: see below); any other request stays proposed without one.
 
 ## Amendment: signers are the first t to accept (`sign.accept`)
 
@@ -161,3 +161,26 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
   Network's chain id, and `sign broadcast` sends each to its own Network's rpc
   urls and records all of them in one `sign.broadcast` receipt. Tests cover
   ordered nonces on one Network mixed with a second Network of the same curve.
+
+## As built (signing and broadcasting Solana)
+
+- **Digest** of a Solana transaction is its legacy compiled message
+  (`signreq.SolanaMessage`), not a hash: Ed25519 hashes internally, so the Node signs
+  the message bytes. Digests are therefore byte slices (`session.Params.Digests`),
+  a 32-byte hash for ECDSA and the message for EdDSA. Accounts are ordered
+  signer-writable, signer-readonly, writable, readonly, each by first appearance,
+  and a repeated account merges its flags. Only the fee payer may be a signer: the
+  Key signs for one address, so any other signer is refused at propose, as is a
+  fee payer that is not the Key's address and a transaction over 1232 bytes.
+- The engine (`tssl.NewSigner`) runs `eddsa/signing` per message the same way as
+  ECDSA, with the message length passed to tss-lib so a leading zero byte stays in
+  the hash. `session.complete` carries one 64-byte `R||S` per message; a complete
+  counts only if each verifies as RFC 8032 against the Key (`session.VerifyEd25519`).
+- `sign broadcast` assembles `shortvec(1) || signature || message` and submits it
+  with `sendTransaction` (base64). A transaction's id is its signature, so the
+  receipt's `tx_hash` is 64 bytes for Solana (32 for Ethereum) and is shown base58.
+  Idempotent like Ethereum: a rejected send whose signature `getSignatureStatuses`
+  already finds without an error is `already_known`.
+- **Default deadline**: a request with a Solana transaction and no explicit deadline
+  gets **60** seconds rather than 300, since its `recentBlockhash` lives ~60–90s.
+  The window is written into the payload as before.

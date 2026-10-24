@@ -99,8 +99,8 @@ type Params struct {
 
 	// A signing Session sets these. Participants are then the t signers, T
 	// is the Key's t, and N is the Roster size.
-	Digests  [][32]byte // one signature each, in order
-	SaveData []byte     // this Node's share of the Key
+	Digests  [][]byte // one message to sign each, in order (ECDSA: a 32-byte hash; EdDSA: the message itself)
+	SaveData []byte   // this Node's share of the Key
 }
 
 // Outgoing is one engine message. A nil To is a broadcast.

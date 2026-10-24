@@ -12,6 +12,7 @@ import (
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
+	"defios.com/internal/solrpc"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -121,13 +122,13 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 		out := NetworkBroadcast{Network: n.Alias, Transactions: []BroadcastedTx{}}
 		receipt := &coslv1.SignBroadcast{SignRequestId: id[:]}
 		for _, tx := range group {
-			known, err := ethrpc.Send(ctx, urls, tx.Raw, tx.Hash)
+			known, err := submit(ctx, n, urls, tx)
 			if err != nil {
 				out.Error = fmt.Sprintf("broadcasting transaction %d to %s: %v", tx.Index, n.Alias, err)
 				break
 			}
-			receipt.Transactions = append(receipt.Transactions, &coslv1.BroadcastedTx{NetworkConfigId: tx.NetworkConfigID[:], TxHash: tx.Hash[:], TxIndex: tx.Index})
-			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Network: n.Alias, TxHash: hex.EncodeToString(tx.Hash[:]), AlreadyKnown: known})
+			receipt.Transactions = append(receipt.Transactions, &coslv1.BroadcastedTx{NetworkConfigId: tx.NetworkConfigID[:], TxHash: tx.ID, TxIndex: tx.Index})
+			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Network: n.Alias, TxHash: signreq.TxIDString(n, tx.ID), AlreadyKnown: known})
 		}
 		if out.Error == "" {
 			sv, err := s.commitReceipt(ctx, replica, info.Conversation, receipt)
@@ -139,6 +140,14 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 		view.Networks = append(view.Networks, out)
 	}
 	return view, nil
+}
+
+// submit sends tx to its Network's node; known says the node already had it.
+func submit(ctx context.Context, n network.Network, urls []string, tx signreq.SignedTx) (known bool, err error) {
+	if n.Type == network.Solana {
+		return solrpc.Send(ctx, urls, tx.Raw, tx.ID)
+	}
+	return ethrpc.Send(ctx, urls, tx.Raw, [32]byte(tx.ID))
 }
 
 // commitReceipt appends a signed sign.broadcast to the Key's Conversation.

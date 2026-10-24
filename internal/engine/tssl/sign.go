@@ -10,16 +10,18 @@ import (
 
 	"github.com/bnb-chain/tss-lib/v4/common"
 	ecdsakeygen "github.com/bnb-chain/tss-lib/v4/ecdsa/keygen"
-	"github.com/bnb-chain/tss-lib/v4/ecdsa/signing"
+	ecdsasigning "github.com/bnb-chain/tss-lib/v4/ecdsa/signing"
+	eddsakeygen "github.com/bnb-chain/tss-lib/v4/eddsa/keygen"
+	eddsasigning "github.com/bnb-chain/tss-lib/v4/eddsa/signing"
 	"github.com/bnb-chain/tss-lib/v4/tss"
 
 	"defios.com/internal/session"
 )
 
 // NewSigner returns the signing engine (docs/adr/0010-signing-session-semantics.md).
-// It runs tss-lib ecdsa/signing once per Digest, all in parallel inside one
-// engine, and prefixes each message with the Digest's index so the COSL
-// carries a single stream. EdDSA signing is not wired yet.
+// It runs tss-lib ecdsa/signing or eddsa/signing once per Digest, all in
+// parallel inside one engine, and prefixes each message with the Digest's index
+// so the COSL carries a single stream.
 func NewSigner(self [32]byte) session.Engine {
 	return &signer{
 		self: self,
@@ -38,6 +40,7 @@ type signer struct {
 	mu      sync.Mutex
 	parties []tss.Party
 	byNode  map[[32]byte]*tss.PartyID
+	curve   string
 	sigs    [][]byte
 	left    int
 	started bool
@@ -52,16 +55,23 @@ func (e *signer) Start(p session.Params) error {
 	switch {
 	case e.started:
 		return fmt.Errorf("sign: engine already started")
-	case p.Curve != "ecdsa":
+	case p.Curve != "ecdsa" && p.Curve != "eddsa":
 		return fmt.Errorf("sign: curve %q is not supported", p.Curve)
 	case len(p.Digests) == 0:
 		return fmt.Errorf("sign: nothing to sign")
 	}
-	var save ecdsakeygen.LocalPartySaveData
-	if err := json.Unmarshal(p.SaveData, &save); err != nil || save.ECDSAPub == nil {
+	ec := tss.S256()
+	var ecdsaSave ecdsakeygen.LocalPartySaveData
+	var eddsaSave eddsakeygen.LocalPartySaveData
+	if p.Curve == "eddsa" {
+		ec = tss.Edwards()
+		if err := json.Unmarshal(p.SaveData, &eddsaSave); err != nil || eddsaSave.EDDSAPub == nil {
+			return fmt.Errorf("sign: this Node holds no share of the Key")
+		}
+	} else if err := json.Unmarshal(p.SaveData, &ecdsaSave); err != nil || ecdsaSave.ECDSAPub == nil {
 		return fmt.Errorf("sign: this Node holds no share of the Key")
 	}
-	sorted, self, byNode, err := partyIDs("ecdsa", p.Participants, e.self)
+	sorted, self, byNode, err := partyIDs(p.Curve, p.Participants, e.self)
 	if err != nil {
 		return err
 	}
@@ -70,6 +80,7 @@ func (e *signer) Start(p session.Params) error {
 		return fmt.Errorf("sign: %d signers do not match t=%d", len(sorted), p.T)
 	}
 	e.byNode = byNode
+	e.curve = p.Curve
 	e.sigs = make([][]byte, len(p.Digests))
 	e.left = len(p.Digests)
 	e.started = true
@@ -81,10 +92,16 @@ func (e *signer) Start(p session.Params) error {
 	}
 	runs := make([]run, len(p.Digests))
 	for i, d := range p.Digests {
-		params := tss.NewParameters(tss.S256(), tss.NewPeerContext(sorted), self, len(sorted), threshold)
+		params := tss.NewParameters(ec, tss.NewPeerContext(sorted), self, len(sorted), threshold)
 		params.SetSessionNonce(digestNonce(p.Nonce, i))
 		r := run{out: make(chan tss.Message, 32), end: make(chan *common.SignatureData, 1)}
-		r.party = signing.NewLocalParty(new(big.Int).SetBytes(d[:]), params, save, r.out, r.end)
+		msg := new(big.Int).SetBytes(d)
+		if p.Curve == "eddsa" {
+			// The length keeps a leading zero byte of the message in the hash.
+			r.party = eddsasigning.NewLocalParty(msg, params, eddsaSave, r.out, r.end, len(d))
+		} else {
+			r.party = ecdsasigning.NewLocalParty(msg, params, ecdsaSave, r.out, r.end)
+		}
 		runs[i] = r
 		e.parties = append(e.parties, r.party)
 		go e.loop(i, r.out, r.end)
@@ -148,16 +165,26 @@ func (e *signer) send(o session.Outgoing) {
 	}
 }
 
-// complete records Digest i's signature as r||s||v and finishes once all are in.
+// complete records Digest i's signature (ECDSA r||s||v, EdDSA R||S) and
+// finishes once all are in.
 func (e *signer) complete(i int, sig *common.SignatureData) {
-	if sig == nil || len(sig.R) == 0 || len(sig.S) == 0 || len(sig.SignatureRecovery) == 0 {
+	var raw []byte
+	switch {
+	case sig == nil:
+	case e.curve == "eddsa":
+		if len(sig.Signature) == 64 {
+			raw = append([]byte(nil), sig.Signature...)
+		}
+	case len(sig.R) != 0 && len(sig.S) != 0 && len(sig.SignatureRecovery) != 0:
+		raw = make([]byte, 65)
+		new(big.Int).SetBytes(sig.R).FillBytes(raw[:32])
+		new(big.Int).SetBytes(sig.S).FillBytes(raw[32:64])
+		raw[64] = sig.SignatureRecovery[0]
+	}
+	if raw == nil {
 		e.finish(session.Result{Err: fmt.Errorf("sign: digest %d finished without a signature", i)})
 		return
 	}
-	raw := make([]byte, 65)
-	new(big.Int).SetBytes(sig.R).FillBytes(raw[:32])
-	new(big.Int).SetBytes(sig.S).FillBytes(raw[32:64])
-	raw[64] = sig.SignatureRecovery[0]
 
 	e.mu.Lock()
 	e.sigs[i] = raw

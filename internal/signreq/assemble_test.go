@@ -60,7 +60,7 @@ func TestSignedTransactions(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRaw, wantHash, _ := AssembleEthereum(1, ethTx().Intent.(*coslv1.SignTransaction_Ethereum).Ethereum, sig)
-	if len(got) != 1 || !bytes.Equal(got[0].Raw, wantRaw) || got[0].Hash != wantHash || got[0].Network.Alias != "eth" || got[0].NetworkConfigID != ethID {
+	if len(got) != 1 || !bytes.Equal(got[0].Raw, wantRaw) || !bytes.Equal(got[0].ID, wantHash[:]) || got[0].Network.Alias != "eth" || got[0].NetworkConfigID != ethID {
 		t.Fatalf("signed = %+v", got)
 	}
 	if _, err := Signed([]cosl.Row{r}, r.MsgID, nil, history); !errors.Is(err, ErrInvalid) {

@@ -90,8 +90,9 @@ func rlpLength(n int, offset byte) []byte {
 
 // Lookup reads the sign.request with msgID off rows and derives what signing
 // it needs (the Key, its Digests, the deadline, who accepted): the Digests are
-// flattened across its transactions in order. Only Ethereum transactions can
-// be signed yet. Every Node reaches the same answer from the same log.
+// flattened across its transactions in order, a keccak256 hash for Ethereum
+// and the compiled message for Solana. Bitcoin cannot be signed yet. Every
+// Node reaches the same answer from the same log.
 func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	var row *cosl.Row
 	for i := range rows {
@@ -131,16 +132,23 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 		var id [32]byte
 		copy(id[:], tx.NetworkConfigId)
 		n, known := history[id]
-		in, isEth := tx.Intent.(*coslv1.SignTransaction_Ethereum)
-		switch {
-		case !known:
+		if !known {
 			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: unknown network config", ErrInvalid, i)
-		case !isEth:
-			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: only ethereum can be signed", ErrInvalid, i)
 		}
-		_, dg, err := EthereumDigest(n.ChainID, in.Ethereum)
-		if err != nil {
-			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
+		var dg []byte
+		switch in := tx.Intent.(type) {
+		case *coslv1.SignTransaction_Ethereum:
+			_, h, err := EthereumDigest(n.ChainID, in.Ethereum)
+			if err != nil {
+				return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
+			}
+			dg = h[:]
+		case *coslv1.SignTransaction_Solana:
+			if dg, err = SolanaMessage(in.Solana); err != nil {
+				return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
+			}
+		default:
+			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: only ethereum and solana can be signed", ErrInvalid, i)
 		}
 		out.Digests = append(out.Digests, dg)
 	}

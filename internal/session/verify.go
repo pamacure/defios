@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"math/big"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -28,4 +29,10 @@ func VerifyECDSA(publicKey []byte, digest [32]byte, sig []byte) bool {
 		return false
 	}
 	return bytes.Equal(got.SerializeCompressed(), publicKey)
+}
+
+// VerifyEd25519 reports whether sig, 64 bytes, is an RFC 8032 signature of
+// msg under the 32-byte publicKey: what a Solana transaction carries.
+func VerifyEd25519(publicKey, msg, sig []byte) bool {
+	return len(publicKey) == ed25519.PublicKeySize && len(sig) == ed25519.SignatureSize && ed25519.Verify(publicKey, msg, sig)
 }

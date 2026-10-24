@@ -47,7 +47,7 @@ func newSignFixtureOn(t *testing.T, c *pair, tt int) *signFixture {
 		t.Fatal(err)
 	}
 	f.sig = append(slices.Clone(compact[1:]), compact[0]-27-4)
-	f.info = session.SignInfo{Curve: "ecdsa", PublicKey: f.pub, T: tt, Digests: [][32]byte{f.digest}, Deadline: c.nowFn().Add(time.Hour), Conversation: bytes.Repeat([]byte{7}, 32)}
+	f.info = session.SignInfo{Curve: "ecdsa", PublicKey: f.pub, T: tt, Digests: [][]byte{f.digest[:]}, Deadline: c.nowFn().Add(time.Hour), Conversation: bytes.Repeat([]byte{7}, 32)}
 
 	f.nodes = []*node{c.alice, c.bob}
 	if c.carol != nil {
@@ -158,7 +158,7 @@ func TestSignSessionStartsOnTheTthAcceptAndRunsEachSignerWithDigestsAndShare(t *
 	if a.Curve != "ecdsa" || a.T != 2 || len(a.Participants) != 2 || a.Nonce != b.Nonce {
 		t.Fatalf("alice params = %+v", a)
 	}
-	if !slices.Equal(a.Digests, [][32]byte{f.digest}) || string(a.SaveData) != "alice-share" || string(b.SaveData) != "bob-share" {
+	if !slices.EqualFunc(a.Digests, [][]byte{f.digest[:]}, bytes.Equal) || string(a.SaveData) != "alice-share" || string(b.SaveData) != "bob-share" {
 		t.Fatalf("digests/share: alice %q bob %q", a.SaveData, b.SaveData)
 	}
 	if got := len(c.alice.ofType(t, cosl.TypeSignAccept)); got != 1 {

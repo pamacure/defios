@@ -18,12 +18,14 @@ type SignedTx struct {
 	Network         network.Network
 	NetworkConfigID [32]byte
 	Raw             []byte
-	Hash            [32]byte
+	// ID names the transaction on its Network: the keccak256 hash of an
+	// Ethereum transaction, the first signature of a Solana one.
+	ID []byte
 }
 
 // Signed assembles every transaction of the sign.request msgID from sigs, one
 // signature per transaction in order (as a Session completes with them).
-// history resolves each transaction's Network. Only Ethereum can be assembled yet.
+// history resolves each transaction's Network. Only Ethereum and Solana can be assembled yet.
 func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte]network.Network) ([]SignedTx, error) {
 	row, err := match(rows, fmt.Sprintf("%x", msgID))
 	if err != nil {
@@ -41,18 +43,27 @@ func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte
 		var id [32]byte
 		copy(id[:], tx.NetworkConfigId)
 		n, known := history[id]
-		in, isEth := tx.Intent.(*coslv1.SignTransaction_Ethereum)
-		switch {
-		case !known:
+		if !known {
 			return nil, invalidf("transaction %d: unknown network config", i)
-		case !isEth:
-			return nil, invalidf("transaction %d: only ethereum can be broadcast", i)
 		}
-		raw, hash, err := AssembleEthereum(n.ChainID, in.Ethereum, sigs[i])
-		if err != nil {
-			return nil, invalidf("transaction %d: %v", i, err)
+		stx := SignedTx{Index: uint32(i), Network: n, NetworkConfigID: id}
+		switch in := tx.Intent.(type) {
+		case *coslv1.SignTransaction_Ethereum:
+			raw, hash, err := AssembleEthereum(n.ChainID, in.Ethereum, sigs[i])
+			if err != nil {
+				return nil, invalidf("transaction %d: %v", i, err)
+			}
+			stx.Raw, stx.ID = raw, hash[:]
+		case *coslv1.SignTransaction_Solana:
+			raw, err := AssembleSolana(in.Solana, sigs[i])
+			if err != nil {
+				return nil, invalidf("transaction %d: %v", i, err)
+			}
+			stx.Raw, stx.ID = raw, sigs[i]
+		default:
+			return nil, invalidf("transaction %d: only ethereum and solana can be broadcast", i)
 		}
-		out[i] = SignedTx{Index: uint32(i), Network: n, NetworkConfigID: id, Raw: raw, Hash: hash}
+		out[i] = stx
 	}
 	return out, nil
 }
