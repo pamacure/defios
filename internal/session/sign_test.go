@@ -186,7 +186,8 @@ func TestSignEngineWaitsForTheNodesOwnAccept(t *testing.T) {
 }
 
 // With 2-of-3, whoever of the others accepts first signs; the later Node is
-// not a signer, is not blocked, and appends nothing.
+// not a signer, is told so with ErrSignerSetFull (not ErrNotParticipant, which
+// is for a Node outside a started Session), and appends nothing.
 func TestFirstToAcceptSignsRegardlessOfRosterOrder(t *testing.T) {
 	f := newSignFixtureOn(t, newTrio(t, time.Hour), 2)
 	c := f.c
@@ -202,7 +203,7 @@ func TestFirstToAcceptSignsRegardlessOfRosterOrder(t *testing.T) {
 	if !slices.Equal(d.Participants, want) {
 		t.Fatalf("participants = %v, want alice and carol %v", d.Participants, want)
 	}
-	if err := c.bob.svc.AcceptSign(context.Background(), f.request); !errors.Is(err, session.ErrNotParticipant) {
+	if err := c.bob.svc.AcceptSign(context.Background(), f.request); !errors.Is(err, session.ErrSignerSetFull) {
 		t.Fatalf("late accept: %v", err)
 	}
 	if got := len(c.alice.ofType(t, cosl.TypeSignAccept)); got != 1 {

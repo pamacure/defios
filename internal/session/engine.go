@@ -14,7 +14,10 @@ var (
 	ErrUnknownSession = errors.New("session: no such session")
 	ErrNotParticipant = errors.New("session: this Node is not a participant")
 	ErrClosedSession  = errors.New("session: session is not open")
-	ErrNoEngine       = errors.New("session: no engine")
+	// ErrSignerSetFull is a sign accept that came after t Nodes had already
+	// accepted: the Node is not a signer for this request, and nothing was appended.
+	ErrSignerSetFull = errors.New("session: t other Nodes accepted first")
+	ErrNoEngine      = errors.New("session: no engine")
 	// ErrUnsupported is a signing Session for a curve or transaction that
 	// cannot be signed yet.
 	ErrUnsupported = errors.New("session: signing is not supported for this Key")

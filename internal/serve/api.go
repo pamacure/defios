@@ -233,6 +233,7 @@ var errorKinds = []struct {
 	{session.ErrBadCurve, "bad-curve", http.StatusBadRequest},
 	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},
 	{session.ErrNotParticipant, "not-participant", http.StatusForbidden},
+	{session.ErrSignerSetFull, "signer-set-full", http.StatusConflict},
 	{session.ErrUnsupported, "signing-unsupported", http.StatusUnprocessableEntity},
 	{session.ErrClosedSession, "closed-session", http.StatusConflict},
 	{raftx.ErrNoLeader, "no-leader", http.StatusServiceUnavailable},

@@ -457,3 +457,100 @@ func TestSummaryOfARequestWithAnUnknownKey(t *testing.T) {
 		t.Errorf("summary = %+v, want key unknown", list[0])
 	}
 }
+
+func rawRow(t *testing.T, seq uint64, sender byte, msgType uint32, created time.Time, conv []byte, msg proto.Message) cosl.Row {
+	t.Helper()
+	payload, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := proto.Marshal(&coslv1.Envelope{Version: 1, MsgType: msgType, Payload: payload, ConversationId: conv, CreatedAt: created.UnixNano()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cosl.Row{Seq: seq, MsgType: msgType, MsgID: [32]byte{0xdd, byte(seq)}, Sender: identity.ID{sender}, ConversationID: conv, CreatedAt: created.UnixNano(), Envelope: env}
+}
+
+// mintedKey is the rows of a 2-of-2 ECDSA keygen by Nodes 1 and 2.
+func mintedKey(t *testing.T, at time.Time) []cosl.Row {
+	t.Helper()
+	sid := bytes32(0x77)
+	nodes := [][]byte{idBytes(1), idBytes(2)}
+	rows := []cosl.Row{rawRow(t, 1, 1, cosl.TypeSessionStart, at, nil,
+		&coslv1.SessionStart{SessionId: sid, Curve: "ecdsa", T: 2, N: 2, Participants: nodes})}
+	for i, n := range []byte{1, 2} {
+		rows = append(rows, rawRow(t, uint64(2+i), n, cosl.TypeSessionComplete, at, nil,
+			&coslv1.SessionComplete{SessionId: sid, Curve: "ecdsa", PublicKey: ecdsaKey.PublicKey}))
+	}
+	return rows
+}
+
+func bytes32(b byte) []byte { return append(make([]byte, 31), b) }
+
+func idBytes(n byte) []byte {
+	id := identity.ID{n}
+	return id[:]
+}
+
+// A request's status follows what has happened to it: collecting accepts
+// (open), t accepts but no Session yet (waiting), a Session open (signing),
+// finished (signed) or aborted (aborted), and expired only if the deadline
+// passed with no Session. A Session outlives the deadline: signed and aborted
+// beat expired.
+func TestRequestStatus(t *testing.T) {
+	start := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	request := func() cosl.Row {
+		r := rowOf(t, 10, 0xa1, start, conv[:], req(ethTx())) // 300s window
+		r.Sender = identity.ID{1}
+		return r
+	}
+	accept2 := func(r cosl.Row) cosl.Row { return acceptRow(t, 11, 2, start.Add(time.Second), conv[:], r.MsgID) }
+	sessionStart := func(r cosl.Row) cosl.Row {
+		return rawRow(t, 12, 1, cosl.TypeSessionStart, start.Add(2*time.Second), nil,
+			&coslv1.SessionStart{SessionId: bytes32(0x88), Curve: "ecdsa", T: 2, N: 2, SignRequestId: r.MsgID[:],
+				Participants: [][]byte{idBytes(1), idBytes(2)}})
+	}
+	abort := rawRow(t, 13, 2, cosl.TypeSessionAbort, start.Add(3*time.Second), nil, &coslv1.SessionAbort{SessionId: bytes32(0x88), Reason: "declined"})
+	complete := rawRow(t, 13, 2, cosl.TypeSessionComplete, start.Add(3*time.Second), nil,
+		&coslv1.SessionComplete{SessionId: bytes32(0x88), Curve: "ecdsa", PublicKey: ecdsaKey.PublicKey, Signatures: [][]byte{make([]byte, 65)}})
+
+	within, after := start.Add(10*time.Second), start.Add(time.Hour)
+	cases := []struct {
+		name string
+		rows func(r cosl.Row) []cosl.Row
+		now  time.Time
+		want string
+	}{
+		{"collecting accepts", func(r cosl.Row) []cosl.Row { return nil }, within, "open"},
+		{"t accepts, no Session", func(r cosl.Row) []cosl.Row { return []cosl.Row{accept2(r)} }, within, "waiting"},
+		{"Session open", func(r cosl.Row) []cosl.Row { return []cosl.Row{accept2(r), sessionStart(r)} }, within, "signing"},
+		{"Session finished", func(r cosl.Row) []cosl.Row { return []cosl.Row{accept2(r), sessionStart(r), complete} }, within, "signed"},
+		{"Session aborted", func(r cosl.Row) []cosl.Row { return []cosl.Row{accept2(r), sessionStart(r), abort} }, within, "aborted"},
+		{"finished past the deadline", func(r cosl.Row) []cosl.Row { return []cosl.Row{accept2(r), sessionStart(r), complete} }, after, "signed"},
+		{"aborted past the deadline", func(r cosl.Row) []cosl.Row { return []cosl.Row{accept2(r), sessionStart(r), abort} }, after, "aborted"},
+		{"too few accepts past the deadline", func(r cosl.Row) []cosl.Row { return nil }, after, "expired"},
+		{"t accepts but never started, past the deadline", func(r cosl.Row) []cosl.Row { return []cosl.Row{accept2(r)} }, after, "expired"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := request()
+			rows := append(mintedKey(t, start), r)
+			rows = append(rows, c.rows(r)...)
+			list, err := List(rows, c.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := list[0].Status; got != c.want {
+				t.Errorf("List status = %q, want %q", got, c.want)
+			}
+			d, err := Inspect(rows, "a1", nil, c.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.Status != c.want {
+				t.Errorf("Inspect status = %q, want %q", d.Status, c.want)
+			}
+		})
+	}
+}

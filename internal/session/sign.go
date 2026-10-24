@@ -38,16 +38,17 @@ func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte) error {
 		return s.remember(ID(requestID))
 	}
 	if len(info.signers(0)) >= info.T {
-		return ErrNotParticipant
+		return ErrSignerSetFull
 	}
 	return s.appendAccept(ctx, requestID, info)
 }
 
 // acceptStarted is the local accept of a request whose Session already
-// started: only one of its participants can open the gate, and only while open.
+// started: only one of its participants can open the gate, and only while
+// open. The participants are the first t accepts, so any other Node was late.
 func (s *Service) acceptStarted(r *rec, requestID [32]byte) error {
 	if !slices.Contains(r.participants, s.cfg.Node.NodeID) {
-		return ErrNotParticipant
+		return ErrSignerSetFull
 	}
 	if r.status != Open {
 		return ErrClosedSession

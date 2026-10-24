@@ -1,7 +1,7 @@
 // Package signreq builds, validates, and reads Sign Requests off the COSL
 // (docs/adr/0009-sign-request-on-cosl.md). There is no requests table: a
-// Sign Request is a sign.request row, and its status is derived from its
-// deadline. No signatures are produced here.
+// Sign Request is a sign.request row, and its status is derived from
+// the log. Signatures are produced elsewhere (internal/session).
 package signreq
 
 import (
@@ -291,10 +291,17 @@ func checkSolana(n network.Network, k key.Key, in *coslv1.SolanaIntent) error {
 	return err
 }
 
-// Status of a request, derived from its deadline: nothing signs yet, so a
-// request is open until its window passes.
+// Status of a request, derived from the log: open while it collects accepts,
+// waiting once t Nodes have accepted but no Session has started (for instance
+// while another Session holds the slot), then signing, signed or aborted with
+// its Session. A request with no Session is expired once its deadline passes;
+// a Session outlives the deadline, so signed and aborted beat expired.
 const (
 	Open    = "open"
+	Waiting = "waiting"
+	Signing = "signing"
+	Done    = "signed"
+	Aborted = "aborted"
 	Expired = "expired"
 )
 
@@ -392,9 +399,27 @@ type Detail struct {
 	BroadcastReceipts []BroadcastReceipt `json:"broadcast_receipts"`
 }
 
-func status(r cosl.Row, req *coslv1.SignRequest, now time.Time) string {
-	if now.After(deadline(r, req)) {
+// status derives a request's status. sessions are the log's Sessions in start
+// order, of which the first for the request is the one that counts.
+func status(r cosl.Row, req *coslv1.SignRequest, sessions []session.Summary, accepted, needed int, now time.Time) string {
+	id := hex.EncodeToString(r.MsgID[:])
+	for _, s := range sessions {
+		if s.SignRequest != id {
+			continue
+		}
+		switch s.Status {
+		case session.Complete:
+			return Done
+		case session.Aborted:
+			return Aborted
+		}
+		return Signing
+	}
+	switch {
+	case now.After(deadline(r, req)):
 		return Expired
+	case needed > 0 && accepted >= needed:
+		return Waiting
 	}
 	return Open
 }
@@ -420,11 +445,11 @@ func decodeRow(r cosl.Row) (*coslv1.SignRequest, error) {
 	return msg.(*coslv1.SignRequest), nil
 }
 
-func summarise(rows []cosl.Row, needed map[string]int, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
+func summarise(rows []cosl.Row, sessions []session.Summary, needed map[string]int, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
 	sum := Summary{
 		Seq: r.Seq, MsgID: hex.EncodeToString(r.MsgID[:]), Conversation: hex.EncodeToString(r.ConversationID),
 		Proposer: r.Sender.String(), CreatedAt: time.Unix(0, r.CreatedAt).UTC().Format(time.RFC3339),
-		Status: status(r, req, now), Transactions: len(req.Transactions), Reason: req.Reason,
+		Transactions: len(req.Transactions), Reason: req.Reason,
 		Accepted: []string{},
 	}
 	for _, a := range Accepts(rows, r, req) {
@@ -440,6 +465,7 @@ func summarise(rows []cosl.Row, needed map[string]int, r cosl.Row, req *coslv1.S
 	}
 	sum.FullyBroadcast = len(covered) == len(req.Transactions)
 	sum.Needed, sum.KeyKnown = needed[string(r.ConversationID)]
+	sum.Status = status(r, req, sessions, len(sum.Accepted), sum.Needed, now)
 	return sum
 }
 
@@ -464,6 +490,10 @@ func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 	if err != nil {
 		return nil, err
 	}
+	sessions, err := session.List(rows)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rows {
 		if r.MsgType != cosl.TypeSignRequest {
 			continue
@@ -472,7 +502,7 @@ func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, summarise(rows, needed, r, req, now))
+		out = append(out, summarise(rows, sessions, needed, r, req, now))
 	}
 	return out, nil
 }
@@ -492,7 +522,11 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 	if err != nil {
 		return Detail{}, err
 	}
-	d := Detail{Summary: summarise(rows, needed, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
+	sessions, err := session.List(rows)
+	if err != nil {
+		return Detail{}, err
+	}
+	d := Detail{Summary: summarise(rows, sessions, needed, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
 	if ref := req.ReasonRef; ref != nil {
 		d.ReasonRef = fmt.Sprintf("%x/%x", ref.ConversationId, ref.MsgId)
 	}

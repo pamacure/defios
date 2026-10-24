@@ -81,11 +81,11 @@ A blockchain a Group may broadcast a signed transaction to, described by a confi
 _Avoid_: chain config, blockchain configuration, RPC, endpoint
 
 **Sign Request**:
-One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several Networks of the Key's curve, but each signed transaction is broadcastable on exactly one Network. The proposing Node's signature on the request is its own acceptance.
+One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several Networks of the Key's curve, but each signed transaction is broadcastable on exactly one Network. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `aborted` or `expired`.
 _Avoid_: transaction request, signing job, order
 
 **Sign Accept**:
-A Node's COSL message (`sign.accept`) agreeing to sign one Sign Request. The first t Nodes to accept, the proposer counting first, are its Signers; once they exist one of them starts the signing Session. Later accepts are ignored.
+A Node's COSL message (`sign.accept`) agreeing to sign one Sign Request. The first t Nodes to accept, the proposer counting first, are its Signers; once they exist one of them starts the signing Session. Later accepts do not count, and a late `sign accept` fails with `signer-set-full`.
 _Avoid_: approval, vote, signature (a Sign Accept is not a signature over a Digest)
 
 **Digest**:

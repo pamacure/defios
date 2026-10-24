@@ -220,3 +220,27 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
   equal btcd's `txscript` for the same intent, and the serve test's fake node accepts a
   transaction only if btcd's script engine executes every input's witness against the
   output it spends. Not covered: fee policy and a real `bitcoind` (regtest).
+
+## Amendment: request lifecycle decisions (#43)
+
+- **Request status** is derived from the log, not the deadline alone: `open`
+  (collecting accepts), `waiting` (t Nodes accepted, no Session yet, for example
+  while another Session holds the one-open-Session slot), `signing` (Session
+  open), `signed` (Session finished), `aborted` (Session aborted) and `expired`
+  (deadline passed with no Session). A Session outlives the deadline, so `signed`
+  and `aborted` beat `expired`. Whether a signed request has been broadcast stays
+  in `sign list`'s `broadcasts=` and `fully` columns, not a state of its own.
+- **Late accept** is a strong error, `ErrSignerSetFull` (wire kind
+  `signer-set-full`, HTTP 409), whether or not the Session has started yet, and
+  appends nothing. `ErrNotParticipant` is now only for keygen's `session accept`.
+  The decision uses the Node's local, possibly stale, view of the log; a UI may
+  choose to ignore the error.
+- **Backdated accepts**: the deadline check keeps using each row's own
+  `created_at`. Every Node runs the same code, which commits its timestamp
+  honestly; a Node that backdates is outside the trust model, as with the
+  proposer's own `created_at`, which anchors the deadline.
+- **Busy slot**: unchanged. `startAccepted` waits while another Session is open
+  and retries on the next poll; the request shows `waiting` meanwhile, and
+  expires if its deadline passes first. The other Session is bounded by the
+  2-minute `WaitingFor` timeout, so only short deadlines (Solana's 60s default)
+  can be hit.

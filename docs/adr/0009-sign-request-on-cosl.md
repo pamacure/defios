@@ -64,8 +64,8 @@ tickets to follow.
   A new request must reference a *live* config.
 - `deadline` is stored as `deadline_seconds`, a window after the envelope's
   `created_at` (the proposer's default of 300 is written into the payload, so
-  every Node reads the same value). Until signing exists, status is `open` or
-  `expired` by that window alone.
+  every Node reads the same value). Status was `open` or
+  `expired` by that window alone (superseded by the #43 amendment in ADR 0010).
 - `reason_ref` is an optional `{conversation_id, msg_id}` pointer.
 - The proposer's envelope signature is its acceptance: one append, no separate
   accept message. This still stands: other Nodes accept with a `sign.accept`
