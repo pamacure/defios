@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"defios.com/internal/btcrpc"
 	"defios.com/internal/cosl"
 	"defios.com/internal/ethrpc"
 	"defios.com/internal/network"
@@ -144,8 +145,11 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 
 // submit sends tx to its Network's node; known says the node already had it.
 func submit(ctx context.Context, n network.Network, urls []string, tx signreq.SignedTx) (known bool, err error) {
-	if n.Type == network.Solana {
+	switch n.Type {
+	case network.Solana:
 		return solrpc.Send(ctx, urls, tx.Raw, tx.ID)
+	case network.Bitcoin:
+		return btcrpc.Send(ctx, urls, tx.Raw, [32]byte(tx.ID))
 	}
 	return ethrpc.Send(ctx, urls, tx.Raw, [32]byte(tx.ID))
 }

@@ -171,7 +171,7 @@ func Validate(r *coslv1.SignRequest, k key.Key, nets []network.Network) error {
 		case *coslv1.SignTransaction_Ethereum:
 			err = checkEthereum(n, in.Ethereum)
 		case *coslv1.SignTransaction_Bitcoin:
-			err = checkBitcoin(n, in.Bitcoin)
+			err = checkBitcoin(n, k, in.Bitcoin)
 		case *coslv1.SignTransaction_Solana:
 			err = checkSolana(n, k, in.Solana)
 		default:
@@ -236,7 +236,9 @@ func amount(s string, blankOK bool) (*big.Int, error) {
 
 const maxSats = 21_000_000 * 100_000_000
 
-func checkBitcoin(n network.Network, in *coslv1.BitcoinIntent) error {
+// checkBitcoin also holds every input to the Key's own P2WPKH script, the one
+// a Key signs for, and every output address to the Network's bitcoin network.
+func checkBitcoin(n network.Network, k key.Key, in *coslv1.BitcoinIntent) error {
 	if n.Type != network.Bitcoin {
 		return fmt.Errorf("a bitcoin intent on a %s network", n.Type)
 	}
@@ -263,7 +265,14 @@ func checkBitcoin(n network.Network, in *coslv1.BitcoinIntent) error {
 	if out > sum {
 		return fmt.Errorf("outputs (%d sats) exceed inputs (%d sats)", out, sum)
 	}
-	return nil
+	own := P2WPKHScript(k.PublicKey)
+	for i, x := range in.Inputs {
+		if !bytes.Equal(x.ScriptPubkey, own) {
+			return fmt.Errorf("input %d must spend the Key's P2WPKH output %x", i, own)
+		}
+	}
+	_, err := BitcoinDigests(n.BitcoinNetwork, in)
+	return err
 }
 
 func checkSolana(n network.Network, k key.Key, in *coslv1.SolanaIntent) error {
@@ -508,6 +517,13 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 			}
 		case *coslv1.SignTransaction_Bitcoin:
 			td.Lines = describeBitcoin(in.Bitcoin)
+			if dgs, err := BitcoinDigests(n.BitcoinNetwork, in.Bitcoin); err != nil {
+				td.Lines = append(td.Lines, "digest unavailable: "+err.Error())
+			} else {
+				for _, dg := range dgs {
+					td.Digests = append(td.Digests, hex.EncodeToString(dg[:]))
+				}
+			}
 		case *coslv1.SignTransaction_Solana:
 			td.Lines = describeSolana(in.Solana)
 			if msg, err := SolanaMessage(in.Solana); err != nil {

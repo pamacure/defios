@@ -91,8 +91,8 @@ func rlpLength(n int, offset byte) []byte {
 // Lookup reads the sign.request with msgID off rows and derives what signing
 // it needs (the Key, its Digests, the deadline, who accepted): the Digests are
 // flattened across its transactions in order, a keccak256 hash for Ethereum
-// and the compiled message for Solana. Bitcoin cannot be signed yet. Every
-// Node reaches the same answer from the same log.
+// the compiled message for Solana, and one BIP-143 sighash per input for
+// Bitcoin. Every Node reaches the same answer from the same log.
 func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	var row *cosl.Row
 	for i := range rows {
@@ -108,20 +108,9 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	if err != nil {
 		return session.SignInfo{}, err
 	}
-	keys, err := key.List(rows)
+	k, err := keyOf(rows, row.ConversationID)
 	if err != nil {
 		return session.SignInfo{}, err
-	}
-	var k key.Key
-	found := false
-	for _, c := range keys {
-		if conv := key.ConversationID(c.Curve, c.PublicKey); bytes.Equal(conv[:], row.ConversationID) {
-			k, found = c, true
-			break
-		}
-	}
-	if !found {
-		return session.SignInfo{}, key.ErrUnknown
 	}
 	history, err := network.History(rows)
 	if err != nil {
@@ -135,22 +124,32 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 		if !known {
 			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: unknown network config", ErrInvalid, i)
 		}
-		var dg []byte
+		var dgs [][]byte
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
 			_, h, err := EthereumDigest(n.ChainID, in.Ethereum)
 			if err != nil {
 				return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
 			}
-			dg = h[:]
+			dgs = [][]byte{h[:]}
 		case *coslv1.SignTransaction_Solana:
-			if dg, err = SolanaMessage(in.Solana); err != nil {
+			msg, err := SolanaMessage(in.Solana)
+			if err != nil {
 				return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
 			}
+			dgs = [][]byte{msg}
+		case *coslv1.SignTransaction_Bitcoin:
+			hs, err := BitcoinDigests(n.BitcoinNetwork, in.Bitcoin)
+			if err != nil {
+				return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
+			}
+			for _, h := range hs {
+				dgs = append(dgs, h[:])
+			}
 		default:
-			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: only ethereum and solana can be signed", ErrInvalid, i)
+			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: no intent to sign", ErrInvalid, i)
 		}
-		out.Digests = append(out.Digests, dg)
+		out.Digests = append(out.Digests, dgs...)
 	}
 	window := min(req.DeadlineSeconds, MaxDeadlineSeconds)
 	out.Deadline = time.Unix(0, row.CreatedAt).Add(time.Duration(window) * time.Second)
@@ -164,4 +163,18 @@ func Resolve(rows []cosl.Row, prefix string) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	return m.MsgID, nil
+}
+
+// keyOf is the Key whose Conversation is conversation.
+func keyOf(rows []cosl.Row, conversation []byte) (key.Key, error) {
+	keys, err := key.List(rows)
+	if err != nil {
+		return key.Key{}, err
+	}
+	for _, c := range keys {
+		if conv := key.ConversationID(c.Curve, c.PublicKey); bytes.Equal(conv[:], conversation) {
+			return c, nil
+		}
+	}
+	return key.Key{}, key.ErrUnknown
 }

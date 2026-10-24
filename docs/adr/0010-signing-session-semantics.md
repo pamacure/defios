@@ -79,8 +79,9 @@ _Signers are chosen by first-t accepts, as described in the amendment below._
   such complete finishes the Session. A Node whose own signatures do not verify
   aborts instead of appending. A signing Session never mints or deletes a share.
 - A Session still open past the request's deadline is aborted
-  (`sign request expired`). Only Ethereum transactions on an ECDSA Key and Solana transactions on an EdDSA
-  Key start a Session (Solana: see below); any other request stays proposed without one.
+  (`sign request expired`). Ethereum and Bitcoin transactions start a Session on
+  an ECDSA Key and Solana transactions on an EdDSA Key (Solana and Bitcoin: see
+  below); a request with a transaction of no known type stays proposed without one.
 
 ## Amendment: signers are the first t to accept (`sign.accept`)
 
@@ -184,3 +185,38 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
 - **Default deadline**: a request with a Solana transaction and no explicit deadline
   gets **60** seconds rather than 300, since its `recentBlockhash` lives ~60–90s.
   The window is written into the payload as before.
+
+## As built (signing and broadcasting Bitcoin)
+
+- **A Key maps to one script type: P2WPKH** (witness v0, `0014<hash160(compressed
+  pubkey)>`), `signreq.P2WPKHScript`. Every input of a Bitcoin transaction must
+  spend that script, so a request that spends an output the Key does not own, or any
+  other script type, is refused at propose and again by every Node deriving Digests.
+  **P2TR is deferred, not rejected on principle**: BIP-341 needs a BIP-340 Schnorr
+  signature, which the tss-lib ECDSA engine cannot produce; it needs a Schnorr
+  threshold signer (FROST/Givre) behind the same `session.Engine` seam. Outputs may
+  pay any address type (P2PKH, P2SH, P2WPKH, P2WSH, P2TR), decoded for the Network's
+  bitcoin network (`signreq.OutputScript`; `mainnet` is `bc`/`0x00`/`0x05`, `testnet`
+  and `signet` `tb`/`0x6f`/`0xc4`, `regtest` `bcrt`), so a wrong-network address
+  fails up front like a wrong-curve Network does.
+- **Digests**: one per input, the BIP-143 SIGHASH_ALL sighash (`signreq.BitcoinDigests`),
+  a 32-byte double-SHA-256 like Ethereum's, so the ECDSA signer and `VerifyECDSA` are
+  unchanged. A request's Digests are flattened across its transactions, so a mixed
+  Ethereum + Bitcoin request (both secp256k1) signs one Digest for the former and one
+  per input for the latter under one Session, and `signreq.Signed` takes the
+  signatures the same way.
+- The intent carries no `sequence`: every input is `0xfffffffd` (BIP-125 opt-in RBF,
+  and below `0xffffffff` so a non-zero `lock_time` is enforced), the version is 2, and
+  the fee is the inputs minus the outputs. A different sequence is a new intent field.
+- `sign broadcast` assembles the segwit transaction (`signreq.AssembleBitcoin`): each
+  input's witness is `DER(r,s) || 0x01` and the Key's compressed pubkey (the Session's
+  signatures are already low-s). A transaction's id is its txid, the receipt's `tx_hash`
+  is 32 bytes and shown hex in display order, as explorers write it. It submits with
+  Bitcoin Core's `sendrawtransaction` over the Network's http(s) endpoints
+  (`btcrpc.Send`), idempotent like the others: a node that rejects the submission but
+  already has the txid (`getrawtransaction`), or says it is already in the block chain
+  (a mined one on a node without a txindex), is `already_known`.
+- Verified against independent implementations: the sighashes, signed bytes and txid
+  equal btcd's `txscript` for the same intent, and the serve test's fake node accepts a
+  transaction only if btcd's script engine executes every input's witness against the
+  output it spends. Not covered: fee policy and a real `bitcoind` (regtest).

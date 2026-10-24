@@ -13,11 +13,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 	"golang.org/x/crypto/sha3"
 	"google.golang.org/protobuf/proto"
 
@@ -165,13 +169,15 @@ func (c *chain) sends() int {
 // curve: nonce 0 on eth, one on eth2 (chain 10) at otherURL, then nonce 1 on eth.
 func signedRequest(t *testing.T, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
 	t.Helper()
-	return signedRequestOn(t, false, rpcURL, otherURL...)
+	return signedRequestOn(t, "ethereum", rpcURL, otherURL...)
 }
 
-// signedRequestOn is signedRequest on an EdDSA Key and a Solana Network when
-// solana is set: one Solana transfer paid by the Key's address.
-func signedRequestOn(t *testing.T, solana bool, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
+// signedRequestOn is signedRequest on the Network type kind: an EdDSA Key and
+// one Solana transfer paid by the Key's address for "solana", or one
+// two-input Bitcoin transaction spending the Key's P2WPKH outputs for "bitcoin".
+func signedRequestOn(t *testing.T, kind string, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
 	t.Helper()
+	solana := kind == "solana"
 	curve := "ecdsa"
 	var pk []byte
 	var priv *btcec.PrivateKey
@@ -231,9 +237,13 @@ func signedRequestOn(t *testing.T, solana bool, rpcURL string, otherURL ...strin
 	ctx := context.Background()
 	cfg := &coslv1.NetworkConfig{Alias: "eth", Type: "ethereum", ChainId: 1, RpcUrls: []string{rpcURL}}
 	txs := []signreq.TxSpec{{Network: "eth", Ethereum: ethIntent(0)}}
-	if solana {
+	switch kind {
+	case "solana":
 		cfg = &coslv1.NetworkConfig{Alias: "eth", Type: "solana", Cluster: "devnet", RpcUrls: []string{rpcURL}}
 		txs = []signreq.TxSpec{{Network: "eth", Solana: solanaIntent(pk)}}
+	case "bitcoin":
+		cfg = &coslv1.NetworkConfig{Alias: "eth", Type: "bitcoin", Network: "mainnet", RpcUrls: []string{rpcURL}}
+		txs = []signreq.TxSpec{{Network: "eth", Bitcoin: bitcoinIntent(pk)}}
 	}
 	if _, err := a.client().NetworkAdd(ctx, cfg); err != nil {
 		t.Fatal(err)
@@ -283,6 +293,130 @@ func solanaIntent(pk []byte) json.RawMessage {
 		payer, base58.Encode(bytes.Repeat([]byte{3}, 32)), base58.Encode(make([]byte, 32)), payer, base58.Encode(bytes.Repeat([]byte{2}, 32))))
 }
 
+// spendKey tells the node which outputs bitcoinIntent spends: two P2WPKH
+// outputs of pk, 100000 and 50000 sats, as the UTXO set of a real node would.
+func (c *bitcoinChain) spendKey(pk []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	spk := signreq.P2WPKHScript(pk)
+	for i, prefix := range []string{"aa", "bb"} {
+		h, _ := chainhash.NewHashFromStr(prefix + strings.Repeat("00", 31)) // display order
+		c.prevouts[wire.OutPoint{Hash: *h, Index: uint32(i)}] = wire.NewTxOut([]int64{100000, 50000}[i], spk)
+	}
+}
+
+// keyOf is the public key of the one Key minted on n's log.
+func keyOf(t *testing.T, n *node) []byte {
+	t.Helper()
+	store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.Log(cosl.Query{})
+	store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := key.List(rows)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("keys = %v, %v", keys, err)
+	}
+	return keys[0].PublicKey
+}
+
+// bitcoinIntent spends two P2WPKH outputs of the Key (100000 and 50000 sats)
+// to a P2WPKH and a P2TR address, leaving 10000 sats of fee.
+func bitcoinIntent(pk []byte) json.RawMessage {
+	spk := base64.StdEncoding.EncodeToString(signreq.P2WPKHScript(pk))
+	return json.RawMessage(fmt.Sprintf(`{"inputs":[`+
+		`{"txid":"aa%[1]s","vout":0,"amountSats":"100000","scriptPubkey":%[2]q},`+
+		`{"txid":"bb%[1]s","vout":1,"amountSats":"50000","scriptPubkey":%[2]q}],`+
+		`"outputs":[{"address":"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4","amountSats":"120000"},`+
+		`{"address":"bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0","amountSats":"20000"}]}`,
+		strings.Repeat("00", 31), spk))
+}
+
+// bitcoinChain is a fake Bitcoin Core node. Like the real one it accepts a
+// transaction only if every input's witness satisfies the output it spends,
+// run through btcd's script engine, an implementation independent of ours.
+type bitcoinChain struct {
+	srv      *httptest.Server
+	mu       sync.Mutex
+	prevouts map[wire.OutPoint]*wire.TxOut
+	txs      map[string]*wire.MsgTx // txid -> transaction
+	sent     int
+}
+
+func newBitcoinChain(t *testing.T) *bitcoinChain {
+	t.Helper()
+	c := &bitcoinChain{prevouts: map[wire.OutPoint]*wire.TxOut{}, txs: map[string]*wire.MsgTx{}}
+	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params []string        `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+		fail := func(msg string) { resp["error"] = map[string]any{"code": -26, "message": msg} }
+		switch req.Method {
+		case "sendrawtransaction":
+			c.sent++
+			raw, err := hex.DecodeString(req.Params[0])
+			tx := wire.NewMsgTx(0)
+			if err != nil || tx.Deserialize(bytes.NewReader(raw)) != nil {
+				fail("TX decode failed")
+				break
+			}
+			id := tx.TxHash().String()
+			if _, dup := c.txs[id]; dup {
+				fail("txn-already-in-mempool")
+				break
+			}
+			fetcher := txscript.NewMultiPrevOutFetcher(c.prevouts)
+			hashes := txscript.NewTxSigHashes(tx, fetcher)
+			for i, in := range tx.TxIn {
+				prev, ok := c.prevouts[in.PreviousOutPoint]
+				if !ok {
+					fail("bad-txns-inputs-missingorspent")
+					break
+				}
+				vm, err := txscript.NewEngine(prev.PkScript, tx, i, txscript.StandardVerifyFlags, nil, hashes, prev.Value, fetcher)
+				if err == nil {
+					err = vm.Execute()
+				}
+				if err != nil {
+					fail(fmt.Sprintf("mandatory-script-verify-flag-failed (input %d: %v)", i, err))
+					break
+				}
+			}
+			if _, bad := resp["error"]; !bad {
+				c.txs[id] = tx
+				resp["result"] = id
+			}
+		case "getrawtransaction":
+			if _, ok := c.txs[req.Params[0]]; ok {
+				resp["result"] = "00"
+			} else {
+				fail("No such mempool or blockchain transaction")
+			}
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(c.srv.Close)
+	return c
+}
+
+func (c *bitcoinChain) get(id string) *wire.MsgTx {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.txs[id]
+}
+
 func signed(t *testing.T, n *node, msgID string) bool {
 	t.Helper()
 	store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
@@ -305,12 +439,49 @@ func signed(t *testing.T, n *node, msgID string) bool {
 	return ok
 }
 
+// A Bitcoin request signs one BIP-143 sighash per input and broadcasts a
+// transaction whose every witness a script engine accepts; the receipt carries
+// its txid, and a repeat is harmless.
+func TestSignBroadcastBitcoin(t *testing.T) {
+	ch := newBitcoinChain(t)
+	a, b, _, msgID, _ := signedRequestOn(t, "bitcoin", ch.srv.URL)
+	ch.spendKey(keyOf(t, a))
+	ctx := context.Background()
+
+	d, err := a.client().SignInspect(ctx, msgID[:8])
+	if err != nil || len(d.Details) != 1 || len(d.Details[0].Digests) != 2 {
+		t.Fatalf("inspect = %+v, %v; want two Digests, one per input", d, err)
+	}
+
+	first, err := a.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Failed() || len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil {
+		t.Fatalf("first = %+v", first)
+	}
+	id := first.Networks[0].Transactions[0].TxHash
+	tx := ch.get(id)
+	if tx == nil {
+		t.Fatalf("the node never accepted a transaction with txid %s", id)
+	}
+	if len(tx.TxIn) != 2 || len(tx.TxOut) != 2 {
+		t.Errorf("the node took %d inputs and %d outputs, want 2 and 2", len(tx.TxIn), len(tx.TxOut))
+	}
+
+	second, err := b.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil || second.Failed() || !second.Networks[0].Transactions[0].AlreadyKnown || second.Networks[0].Transactions[0].TxHash != id {
+		t.Fatalf("second = %+v, %v", second, err)
+	}
+	waitReceipts(t, a, msgID, 2)
+}
+
 // A Solana request signs the compiled message with Ed25519 and broadcasts a
 // transaction whose id is the signature: the cluster gets bytes that verify
 // against the Key, the receipt shows the base58 signature, and a repeat is harmless.
 func TestSignBroadcastSolana(t *testing.T) {
 	ch := newSolanaChain(t)
-	a, b, _, msgID, _ := signedRequestOn(t, true, ch.srv.URL)
+	a, b, _, msgID, _ := signedRequestOn(t, "solana", ch.srv.URL)
 	ctx := context.Background()
 
 	first, err := a.client().SignBroadcast(ctx, msgID[:8])

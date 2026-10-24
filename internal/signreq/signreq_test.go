@@ -1,6 +1,7 @@
 package signreq
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -28,9 +29,17 @@ var (
 		{Alias: "btc", ConfigID: btcID, Type: "bitcoin", BitcoinNetwork: "mainnet"},
 		{Alias: "sol", ConfigID: solID, Type: "solana", Cluster: "devnet"},
 	}
-	ecdsaKey = key.Key{Curve: "ecdsa", PublicKey: []byte{9}}
-	eddsaKey = key.Key{Curve: "eddsa", PublicKey: make([]byte, 32)} // the address b58 spells
+	ecdsaKey = key.Key{Curve: "ecdsa", PublicKey: mustHex(btcPubkey)} // the key btcTx() spends from
+	eddsaKey = key.Key{Curve: "eddsa", PublicKey: make([]byte, 32)}   // the address b58 spells
 )
+
+func mustHex(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
 
 func ethTx() *coslv1.SignTransaction {
 	return &coslv1.SignTransaction{NetworkConfigId: ethID[:], Intent: &coslv1.SignTransaction_Ethereum{Ethereum: &coslv1.EthereumIntent{
@@ -40,8 +49,8 @@ func ethTx() *coslv1.SignTransaction {
 
 func btcTx() *coslv1.SignTransaction {
 	return &coslv1.SignTransaction{NetworkConfigId: btcID[:], Intent: &coslv1.SignTransaction_Bitcoin{Bitcoin: &coslv1.BitcoinIntent{
-		Inputs:  []*coslv1.BitcoinInput{{Txid: strings.Repeat("ab", 32), AmountSats: 5000, ScriptPubkey: []byte{0}}},
-		Outputs: []*coslv1.BitcoinOutput{{Address: "bc1qxyz", AmountSats: 4000}},
+		Inputs:  []*coslv1.BitcoinInput{{Txid: strings.Repeat("ab", 32), AmountSats: 5000, ScriptPubkey: mustHex(btcSPK)}},
+		Outputs: []*coslv1.BitcoinOutput{{Address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", AmountSats: 4000}},
 	}}}
 }
 
@@ -99,9 +108,19 @@ func TestValidate(t *testing.T) {
 	hugeValue.GetEthereum().Value = strings.Repeat("9", 100)
 	wrapBtc := btcTx()
 	wrapBtc.GetBitcoin().Inputs = []*coslv1.BitcoinInput{
-		{Txid: strings.Repeat("ab", 32), AmountSats: 1 << 63, ScriptPubkey: []byte{0}},
-		{Txid: strings.Repeat("ab", 32), AmountSats: 1 << 63, ScriptPubkey: []byte{0}},
+		{Txid: strings.Repeat("ab", 32), AmountSats: 1 << 63, ScriptPubkey: mustHex(btcSPK)},
+		{Txid: strings.Repeat("ab", 32), AmountSats: 1 << 63, ScriptPubkey: mustHex(btcSPK)},
 	}
+	foreignInput := btcTx() // an input the Key does not own
+	foreignInput.GetBitcoin().Inputs[0].ScriptPubkey = mustHex("0014" + strings.Repeat("11", 20))
+	taprootInput := btcTx() // P2TR is not a script type a Key signs for
+	taprootInput.GetBitcoin().Inputs[0].ScriptPubkey = mustHex("5120" + strings.Repeat("11", 32))
+	badAddress := btcTx()
+	badAddress.GetBitcoin().Outputs[0].Address = "bc1qxyz"
+	testnetAddress := btcTx() // a testnet address on the mainnet Network
+	testnetAddress.GetBitcoin().Outputs[0].Address = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+	badTxid := btcTx()
+	badTxid.GetBitcoin().Inputs[0].Txid = "zz"
 	badPayer := solTx()
 	badPayer.GetSolana().FeePayer = "xyz"
 	longDeadline := req(ethTx())
@@ -111,23 +130,28 @@ func TestValidate(t *testing.T) {
 		r *coslv1.SignRequest
 		k key.Key
 	}{
-		"no transactions": {req(), ecdsaKey},
-		"blank reason":    {noReason, ecdsaKey},
-		"non-utf8":        {badNonUTF, ecdsaKey},
-		"zero deadline":   {noDeadline, ecdsaKey},
-		"unknown network": {req(unknownNet), ecdsaKey},
-		"intent mismatch": {req(wrongIntent), ecdsaKey},
-		"no intent":       {req(noIntent), ecdsaKey},
-		"bad to":          {req(badTo), ecdsaKey},
-		"no gas":          {req(noGas), ecdsaKey},
-		"bad value":       {req(badValue), ecdsaKey},
-		"no inputs":       {req(noInputs), ecdsaKey},
-		"no blockhash":    {req(noBlockhash), eddsaKey},
-		"tip over max":    {req(tipOverMax), ecdsaKey},
-		"huge value":      {req(hugeValue), ecdsaKey},
-		"btc sum wraps":   {req(wrapBtc), ecdsaKey},
-		"bad fee payer":   {req(badPayer), eddsaKey},
-		"deadline huge":   {longDeadline, ecdsaKey},
+		"no transactions":   {req(), ecdsaKey},
+		"blank reason":      {noReason, ecdsaKey},
+		"non-utf8":          {badNonUTF, ecdsaKey},
+		"zero deadline":     {noDeadline, ecdsaKey},
+		"unknown network":   {req(unknownNet), ecdsaKey},
+		"intent mismatch":   {req(wrongIntent), ecdsaKey},
+		"no intent":         {req(noIntent), ecdsaKey},
+		"bad to":            {req(badTo), ecdsaKey},
+		"no gas":            {req(noGas), ecdsaKey},
+		"bad value":         {req(badValue), ecdsaKey},
+		"no inputs":         {req(noInputs), ecdsaKey},
+		"no blockhash":      {req(noBlockhash), eddsaKey},
+		"tip over max":      {req(tipOverMax), ecdsaKey},
+		"huge value":        {req(hugeValue), ecdsaKey},
+		"btc sum wraps":     {req(wrapBtc), ecdsaKey},
+		"btc foreign input": {req(foreignInput), ecdsaKey},
+		"btc taproot input": {req(taprootInput), ecdsaKey},
+		"btc bad address":   {req(badAddress), ecdsaKey},
+		"btc wrong network": {req(testnetAddress), ecdsaKey},
+		"btc bad txid":      {req(badTxid), ecdsaKey},
+		"bad fee payer":     {req(badPayer), eddsaKey},
+		"deadline huge":     {longDeadline, ecdsaKey},
 	}
 	for name, c := range bad {
 		if err := Validate(c.r, c.k, nets); !errors.Is(err, ErrInvalid) {

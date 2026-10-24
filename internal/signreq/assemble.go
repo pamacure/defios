@@ -19,13 +19,15 @@ type SignedTx struct {
 	NetworkConfigID [32]byte
 	Raw             []byte
 	// ID names the transaction on its Network: the keccak256 hash of an
-	// Ethereum transaction, the first signature of a Solana one.
+	// Ethereum transaction, the first signature of a Solana one, the txid of
+	// a Bitcoin one (display order).
 	ID []byte
 }
 
 // Signed assembles every transaction of the sign.request msgID from sigs, one
-// signature per transaction in order (as a Session completes with them).
-// history resolves each transaction's Network. Only Ethereum and Solana can be assembled yet.
+// signature per Digest, flattened across the transactions in order (as a
+// Session completes with them): one per Ethereum or Solana transaction, one
+// per input of a Bitcoin one. history resolves each transaction's Network.
 func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte]network.Network) ([]SignedTx, error) {
 	row, err := match(rows, fmt.Sprintf("%x", msgID))
 	if err != nil {
@@ -35,11 +37,18 @@ func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte
 	if err != nil {
 		return nil, err
 	}
-	if len(sigs) != len(req.Transactions) {
-		return nil, invalidf("%d signatures for %d transactions", len(sigs), len(req.Transactions))
+	need := 0
+	for _, tx := range req.Transactions {
+		need += digestCount(tx)
+	}
+	if len(sigs) != need {
+		return nil, invalidf("%d signatures for %d digests", len(sigs), need)
 	}
 	out := make([]SignedTx, len(req.Transactions))
+	next := 0 // the first of sigs this transaction signs
 	for i, tx := range req.Transactions {
+		mine := sigs[next : next+digestCount(tx)]
+		next += len(mine)
 		var id [32]byte
 		copy(id[:], tx.NetworkConfigId)
 		n, known := history[id]
@@ -49,23 +58,41 @@ func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte
 		stx := SignedTx{Index: uint32(i), Network: n, NetworkConfigID: id}
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
-			raw, hash, err := AssembleEthereum(n.ChainID, in.Ethereum, sigs[i])
+			raw, hash, err := AssembleEthereum(n.ChainID, in.Ethereum, mine[0])
 			if err != nil {
 				return nil, invalidf("transaction %d: %v", i, err)
 			}
 			stx.Raw, stx.ID = raw, hash[:]
 		case *coslv1.SignTransaction_Solana:
-			raw, err := AssembleSolana(in.Solana, sigs[i])
+			raw, err := AssembleSolana(in.Solana, mine[0])
 			if err != nil {
 				return nil, invalidf("transaction %d: %v", i, err)
 			}
-			stx.Raw, stx.ID = raw, sigs[i]
+			stx.Raw, stx.ID = raw, mine[0]
+		case *coslv1.SignTransaction_Bitcoin:
+			k, err := keyOf(rows, row.ConversationID)
+			if err != nil {
+				return nil, err
+			}
+			raw, txid, err := AssembleBitcoin(n.BitcoinNetwork, k.PublicKey, in.Bitcoin, mine)
+			if err != nil {
+				return nil, invalidf("transaction %d: %v", i, err)
+			}
+			stx.Raw, stx.ID = raw, txid[:]
 		default:
-			return nil, invalidf("transaction %d: only ethereum and solana can be broadcast", i)
+			return nil, invalidf("transaction %d: no intent to broadcast", i)
 		}
 		out[i] = stx
 	}
 	return out, nil
+}
+
+// digestCount is how many signatures tx needs: one per Bitcoin input, else one.
+func digestCount(tx *coslv1.SignTransaction) int {
+	if in := tx.GetBitcoin(); in != nil {
+		return len(in.Inputs)
+	}
+	return 1
 }
 
 // AssembleEthereum is the broadcastable EIP-1559 transaction for intent in on
