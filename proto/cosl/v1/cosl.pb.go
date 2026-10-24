@@ -880,7 +880,7 @@ func (x *SignAccept) GetSignRequestId() []byte {
 type SignBroadcast struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SignRequestId []byte                 `protobuf:"bytes,1,opt,name=sign_request_id,json=signRequestId,proto3" json:"sign_request_id,omitempty"` // msg_id of the sign.request; 32
-	Transactions  []*BroadcastedTx       `protobuf:"bytes,2,rep,name=transactions,proto3" json:"transactions,omitempty"`                          // one per transaction of the request, in order
+	Transactions  []*BroadcastedTx       `protobuf:"bytes,2,rep,name=transactions,proto3" json:"transactions,omitempty"`                          // a non-empty subset of the request's transactions, all on one Network
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -933,6 +933,7 @@ type BroadcastedTx struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	NetworkConfigId []byte                 `protobuf:"bytes,1,opt,name=network_config_id,json=networkConfigId,proto3" json:"network_config_id,omitempty"` // msg_id of the config of the Network it was sent to; 32
 	TxHash          []byte                 `protobuf:"bytes,2,opt,name=tx_hash,json=txHash,proto3" json:"tx_hash,omitempty"`                              // the transaction's hash; 32
+	TxIndex         uint32                 `protobuf:"varint,3,opt,name=tx_index,json=txIndex,proto3" json:"tx_index,omitempty"`                          // position in the request's transactions[]
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -979,6 +980,13 @@ func (x *BroadcastedTx) GetTxHash() []byte {
 		return x.TxHash
 	}
 	return nil
+}
+
+func (x *BroadcastedTx) GetTxIndex() uint32 {
+	if x != nil {
+		return x.TxIndex
+	}
+	return 0
 }
 
 type MessageRef struct {
@@ -1680,10 +1688,11 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\x0fsign_request_id\x18\x01 \x01(\fR\rsignRequestId\"z\n" +
 	"\rSignBroadcast\x12&\n" +
 	"\x0fsign_request_id\x18\x01 \x01(\fR\rsignRequestId\x12A\n" +
-	"\ftransactions\x18\x02 \x03(\v2\x1d.defios.cosl.v1.BroadcastedTxR\ftransactions\"T\n" +
+	"\ftransactions\x18\x02 \x03(\v2\x1d.defios.cosl.v1.BroadcastedTxR\ftransactions\"o\n" +
 	"\rBroadcastedTx\x12*\n" +
 	"\x11network_config_id\x18\x01 \x01(\fR\x0fnetworkConfigId\x12\x17\n" +
-	"\atx_hash\x18\x02 \x01(\fR\x06txHash\"L\n" +
+	"\atx_hash\x18\x02 \x01(\fR\x06txHash\x12\x19\n" +
+	"\btx_index\x18\x03 \x01(\rR\atxIndex\"L\n" +
 	"\n" +
 	"MessageRef\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\fR\x0econversationId\x12\x15\n" +

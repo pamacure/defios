@@ -118,12 +118,13 @@ message SignAccept {
 // receipts; the same transactions broadcast twice carry the same hashes.
 message SignBroadcast {
   bytes sign_request_id = 1;                  // msg_id of the sign.request; 32
-  repeated BroadcastedTx transactions = 2;    // one per transaction of the request, in order
+  repeated BroadcastedTx transactions = 2;    // a non-empty subset of the request's transactions, all on one Network
 }
 
 message BroadcastedTx {
   bytes network_config_id = 1;        // msg_id of the config of the Network it was sent to; 32
   bytes tx_hash = 2;                  // the transaction's hash; 32
+  uint32 tx_index = 3;                // position in the request's transactions[]
 }
 
 message MessageRef {

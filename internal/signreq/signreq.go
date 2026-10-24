@@ -349,10 +349,13 @@ type Summary struct {
 	Session string `json:"session,omitempty"`
 	// Broadcasts counts the Broadcast Receipts committed for the request.
 	Broadcasts int `json:"broadcasts"`
+	// FullyBroadcast is true once every transaction appears in some receipt.
+	FullyBroadcast bool `json:"fully_broadcast"`
 }
 
 // BroadcastedTx is one transaction a Broadcast Receipt says was submitted.
 type BroadcastedTx struct {
+	Index           uint32 `json:"index"`   // position in the request's transactions
 	Network         string `json:"network"` // alias, or unknown(<config id>)
 	NetworkConfigID string `json:"network_config_id"`
 	TxHash          string `json:"tx_hash"`
@@ -413,7 +416,15 @@ func summarise(rows []cosl.Row, keys []key.Key, r cosl.Row, req *coslv1.SignRequ
 	for _, a := range Accepts(rows, r, req) {
 		sum.Accepted = append(sum.Accepted, a.Node.String())
 	}
-	sum.Broadcasts = len(broadcasts(rows, r, len(req.Transactions)))
+	receipts := broadcasts(rows, r, req)
+	sum.Broadcasts = len(receipts)
+	covered := map[uint32]bool{}
+	for _, b := range receipts {
+		for _, tx := range b.msg.Transactions {
+			covered[tx.TxIndex] = true
+		}
+	}
+	sum.FullyBroadcast = len(covered) == len(req.Transactions)
 	for _, k := range keys {
 		if conv := key.ConversationID(k.Curve, k.PublicKey); bytes.Equal(conv[:], r.ConversationID) {
 			sum.Needed = k.T
@@ -487,7 +498,7 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 		}
 		d.Details = append(d.Details, td)
 	}
-	for _, b := range broadcasts(rows, m, len(req.Transactions)) {
+	for _, b := range broadcasts(rows, m, req) {
 		rc := BroadcastReceipt{
 			Seq: b.row.Seq, Broadcaster: b.row.Sender.String(), At: time.Unix(0, b.row.CreatedAt).UTC().Format(time.RFC3339),
 		}
@@ -499,7 +510,7 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 				name = n.Alias
 			}
 			rc.Transactions = append(rc.Transactions, BroadcastedTx{
-				Network: name, NetworkConfigID: hex.EncodeToString(tx.NetworkConfigId), TxHash: hex.EncodeToString(tx.TxHash),
+				Index: tx.TxIndex, Network: name, NetworkConfigID: hex.EncodeToString(tx.NetworkConfigId), TxHash: hex.EncodeToString(tx.TxHash),
 			})
 		}
 		d.BroadcastReceipts = append(d.BroadcastReceipts, rc)
@@ -507,14 +518,22 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 	return d, nil
 }
 
-// wellFormed is a receipt with one 32-byte hash and config id per transaction
-// of the request; any Node may append one, so readers do not trust the shape.
-func wellFormed(b *coslv1.SignBroadcast, txs int) bool {
-	if len(b.Transactions) != txs {
+// wellFormed is a receipt covering a non-empty subset of the request's
+// transactions, each entry once, with a 32-byte hash and the Network the
+// request names for that transaction, all on one Network. Any Node may append
+// one, so readers do not trust the shape.
+func wellFormed(b *coslv1.SignBroadcast, req *coslv1.SignRequest) bool {
+	if len(b.Transactions) == 0 {
 		return false
 	}
+	seen := map[uint32]bool{}
 	for _, t := range b.Transactions {
-		if len(t.TxHash) != 32 || len(t.NetworkConfigId) != 32 {
+		if len(t.TxHash) != 32 || int(t.TxIndex) >= len(req.Transactions) || seen[t.TxIndex] {
+			return false
+		}
+		seen[t.TxIndex] = true
+		want := req.Transactions[t.TxIndex].NetworkConfigId
+		if !bytes.Equal(t.NetworkConfigId, want) || !bytes.Equal(want, req.Transactions[b.Transactions[0].TxIndex].NetworkConfigId) {
 			return false
 		}
 	}
@@ -528,8 +547,10 @@ type receipt struct {
 
 // broadcasts are the sign.broadcast rows for the request at row, in log order:
 // same Key Conversation, naming the request. Every one is kept, so a second
-// broadcast of the same transactions stays visible.
-func broadcasts(rows []cosl.Row, row cosl.Row, txs int) []receipt {
+// broadcast of the same transactions stays visible. A request has several
+// receipts when it was broadcast more than once or its Networks were
+// broadcast separately.
+func broadcasts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []receipt {
 	var out []receipt
 	for _, r := range rows {
 		if r.MsgType != cosl.TypeSignBroadcast || r.Seq <= row.Seq || !bytes.Equal(r.ConversationID, row.ConversationID) {
@@ -543,7 +564,7 @@ func broadcasts(rows []cosl.Row, row cosl.Row, txs int) []receipt {
 		if err != nil {
 			continue
 		}
-		if b := msg.(*coslv1.SignBroadcast); bytes.Equal(b.SignRequestId, row.MsgID[:]) && wellFormed(b, txs) {
+		if b := msg.(*coslv1.SignBroadcast); bytes.Equal(b.SignRequestId, row.MsgID[:]) && wellFormed(b, req) {
 			out = append(out, receipt{r, b})
 		}
 	}

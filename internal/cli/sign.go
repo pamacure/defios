@@ -77,7 +77,7 @@ Every referenced Network must be of the Key's curve.`,
 				return g.emitJSON(rows)
 			}
 			for _, s := range rows {
-				fmt.Fprintf(g.app.Stdout, "%s  %s  %d/%d accepted  txs=%d  broadcasts=%d  %s\n", s.MsgID[:8], s.Status, len(s.Accepted), s.Needed, s.Transactions, s.Broadcasts, s.Reason)
+				fmt.Fprintf(g.app.Stdout, "%s  %s  %d/%d accepted  txs=%d  broadcasts=%d%s  %s\n", s.MsgID[:8], s.Status, len(s.Accepted), s.Needed, s.Transactions, s.Broadcasts, fully(s.FullyBroadcast), s.Reason)
 			}
 			return nil
 		},
@@ -108,7 +108,7 @@ Every referenced Network must be of the Key's curve.`,
 			for _, b := range d.BroadcastReceipts {
 				fmt.Fprintf(out, "broadcast by %s at %s (seq %d)\n", b.Broadcaster, b.At, b.Seq)
 				for _, t := range b.Transactions {
-					fmt.Fprintf(out, "  %s  %s\n", t.Network, t.TxHash)
+					fmt.Fprintf(out, "  tx %d  %s  %s\n", t.Index, t.Network, t.TxHash)
 				}
 			}
 			if d.ReasonRef != "" {
@@ -162,9 +162,11 @@ signature verifies against the Key. A Node that accepts after that is not a sign
 		Use:   "broadcast <msg-id>",
 		Short: "Broadcast a signed request's transactions and record a receipt (requires serve)",
 		Long: `Assembles each transaction of a signed Sign Request, submits it through its Network's rpc url (this Node's
-local override first, see network), and commits a sign.broadcast receipt. Any Node may broadcast; the proposer
-goes first by convention. Broadcasting twice is harmless: a node that already has the transaction is not an
-error, and the repeat shows as one more receipt. Only http(s) rpc urls are used.`,
+local override first, see network), and commits a sign.broadcast receipt for each Network. Networks are
+independent: if one fails, the others are still broadcast and receipted, the failure is reported, and the
+command exits non-zero. Any Node may broadcast; the proposer goes first by convention. Broadcasting again is
+harmless: a node that already has a transaction is not an error, the repeat shows as one more receipt, and a
+failed Network is retried. Only http(s) rpc urls are used.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			v, err := serve.Client{Socket: g.paths().Socket}.SignBroadcast(cmd.Context(), args[0])
@@ -172,22 +174,41 @@ error, and the repeat shows as one more receipt. Only http(s) rpc urls are used.
 				return signError(err)
 			}
 			if g.json {
-				return g.emitJSON(v)
-			}
-			for _, t := range v.Transactions {
-				repeat := ""
-				if t.AlreadyKnown {
-					repeat = " (already known to the network)"
+				if err := g.emitJSON(v); err != nil {
+					return err
 				}
-				fmt.Fprintf(g.app.Stdout, "%s  %s%s\n", t.Network, t.TxHash, repeat)
+			} else {
+				for _, n := range v.Networks {
+					for _, t := range n.Transactions {
+						repeat := ""
+						if t.AlreadyKnown {
+							repeat = " (already known to the network)"
+						}
+						fmt.Fprintf(g.app.Stdout, "%s  tx %d  %s%s\n", n.Network, t.Index, t.TxHash, repeat)
+					}
+					if n.Receipt != nil {
+						fmt.Fprintf(g.app.Stdout, "%s: receipt recorded as seq %d (msg_id %s)\n", n.Network, n.Receipt.Seq, n.Receipt.MsgID)
+					} else {
+						fmt.Fprintf(g.app.Stdout, "%s: FAILED, no receipt recorded: %s\n", n.Network, n.Error)
+					}
+				}
 			}
-			fmt.Fprintf(g.app.Stdout, "receipt recorded as seq %d (msg_id %s)\n", v.Seq, v.MsgID)
+			if v.Failed() {
+				return exitOperationalf("some Networks failed to broadcast; run sign broadcast again to retry them")
+			}
 			return nil
 		},
 	}
 
 	root.AddCommand(propose, list, inspect, accept, decline, broadcast)
 	return root
+}
+
+func fully(b bool) string {
+	if b {
+		return " (fully broadcast)"
+	}
+	return ""
 }
 
 func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {

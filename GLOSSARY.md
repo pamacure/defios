@@ -93,5 +93,5 @@ The exact bytes a Key signs for one transaction — one per Bitcoin input, one p
 _Avoid_: hash, message, sighash
 
 **Broadcast Receipt**:
-A Node's record on the COSL that it submitted a signed transaction to its Network, carrying the resulting transaction hash per transaction (`sign.broadcast`); its sender is the broadcaster and its timestamp the broadcast time, so broadcasting is provable and visible to the Group. Any Node may broadcast and record one; a repeat broadcast is harmless and simply records another.
+A Node's record on the COSL that it submitted signed transactions to one Network, carrying the resulting transaction hash and request position of each (`sign.broadcast`); a request spanning several Networks gets one receipt per Network that went out, and is fully broadcast once every transaction appears in some receipt; its sender is the broadcaster and its timestamp the broadcast time, so broadcasting is provable and visible to the Group. Any Node may broadcast and record one; a repeat broadcast is harmless and simply records another.
 _Avoid_: confirmation, txid record, acknowledgement

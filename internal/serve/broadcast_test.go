@@ -30,10 +30,11 @@ import (
 
 // chain is a fake Ethereum JSON-RPC node that remembers what it was sent.
 type chain struct {
-	srv  *httptest.Server
-	mu   sync.Mutex
-	raws map[string][]byte // hash hex -> raw tx
-	sent int               // eth_sendRawTransaction calls
+	srv    *httptest.Server
+	mu     sync.Mutex
+	raws   map[string][]byte // hash hex -> raw tx
+	sent   int               // eth_sendRawTransaction calls
+	reject bool              // answer every send with an error
 }
 
 func newChain(t *testing.T) *chain {
@@ -54,6 +55,10 @@ func newChain(t *testing.T) *chain {
 		switch req.Method {
 		case "eth_sendRawTransaction":
 			c.sent++
+			if c.reject {
+				resp["error"] = map[string]any{"code": -32000, "message": "mempool is on fire"}
+				break
+			}
 			raw, _ := hex.DecodeString(req.Params[0][2:])
 			h := sha3.NewLegacyKeccak256()
 			h.Write(raw)
@@ -82,6 +87,12 @@ func (c *chain) has(hash string) bool {
 	defer c.mu.Unlock()
 	_, ok := c.raws[hash]
 	return ok
+}
+
+func (c *chain) setReject(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reject = v
 }
 
 func (c *chain) sends() int {
@@ -215,18 +226,19 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Transactions) != 1 || first.Transactions[0].Network != "eth" || first.Transactions[0].AlreadyKnown || ch.sends() != 1 {
+	if len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Network != "eth" || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil || ch.sends() != 1 {
 		t.Fatalf("first = %+v, sends %d", first, ch.sends())
 	}
-	if !ch.has("0x" + first.Transactions[0].TxHash) {
-		t.Fatalf("the chain never got a transaction with hash %s", first.Transactions[0].TxHash)
+	firstTx := first.Networks[0].Transactions[0]
+	if !ch.has("0x" + firstTx.TxHash) {
+		t.Fatalf("the chain never got a transaction with hash %s", firstTx.TxHash)
 	}
 
 	second, err := b.client().SignBroadcast(ctx, msgID[:8])
 	if err != nil {
 		t.Fatalf("a repeat broadcast must succeed: %v", err)
 	}
-	if !second.Transactions[0].AlreadyKnown || second.Transactions[0].TxHash != first.Transactions[0].TxHash {
+	if second.Failed() || !second.Networks[0].Transactions[0].AlreadyKnown || second.Networks[0].Transactions[0].TxHash != firstTx.TxHash {
 		t.Fatalf("second = %+v", second)
 	}
 
@@ -240,7 +252,7 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 			if len(d.BroadcastReceipts) == 2 {
 				r := d.BroadcastReceipts[0]
 				if r.Broadcaster != a.id.NodeID.String() || d.BroadcastReceipts[1].Broadcaster != b.id.NodeID.String() ||
-					len(r.Transactions) != 1 || r.Transactions[0].TxHash != first.Transactions[0].TxHash || r.Transactions[0].Network != "eth" || r.At == "" {
+					len(r.Transactions) != 1 || r.Transactions[0].TxHash != firstTx.TxHash || r.Transactions[0].Network != "eth" || r.At == "" {
 					t.Fatalf("%s receipts = %+v", n.name, d.BroadcastReceipts)
 				}
 				if d.Broadcasts != 2 {
@@ -267,8 +279,8 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 }
 
 // A multi-transaction request over two Networks of one curve signs every
-// Digest under one Session and broadcasts each transaction to its own
-// Network, recording them all in one receipt.
+// Digest under one Session and broadcasts each Network's transactions to its
+// own endpoint, one receipt per Network, each saying which transactions it covers.
 func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
 	one, other := newChain(t), newChain(t)
 	a, _, _, msgID, _ := signedRequest(t, one.srv.URL, other.srv.URL)
@@ -278,29 +290,71 @@ func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Transactions) != 3 || v.Transactions[0].Network != "eth" || v.Transactions[1].Network != "eth2" || v.Transactions[2].Network != "eth" {
-		t.Fatalf("view = %+v", v.Transactions)
+	if v.Failed() || len(v.Networks) != 2 || v.Networks[0].Network != "eth" || v.Networks[1].Network != "eth2" ||
+		len(v.Networks[0].Transactions) != 2 || len(v.Networks[1].Transactions) != 1 ||
+		v.Networks[0].Transactions[1].Index != 2 || v.Networks[1].Transactions[0].Index != 1 {
+		t.Fatalf("view = %+v", v)
 	}
 	if one.sends() != 2 || other.sends() != 1 {
 		t.Fatalf("sends: eth %d, eth2 %d", one.sends(), other.sends())
 	}
-	for i, tx := range v.Transactions {
-		want := one
-		if tx.Network == "eth2" {
-			want = other
-		}
-		if !want.has("0x" + tx.TxHash) {
-			t.Errorf("transaction %d (%s) never reached its own Network", i, tx.Network)
+	for _, tx := range v.Networks[0].Transactions {
+		if !one.has("0x" + tx.TxHash) {
+			t.Errorf("transaction %d never reached eth", tx.Index)
 		}
 	}
-	waitReceipts(t, a, msgID, 1)
+	if !other.has("0x" + v.Networks[1].Transactions[0].TxHash) {
+		t.Error("the eth2 transaction never reached eth2")
+	}
+	waitReceipts(t, a, msgID, 2)
 	d, err := a.client().SignInspect(ctx, msgID[:8])
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := d.BroadcastReceipts[0]
-	if len(r.Transactions) != 3 || r.Transactions[1].Network != "eth2" || r.Transactions[1].TxHash != v.Transactions[1].TxHash {
-		t.Fatalf("receipt = %+v", r)
+	if len(d.BroadcastReceipts) != 2 || len(d.BroadcastReceipts[0].Transactions) != 2 || len(d.BroadcastReceipts[1].Transactions) != 1 ||
+		d.BroadcastReceipts[1].Transactions[0].Network != "eth2" || d.BroadcastReceipts[1].Transactions[0].Index != 1 || !d.FullyBroadcast {
+		t.Fatalf("receipts = %+v, fully %v", d.BroadcastReceipts, d.FullyBroadcast)
+	}
+}
+
+// One Network failing does not hide another's success: the healthy Network is
+// receipted, the failing one reports its error and commits nothing, and a
+// re-run repeats the receipted Network (already known) and retries the failed one.
+func TestSignBroadcastFailsPerNetwork(t *testing.T) {
+	good, bad := newChain(t), newChain(t)
+	bad.setReject(true)
+	a, _, _, msgID, _ := signedRequest(t, good.srv.URL, bad.srv.URL)
+	ctx := context.Background()
+
+	v, err := a.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Failed() || len(v.Networks) != 2 || v.Networks[0].Receipt == nil || v.Networks[0].Error != "" ||
+		v.Networks[1].Receipt != nil || v.Networks[1].Error == "" || len(v.Networks[1].Transactions) != 0 {
+		t.Fatalf("view = %+v", v)
+	}
+	waitReceipts(t, a, msgID, 1)
+	time.Sleep(300 * time.Millisecond)
+	d, err := a.client().SignInspect(ctx, msgID[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.BroadcastReceipts) != 1 || d.BroadcastReceipts[0].Transactions[0].Network != "eth" || d.FullyBroadcast {
+		t.Fatalf("receipts = %+v, fully %v", d.BroadcastReceipts, d.FullyBroadcast)
+	}
+
+	bad.setReject(false)
+	v, err = a.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil || v.Failed() {
+		t.Fatalf("retry = %+v, %v", v, err)
+	}
+	if !v.Networks[0].Transactions[0].AlreadyKnown || v.Networks[1].Transactions[0].AlreadyKnown {
+		t.Fatalf("retry = %+v", v)
+	}
+	waitReceipts(t, a, msgID, 3)
+	if d, _ = a.client().SignInspect(ctx, msgID[:8]); !d.FullyBroadcast {
+		t.Fatalf("not fully broadcast: %+v", d.BroadcastReceipts)
 	}
 }
 
@@ -318,8 +372,8 @@ func TestSignBroadcastUsesTheLocalOverrideAndFailsLoudly(t *testing.T) {
 	if err := os.WriteFile(path, []byte("[eth]\nrpc_urls = ['"+local.srv.URL+"']\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil {
-		t.Fatal(err)
+	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || v.Failed() {
+		t.Fatalf("%+v, %v", v, err)
 	}
 	if local.sends() != 1 || onLog.sends() != 0 {
 		t.Fatalf("override sends %d, log sends %d", local.sends(), onLog.sends())
@@ -327,8 +381,8 @@ func TestSignBroadcastUsesTheLocalOverrideAndFailsLoudly(t *testing.T) {
 
 	waitReceipts(t, b, msgID, 1)
 	onLog.srv.Close() // b has no override and the log's endpoint is down
-	if _, err := b.client().SignBroadcast(ctx, msgID[:8]); err == nil {
-		t.Fatal("broadcast to a dead endpoint must fail")
+	if v, err := b.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || v.Networks[0].Receipt != nil || v.Networks[0].Error == "" {
+		t.Fatalf("broadcast to a dead endpoint must report a failed Network and no receipt: %+v, %v", v, err)
 	}
 	time.Sleep(300 * time.Millisecond)
 	if d, err := b.client().SignInspect(ctx, msgID[:8]); err != nil || len(d.BroadcastReceipts) != 1 {

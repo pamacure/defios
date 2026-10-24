@@ -119,26 +119,36 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
 
 ## As built (broadcasting Ethereum)
 
-- **`sign.broadcast`** (registry id 12), body `{ sign_request_id, transactions: [{ network_config_id, tx_hash }] }`,
+- **`sign.broadcast`** (registry id 12), body `{ sign_request_id, transactions: [{ network_config_id, tx_hash, tx_index }] }`,
   scoped to the Key's Conversation. Its sender is the broadcasting Node and its
   envelope `created_at` is the broadcast time, so the receipt adds no fields for them.
-  It is one entry per transaction of the request, in order.
+  A receipt covers one Network's transactions: a non-empty subset of the request's,
+  each entry naming its `tx_index` in `transactions[]` (two transactions on one Network
+  are otherwise indistinguishable) and all on one `network_config_id`. Readers drop a
+  receipt that is empty, repeats or overruns an index, names a Network other than the
+  request's for that index, or mixes Networks.
 - `sign broadcast <msg-id>` (any Node, any number of times) takes the signatures of the
   request's completed Session (`session.Signatures`: the first complete that verifies),
   assembles each transaction (`signreq.AssembleEthereum`: the unsigned EIP-1559 field list
   plus `y_parity, r, s`) and submits it to its Network with `eth_sendRawTransaction`,
-  then commits one receipt. The endpoints are this Node's local override for the alias if
+  then commits one receipt per Network. The endpoints are this Node's local override for the alias if
   it has one, else the Network's current `rpc_urls`; they are tried in order and only
   http(s) ones can carry the call. A request with no verified signature is `not-signed`.
 - **Idempotent.** The same signatures give the same bytes and hash. A node that rejects the
   submission but already has that hash (`eth_getTransactionByHash`), e.g. "already known" or
   "nonce too low" after inclusion, counts as success and is reported as `already_known`. A
   repeat broadcast therefore succeeds and commits one more receipt; receipts are never
-  deduplicated, so the repeat stays visible. A rejection the node does not recognise
-  fails the call before anything is committed, so retry is safe.
-- A multi-transaction request is all-or-error: if transaction *k* fails, 1…*k*−1 are on the
-  network but no receipt is written until a retry succeeds for all.
-- `sign list` shows a receipt count; `sign inspect` shows each receipt.
+  deduplicated, so the repeat stays visible.
+- **All-or-error per Network.** Transactions are grouped by `network_config_id` and each
+  group is submitted independently, in request order. A group that fully goes out commits
+  its own receipt; a group where any submission is rejected (a rejection the node does not
+  recognise) commits none, reports its error, and does not stop the other groups. Earlier
+  transactions of a failed group may already be on the network, which is why a re-run is
+  safe: receipted groups report `already_known` and add a repeat receipt, the failed group
+  is retried. `sign broadcast` prints per-Network success or failure and exits non-zero
+  if any failed; `--json` carries the same.
+- `sign list` shows a receipt count and whether the request is fully broadcast (every
+  transaction appears in some receipt); `sign inspect` shows each receipt.
 
 ## As built (multi-transaction requests)
 

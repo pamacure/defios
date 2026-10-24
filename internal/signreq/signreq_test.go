@@ -347,3 +347,73 @@ func malformedBroadcast(t *testing.T, seq uint64, created time.Time, conv []byte
 	}
 	return row
 }
+
+// A receipt covers one Network's transactions, saying which by index. A
+// request with receipts for different Networks is fully broadcast once every
+// transaction is in some receipt; malformed receipts count for nothing.
+func TestPartialBroadcastReceipts(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	r := rowOf(t, 1, 0xa1, now, conv[:], req(ethTx(), ethTx(), solTx()))
+	rcpt := func(seq uint64, txs ...*coslv1.BroadcastedTx) cosl.Row {
+		return receiptRow(t, seq, now.Add(time.Duration(seq)*time.Second), conv[:], r.MsgID, txs...)
+	}
+	tx := func(idx uint32, net [32]byte) *coslv1.BroadcastedTx {
+		return &coslv1.BroadcastedTx{NetworkConfigId: net[:], TxHash: append(make([]byte, 31), byte(idx+1)), TxIndex: idx}
+	}
+	history := map[[32]byte]network.Network{ethID: nets[0], solID: nets[2]}
+	status := func(rows ...cosl.Row) (Summary, Detail) {
+		rows = append([]cosl.Row{r}, rows...)
+		l, err := List(rows, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := Inspect(rows, "a1", history, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l[0], d
+	}
+
+	if s, _ := status(); s.FullyBroadcast || s.Broadcasts != 0 {
+		t.Errorf("no receipts: %+v", s)
+	}
+	s, d := status(rcpt(2, tx(0, ethID), tx(1, ethID)))
+	if s.FullyBroadcast || s.Broadcasts != 1 || len(d.BroadcastReceipts[0].Transactions) != 2 || d.BroadcastReceipts[0].Transactions[1].Index != 1 {
+		t.Errorf("one Network: %+v %+v", s, d.BroadcastReceipts)
+	}
+	s, d = status(rcpt(2, tx(0, ethID), tx(1, ethID)), rcpt(3, tx(2, solID)))
+	if !s.FullyBroadcast || s.Broadcasts != 2 || d.BroadcastReceipts[1].Transactions[0].Network != "sol" {
+		t.Errorf("both Networks: %+v %+v", s, d.BroadcastReceipts)
+	}
+	// A repeat of a covered subset is one more receipt, still fully broadcast.
+	if s, _ = status(rcpt(2, tx(0, ethID), tx(1, ethID)), rcpt(3, tx(2, solID)), rcpt(4, tx(2, solID))); !s.FullyBroadcast || s.Broadcasts != 3 {
+		t.Errorf("repeat: %+v", s)
+	}
+
+	for name, bad := range map[string][]*coslv1.BroadcastedTx{
+		"empty":              nil,
+		"mixed Networks":     {tx(0, ethID), tx(2, solID)},
+		"index out of range": {tx(3, ethID)},
+		"duplicate index":    {tx(0, ethID), tx(0, ethID)},
+		"wrong Network":      {tx(2, ethID)},
+		"short hash":         {{NetworkConfigId: ethID[:], TxHash: []byte{1}, TxIndex: 0}},
+	} {
+		if s, _ := status(rcpt(2, bad...)); s.Broadcasts != 0 {
+			t.Errorf("%s: a malformed receipt was counted", name)
+		}
+	}
+}
+
+func receiptRow(t *testing.T, seq uint64, created time.Time, conv []byte, request [32]byte, txs ...*coslv1.BroadcastedTx) cosl.Row {
+	t.Helper()
+	payload, err := proto.Marshal(&coslv1.SignBroadcast{SignRequestId: request[:], Transactions: txs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := proto.Marshal(&coslv1.Envelope{Version: 1, MsgType: cosl.TypeSignBroadcast, Payload: payload, ConversationId: conv, CreatedAt: created.UnixNano()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cosl.Row{Seq: seq, MsgType: cosl.TypeSignBroadcast, MsgID: [32]byte{0xcc, byte(seq)}, Sender: identity.ID{byte(seq)}, ConversationID: conv, CreatedAt: created.UnixNano(), Envelope: env}
+}

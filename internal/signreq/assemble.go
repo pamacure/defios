@@ -14,6 +14,7 @@ import (
 // SignedTx is one transaction of a Sign Request, assembled and ready to
 // broadcast to its Network.
 type SignedTx struct {
+	Index           uint32 // position in the request's transactions
 	Network         network.Network
 	NetworkConfigID [32]byte
 	Raw             []byte
@@ -51,7 +52,7 @@ func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte
 		if err != nil {
 			return nil, invalidf("transaction %d: %v", i, err)
 		}
-		out[i] = SignedTx{Network: n, NetworkConfigID: id, Raw: raw, Hash: hash}
+		out[i] = SignedTx{Index: uint32(i), Network: n, NetworkConfigID: id, Raw: raw, Hash: hash}
 	}
 	return out, nil
 }
