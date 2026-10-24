@@ -55,19 +55,19 @@ tickets to follow.
 
 ## As built (signing one Ethereum transaction)
 
-_Signer selection and `sign propose` / `sign accept` below are superseded by the amendment at the end._
+_Signers are chosen by first-t accepts, as described in the amendment below._
 
 - A signing Session is a `session.start` with `sign_request_id` set (the
-  `sign.request`'s msg_id). Its `participants` are the **t** signers — the
-  proposer plus the first t−1 other Roster Nodes, sorted — not the whole Roster;
-  `t` is the Key's t and `n` the Roster size. Nonce boxes are sealed to the
-  signers only. A start whose signers are not distinct Roster Nodes, omit the
-  proposer, or mismatch the Key is invalid and aborted by every Node. Choosing a
-  different signer set means a new Sign Request.
-- `sign propose` appends the request and then the start, which is the proposer's
-  accept. `sign accept <msg-id>` is another signer's local accept (nothing is
-  written to the COSL); `sign decline <msg-id>` aborts the Session. A signing
-  Session shares the one-open-Session slot with keygen.
+  `sign.request`'s msg_id). Its `participants` are the **t** signers (the first t
+  Nodes to accept, sorted), not the whole Roster; `t` is the Key's t and `n` the
+  Roster size. Nonce boxes are sealed to the signers only. A start whose signers
+  are not distinct Roster Nodes, are not the first t accepts, or mismatch the Key
+  is invalid and aborted by every Node. Choosing a different signer set means a
+  new Sign Request.
+- `sign propose` appends only the request (the proposer's accept is its signature).
+  `sign accept <msg-id>` appends a `sign.accept` and opens the local gate;
+  `sign decline <msg-id>` aborts the Session once one exists. A signing Session
+  shares the one-open-Session slot with keygen.
 - The engine (`tssl.NewSigner`) runs `ecdsa/signing` once per Digest in parallel
   inside one engine, prefixing each message with the Digest's index so the COSL
   carries a single `tss.session` stream. Each Digest's party gets its own session
@@ -112,7 +112,11 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
   only if its `participants` equal the first t accepts before it, in sorted order,
   and its sender is one of them.
 - **Decline** before a start exists is a no-op: not accepting is declining, and an
-  append already made cannot be withdrawn. After a start exists it aborts the Session.
+  append already made cannot be withdrawn. `sign decline` says which happened (the
+  Session was aborted; there was nothing to decline; your accept stands; the Session
+  had already finished). After a start exists it aborts the Session.
+- A request whose Key is not on the log shows `key_known: false` and `?` for t in
+  `sign list` / `inspect`, not `0`.
 - An aborted Session (timeout, decline, crash) still kills the request: retry is a
   new Sign Request, and accepts do not carry over. A request that never reaches t
   accepts before its deadline is `expired`.

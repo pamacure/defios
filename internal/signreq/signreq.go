@@ -23,6 +23,7 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
+	"defios.com/internal/session"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -285,13 +286,6 @@ const (
 	Expired = "expired"
 )
 
-// Accept is one Node's agreement to sign a request: the proposer's own
-// sign.request, or a later sign.accept.
-type Accept struct {
-	Node identity.ID
-	Seq  uint64
-}
-
 // deadline is when a request lapses.
 func deadline(r cosl.Row, req *coslv1.SignRequest) time.Time {
 	window := min(req.DeadlineSeconds, MaxDeadlineSeconds) // a row from a foreign writer may carry more
@@ -302,8 +296,8 @@ func deadline(r cosl.Row, req *coslv1.SignRequest) time.Time {
 // proposer first (its signature on the request is its accept). Only a Node's
 // first accept counts, and only one made within the request's deadline. The
 // FSM already drops senders that are not on the Roster.
-func Accepts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []Accept {
-	out := []Accept{{Node: row.Sender, Seq: row.Seq}}
+func Accepts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []session.SignAccept {
+	out := []session.SignAccept{{Node: row.Sender, Seq: row.Seq}}
 	end := deadline(row, req)
 	seen := map[identity.ID]struct{}{row.Sender: {}}
 	for _, r := range rows {
@@ -313,11 +307,7 @@ func Accepts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []Accept {
 		if _, dup := seen[r.Sender]; dup || time.Unix(0, r.CreatedAt).After(end) {
 			continue
 		}
-		env, err := r.Decode()
-		if err != nil {
-			continue
-		}
-		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+		msg, err := decodePayload(r)
 		if err != nil {
 			continue
 		}
@@ -325,7 +315,7 @@ func Accepts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []Accept {
 			continue
 		}
 		seen[r.Sender] = struct{}{}
-		out = append(out, Accept{Node: r.Sender, Seq: r.Seq})
+		out = append(out, session.SignAccept{Node: r.Sender, Seq: r.Seq})
 	}
 	return out
 }
@@ -344,6 +334,9 @@ type Summary struct {
 	// Later accepts than the first Needed do not sign.
 	Accepted []string `json:"accepted"`
 	Needed   int      `json:"needed"`
+	// KeyKnown is false when the request's Key is not on this log, in which
+	// case Needed is 0 and means "unknown", not zero signers.
+	KeyKnown bool `json:"key_known"`
 	// Session is the signing Session's id once t Nodes have accepted and one
 	// has started it.
 	Session string `json:"session,omitempty"`
@@ -394,7 +387,8 @@ func status(r cosl.Row, req *coslv1.SignRequest, now time.Time) string {
 	return Open
 }
 
-func decodeRow(r cosl.Row) (*coslv1.SignRequest, error) {
+// decodePayload is the row's payload message, per its registry type.
+func decodePayload(r cosl.Row) (proto.Message, error) {
 	env, err := r.Decode()
 	if err != nil {
 		return nil, err
@@ -403,10 +397,18 @@ func decodeRow(r cosl.Row) (*coslv1.SignRequest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sign: seq %d: %w", r.Seq, err)
 	}
+	return msg, nil
+}
+
+func decodeRow(r cosl.Row) (*coslv1.SignRequest, error) {
+	msg, err := decodePayload(r)
+	if err != nil {
+		return nil, err
+	}
 	return msg.(*coslv1.SignRequest), nil
 }
 
-func summarise(rows []cosl.Row, keys []key.Key, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
+func summarise(rows []cosl.Row, needed map[string]int, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
 	sum := Summary{
 		Seq: r.Seq, MsgID: hex.EncodeToString(r.MsgID[:]), Conversation: hex.EncodeToString(r.ConversationID),
 		Proposer: r.Sender.String(), CreatedAt: time.Unix(0, r.CreatedAt).UTC().Format(time.RFC3339),
@@ -425,18 +427,28 @@ func summarise(rows []cosl.Row, keys []key.Key, r cosl.Row, req *coslv1.SignRequ
 		}
 	}
 	sum.FullyBroadcast = len(covered) == len(req.Transactions)
-	for _, k := range keys {
-		if conv := key.ConversationID(k.Curve, k.PublicKey); bytes.Equal(conv[:], r.ConversationID) {
-			sum.Needed = k.T
-		}
-	}
+	sum.Needed, sum.KeyKnown = needed[string(r.ConversationID)]
 	return sum
+}
+
+// neededSigners is each Key's t, by the Key's Conversation ID.
+func neededSigners(rows []cosl.Row) (map[string]int, error) {
+	keys, err := key.List(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(keys))
+	for _, k := range keys {
+		conv := key.ConversationID(k.Curve, k.PublicKey)
+		out[string(conv[:])] = k.T
+	}
+	return out, nil
 }
 
 // List reads every Sign Request off rows, in log order.
 func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 	out := []Summary{}
-	keys, err := key.List(rows)
+	needed, err := neededSigners(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +460,7 @@ func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, summarise(rows, keys, r, req, now))
+		out = append(out, summarise(rows, needed, r, req, now))
 	}
 	return out, nil
 }
@@ -464,11 +476,11 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 	if err != nil {
 		return Detail{}, err
 	}
-	keys, err := key.List(rows)
+	needed, err := neededSigners(rows)
 	if err != nil {
 		return Detail{}, err
 	}
-	d := Detail{Summary: summarise(rows, keys, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
+	d := Detail{Summary: summarise(rows, needed, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
 	if ref := req.ReasonRef; ref != nil {
 		d.ReasonRef = fmt.Sprintf("%x/%x", ref.ConversationId, ref.MsgId)
 	}
@@ -556,11 +568,7 @@ func broadcasts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []receip
 		if r.MsgType != cosl.TypeSignBroadcast || r.Seq <= row.Seq || !bytes.Equal(r.ConversationID, row.ConversationID) {
 			continue
 		}
-		env, err := r.Decode()
-		if err != nil {
-			continue
-		}
-		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+		msg, err := decodePayload(r)
 		if err != nil {
 			continue
 		}

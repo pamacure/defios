@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -233,6 +234,28 @@ func TestAuthVerificationNegatives(t *testing.T) {
 		env := f.envelope(1, 42, freeform("future kind"))
 		if res := f.apply(index, 1, f.signed(1, env)); !res.Inserted {
 			t.Fatalf("not inserted: %+v", res)
+		}
+	})
+
+	// The registry rule: a reader that predates a type stores its rows and
+	// skips what it cannot decode. sign.accept (11) arrived after the others.
+	t.Run("an older reader skips sign.accept", func(t *testing.T) {
+		cosl.WithoutType(t, cosl.TypeSignAccept)
+		index++
+		payload := &coslv1.SignAccept{SignRequestId: make([]byte, 32)}
+		env := f.envelope(1, cosl.TypeSignAccept, payload)
+		if res := f.apply(index, 1, f.signed(1, env)); !res.Inserted {
+			t.Fatalf("not inserted: %+v", res)
+		}
+		raw, _ := proto.Marshal(payload)
+		if _, err := cosl.DecodePayload(cosl.TypeSignAccept, raw); !errors.Is(err, cosl.ErrUnknownType) {
+			t.Fatalf("decode = %v, want ErrUnknownType", err)
+		}
+		if got := cosl.Summary(cosl.TypeSignAccept, raw); got != "34 bytes" {
+			t.Fatalf("summary %q", got)
+		}
+		if got := cosl.TypeName(cosl.TypeSignAccept); got != "unknown(11)" {
+			t.Fatalf("name %q", got)
 		}
 	})
 

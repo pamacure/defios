@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -63,8 +64,19 @@ type SignAccept struct {
 	Seq  uint64
 }
 
+// signingCurve is the one curve signing supports yet.
+const signingCurve = "ecdsa"
+
+// SupportsSigning is whether a Key of curve can sign.
+func SupportsSigning(curve string) bool { return curve == signingCurve }
+
+// hasAccepted is whether node is among the request's accepts.
+func (i SignInfo) hasAccepted(node identity.ID) bool {
+	return slices.ContainsFunc(i.Accepted, func(a SignAccept) bool { return a.Node == node })
+}
+
 // signers are the first t Nodes to have accepted before seq (0 = no bound),
-// or fewer while t have not.
+// or fewer while t have not, in sorted order.
 func (i SignInfo) signers(before uint64) []identity.ID {
 	var out []identity.ID
 	for _, a := range i.Accepted {
@@ -75,6 +87,7 @@ func (i SignInfo) signers(before uint64) []identity.ID {
 			out = append(out, a.Node)
 		}
 	}
+	slices.SortFunc(out, func(a, b identity.ID) int { return bytes.Compare(a[:], b[:]) })
 	return out
 }
 

@@ -97,19 +97,16 @@ func signInfoFrom(store *cosl.Store) func([32]byte) (session.SignInfo, error) {
 		if err != nil {
 			return session.SignInfo{}, err
 		}
-		if sg.Curve != "ecdsa" {
+		if !session.SupportsSigning(sg.Curve) {
 			return session.SignInfo{}, session.ErrUnsupported
 		}
-		info := session.SignInfo{Curve: sg.Curve, PublicKey: sg.PublicKey, T: sg.T, Digests: sg.Digests, Deadline: sg.Deadline, Conversation: sg.Conversation}
-		for _, a := range sg.Accepted {
-			info.Accepted = append(info.Accepted, session.SignAccept{Node: a.Node, Seq: a.Seq})
-		}
-		return info, nil
+		return sg, nil
 	}
 }
 
 // signAnswer is this Node's accept or decline of a Sign Request.
-func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(*session.Service, context.Context, [32]byte) error) {
+// reply, if set, builds the response body after answer ran.
+func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(*session.Service, context.Context, [32]byte) error, reply func() any) {
 	var req signInspectRequest
 	if !s.readLocal(w, r, &req) {
 		return
@@ -133,15 +130,28 @@ func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(
 		writeError(w, err)
 		return
 	}
+	if reply != nil {
+		writeJSON(w, reply())
+		return
+	}
 	writeJSON(w, struct{}{})
+}
+
+// DeclineView is what `sign decline` did.
+type DeclineView struct {
+	Result session.DeclineResult `json:"result"`
 }
 
 func (s *server) signRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sign/accept", func(w http.ResponseWriter, r *http.Request) {
-		s.signAnswer(w, r, (*session.Service).AcceptSign)
+		s.signAnswer(w, r, (*session.Service).AcceptSign, nil)
 	})
 	mux.HandleFunc("POST /v1/sign/decline", func(w http.ResponseWriter, r *http.Request) {
-		s.signAnswer(w, r, (*session.Service).DeclineSign)
+		var result session.DeclineResult
+		s.signAnswer(w, r, func(svc *session.Service, ctx context.Context, id [32]byte) (err error) {
+			result, err = svc.DeclineSign(ctx, id)
+			return err
+		}, func() any { return DeclineView{Result: result} })
 	})
 	mux.HandleFunc("POST /v1/sign/propose", func(w http.ResponseWriter, r *http.Request) {
 		var req signProposeRequest
@@ -175,7 +185,11 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		sessions := signSessions(rows)
+		sessions, err := signSessions(rows)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
 		for i := range list {
 			list[i].Session = sessions[list[i].MsgID]
 		}
@@ -206,25 +220,30 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		d.Session = signSessions(rows)[d.MsgID]
+		sessions, err := signSessions(rows)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		d.Session = sessions[d.MsgID]
 		writeJSON(w, d)
 	})
 }
 
 // signSessions maps each Sign Request's msg id to the signing Session started
 // for it.
-func signSessions(rows []cosl.Row) map[string]string {
+func signSessions(rows []cosl.Row) (map[string]string, error) {
 	out := map[string]string{}
 	list, err := session.List(rows)
 	if err != nil {
-		return out
+		return nil, err
 	}
 	for _, sum := range list {
 		if _, ok := out[sum.SignRequest]; sum.SignRequest != "" && !ok {
 			out[sum.SignRequest] = sum.SessionID
 		}
 	}
-	return out
+	return out, nil
 }
 
 // SignPropose is `sign propose`: commit a sign.request for the Key.
@@ -240,8 +259,10 @@ func (c Client) SignAccept(ctx context.Context, msgID string) error {
 }
 
 // SignDecline is `sign decline`: abort the signing Session, if one has started.
-func (c Client) SignDecline(ctx context.Context, msgID string) error {
-	return c.do(ctx, "/v1/sign/decline", signInspectRequest{MsgID: msgID}, &struct{}{})
+func (c Client) SignDecline(ctx context.Context, msgID string) (DeclineView, error) {
+	var v DeclineView
+	err := c.do(ctx, "/v1/sign/decline", signInspectRequest{MsgID: msgID}, &v)
+	return v, err
 }
 
 // SignList is `sign list`.

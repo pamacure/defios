@@ -77,7 +77,7 @@ Every referenced Network must be of the Key's curve.`,
 				return g.emitJSON(rows)
 			}
 			for _, s := range rows {
-				fmt.Fprintf(g.app.Stdout, "%s  %s  %d/%d accepted  txs=%d  broadcasts=%d%s  %s\n", s.MsgID[:8], s.Status, len(s.Accepted), s.Needed, s.Transactions, s.Broadcasts, fully(s.FullyBroadcast), s.Reason)
+				fmt.Fprintf(g.app.Stdout, "%s  %s  %s accepted  txs=%d  broadcasts=%d%s  %s\n", s.MsgID[:8], s.Status, acceptedOf(s), s.Transactions, s.Broadcasts, fully(s.FullyBroadcast), s.Reason)
 			}
 			return nil
 		},
@@ -98,7 +98,7 @@ Every referenced Network must be of the Key's curve.`,
 			out := g.app.Stdout
 			fmt.Fprintf(out, "sign_request %s\nstatus %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
 				d.MsgID, d.Status, d.Proposer, d.CreatedAt, d.DeadlineSeconds, d.Conversation, d.Reason)
-			fmt.Fprintf(out, "accepted %d/%d\n", len(d.Accepted), d.Needed)
+			fmt.Fprintf(out, "accepted %s\n", acceptedOf(d.Summary))
 			for _, a := range d.Accepted {
 				fmt.Fprintf(out, "  %s\n", a)
 			}
@@ -147,13 +147,27 @@ signature verifies against the Key. A Node that accepts after that is not a sign
 	decline := &cobra.Command{
 		Use:   "decline <msg-id>",
 		Short: "Abort the signing Session for a Sign Request (requires serve)",
-		Long:  `Declining aborts the request's signing Session. Before one has started there is nothing to abort: not accepting is declining.`,
+		Long:  `Declining aborts the request's signing Session. Before one has started there is nothing to abort: not accepting is declining, and an accept you already made stays on the log (the output says so).`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := (serve.Client{Socket: g.paths().Socket}).SignDecline(cmd.Context(), args[0]); err != nil {
+			v, err := serve.Client{Socket: g.paths().Socket}.SignDecline(cmd.Context(), args[0])
+			if err != nil {
 				return signError(err)
 			}
-			fmt.Fprintf(g.app.Stdout, "declined %s\n", args[0])
+			if g.json {
+				return g.emitJSON(v)
+			}
+			out := g.app.Stdout
+			switch v.Result {
+			case session.DeclineAborted:
+				fmt.Fprintf(out, "declined %s: its signing Session was aborted\n", args[0])
+			case session.DeclineAcceptStands:
+				fmt.Fprintf(out, "nothing declined: no Session has started and your accept of %s is already on the log, so you can still be named a signer\n", args[0])
+			case session.DeclineClosed:
+				fmt.Fprintf(out, "nothing declined: the Session for %s has already finished\n", args[0])
+			default:
+				fmt.Fprintf(out, "nothing to decline: no Session has started for %s and you have not accepted it\n", args[0])
+			}
 			return nil
 		},
 	}
@@ -202,6 +216,14 @@ failed Network is retried. Only http(s) rpc urls are used.`,
 
 	root.AddCommand(propose, list, inspect, accept, decline, broadcast)
 	return root
+}
+
+// acceptedOf is "n/t", or "n/? (Key not on this log)" when t is unknown.
+func acceptedOf(s signreq.Summary) string {
+	if !s.KeyKnown {
+		return fmt.Sprintf("%d/? (Key not on this log)", len(s.Accepted))
+	}
+	return fmt.Sprintf("%d/%d", len(s.Accepted), s.Needed)
 }
 
 func fully(b bool) string {

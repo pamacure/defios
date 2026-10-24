@@ -13,6 +13,7 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
+	"defios.com/internal/session"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -267,7 +268,7 @@ func TestAccepts(t *testing.T) {
 		acceptRow(t, 8, 6, now.Add(10*time.Second), conv[:], r.MsgID),
 	}
 	got := Accepts(rows, r, req(ethTx()))
-	want := []Accept{{identity.ID{1}, 1}, {identity.ID{3}, 2}, {identity.ID{6}, 8}}
+	want := []session.SignAccept{{Node: identity.ID{1}, Seq: 1}, {Node: identity.ID{3}, Seq: 2}, {Node: identity.ID{6}, Seq: 8}}
 	if len(got) != len(want) {
 		t.Fatalf("accepts = %+v, want %+v", got, want)
 	}
@@ -416,4 +417,19 @@ func receiptRow(t *testing.T, seq uint64, created time.Time, conv []byte, reques
 		t.Fatal(err)
 	}
 	return cosl.Row{Seq: seq, MsgType: cosl.TypeSignBroadcast, MsgID: [32]byte{0xcc, byte(seq)}, Sender: identity.ID{byte(seq)}, ConversationID: conv, CreatedAt: created.UnixNano(), Envelope: env}
+}
+
+// A request whose Key is not on the log has no t to show: it says so instead
+// of reporting zero signers needed.
+func TestSummaryOfARequestWithAnUnknownKey(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", []byte{0x42}) // no key.create/session.complete minted it
+	r := rowOf(t, 1, 0xa1, now, conv[:], req(ethTx()))
+	list, err := List([]cosl.Row{r}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list[0].KeyKnown || list[0].Needed != 0 {
+		t.Errorf("summary = %+v, want key unknown", list[0])
+	}
 }

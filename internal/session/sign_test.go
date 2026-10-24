@@ -370,8 +370,8 @@ func TestDeclineAbortsTheSigningSession(t *testing.T) {
 	f.propose(t)
 	f.accept(t, c.bob)
 	sum := f.liveSession(t, c.bob) // bob must have seen the start to decline it
-	if err := c.bob.svc.DeclineSign(context.Background(), f.request); err != nil {
-		t.Fatal(err)
+	if res, err := c.bob.svc.DeclineSign(context.Background(), f.request); err != nil || res != session.DeclineAborted {
+		t.Fatalf("decline = %q, %v", res, err)
 	}
 	wait(t, func() bool { return abortedReason(t, c.alice, sum.SessionID, "declined") })
 	if err := c.bob.svc.AcceptSign(context.Background(), f.request); !errors.Is(err, session.ErrClosedSession) {
@@ -379,14 +379,23 @@ func TestDeclineAbortsTheSigningSession(t *testing.T) {
 	}
 }
 
-// Before a start exists there is nothing to abort: declining is a no-op.
+// Before a start exists there is nothing to abort: declining is a no-op, and
+// the result says whether an earlier accept still stands.
 func TestDeclineBeforeAStartIsANoOp(t *testing.T) {
 	f := newSignFixture(t)
 	f.propose(t)
-	if err := f.c.bob.svc.DeclineSign(context.Background(), f.request); err != nil {
-		t.Fatal(err)
+	if res, err := f.c.bob.svc.DeclineSign(context.Background(), f.request); err != nil || res != session.DeclineNoSession {
+		t.Fatalf("decline without accepting = %q, %v", res, err)
 	}
 	noSession(t, f.c.alice, f.c.bob)
+}
+
+func TestDeclineAfterAcceptingSaysTheAcceptStands(t *testing.T) {
+	f := newSignFixture(t)
+	f.propose(t)
+	if res, err := f.c.alice.svc.DeclineSign(context.Background(), f.request); err != nil || res != session.DeclineAcceptStands {
+		t.Fatalf("decline after proposing (accepted) = %q, %v", res, err)
+	}
 }
 
 func TestSignSessionAbortsPastTheRequestDeadline(t *testing.T) {

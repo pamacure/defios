@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -27,28 +26,38 @@ func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte) error {
 	if err != nil {
 		return err
 	}
-	self := s.cfg.Node.NodeID
-	signers := info.signers(0)
 	if r, err := s.signSession(requestID); err != nil {
 		return err
 	} else if r != nil {
-		if !slices.Contains(r.participants, self) {
-			return ErrNotParticipant
-		}
-		if r.status != Open {
-			return ErrClosedSession
-		}
-		return s.remember(ID(requestID))
+		return s.acceptStarted(r, requestID)
 	}
 	if s.cfg.Now().After(info.Deadline) {
 		return ErrClosedSession
 	}
-	if slices.ContainsFunc(info.Accepted, func(a SignAccept) bool { return a.Node == self }) {
+	if info.hasAccepted(s.cfg.Node.NodeID) {
 		return s.remember(ID(requestID))
 	}
-	if len(signers) >= info.T {
+	if len(info.signers(0)) >= info.T {
 		return ErrNotParticipant
 	}
+	return s.appendAccept(ctx, requestID, info)
+}
+
+// acceptStarted is the local accept of a request whose Session already
+// started: only one of its participants can open the gate, and only while open.
+func (s *Service) acceptStarted(r *rec, requestID [32]byte) error {
+	if !slices.Contains(r.participants, s.cfg.Node.NodeID) {
+		return ErrNotParticipant
+	}
+	if r.status != Open {
+		return ErrClosedSession
+	}
+	return s.remember(ID(requestID))
+}
+
+// appendAccept opens the local gate and appends this Node's sign.accept,
+// closing the gate again if the append fails.
+func (s *Service) appendAccept(ctx context.Context, requestID [32]byte, info SignInfo) error {
 	if err := s.remember(ID(requestID)); err != nil {
 		return err
 	}
@@ -70,14 +79,50 @@ func (s *Service) AcceptProposed(requestID [32]byte) error {
 	return s.remember(ID(requestID))
 }
 
+// DeclineResult says what `sign decline` did, because declining before a
+// Session exists changes nothing on the log.
+type DeclineResult string
+
+const (
+	// DeclineAborted: the open signing Session was aborted.
+	DeclineAborted DeclineResult = "aborted"
+	// DeclineNoSession: no Session has started and this Node has not accepted,
+	// so there was nothing to decline.
+	DeclineNoSession DeclineResult = "no-session"
+	// DeclineAcceptStands: no Session has started, but this Node already
+	// accepted; its accept is on the log and it can still be named a signer.
+	DeclineAcceptStands DeclineResult = "accept-stands"
+	// DeclineClosed: the request's Session had already finished or aborted.
+	DeclineClosed DeclineResult = "closed"
+)
+
 // DeclineSign aborts the open signing Session for a sign.request. Before one
-// exists there is nothing to abort: declining is simply not accepting.
-func (s *Service) DeclineSign(ctx context.Context, requestID [32]byte) error {
+// exists there is nothing to abort: declining is simply not accepting, and an
+// accept this Node already made stays, which the result says.
+func (s *Service) DeclineSign(ctx context.Context, requestID [32]byte) (DeclineResult, error) {
 	r, err := s.signSession(requestID)
-	if err != nil || r == nil || r.status != Open {
-		return err
+	if err != nil {
+		return "", err
 	}
-	return s.Abort(ctx, r.id, reasonDeclined)
+	switch {
+	case r != nil && r.status != Open:
+		return DeclineClosed, nil
+	case r != nil:
+		return DeclineAborted, s.Abort(ctx, r.id, reasonDeclined)
+	case s.acceptedLocally(ID(requestID)):
+		return DeclineAcceptStands, nil
+	default:
+		return DeclineNoSession, nil
+	}
+}
+
+// acceptedLocally is whether this Node has accepted id (on disk or live).
+func (s *Service) acceptedLocally(id ID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, p := s.pending[id]
+	_, d := s.onDisk[id]
+	return p || d
 }
 
 // signSession is the first Session started for a sign.request, or nil.
@@ -104,45 +149,53 @@ func (s *Service) startAccepted(ctx context.Context, recs []*rec) {
 		return
 	}
 	started := map[ID]struct{}{}
+	sessions := map[ID]struct{}{}
 	busy := false
 	for _, r := range recs {
+		sessions[r.id] = struct{}{}
 		if r.isSign {
 			started[ID(r.signReq)] = struct{}{}
 		}
 		busy = busy || r.status == Open
 	}
-	for _, id := range s.accepted() {
+	for _, id := range s.acceptedRequests(sessions) {
 		if _, ok := started[id]; ok {
 			continue
 		}
 		if _, ok := s.starting[id]; ok {
 			continue
 		}
-		info, err := s.cfg.SignInfo(id)
-		if err != nil {
-			continue // not a sign.request (a keygen Session id), or not readable yet
-		}
-		if s.cfg.Now().After(info.Deadline) {
-			s.forget(id)
-			continue
-		}
-		s.promote(id) // accepted before a restart, and no Session has been lost
-		signers := info.signers(0)
-		if busy || len(signers) < info.T || !slices.Contains(signers, s.cfg.Node.NodeID) || info.Curve != "ecdsa" {
-			continue
-		}
-		s.starting[id] = struct{}{}
-		if err := s.appendSignStart(ctx, id, info, signers); err != nil {
-			delete(s.starting, id)
-			s.cfg.Logf("session: starting %x: %v", id[:4], err)
-		}
+		s.startRequest(ctx, id, busy)
 	}
 }
 
-// appendSignStart mints the Session's nonce and seals it to the signers.
+// startRequest starts the Session for an accepted request if t signers exist,
+// this Node is one, and the slot is free.
+func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
+	info, err := s.cfg.SignInfo(id)
+	if err != nil {
+		return // not readable yet, or no longer a sign.request
+	}
+	if s.cfg.Now().After(info.Deadline) {
+		s.forget(id)
+		return
+	}
+	s.promote(id) // accepted before a restart, and no Session has been lost
+	signers := info.signers(0)
+	if busy || len(signers) < info.T || !slices.Contains(signers, s.cfg.Node.NodeID) || !SupportsSigning(info.Curve) {
+		return
+	}
+	s.starting[id] = struct{}{}
+	if err := s.appendSignStart(ctx, id, info, signers); err != nil {
+		delete(s.starting, id)
+		s.cfg.Logf("session: starting %x: %v", id[:4], err)
+	}
+}
+
+// appendSignStart mints the Session's nonce and seals it to the signers,
+// which are in sorted order (SignInfo.signers).
 func (s *Service) appendSignStart(ctx context.Context, requestID ID, info SignInfo, signers []identity.ID) error {
 	nodes := s.cfg.Roster.Nodes()
-	slices.SortFunc(signers, func(a, b identity.ID) int { return bytes.Compare(a[:], b[:]) })
 	var id ID
 	var nonce [32]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -176,18 +229,24 @@ func (s *Service) appendSignStart(ctx context.Context, requestID ID, info SignIn
 	})
 }
 
-// accepted are the ids this Node has locally accepted: Sessions, and
-// sign.requests that may not have a Session yet.
-func (s *Service) accepted() []ID {
+// acceptedRequests are the ids this Node has locally accepted that are not
+// in skip (the Sessions the log shows): sign.requests that may not have a
+// Session yet.
+func (s *Service) acceptedRequests(skip map[ID]struct{}) []ID {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ids := make([]ID, 0, len(s.onDisk)+len(s.pending))
+	var ids []ID
+	add := func(id ID) {
+		if _, ok := skip[id]; !ok {
+			ids = append(ids, id)
+		}
+	}
 	for id := range s.onDisk {
-		ids = append(ids, id)
+		add(id)
 	}
 	for id := range s.pending {
 		if _, ok := s.onDisk[id]; !ok {
-			ids = append(ids, id)
+			add(id)
 		}
 	}
 	return ids
@@ -261,9 +320,8 @@ func (s *Service) signInfo(r *rec) (SignInfo, error) {
 func (r *rec) validateSign(roster group.Roster, info SignInfo) {
 	ids := roster.NodeIDs()
 	signers := info.signers(r.startSeq)
-	slices.SortFunc(signers, func(a, b identity.ID) int { return bytes.Compare(a[:], b[:]) })
 	switch {
-	case info.Curve != "ecdsa":
+	case !SupportsSigning(info.Curve):
 		r.invalid = fmt.Sprintf("signing with a %s Key is not supported", info.Curve)
 	case r.curve != info.Curve || int(r.t) != info.T || int(r.n) != len(ids):
 		r.invalid = "start does not match the Key"

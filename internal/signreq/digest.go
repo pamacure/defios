@@ -11,6 +11,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
+	"defios.com/internal/session"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -87,24 +88,11 @@ func rlpLength(n int, offset byte) []byte {
 	return append([]byte{offset + 55 + byte(len(be))}, be...)
 }
 
-// Signable is what signing a sign.request needs: the Key, the Digests every
-// Node derives from the request, and when it lapses.
-type Signable struct {
-	Curve     string
-	PublicKey []byte
-	T         int // the Key's t
-	Digests   [][32]byte
-	Deadline  time.Time
-	// Conversation is the Key's Conversation ID, where accepts are scoped.
-	Conversation []byte
-	// Accepted is who has accepted, in log order, the proposer first.
-	Accepted []Accept
-}
-
-// Lookup reads the sign.request with msgID off rows and derives its Digests,
+// Lookup reads the sign.request with msgID off rows and derives what signing
+// it needs (the Key, its Digests, the deadline, who accepted): the Digests are
 // flattened across its transactions in order. Only Ethereum transactions can
 // be signed yet. Every Node reaches the same answer from the same log.
-func Lookup(rows []cosl.Row, msgID [32]byte) (Signable, error) {
+func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	var row *cosl.Row
 	for i := range rows {
 		if rows[i].MsgType == cosl.TypeSignRequest && rows[i].MsgID == msgID {
@@ -113,15 +101,15 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (Signable, error) {
 		}
 	}
 	if row == nil {
-		return Signable{}, ErrUnknown
+		return session.SignInfo{}, ErrUnknown
 	}
 	req, err := decodeRow(*row)
 	if err != nil {
-		return Signable{}, err
+		return session.SignInfo{}, err
 	}
 	keys, err := key.List(rows)
 	if err != nil {
-		return Signable{}, err
+		return session.SignInfo{}, err
 	}
 	var k key.Key
 	found := false
@@ -132,13 +120,13 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (Signable, error) {
 		}
 	}
 	if !found {
-		return Signable{}, key.ErrUnknown
+		return session.SignInfo{}, key.ErrUnknown
 	}
 	history, err := network.History(rows)
 	if err != nil {
-		return Signable{}, err
+		return session.SignInfo{}, err
 	}
-	out := Signable{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, req)}
+	out := session.SignInfo{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, req)}
 	for i, tx := range req.Transactions {
 		var id [32]byte
 		copy(id[:], tx.NetworkConfigId)
@@ -146,13 +134,13 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (Signable, error) {
 		in, isEth := tx.Intent.(*coslv1.SignTransaction_Ethereum)
 		switch {
 		case !known:
-			return Signable{}, fmt.Errorf("%w: transaction %d: unknown network config", ErrInvalid, i)
+			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: unknown network config", ErrInvalid, i)
 		case !isEth:
-			return Signable{}, fmt.Errorf("%w: transaction %d: only ethereum can be signed", ErrInvalid, i)
+			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: only ethereum can be signed", ErrInvalid, i)
 		}
 		_, dg, err := EthereumDigest(n.ChainID, in.Ethereum)
 		if err != nil {
-			return Signable{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
+			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
 		}
 		out.Digests = append(out.Digests, dg)
 	}
