@@ -201,7 +201,14 @@ The `ethereum_address` line is the account. Check its balance on https://sepolia
 On A, write the transaction. `to` is a base64 20-byte address; this converts a hex one (here, send to yourself or any address you control):
 
 ```bash
-echo 0x<recipient-address> | sed 's/^0x//' | xxd -r -p | base64
+python3 -c "import base64,sys; print(base64.b64encode(bytes.fromhex(sys.argv[1].removeprefix('0x'))).decode())" 0x<recipient-address>
+```
+
+Without Python, GNU coreutils works (the hex must be uppercase), as does `xxd`:
+
+```bash
+echo <recipient-hex-without-0x> | tr a-f A-F | basenc --base16 -d | base64
+echo <recipient-hex-without-0x> | xxd -r -p | base64
 ```
 
 ```bash
