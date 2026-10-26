@@ -100,7 +100,8 @@ message SignRequest {
   repeated SignTransaction transactions = 1;  // ordered, at least one
   string reason = 2;                          // UTF-8, required
   uint64 deadline_seconds = 3;                // after the envelope's created_at; > 0
-  MessageRef reason_ref = 4;                  // optional pointer to the talk behind the reason
+  reserved 4;                                 // was reason_ref (docs/adr/0012-recap-on-the-log-pruning-off-it.md)
+  reserved "reason_ref";
 }
 
 // SignAccept is the payload of sign.accept (docs/adr/0010-signing-session-semantics.md).
@@ -125,11 +126,6 @@ message BroadcastedTx {
   bytes network_config_id = 1;        // msg_id of the config of the Network it was sent to; 32
   bytes tx_hash = 2;                  // the transaction's id: hash (32) or Solana signature (64)
   uint32 tx_index = 3;                // position in the request's transactions[]
-}
-
-message MessageRef {
-  bytes conversation_id = 1;          // unset = Group-level, else 32
-  bytes msg_id = 2;                   // 32
 }
 
 message SignTransaction {

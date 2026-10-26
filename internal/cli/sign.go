@@ -111,9 +111,6 @@ Every referenced Network must be of the Key's curve.`,
 					fmt.Fprintf(out, "  tx %d  %s  %s\n", t.Index, t.Network, t.TxHash)
 				}
 			}
-			if d.ReasonRef != "" {
-				fmt.Fprintf(out, "reason_ref %s\n", d.ReasonRef)
-			}
 			for i, t := range d.Details {
 				fmt.Fprintf(out, "\ntransaction %d: %s (%s)\n", i, t.Network, t.Type)
 				for _, l := range t.Lines {

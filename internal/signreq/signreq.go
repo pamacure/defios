@@ -153,11 +153,6 @@ func Validate(r *coslv1.SignRequest, k key.Key, nets []network.Network) error {
 	case r.DeadlineSeconds == 0 || r.DeadlineSeconds > MaxDeadlineSeconds:
 		return invalidf("deadline must be 1–%d seconds", MaxDeadlineSeconds)
 	}
-	if ref := r.ReasonRef; ref != nil {
-		if (len(ref.ConversationId) != 0 && len(ref.ConversationId) != 32) || len(ref.MsgId) != 32 {
-			return invalidf("reason_ref needs a 32-byte msg_id and an unset or 32-byte conversation_id")
-		}
-	}
 	for i, tx := range r.Transactions {
 		n, ok := liveByID(nets, tx.NetworkConfigId)
 		if !ok {
@@ -393,7 +388,6 @@ type TxDetail struct {
 type Detail struct {
 	Summary
 	DeadlineSeconds uint64     `json:"deadline_seconds"`
-	ReasonRef       string     `json:"reason_ref,omitempty"`
 	Details         []TxDetail `json:"details"`
 	// BroadcastReceipts are the request's sign.broadcast rows, in log order.
 	BroadcastReceipts []BroadcastReceipt `json:"broadcast_receipts"`
@@ -527,9 +521,6 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 		return Detail{}, err
 	}
 	d := Detail{Summary: summarise(rows, sessions, needed, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
-	if ref := req.ReasonRef; ref != nil {
-		d.ReasonRef = fmt.Sprintf("%x/%x", ref.ConversationId, ref.MsgId)
-	}
 	for _, tx := range req.Transactions {
 		var id [32]byte
 		copy(id[:], tx.NetworkConfigId)
