@@ -3,7 +3,7 @@
 ### Issue tracker
 
 Issues are tracked as GitHub issues in this repo via the `gh` CLI. See `docs/agents/issue-tracker.md`. Close each GitHub issue after implementation.
-Unless otherwise instructed, commit ticket implementations to branch master.
+Unless otherwise instructed, commit ticket implementations to branch master (when a commit is applicable).
 
 ### Triage labels
 
