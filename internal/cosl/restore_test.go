@@ -3,7 +3,9 @@ package cosl_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"defios.com/internal/cosl"
@@ -130,37 +132,42 @@ func TestRestoreExtendsPrefixAndRejectsDivergence(t *testing.T) {
 	sameRows(t, before, stranger.rows())
 }
 
-// A snapshot whose prev_hash chain does not verify is rejected and the
-// live replica untouched.
+// A snapshot whose envelope no longer matches its hash, or whose
+// envelope_hash no longer chains, is rejected and the live replica
+// untouched.
 func TestRestoreRejectsBrokenChain(t *testing.T) {
-	leader := newFixture(t)
-	leader.fill(4)
-	snap := leader.snapshotOf()
-
-	// Tamper with row 3's envelope in the staging copy. The triggers guard
-	// the live replica, not a copy, so drop them there first.
-	db, err := sql.Open("sqlite", "file:"+snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{
-		"DROP TRIGGER cosl_no_update",
-		"UPDATE cosl SET envelope = X'00' WHERE seq = 3",
+	for name, tamper := range map[string]string{
+		"envelope":      "UPDATE cosl SET envelope = X'00' WHERE seq = 3",
+		"envelope_hash": "UPDATE cosl SET envelope = NULL, envelope_hash = zeroblob(32) WHERE seq = 3",
 	} {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
-	}
-	db.Close()
+		t.Run(name, func(t *testing.T) {
+			leader := newFixture(t)
+			leader.fill(4)
+			snap := leader.snapshotOf()
 
-	victim := leader.sibling()
-	victim.apply(1, 1, leader.rows()[0].Envelope)
-	before := victim.rows()
-	err = victim.store.Restore(snap)
-	if !errors.Is(err, cosl.ErrBadChain) {
-		t.Fatalf("tampered restore = %v, want ErrBadChain", err)
+			// Tamper with row 3 in the staging copy. The triggers guard
+			// the live replica, not a copy, so drop them there first.
+			db, err := sql.Open("sqlite", "file:"+snap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, stmt := range []string{"DROP TRIGGER cosl_no_update", tamper} {
+				if _, err := db.Exec(stmt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db.Close()
+
+			victim := leader.sibling()
+			victim.apply(1, 1, leader.rows()[0].Envelope)
+			before := victim.rows()
+			err = victim.store.Restore(snap)
+			if !errors.Is(err, cosl.ErrBadChain) {
+				t.Fatalf("tampered restore = %v, want ErrBadChain", err)
+			}
+			sameRows(t, before, victim.rows())
+		})
 	}
-	sameRows(t, before, victim.rows())
 }
 
 // A snapshot no further along than this replica changes nothing.
@@ -173,4 +180,80 @@ func TestRestoreOfOlderSnapshotIsNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameRows(t, want, f.rows())
+}
+
+// prune strips every freeform envelope from a snapshot copy, as Pruning
+// will leave rows: metadata and envelope_hash only (ADR 0012). The trigger
+// is dropped for the rewrite and put back, so the copy stays append-only.
+func (f *fixture) prune(snap string) {
+	f.t.Helper()
+	db, err := sql.Open("sqlite", "file:"+snap)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		"DROP TRIGGER cosl_no_update",
+		fmt.Sprintf("UPDATE cosl SET envelope = NULL WHERE msg_type = %d", cosl.TypeAppFreeform),
+		"CREATE TRIGGER cosl_no_update BEFORE UPDATE ON cosl BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+}
+
+// A replica with no payload bytes still verifies from genesis, and pruned
+// and unpruned replicas of one history agree on the chain head, so either
+// restores over the other.
+func TestRestoreAcrossPrunedAndUnprunedReplicas(t *testing.T) {
+	leader := newFixture(t)
+	leader.fill(3)
+	early := leader.snapshotOf()
+	leader.prune(early)
+
+	pruned := leader.sibling()
+	if err := pruned.store.Restore(early); err != nil {
+		t.Fatalf("restore of pruned snapshot: %v", err)
+	}
+	for _, r := range pruned.rows() {
+		if r.Envelope != nil {
+			t.Fatalf("seq %d kept its envelope", r.Seq)
+		}
+	}
+	sameRows(t, leader.rows(), pruned.rows())
+	lm, _ := leader.store.Meta()
+	pm, _ := pruned.store.Meta()
+	if lm.ChainHead != pm.ChainHead {
+		t.Fatalf("chain head %x vs %x", pm.ChainHead, lm.ChainHead)
+	}
+
+	// Pruned replica, unpruned snapshot.
+	want := leader.fill(3)
+	if err := pruned.store.Restore(leader.snapshotOf()); err != nil {
+		t.Fatalf("pruned replica onto unpruned snapshot: %v", err)
+	}
+	sameRows(t, want, pruned.rows())
+
+	// Unpruned replica, pruned snapshot.
+	late := leader.snapshotOf()
+	leader.prune(late)
+	follower := leader.sibling()
+	for _, r := range want[:3] {
+		follower.apply(r.Seq, r.Term, r.Envelope)
+	}
+	if err := follower.store.Restore(late); err != nil {
+		t.Fatalf("unpruned replica onto pruned snapshot: %v", err)
+	}
+	sameRows(t, want, follower.rows())
+
+	// The restored pruned replica is still append-only.
+	db, err := sql.Open("sqlite", "file:"+follower.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("UPDATE cosl SET term = 9"); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("update on restored pruned replica = %v, want append-only", err)
+	}
 }

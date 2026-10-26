@@ -2,6 +2,7 @@ package cosl
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,8 +10,9 @@ import (
 	"modernc.org/sqlite"
 )
 
-// ErrBadChain means a snapshot's prev_hash chain does not verify, or does
-// not extend the chain this replica already holds.
+// ErrBadChain means a snapshot's prev_hash chain does not verify, an
+// envelope it still holds does not match its envelope_hash, or it does not
+// extend the chain this replica already holds.
 var ErrBadChain = errors.New("cosl: snapshot chain does not verify")
 
 // Restore brings this replica up to a leader's snapshot (§4.4): the
@@ -71,9 +73,10 @@ func (s *Store) Restore(snapshotPath string) error {
 }
 
 // verifyChain recomputes the prev_hash chain of a replica file from
-// genesis and checks it against every row and the recorded head.
+// genesis and checks it against every row and the recorded head. Each
+// envelope still present must hash to its envelope_hash.
 func verifyChain(db *sql.DB) (Meta, error) {
-	rows, err := db.Query("SELECT seq, term, envelope, prev_hash FROM cosl ORDER BY seq")
+	rows, err := db.Query("SELECT seq, term, envelope, envelope_hash, prev_hash FROM cosl ORDER BY seq")
 	if err != nil {
 		return Meta{}, fmt.Errorf("cosl: restore: %w", err)
 	}
@@ -82,11 +85,17 @@ func verifyChain(db *sql.DB) (Meta, error) {
 	var lastSeq uint64
 	for rows.Next() {
 		var seq, term uint64
-		var envelope, stored []byte
-		if err := rows.Scan(&seq, &term, &envelope, &stored); err != nil {
+		var envelope, envHash, stored []byte
+		if err := rows.Scan(&seq, &term, &envelope, &envHash, &stored); err != nil {
 			return Meta{}, fmt.Errorf("cosl: restore: %w", err)
 		}
-		h := chainHash(prev, seq, term, envelope)
+		var eh [32]byte
+		copy(eh[:], envHash)
+		// A pruned row has no envelope left to check; its hash still chains.
+		if envelope != nil && sha256.Sum256(envelope) != eh {
+			return Meta{}, fmt.Errorf("%w: row %d envelope does not match its hash", ErrBadChain, seq)
+		}
+		h := chainHash(prev, seq, term, eh)
 		if string(h[:]) != string(stored) {
 			return Meta{}, fmt.Errorf("%w: row %d", ErrBadChain, seq)
 		}

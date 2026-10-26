@@ -126,14 +126,20 @@ func TestApplyInsertsVerifiedEnvelopeAndChainsPrevHash(t *testing.T) {
 	}
 
 	// Independent chain: genesis 32 zero bytes, then
-	// SHA-256(prev || seq_be64 || term_be64 || envelope).
+	// SHA-256(prev || seq_be64 || term_be64 || SHA-256(envelope)), so a row
+	// whose envelope is later pruned still chains (ADR 0012).
 	prev := make([]byte, 32)
-	for _, r := range rows {
+	applied := [][]byte{e1, e2}
+	for i, r := range rows {
+		envHash := sha256.Sum256(applied[i])
+		if r.EnvelopeHash != envHash {
+			t.Fatalf("seq %d envelope_hash = %x, want %x", r.Seq, r.EnvelopeHash, envHash)
+		}
 		h := sha256.New()
 		h.Write(prev)
 		h.Write(binary.BigEndian.AppendUint64(nil, r.Seq))
 		h.Write(binary.BigEndian.AppendUint64(nil, r.Term))
-		h.Write(r.Envelope)
+		h.Write(envHash[:])
 		prev = h.Sum(nil)
 		if !bytes.Equal(r.PrevHash[:], prev) {
 			t.Fatalf("seq %d prev_hash = %x, want %x", r.Seq, r.PrevHash, prev)

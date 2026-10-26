@@ -16,13 +16,15 @@ import (
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// schema is docs/spec/mvp.md §5.5 verbatim. PRAGMAs ride on the DSN so every
-// connection gets them.
+// schema is docs/spec/mvp.md §5.5 plus envelope_hash (ADR 0012): the chain
+// folds over the hash, so a NULL envelope (a pruned row) still verifies.
+// PRAGMAs ride on the DSN so every connection gets them.
 const schema = `
 CREATE TABLE IF NOT EXISTS cosl (
   seq              INTEGER PRIMARY KEY,
   term             INTEGER NOT NULL,
-  envelope         BLOB    NOT NULL,
+  envelope         BLOB,
+  envelope_hash    BLOB    NOT NULL,
   sender           BLOB    NOT NULL,
   msg_type         INTEGER NOT NULL,
   msg_id           BLOB    NOT NULL,
@@ -84,12 +86,14 @@ func Open(path string) (*Store, error) {
 // Close releases the database.
 func (s *Store) Close() error { return s.db.Close() }
 
-// Row is one COSL row; Envelope is the source of truth, the rest is
-// denormalized for queries.
+// Row is one COSL row; Envelope is the source of truth while it is held,
+// the rest is denormalized for queries. Envelope is nil once the row is
+// pruned; EnvelopeHash, SHA-256 of it, is what the chain folds over.
 type Row struct {
 	Seq            uint64
 	Term           uint64
 	Envelope       []byte
+	EnvelopeHash   [32]byte
 	Sender         identity.ID
 	MsgType        uint32
 	MsgID          [32]byte
@@ -115,7 +119,7 @@ type Query struct {
 	Limit          int
 }
 
-const rowColumns = "seq, term, envelope, sender, msg_type, msg_id, conversation_id, created_at, prev_hash"
+const rowColumns = "seq, term, envelope, envelope_hash, sender, msg_type, msg_id, conversation_id, created_at, prev_hash"
 
 // Log returns rows in seq order.
 func (s *Store) Log(q Query) ([]Row, error) {
@@ -227,16 +231,17 @@ func (s *Store) append(index, term uint64, data []byte, env *coslv1.Envelope) (b
 	if err != nil {
 		return false, err
 	}
-	head := chainHash(meta.ChainHead, index, term, data)
+	envHash := sha256.Sum256(data)
+	head := chainHash(meta.ChainHead, index, term, envHash)
 
 	var conversationID any
 	if env.ConversationId != nil {
 		conversationID = env.ConversationId
 	}
 	res, err := tx.Exec(`INSERT OR IGNORE INTO cosl
-		(seq, term, envelope, sender, msg_type, msg_id, conversation_id, created_at, prev_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		index, term, data, env.Sender, env.MsgType, env.MsgId, conversationID, env.CreatedAt, head[:])
+		(seq, term, envelope, envelope_hash, sender, msg_type, msg_id, conversation_id, created_at, prev_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		index, term, data, envHash[:], env.Sender, env.MsgType, env.MsgId, conversationID, env.CreatedAt, head[:])
 	if err != nil {
 		return false, fmt.Errorf("cosl: insert: %w", err)
 	}
@@ -274,13 +279,14 @@ func (s *Store) markApplied(index, term uint64) error {
 	return nil
 }
 
-// chainHash is SHA-256(prev || seq_be64 || term_be64 || envelope_bytes).
-func chainHash(prev [32]byte, seq, term uint64, envelope []byte) [32]byte {
+// chainHash is SHA-256(prev || seq_be64 || term_be64 || envelope_hash),
+// where envelope_hash is SHA-256(envelope_bytes).
+func chainHash(prev [32]byte, seq, term uint64, envelopeHash [32]byte) [32]byte {
 	h := sha256.New()
 	h.Write(prev[:])
 	h.Write(binary.BigEndian.AppendUint64(nil, seq))
 	h.Write(binary.BigEndian.AppendUint64(nil, term))
-	h.Write(envelope)
+	h.Write(envelopeHash[:])
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
@@ -341,10 +347,11 @@ func scanMeta(q querier, key string, dst *[]byte) error {
 
 func scanRow(rows *sql.Rows) (Row, error) {
 	var r Row
-	var sender, msgID, prevHash []byte
-	if err := rows.Scan(&r.Seq, &r.Term, &r.Envelope, &sender, &r.MsgType, &msgID, &r.ConversationID, &r.CreatedAt, &prevHash); err != nil {
+	var envHash, sender, msgID, prevHash []byte
+	if err := rows.Scan(&r.Seq, &r.Term, &r.Envelope, &envHash, &sender, &r.MsgType, &msgID, &r.ConversationID, &r.CreatedAt, &prevHash); err != nil {
 		return Row{}, fmt.Errorf("cosl: %w", err)
 	}
+	copy(r.EnvelopeHash[:], envHash)
 	copy(r.Sender[:], sender)
 	copy(r.MsgID[:], msgID)
 	copy(r.PrevHash[:], prevHash)
