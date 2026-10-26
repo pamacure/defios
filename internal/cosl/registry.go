@@ -26,6 +26,10 @@ const (
 	TypeNetworkRemove   uint32 = 10
 	TypeSignAccept      uint32 = 11
 	TypeSignBroadcast   uint32 = 12
+	// 13 is app.recap (docs/adr/0012-recap-on-the-log-pruning-off-it.md).
+	TypeModelCreate uint32 = 14
+	TypeModelUpdate uint32 = 15
+	TypeModelRemove uint32 = 16
 )
 
 // kind is one registry entry: its wire name and its payload schema.
@@ -49,6 +53,9 @@ var registry = map[uint32]kind{
 	TypeNetworkRemove:   {"network.remove", func() proto.Message { return &coslv1.NetworkRemove{} }},
 	TypeSignAccept:      {"sign.accept", func() proto.Message { return &coslv1.SignAccept{} }},
 	TypeSignBroadcast:   {"sign.broadcast", func() proto.Message { return &coslv1.SignBroadcast{} }},
+	TypeModelCreate:     {"model.create", func() proto.Message { return &coslv1.ModelConfig{} }},
+	TypeModelUpdate:     {"model.update", func() proto.Message { return &coslv1.ModelConfig{} }},
+	TypeModelRemove:     {"model.remove", func() proto.Message { return &coslv1.ModelRemove{} }},
 }
 
 // ErrUnknownType is returned by DecodePayload for ids outside the registry.

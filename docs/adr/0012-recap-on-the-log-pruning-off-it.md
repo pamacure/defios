@@ -98,7 +98,11 @@ per Node, and a Node that falls past `SnapshotThreshold` re-transfers all of it.
   `model.create` / `model.update` / `model.remove`, ids 14/15/16: alias-keyed
   and folded exactly as Networks are, so the Group agrees on what produced a
   Recap. A Conversation's agent config names the alias rather than pinning a
-  config id — unlike a Sign Request, a Recap commits to nothing.
+  config id — unlike a Sign Request, a Recap commits to nothing. A config is
+  a `provider` (`anthropic` | `openai`, fixed for the alias's life as a
+  Network's type is), the provider's `model` id, and an optional `base_url`
+  and `api_path`; neither may carry userinfo or a query, so a credential
+  cannot ride along.
 - Credentials for those models live in the Vault, with an environment variable
   taking precedence when set and `init` never writing one — the `TS_AUTHKEY`
   precedent in `config.toml`. This is a deliberate departure from

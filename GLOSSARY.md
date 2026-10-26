@@ -88,6 +88,10 @@ _Avoid_: tombstone (that is a Network removal marker, which destroys nothing), d
 A blockchain a Group may broadcast a signed transaction to, described by a config the Group maintains on its COSL and recalls by a local alias (e.g. `ethereum-mainnet`). Each Network is of one type — Bitcoin, Ethereum, or Solana — which fixes the curve a signing Key must use for it.
 _Avoid_: chain config, blockchain configuration, RPC, endpoint
 
+**Model**:
+A language model a Group's agent may use, described by a config the Group maintains on its COSL and recalls by a local alias, as a Network is: a provider (Anthropic or OpenAI, fixed for the alias's life), the provider's model id, and optionally an endpoint. Credentials for it never ride the COSL.
+_Avoid_: LLM config, provider (that is one field of a Model), engine (that is a threshold-signing engine)
+
 **Sign Request**:
 One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several Networks of the Key's curve, but each signed transaction is broadcastable on exactly one Network. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `aborted` or `expired`.
 _Avoid_: transaction request, signing job, order

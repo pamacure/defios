@@ -125,6 +125,10 @@ func Summary(msgType uint32, payload []byte) string {
 		return fmt.Sprintf("alias=%s type=%s", oneLine(p.Alias), oneLine(p.Type))
 	case *coslv1.NetworkRemove:
 		return fmt.Sprintf("alias=%s", oneLine(p.Alias))
+	case *coslv1.ModelConfig:
+		return fmt.Sprintf("alias=%s provider=%s model=%s", oneLine(p.Alias), oneLine(p.Provider), oneLine(p.Model))
+	case *coslv1.ModelRemove:
+		return fmt.Sprintf("alias=%s", oneLine(p.Alias))
 	}
 	return ""
 }
