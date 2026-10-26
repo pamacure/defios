@@ -76,6 +76,14 @@ _Avoid_: chat, channel, room, thread
 A Conversation's 32-byte identity, derived as SHA-256("defios-conversation-id-v1" || curve || joint public key). Identical to the Key's identity, hashed; not minted, not a Session ID. A nil conversation id on a COSL message marks Group-level talk, not a Conversation.
 _Avoid_: chat id, channel id, thread id
 
+**Recap**:
+A COSL message (`app.recap`) carrying one Node's account of a Conversation's talk up to a stated seq, which stands in place of that talk for readers. The newest Recap for a Conversation is the live one; earlier Recaps stay on the log and keep their text.
+_Avoid_: summary (that is the one-line payload line `cosl log` prints), digest, compaction, checkpoint
+
+**Pruning**:
+One Node's destruction of the `app.freeform` payloads a Recap has already accounted for, keeping each row, its hash, and its place in the chain. Node-local and written nowhere on the COSL, so two replicas of one Group legitimately hold different amounts of talk.
+_Avoid_: tombstone (that is a Network removal marker, which destroys nothing), delete, compaction, garbage collection
+
 **Network**:
 A blockchain a Group may broadcast a signed transaction to, described by a config the Group maintains on its COSL and recalls by a local alias (e.g. `ethereum-mainnet`). Each Network is of one type — Bitcoin, Ethereum, or Solana — which fixes the curve a signing Key must use for it.
 _Avoid_: chain config, blockchain configuration, RPC, endpoint
