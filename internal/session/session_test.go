@@ -1051,9 +1051,15 @@ func TestShareIsWrittenBeforeCompleteAndRemovedWhenCompletesDisagree(t *testing.
 
 	pk := bytes.Repeat([]byte{0x02}, 33)
 	other := bytes.Repeat([]byte{0x03}, 33)
+	// Only alice's own complete must follow her Put; bob's engine runs
+	// concurrently, so his complete may land on her replica first.
 	var completesAtPut int
 	aliceShares.onPut = func() {
-		completesAtPut = len(c.alice.ofType(t, cosl.TypeSessionComplete))
+		for _, r := range c.alice.ofType(t, cosl.TypeSessionComplete) {
+			if r.Sender == c.alice.id.NodeID {
+				completesAtPut++
+			}
+		}
 	}
 	c.alice.finish = &session.Result{PublicKey: pk, SaveData: []byte("alice-share")}
 	c.bob.finish = &session.Result{PublicKey: other, SaveData: []byte("bob-share")}
