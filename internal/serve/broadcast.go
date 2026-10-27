@@ -12,6 +12,7 @@ import (
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/ethrpc"
+	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/raftx"
 	"defios.com/internal/secret"
@@ -99,7 +100,7 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	if err != nil {
 		return BroadcastView{}, err
 	}
-	overrides, unresolved, err := s.localOverrides(info.Conversation)
+	overrides, unresolved, err := s.localOverrides(rows, info.Conversation)
 	if err != nil {
 		return BroadcastView{}, err
 	}
@@ -157,15 +158,21 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 // it, every reference resolved. Both files are read at each use, so an edit
 // needs no restart. A Network whose override does not resolve to a URL is
 // reported in unresolved, never sent to the log's endpoints instead.
-func (s *server) localOverrides(conversation []byte) (ov network.Overrides, unresolved map[string]error, err error) {
+func (s *server) localOverrides(rows []cosl.Row, conversation []byte) (ov network.Overrides, unresolved map[string]error, err error) {
 	p, alias := s.opts.Paths, s.opts.Alias
 	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, err
 	}
 	ws := cfg.Workspace
-	if len(conversation) == 32 {
-		conv, err := config.ReadWorkspace(p.ConversationConfigFile(alias, [32]byte(conversation)))
+	keys, err := key.List(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	var id [32]byte
+	copy(id[:], conversation)
+	if name, ok := key.WorkspaceNames(keys)[id]; ok && len(conversation) == len(id) {
+		conv, err := config.ReadWorkspace(p.ConversationConfigFile(alias, name))
 		if err != nil {
 			return nil, nil, err
 		}

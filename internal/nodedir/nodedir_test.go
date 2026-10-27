@@ -1,7 +1,6 @@
 package nodedir_test
 
 import (
-	"strings"
 	"testing"
 
 	"defios.com/internal/nodedir"
@@ -122,17 +121,14 @@ func TestAliasPathsSplitConfigAndData(t *testing.T) {
 	}
 }
 
-// A Conversation's Workspace sits in its Group's, named by the hex
-// Conversation ID.
-func TestConversationWorkspaceIsTheHexIDInTheGroupWorkspace(t *testing.T) {
+// A Conversation's Workspace sits in its Group's, under its Key's name.
+func TestConversationWorkspaceIsInTheGroupWorkspace(t *testing.T) {
 	p := nodedir.Resolve(nodedir.Lookup{Dir: "/n"})
-	var id [32]byte
-	id[0], id[31] = 0xab, 0x01
-	want := "/n/group/home/ab" + strings.Repeat("00", 30) + "01"
-	if got := p.ConversationWorkspace("home", id); got != want {
+	want := "/n/group/home/ecdsa-02a1b2c3d4e5"
+	if got := p.ConversationWorkspace("home", "ecdsa-02a1b2c3d4e5"); got != want {
 		t.Fatalf("conversation workspace = %q, want %q", got, want)
 	}
-	if got := p.ConversationConfigFile("home", id); got != want+"/config.toml" {
+	if got := p.ConversationConfigFile("home", "ecdsa-02a1b2c3d4e5"); got != want+"/config.toml" {
 		t.Fatalf("conversation config = %q", got)
 	}
 }

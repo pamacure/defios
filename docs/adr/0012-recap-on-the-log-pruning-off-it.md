@@ -127,7 +127,7 @@ per Node, and a Node that falls past `SnapshotThreshold` re-transfers all of it.
   describing the agent's purpose. Model settings are Group-scoped, agent
   settings Conversation-scoped. *Amended by
   [ADR 0013](0013-group-config-workspaces-and-named-secrets.md): a
-  Conversation's Workspace is `config/group/<alias>/<conversation-id>/`, its
+  Conversation's Workspace is `config/group/<alias>/<curve>-<pubkey-prefix>/`, its
   `config.toml` overrides the Group's `[networks]`, `[providers]` and `[agent]`
   table by table, the markdown is `SOUL.md`, and `group-level` is gone: the
   Group Workspace itself configures Group-level talk.*

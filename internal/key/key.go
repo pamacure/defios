@@ -95,3 +95,32 @@ func Resolve(keys []Key, query string) (Key, error) {
 		return Key{}, ErrAmbiguous
 	}
 }
+
+// workspacePrefix is how many hex characters of a public key name its
+// Conversation's Workspace: short enough to type, and a prefix key inspect
+// accepts.
+const workspacePrefix = 12
+
+// WorkspaceNames names each Key's Conversation Workspace, by Conversation ID:
+// <curve>-<first 12 hex of the public key>, or <curve>-<full public key hex>
+// when an earlier Key in keys already holds the short name. keys is in mint
+// order, as List returns it from the log, so every Node names alike and a
+// name never changes once given (ADR 0013).
+func WorkspaceNames(keys []Key) map[[32]byte]string {
+	out := map[[32]byte]string{}
+	taken := map[string]bool{}
+	for _, k := range keys {
+		id := ConversationID(k.Curve, k.PublicKey)
+		if _, ok := out[id]; ok {
+			continue
+		}
+		pub := hex.EncodeToString(k.PublicKey)
+		name := k.Curve + "-" + pub[:min(workspacePrefix, len(pub))]
+		if taken[name] {
+			name = k.Curve + "-" + pub
+		}
+		taken[name] = true
+		out[id] = name
+	}
+	return out
+}

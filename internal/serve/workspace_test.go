@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,13 +12,12 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
-	"defios.com/internal/key"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // Once a Key is minted, every Node serving the Group holds an empty
-// Workspace for its Conversation in the Group's, named by the hex
-// Conversation ID; there is no group-level directory.
+// Workspace for its Conversation in the Group's, named for the Key; there
+// is no group-level directory.
 func TestMintedKeyGetsAConversationWorkspaceOnEveryNode(t *testing.T) {
 	a, b := pair(t)
 	gid := formValid(t, a, b)
@@ -41,10 +41,12 @@ func TestMintedKeyGetsAConversationWorkspaceOnEveryNode(t *testing.T) {
 	complete := &coslv1.SessionComplete{SessionId: sid[:], Curve: "ecdsa", PublicKey: pk}
 	commitEnvelope(t, a, b, sign(a, complete, cosl.TypeSessionComplete))
 	commitEnvelope(t, a, b, sign(b, complete, cosl.TypeSessionComplete))
-	conv := key.ConversationID("ecdsa", pk)
+	// The Workspace is named for the Key as key list shows it: its curve and
+	// the first 12 hex characters of its public key.
+	name := "ecdsa-" + strings.Repeat("33", 6)
 
 	for _, n := range []*node{a, b} {
-		dir := n.paths.ConversationWorkspace(group.ImplicitAlias, conv)
+		dir := n.paths.ConversationWorkspace(group.ImplicitAlias, name)
 		deadline := time.Now().Add(20 * time.Second)
 		for {
 			info, err := os.Stat(dir)

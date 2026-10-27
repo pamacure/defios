@@ -702,11 +702,11 @@ func TestSignBroadcastUsesTheLocalOverrideAndFailsLoudly(t *testing.T) {
 // nowhere fails that Network, naming the reference, and sends nothing.
 func TestSignBroadcastUsesTheKeysConversationWorkspace(t *testing.T) {
 	onLog, groupWide, perKey := newChain(t), newChain(t), newChain(t)
-	a, b, _, msgID, conv := signedRequest(t, onLog.srv.URL)
+	a, b, _, msgID, _ := signedRequest(t, onLog.srv.URL)
 	ctx := context.Background()
 
 	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), "[networks.eth]\nrpc_urls = [\"$GROUP_ETH\"]\n")
-	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, [32]byte(conv)), "[networks.eth]\nrpc_urls = [\"$KEY_ETH\"]\n")
+	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, workspaceOf(t, a)), "[networks.eth]\nrpc_urls = [\"$KEY_ETH\"]\n")
 	a.secrets["GROUP_ETH"], a.secrets["KEY_ETH"] = groupWide.srv.URL, perKey.srv.URL
 	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || v.Failed() {
 		t.Fatalf("%+v, %v", v, err)
@@ -723,6 +723,27 @@ func TestSignBroadcastUsesTheKeysConversationWorkspace(t *testing.T) {
 	if onLog.sends() != 0 {
 		t.Fatal("an unresolved local override fell back to the log's endpoint")
 	}
+}
+
+// workspaceOf waits for the serve to lay down the one Key's Conversation
+// Workspace and returns its name, which must be the curve and the first 12
+// hex characters of the public key.
+func workspaceOf(t *testing.T, n *node) string {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		matches, _ := filepath.Glob(filepath.Join(n.paths.GroupConfigDir(group.ImplicitAlias), "ecdsa-*"))
+		if len(matches) == 1 {
+			name := filepath.Base(matches[0])
+			if len(name) != len("ecdsa-")+12 {
+				t.Fatalf("%s: Workspace name %q is not ecdsa-<12 hex>", n.name, name)
+			}
+			return name
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s: no Conversation Workspace", n.name)
+	return ""
 }
 
 // fileContaining names the first file under dir whose bytes contain s.

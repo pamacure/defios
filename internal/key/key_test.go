@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -144,4 +145,29 @@ func encode(b []byte) string {
 		out[i*2+1] = digits[c&0x0f]
 	}
 	return string(out)
+}
+
+// A Key's Workspace is named <curve>-<first 12 hex of its public key>, a
+// prefix key inspect accepts. A Key whose short name an earlier-minted Key
+// already holds takes its full public key instead, so no two Keys share a
+// Workspace and a name, once given, never changes.
+func TestWorkspaceNamesAreShortUnlessTaken(t *testing.T) {
+	first := key.Key{Curve: "ecdsa", PublicKey: bytesKey(0x02, 0xaa)}
+	clash := key.Key{Curve: "ecdsa", PublicKey: append(bytesKey(0x02, 0xaa)[:32:32], 0xbb)}
+	other := key.Key{Curve: "eddsa", PublicKey: bytesKey(0x02, 0xaa)[:32]}
+	names := key.WorkspaceNames([]key.Key{first, clash, other})
+	want := map[string]string{
+		"first": "ecdsa-02aaaaaaaaaa",
+		"clash": "ecdsa-02" + strings.Repeat("aa", 31) + "bb",
+		"other": "eddsa-02aaaaaaaaaa",
+	}
+	for label, k := range map[string]key.Key{"first": first, "clash": clash, "other": other} {
+		if got := names[key.ConversationID(k.Curve, k.PublicKey)]; got != want[label] {
+			t.Errorf("%s: name %q, want %q", label, got, want[label])
+		}
+	}
+	// The same Keys in the same mint order name the same way on every Node.
+	if again := key.WorkspaceNames([]key.Key{first, clash, other}); len(again) != 3 || again[key.ConversationID(clash.Curve, clash.PublicKey)] != want["clash"] {
+		t.Fatalf("names not reproducible: %v", again)
+	}
 }

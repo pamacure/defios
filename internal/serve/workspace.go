@@ -14,7 +14,7 @@ import (
 const workspaceTick = time.Second
 
 // watchWorkspaces gives every minted Key's Conversation a Workspace in
-// this Group's (ADR 0013), on startup and as Keys are minted, until ctx
+// this Group's, named by key.WorkspaceNames (ADR 0013), on startup and as Keys are minted, until ctx
 // ends, so every Node holds one. The log, not this Node's keygen engine, is
 // what says a Key exists, so a Key minted while this serve was down is
 // covered too. Its markdown is not read yet; its config.toml is read where
@@ -42,13 +42,12 @@ func (s *server) ensureWorkspaces(store *cosl.Store, made map[[32]byte]bool) {
 		s.opts.Logf("serve: listing Keys for Conversation Workspaces: %v", err)
 		return
 	}
-	for _, k := range keys {
-		id := key.ConversationID(k.Curve, k.PublicKey)
+	for id, name := range key.WorkspaceNames(keys) {
 		if made[id] {
 			continue
 		}
-		if err := os.MkdirAll(s.opts.Paths.ConversationWorkspace(s.opts.Alias, id), 0o700); err != nil {
-			s.opts.Logf("serve: Conversation Workspace for %x: %v", id, err)
+		if err := os.MkdirAll(s.opts.Paths.ConversationWorkspace(s.opts.Alias, name), 0o700); err != nil {
+			s.opts.Logf("serve: Conversation Workspace %s: %v", name, err)
 			continue
 		}
 		made[id] = true

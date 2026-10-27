@@ -3,7 +3,6 @@
 package nodedir
 
 import (
-	"encoding/hex"
 	"path/filepath"
 )
 
@@ -132,15 +131,16 @@ func (p Paths) TsnetDir(alias string) string {
 	return filepath.Join(p.GroupDir(alias), "tsnet")
 }
 
-// ConversationWorkspace is config/group/<alias>/<conversation-id>/, named by
-// the hex Conversation ID. A Conversation ID is always 64 hex characters, so
-// it cannot collide with a file in the Group Workspace (ADR 0013).
-func (p Paths) ConversationWorkspace(alias string, id [32]byte) string {
-	return filepath.Join(p.GroupConfigDir(alias), hex.EncodeToString(id[:]))
+// ConversationWorkspace is config/group/<alias>/<name>/, name being the
+// Key's Workspace name (key.WorkspaceNames), <curve>-<public key hex prefix>.
+// The curve prefix keeps it clear of any file in the Group Workspace
+// (ADR 0013).
+func (p Paths) ConversationWorkspace(alias, name string) string {
+	return filepath.Join(p.GroupConfigDir(alias), name)
 }
 
 // ConversationConfigFile is a Conversation Workspace's config.toml, which
 // overrides part of the Group's.
-func (p Paths) ConversationConfigFile(alias string, id [32]byte) string {
-	return filepath.Join(p.ConversationWorkspace(alias, id), "config.toml")
+func (p Paths) ConversationConfigFile(alias, name string) string {
+	return filepath.Join(p.ConversationWorkspace(alias, name), "config.toml")
 }

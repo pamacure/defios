@@ -2,7 +2,7 @@
 
 A Node's local settings for a Group live in one `config.toml` at
 `config/group/<alias>/`, the Group's **Workspace**, and each Key's
-Conversation has its own Workspace at `config/group/<alias>/<conversation-id>/`
+Conversation has its own Workspace at `config/group/<alias>/<curve>-<pubkey-prefix>/`
 whose `config.toml` may override part of the Group's. A config never holds a
 secret: a secret-bearing field holds a reference, `"$NAME"`, and the value is
 found under that name in the serve's environment or else in the Group's Vault,
@@ -37,6 +37,11 @@ to a deployed Node, so nothing is migrated.
 - **Conversation Workspaces created by the operator on demand** — rejected:
   the Workspace is where a Conversation's markdown (its `SOUL.md`) will live,
   and a Key whose agent has no Workspace to read is a gap, not a default.
+- **Naming a Conversation Workspace by its Conversation ID** — rejected: 64
+  hex characters of a hash the operator never sees elsewhere. The Key's
+  curve and public key are what `key list` prints and `key inspect` takes a
+  prefix of, and they are as reproducible: the Conversation ID is only their
+  hash.
 
 ## Consequences
 
@@ -95,7 +100,12 @@ to a deployed Node, so nothing is migrated.
 - **Workspaces.** `group new` creates the Group Workspace. The serve creates a
   Conversation Workspace for every Key the log says is minted, as it starts
   and as Keys are minted, so every Node holds one. Markdown in either (the
-  Group's or a Conversation's `SOUL.md`) is not parsed yet. A Conversation ID
-  is 64 hex characters, so it cannot collide with a file in the Group
-  Workspace. `group-level` and the `conversation/` directory are gone: the
+  Group's or a Conversation's `SOUL.md`) is not parsed yet. A Conversation
+  Workspace is named `<curve>-<first 12 hex characters of the public key>`,
+  as `key list` prints the key, e.g. `ecdsa-02a1b2c3d4e5`; the curve keeps
+  it clear of any file in the Group Workspace. Two Keys must never share a
+  Workspace, so a Key whose short name an earlier-minted Key already holds
+  is named `<curve>-<full public key hex>` instead. Mint order is the log's,
+  so every Node names alike, and a name never changes once given.
+  `group-level` and the `conversation/` directory are gone: the
   Group Workspace is where Group-level talk's agent is configured.
