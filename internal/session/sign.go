@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
@@ -31,7 +32,7 @@ func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte) error {
 	} else if r != nil {
 		return s.acceptStarted(r, requestID)
 	}
-	if s.cfg.Now().After(info.Deadline) {
+	if s.now().After(info.Deadline) {
 		return ErrClosedSession
 	}
 	if info.hasAccepted(s.cfg.Node.NodeID) {
@@ -177,10 +178,12 @@ func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 	if err != nil {
 		return // not readable yet, or no longer a sign.request
 	}
-	if s.cfg.Now().After(info.Deadline) {
+	if s.now().After(info.Deadline) {
 		s.forget(id)
 		return
 	}
+	// The accept lapses at the deadline: wake then to forget it.
+	s.until(info.Deadline.Add(time.Nanosecond))
 	s.promote(id) // accepted before a restart, and no Session has been lost
 	signers := info.signers(0)
 	if busy || len(signers) < info.T || !slices.Contains(signers, s.cfg.Node.NodeID) || !SupportsSigning(info.Curve) {
@@ -189,7 +192,7 @@ func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 	s.starting[id] = struct{}{}
 	if err := s.appendSignStart(ctx, id, info, signers); err != nil {
 		delete(s.starting, id)
-		s.cfg.Logf("session: starting %x: %v", id[:4], err)
+		s.note(fmt.Errorf("starting %x: %w", id[:4], err))
 	}
 }
 
@@ -265,7 +268,7 @@ func (s *Service) promote(id ID) {
 
 // validateAll applies Key policy to every Session. It reports false when a
 // sign.request could not be read this time, so the caller waits for the next
-// poll instead of aborting on a transient failure.
+// wake instead of aborting on a transient failure.
 func (s *Service) validateAll(recs []*rec) bool {
 	started := map[[32]byte]struct{}{}
 	for _, r := range recs {
@@ -285,7 +288,7 @@ func (s *Service) validateAll(recs []*rec) bool {
 		case errors.Is(err, ErrBadSignRequest) || errors.Is(err, ErrUnsupported):
 			r.invalid = err.Error()
 		default:
-			s.cfg.Logf("session: reading sign request for %s: %v", r.id, err)
+			s.note(fmt.Errorf("reading sign request for %s: %w", r.id, err))
 			return false
 		}
 	}
@@ -293,7 +296,7 @@ func (s *Service) validateAll(recs []*rec) bool {
 }
 
 // signInfo resolves a signing Session's request, once. A lookup that fails
-// is retried on the next poll.
+// is retried on the next wake.
 func (s *Service) signInfo(r *rec) (SignInfo, error) {
 	if !r.isSign || s.cfg.SignInfo == nil {
 		return SignInfo{}, ErrNoEngine
@@ -399,8 +402,8 @@ func (i SignInfo) verifyOne(msg, sig []byte) bool {
 func (s *Service) finishSign(ctx context.Context, r *rec, p *party, res Result) {
 	info, err := s.signInfo(r)
 	if err != nil {
-		s.cfg.Logf("session: reading sign request for %s: %v", r.id, err)
-		return // retried on the next poll
+		s.note(fmt.Errorf("reading sign request for %s: %w", r.id, err))
+		return // retried on the next wake
 	}
 	if !info.verifies(res.Signatures) {
 		s.giveUp(ctx, r.id, "session: a signature does not verify against the Key")
@@ -413,7 +416,7 @@ func (s *Service) finishSign(ctx context.Context, r *rec, p *party, res Result) 
 		Signatures: cloneAll(res.Signatures),
 	})
 	if err != nil {
-		s.cfg.Logf("session: complete %s: %v", r.id, err)
+		s.note(fmt.Errorf("complete %s: %w", r.id, err))
 		return
 	}
 	p.minted = true

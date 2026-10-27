@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -106,7 +108,7 @@ type node struct {
 	shares      session.ShareStore
 	signInfo    func([32]byte) (session.SignInfo, error)
 	finish      *session.Result
-	clock       func() time.Time
+	clock       session.Clock
 	append      func(context.Context, cosl.Signed) error
 	appendFn    func(context.Context, cosl.Signed) error
 	waiting     [][32]byte
@@ -127,8 +129,61 @@ type pair struct {
 	alice  *node
 	bob    *node
 	carol  *node // nil unless newTrio
-	nowMu  sync.Mutex
+	clock  *fakeClock
+}
+
+// fakeClock is the Nodes' shared injected time. It moves only on advance,
+// which fires every timer that has fallen due.
+type fakeClock struct {
+	mu     sync.Mutex
 	now    time.Time
+	timers map[*fakeTimer]struct{}
+}
+
+type fakeTimer struct {
+	at time.Time
+	c  chan time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) After(d time.Duration) (<-chan time.Time, func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := &fakeTimer{at: c.now.Add(d), c: make(chan time.Time, 1)}
+	if d <= 0 {
+		t.c <- c.now
+		return t.c, func() {}
+	}
+	c.timers[t] = struct{}{}
+	return t.c, func() {
+		c.mu.Lock()
+		delete(c.timers, t)
+		c.mu.Unlock()
+	}
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	for t := range c.timers {
+		if !t.at.After(c.now) {
+			t.c <- c.now
+			delete(c.timers, t)
+		}
+	}
+}
+
+// pending is how many timers are set and not yet due.
+func (c *fakeClock) pending() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.timers)
 }
 
 func newPair(t *testing.T, waitingFor time.Duration) *pair { return newCluster(t, waitingFor, false) }
@@ -154,7 +209,7 @@ func newCluster(t *testing.T, waitingFor time.Duration, withCarol bool) *pair {
 		nodes = append(nodes, group.RosterNode{Public: ids[2].Public, DisplayName: "carol", TsnetHostname: "defios-carol"})
 	}
 	roster := group.NewRoster(nodes...)
-	c := &pair{t: t, roster: roster, fan: &fanout{}, now: time.Now()}
+	c := &pair{t: t, roster: roster, fan: &fanout{}, clock: &fakeClock{now: time.Now(), timers: map[*fakeTimer]struct{}{}}}
 	c.alice = c.open(ids[0], "alice", waitingFor)
 	c.bob = c.open(ids[1], "bob", waitingFor)
 	all := []*node{c.alice, c.bob}
@@ -184,7 +239,7 @@ func (c *pair) open(id *identity.Node, name string, waitingFor time.Duration) *n
 	n := &node{
 		t: c.t, id: id, name: name, store: store, roster: c.roster,
 		waitingFor: waitingFor, acceptPath: dir + "/local-accept.json",
-		clock: c.nowFn,
+		clock: c.clock,
 	}
 	n.appendFn = c.fan.Append
 	n.append = n.dispatchAppend
@@ -192,26 +247,17 @@ func (c *pair) open(id *identity.Node, name string, waitingFor time.Duration) *n
 	return n
 }
 
-func (c *pair) nowFn() time.Time {
-	c.nowMu.Lock()
-	defer c.nowMu.Unlock()
-	return c.now
-}
+func (c *pair) nowFn() time.Time { return c.clock.Now() }
 
-func (c *pair) advance(d time.Duration) {
-	c.nowMu.Lock()
-	c.now = c.now.Add(d)
-	c.nowMu.Unlock()
-}
+func (c *pair) advance(d time.Duration) { c.clock.advance(d) }
 
 func (n *node) start() {
 	n.t.Helper()
 	svc, err := session.New(session.Config{
 		Node: n.id, Roster: n.roster, Store: n.store, Append: n.append,
 		NewEngine: n.engine, NewSigner: n.engine, SignInfo: n.lookupSign, Preparams: []byte("ecdsa-preparams"),
-		WaitingFor: n.waitingFor, Now: n.clock, Logf: n.logf, AcceptPath: n.acceptPath,
+		WaitingFor: n.waitingFor, Clock: n.clock, Logf: n.logf, AcceptPath: n.acceptPath,
 		Shares: n.shares, PendingPath: n.pendingPath,
-		Tick: 5 * time.Millisecond,
 	})
 	if err != nil {
 		n.t.Fatal(err)
@@ -981,6 +1027,41 @@ func TestLiveWaitAbortIsRetriedWhenAppendFails(t *testing.T) {
 	}
 	if got := len(c.alice.engines()[0].started()); got != 1 {
 		t.Fatalf("engine starts = %d, want 1", got)
+	}
+}
+
+// A failure that repeats on every retry is logged once, and once more when
+// it clears.
+func TestPersistentFailureIsLoggedOnce(t *testing.T) {
+	c := newPair(t, time.Hour)
+	var attempts atomic.Int32
+	c.bob.setAppend(func(ctx context.Context, signed cosl.Signed) error {
+		var env coslv1.Envelope
+		if err := proto.Unmarshal(signed.Bytes, &env); err != nil {
+			return err
+		}
+		if env.MsgType == cosl.TypeSessionAbort && attempts.Add(1) <= 4 {
+			return errors.New("no leader")
+		}
+		return c.fan.Append(ctx, signed)
+	})
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait(t, func() bool { return slices.Contains(c.bob.logLines(), "session "+sum.SessionID+" waiting for accept") })
+	c.advance(time.Hour + time.Second) // bob never accepts, and gives up
+	wait(t, func() bool { return abortedReason(t, c.alice, sum.SessionID, "waiting for accept") })
+	wait(t, func() bool { return slices.Contains(c.bob.logLines(), "session: ok again") })
+	var failures int
+	for _, line := range c.bob.logLines() {
+		if strings.Contains(line, "no leader") {
+			failures++
+		}
+	}
+	if attempts.Load() != 5 || failures != 1 {
+		t.Fatalf("%d abort attempts, %d lines logging the failure; want 5 attempts and 1 line\n%s",
+			attempts.Load(), failures, strings.Join(c.bob.logLines(), "\n"))
 	}
 }
 

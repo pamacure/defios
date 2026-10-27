@@ -48,30 +48,31 @@ func benchService(b testing.TB, shape coslbench.Shape) (*Service, *cosl.FSM, cos
 	return svc, cosl.NewFSM(store, r.Roster), cosl.Author{Node: alice, GroupID: r.Roster.GroupID()}, next
 }
 
-// One wake of the Session layer while nothing has changed on the replica:
-// what an idle serve pays on every tick.
+// One wake of the Session layer while nothing has changed on the replica,
+// no nudge came and no deadline fell due: what an idle serve pays at each
+// fallback tick, and the only wake it has.
 func BenchmarkSessionIdleWake(b *testing.B) {
 	for _, shape := range coslbench.Shapes {
 		b.Run(shape.Name, func(b *testing.B) {
 			svc, _, _, _ := benchService(b, shape)
 			ctx := context.Background()
-			svc.poll(ctx) // settle: the first wake after start does extra work
+			svc.wake(ctx, true) // settle: the first wake after start does extra work
 			b.ReportAllocs()
 			for b.Loop() {
-				svc.poll(ctx)
+				svc.wake(ctx, false)
 			}
 		})
 	}
 }
 
 // One wake of the Session layer after one message of talk committed: what
-// a serve pays per committed row.
+// a serve pays per committed row, since the replica announces each one.
 func BenchmarkSessionWakeAfterARow(b *testing.B) {
 	for _, shape := range coslbench.Shapes {
 		b.Run(shape.Name, func(b *testing.B) {
 			svc, fsm, author, next := benchService(b, shape)
 			ctx := context.Background()
-			svc.poll(ctx)
+			svc.wake(ctx, true)
 			b.ReportAllocs()
 			for b.Loop() {
 				b.StopTimer()
@@ -83,7 +84,7 @@ func BenchmarkSessionWakeAfterARow(b *testing.B) {
 					b.Fatalf("apply: %+v %v", res, err)
 				}
 				b.StartTimer()
-				svc.poll(ctx)
+				svc.wake(ctx, false)
 			}
 		})
 	}

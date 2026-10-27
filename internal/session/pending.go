@@ -63,21 +63,21 @@ func (s *Service) rememberShare(id ID, curve string, publicKey []byte) error {
 
 // dropShare deletes the Vault share for a Session that will not mint.
 // The marker stays until the delete lands, so a retry still finds it.
-func (s *Service) dropShare(id ID) {
+func (s *Service) dropShare(id ID) error {
 	s.mu.Lock()
 	ref, ok := s.held[id]
 	store := s.cfg.Shares
 	s.mu.Unlock()
 	if !ok {
-		return
+		return nil
 	}
 	if store != nil {
 		if err := store.Delete(ref.Curve, ref.PublicKey); err != nil {
-			s.cfg.Logf("session: deleting share %s: %v", id, err)
-			return
+			return fmt.Errorf("deleting share %s: %w", id, err)
 		}
 	}
 	s.forgetShare(id)
+	return nil
 }
 
 // forgetShare drops the pending marker and leaves the Vault share in place.
@@ -117,7 +117,7 @@ func (s *Service) saveHeldLocked() error {
 }
 
 // mint writes the share, then appends session.complete. Either step is
-// retried on the next poll until both have landed; the engine is not
+// retried on the next wake until both have landed; the engine is not
 // started again.
 func (s *Service) mint(ctx context.Context, r *rec, p *party, res Result) {
 	if s.cfg.Shares == nil {
@@ -129,11 +129,11 @@ func (s *Service) mint(ctx context.Context, r *rec, p *party, res Result) {
 		return
 	}
 	if err := s.rememberShare(r.id, r.curve, res.PublicKey); err != nil {
-		s.cfg.Logf("session: share %s: %v", r.id, err)
+		s.note(fmt.Errorf("share %s: %w", r.id, err))
 		return
 	}
 	if err := s.cfg.Shares.Put(r.curve, res.PublicKey, res.SaveData); err != nil {
-		s.cfg.Logf("session: share %s: %v", r.id, err)
+		s.note(fmt.Errorf("share %s: %w", r.id, err))
 		return
 	}
 	err := s.signAndAppend(ctx, cosl.TypeSessionComplete, &coslv1.SessionComplete{
@@ -142,7 +142,7 @@ func (s *Service) mint(ctx context.Context, r *rec, p *party, res Result) {
 		PublicKey: append([]byte(nil), res.PublicKey...),
 	})
 	if err != nil {
-		s.cfg.Logf("session: complete %s: %v", r.id, err)
+		s.note(fmt.Errorf("complete %s: %w", r.id, err))
 		return
 	}
 	p.minted = true

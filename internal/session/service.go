@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/errlog"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -105,9 +106,10 @@ type Config struct {
 	Preparams []byte
 	// WaitingFor overrides DefaultWaitingFor when non-zero.
 	WaitingFor time.Duration
-	// Now is the clock. Nil means time.Now.
-	Now  func() time.Time
-	Logf func(string, ...any)
+	// Clock is what the layer's deadlines are read and waited on by. Nil
+	// means the wall clock.
+	Clock Clock
+	Logf  func(string, ...any)
 	// AcceptPath is the local-accept file. A restart finds Sessions this
 	// Node already accepted and aborts them: the in-memory party is gone
 	// and cannot be resumed. Empty keeps accepts in memory only.
@@ -117,8 +119,24 @@ type Config struct {
 	// but not yet a minted Key, so a restart can delete it on abort.
 	Shares      ShareStore
 	PendingPath string
-	// Tick is how often the replica is polled. Zero means 50ms.
-	Tick time.Duration
+}
+
+// Clock is the Session layer's time: the accept wait, an engine's stall
+// timeout and a Sign Request's deadline are measured and waited on by it.
+type Clock interface {
+	Now() time.Time
+	// After delivers once on the channel when d has passed on this clock
+	// (at once if d <= 0). stop cancels it.
+	After(d time.Duration) (c <-chan time.Time, stop func())
+}
+
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
+func (wallClock) After(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
 }
 
 // Service is one Node's Session layer. Run watches the replica. Start,
@@ -137,6 +155,13 @@ type Service struct {
 	signs    map[ID]SignInfo       // resolved sign.requests, by Session
 	starting map[[32]byte]struct{} // sign.requests this Node has appended a start for
 	verified map[[32]byte]bool     // whether a session.complete's signatures verify, by envelope hash
+
+	// Run's own, between wakes.
+	follow   *cosl.Follower
+	nudged   chan struct{}
+	errs     *errlog.Reporter
+	wakeErrs []error   // this wake's failures
+	next     time.Time // the nearest deadline as of the last full wake
 }
 
 type shareRef struct {
@@ -182,14 +207,11 @@ func New(cfg Config) (*Service, error) {
 	if cfg.WaitingFor <= 0 {
 		cfg.WaitingFor = DefaultWaitingFor
 	}
-	if cfg.Now == nil {
-		cfg.Now = time.Now
+	if cfg.Clock == nil {
+		cfg.Clock = wallClock{}
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
-	}
-	if cfg.Tick <= 0 {
-		cfg.Tick = 50 * time.Millisecond
 	}
 	onDisk := map[ID]struct{}{}
 	if cfg.AcceptPath != "" {
@@ -216,24 +238,105 @@ func New(cfg Config) (*Service, error) {
 		signs:    map[ID]SignInfo{},
 		verified: map[[32]byte]bool{},
 		starting: map[[32]byte]struct{}{},
+		follow:   cfg.Store.Follow(cosl.FallbackTick),
+		nudged:   make(chan struct{}, 1),
+		errs:     errlog.New(cfg.Logf, "session"),
 	}, nil
 }
 
-// Run watches the replica until ctx is done. Cancelling ctx drops
-// in-memory parties and does not itself append session.abort; a later Run
-// sees the lost party and aborts.
+// Run follows the replica until ctx is done (ADR 0014). It wakes when the
+// replica changes, when this process nudges it (a local accept, a keygen
+// start, an engine's output or result), when one of its own deadlines falls
+// due, to retry a wake that failed, and at the fallback tick. Cancelling ctx
+// drops in-memory parties and does not itself append session.abort; a later
+// Run sees the lost party and aborts.
 func (s *Service) Run(ctx context.Context) {
 	defer s.shutdown()
-	s.poll(ctx)
-	ticker := time.NewTicker(s.cfg.Tick)
-	defer ticker.Stop()
-	for {
+	force := true
+	var backoff time.Duration
+	for ctx.Err() == nil {
+		deadline, failed := s.wake(ctx, force)
+		var due <-chan time.Time
+		stopDue := func() {}
+		if !deadline.IsZero() {
+			due, stopDue = s.cfg.Clock.After(deadline.Sub(s.now()))
+		}
+		var again <-chan time.Time
+		stopAgain := func() bool { return false }
+		if failed {
+			backoff = min(max(2*backoff, retryFirst), retryMax)
+			t := time.NewTimer(backoff)
+			again, stopAgain = t.C, t.Stop
+		} else {
+			backoff = 0
+		}
+		fallback := time.NewTimer(cosl.FallbackTick)
+		force = true
 		select {
 		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.poll(ctx)
+		case <-s.follow.Changes():
+			force = false
+		case <-fallback.C:
+			force = false
+		case <-s.nudged:
+		case <-due:
+		case <-again:
 		}
+		fallback.Stop()
+		stopAgain()
+		stopDue()
+	}
+}
+
+const (
+	// retryFirst is how soon a wake that failed is tried again; each
+	// failure in a row doubles it, up to retryMax.
+	retryFirst = 50 * time.Millisecond
+	retryMax   = cosl.FallbackTick
+)
+
+// wake is one turn of Run. Unless forced (a nudge, a deadline, a retry), it
+// reads only the replica's Mark and stops there if nothing moved since the
+// last wake it finished. It returns the nearest of the layer's deadlines,
+// zero if there is none, and whether the wake failed and wants a retry. A
+// failure is logged when it first appears or changes, not on every wake.
+func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, failed bool) {
+	select { // this wake covers every nudge so far
+	case <-s.nudged:
+	default:
+	}
+	_, moved, err := s.follow.Poll()
+	if err != nil {
+		err = fmt.Errorf("reading replica: %w", err)
+	} else if moved || force {
+		s.wakeErrs, s.next = nil, time.Time{}
+		s.catchUp(ctx)
+		err = errors.Join(s.wakeErrs...)
+		s.wakeErrs = nil
+		if err == nil {
+			s.follow.Done()
+		}
+	}
+	s.errs.Report(err)
+	return s.next, err != nil
+}
+
+// nudge wakes Run for something that happened in this process rather than
+// on the replica.
+func (s *Service) nudge() {
+	select {
+	case s.nudged <- struct{}{}:
+	default:
+	}
+}
+
+// note records a failure of this wake; the wake is retried.
+func (s *Service) note(err error) { s.wakeErrs = append(s.wakeErrs, err) }
+
+// until makes t a deadline of this wake: Run wakes at the nearest one.
+func (s *Service) until(t time.Time) {
+	if s.next.IsZero() || t.Before(s.next) {
+		s.next = t
 	}
 }
 
@@ -329,22 +432,24 @@ func (s *Service) Abort(ctx context.Context, id ID, reason string) error {
 	if err := s.abort(ctx, id, reason); err != nil {
 		return err
 	}
-	s.dropShare(id)
+	if err := s.dropShare(id); err != nil {
+		s.cfg.Logf("session: %v", err)
+	}
 	return nil
 }
 
-func (s *Service) poll(ctx context.Context) {
+func (s *Service) catchUp(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	rows, err := s.cfg.Store.Log(cosl.Query{})
+	rows, err := s.cfg.Store.Log(cosl.Query{MsgTypes: msgTypes})
 	if err != nil {
-		s.cfg.Logf("session: reading replica: %v", err)
+		s.note(fmt.Errorf("reading replica: %w", err))
 		return
 	}
 	recs, err := parse(rows, s.verifySigned)
 	if err != nil {
-		s.cfg.Logf("session: %v", err)
+		s.note(err)
 		return
 	}
 	if !s.validateAll(recs) {
@@ -362,7 +467,9 @@ func (s *Service) poll(ctx context.Context) {
 			s.forget(r.gate())
 			delete(s.aborting, r.id)
 			if r.status == Aborted {
-				s.dropShare(r.id)
+				if err := s.dropShare(r.id); err != nil {
+					s.note(err)
+				}
 			} else {
 				s.forgetShare(r.id)
 			}
@@ -380,9 +487,12 @@ func (s *Service) poll(ctx context.Context) {
 			s.giveUp(ctx, r.id, reason)
 			continue
 		}
-		if info, err := s.signInfo(r); err == nil && s.cfg.Now().After(info.Deadline) {
-			s.giveUp(ctx, r.id, reasonExpired)
-			continue
+		if info, err := s.signInfo(r); err == nil {
+			if s.now().After(info.Deadline) {
+				s.giveUp(ctx, r.id, reasonExpired)
+				continue
+			}
+			s.until(info.Deadline.Add(time.Nanosecond))
 		}
 		if s.lost(r) {
 			s.giveUp(ctx, r.id, reasonPartyLost)
@@ -393,9 +503,12 @@ func (s *Service) poll(ctx context.Context) {
 		}
 		if !s.pendingNow(r.gate()) {
 			s.logWaiting(r)
-			if s.cfg.Now().Sub(time.Unix(0, r.createdAt)) > s.cfg.WaitingFor {
+			lapses := time.Unix(0, r.createdAt).Add(s.cfg.WaitingFor + time.Nanosecond)
+			if !s.now().Before(lapses) {
 				s.giveUp(ctx, r.id, reasonWaitingAccept)
+				continue
 			}
+			s.until(lapses)
 			continue
 		}
 		s.ensureParty(ctx, r, head)
@@ -556,25 +669,29 @@ func (s *Service) checkWait(ctx context.Context, r *rec) {
 		return
 	}
 	if p.waitSince.IsZero() {
-		p.waitSince = s.cfg.Now()
+		p.waitSince = s.now()
+	}
+	stalls := p.waitSince.Add(s.cfg.WaitingFor + time.Nanosecond)
+	if !s.now().Before(stalls) {
+		s.giveUp(ctx, r.id, reasonTimedOut)
 		return
 	}
-	if s.cfg.Now().Sub(p.waitSince) > s.cfg.WaitingFor {
-		s.giveUp(ctx, r.id, reasonTimedOut)
-	}
+	s.until(stalls)
 }
 
 // giveUp stops the engine and appends session.abort. A failed append is
 // remembered and retried; the engine is not started again.
 func (s *Service) giveUp(ctx context.Context, id ID, reason string) {
 	s.stop(id)
-	s.dropShare(id)
+	if err := s.dropShare(id); err != nil {
+		s.note(err)
+	}
 	s.fail(id)
 	if _, ok := s.aborting[id]; !ok {
 		s.aborting[id] = reason
 	}
 	if err := s.abort(ctx, id, s.aborting[id]); err != nil {
-		s.cfg.Logf("session: abort %s: %v", id, err)
+		s.note(fmt.Errorf("abort %s: %w", id, err))
 		return
 	}
 	delete(s.aborting, id)
@@ -597,6 +714,7 @@ func (s *Service) pump(ctx context.Context, id ID, p *party) {
 				s.emit(ctx, id, o)
 			}
 			held = nil
+			s.nudge()
 		case o, ok := <-out:
 			if !ok {
 				return
@@ -607,11 +725,13 @@ func (s *Service) pump(ctx context.Context, id ID, p *party) {
 				continue
 			}
 			s.emit(ctx, id, o)
+			s.nudge()
 		case res, ok := <-done:
 			if !ok {
 				return
 			}
 			p.setDone(res)
+			s.nudge()
 			return
 		}
 	}
@@ -681,12 +801,17 @@ func (s *Service) signAndAppend(ctx context.Context, typ uint32, payload proto.M
 	return s.cfg.Append(ctx, signed)
 }
 
+func (s *Service) now() time.Time { return s.cfg.Clock.Now() }
+
 func (s *Service) author() cosl.Author {
 	return cosl.Author{Node: s.cfg.Node, GroupID: s.cfg.Roster.GroupID()}
 }
 
+// msgTypes are the rows the Session layer folds; it reads no others.
+var msgTypes = []uint32{cosl.TypeSessionStart, cosl.TypeSessionAbort, cosl.TypeSessionComplete, cosl.TypeTssSession}
+
 func (s *Service) records() ([]*rec, error) {
-	rows, err := s.cfg.Store.Log(cosl.Query{})
+	rows, err := s.cfg.Store.Log(cosl.Query{MsgTypes: msgTypes})
 	if err != nil {
 		return nil, err
 	}
@@ -729,6 +854,7 @@ func (s *Service) remember(id ID) error {
 	defer s.mu.Unlock()
 	s.pending[id] = struct{}{}
 	s.onDisk[id] = struct{}{}
+	s.nudge() // a local accept: an engine may start now
 	return s.saveLocked()
 }
 

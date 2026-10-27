@@ -469,3 +469,32 @@ func TestVerifyECDSARejectsHighSAndZero(t *testing.T) {
 		t.Fatal("r=0 verified")
 	}
 }
+
+// An engine's result is acted on as it arrives, not when the replica next
+// changes: nothing else happens between the result and the complete.
+func TestEngineResultIsActedOnWithoutAReplicaChange(t *testing.T) {
+	f := newSignFixture(t)
+	c := f.c
+	f.propose(t)
+	f.accept(t, c.bob)
+	sum := f.liveSession(t, c.alice)
+	wait(t, func() bool { es := c.alice.engines(); return len(es) == 1 && len(es[0].started()) == 1 })
+	time.Sleep(50 * time.Millisecond) // let both layers settle
+	c.alice.engines()[0].done <- session.Result{Signatures: [][]byte{f.sig}}
+	wait(t, func() bool { return statusOf(t, c.alice, sum.SessionID) == session.Complete })
+}
+
+// A Sign Request's deadline is a timer only while the request is pending or
+// its Session is open. Once the Session completes, no timer is left.
+func TestNoTimerIsSetOnceNothingIsPending(t *testing.T) {
+	f := newSignFixture(t)
+	c := f.c
+	f.propose(t)
+	f.accept(t, c.bob)
+	sum := f.liveSession(t, c.alice)
+	wait(t, func() bool { return c.clock.pending() > 0 })
+	wait(t, func() bool { return len(c.alice.engines()) == 1 })
+	c.alice.engines()[0].done <- session.Result{Signatures: [][]byte{f.sig}}
+	wait(t, func() bool { return statusOf(t, c.bob, sum.SessionID) == session.Complete })
+	wait(t, func() bool { return c.clock.pending() == 0 })
+}
