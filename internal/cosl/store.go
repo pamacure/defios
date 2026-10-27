@@ -207,6 +207,10 @@ func (s *Store) Meta() (Meta, error) {
 	return readMeta(s.db)
 }
 
+// Pruned reports whether this Node has destroyed the row's payload, with the
+// envelope that carried it; only its metadata and envelope_hash remain.
+func (r Row) Pruned() bool { return r.Envelope == nil }
+
 // Decode parses the stored envelope bytes.
 func (r Row) Decode() (*coslv1.Envelope, error) {
 	var env coslv1.Envelope

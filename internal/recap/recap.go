@@ -8,6 +8,7 @@ package recap
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"defios.com/internal/cosl"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -32,6 +33,15 @@ type Recap struct {
 type View struct {
 	Live *Recap     // nil until a Recap applies
 	Talk []cosl.Row // app.freeform rows after Live.BaseSeq; every one with no Recap
+	Full []Entry    // every app.freeform and every Recap that applied, in seq order
+}
+
+// Entry is one row of a Conversation's full history: talk, or a Recap that
+// applied when it committed.
+type Entry struct {
+	Row        cosl.Row
+	Recap      *Recap // nil for talk
+	Superseded bool   // hidden from the folded view: talk the live Recap covers, or an earlier Recap
 }
 
 // Fold replays one Conversation's rows, in seq order as a Query on its
@@ -39,15 +49,18 @@ type View struct {
 // A Recap that does not apply to the state it meets is skipped, identically
 // on every Node: one whose base_seq is not beyond the live Recap's, one whose
 // base_seq names no earlier app.freeform of this Conversation, and one whose
-// payload is undecodable or whose text app.freeform would refuse.
+// payload is undecodable or whose text app.freeform would refuse. A skipped
+// Recap never accounted for anything, so it is not in Full either.
 func Fold(rows []cosl.Row) (View, error) {
 	var live *Recap
-	var talk []cosl.Row
+	var full []Entry
+	var talkSeqs []uint64
 	isTalk := map[uint64]bool{}
 	for _, r := range rows {
 		switch r.MsgType {
 		case cosl.TypeAppFreeform:
-			talk = append(talk, r)
+			full = append(full, Entry{Row: r})
+			talkSeqs = append(talkSeqs, r.Seq)
 			isTalk[r.Seq] = true
 		case cosl.TypeAppRecap:
 			env, err := r.Decode()
@@ -67,16 +80,23 @@ func Fold(rows []cosl.Row) (View, error) {
 			if live != nil && p.BaseSeq <= live.BaseSeq {
 				continue
 			}
-			live = &Recap{Row: r, Text: p.Text, BaseSeq: p.BaseSeq}
+			// Every earlier talk row is at or below the base or after it,
+			// and talkSeqs is ascending.
+			covers, _ := slices.BinarySearch(talkSeqs, p.BaseSeq)
+			live = &Recap{Row: r, Text: p.Text, BaseSeq: p.BaseSeq, Covers: covers + 1}
+			full = append(full, Entry{Row: r, Recap: live})
 		}
 	}
-	v := View{Live: live}
-	for _, r := range talk {
-		if live != nil && r.Seq <= live.BaseSeq {
-			live.Covers++
-			continue
+	v := View{Live: live, Full: full}
+	for i, e := range full {
+		switch {
+		case e.Recap != nil:
+			v.Full[i].Superseded = e.Recap != live
+		case live != nil && e.Row.Seq <= live.BaseSeq:
+			v.Full[i].Superseded = true
+		default:
+			v.Talk = append(v.Talk, e.Row)
 		}
-		v.Talk = append(v.Talk, r)
 	}
 	return v, nil
 }

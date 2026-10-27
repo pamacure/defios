@@ -175,6 +175,13 @@ defios conversation log --key ecdsa:<hex>
 `--base-seq` must be the seq of a message in that same Conversation, past the base of any earlier Recap. Without `--key` it recaps Group-level talk. `conversation log` then prints the Recap first, as `[recap of <n> messages to seq <base>] <text>`, followed only by the messages after its base. `cosl log` still shows every row.
 
 ```bash
+defios conversation log --key ecdsa:<hex> --full
+defios conversation log --key ecdsa:<hex> --lean
+```
+
+`--full` also shows the messages and earlier Recaps that the live Recap supersedes. A message whose payload this Node has pruned shows as `[pruned]` with only its seq, time and sender. `--lean` gives an agent its starting context: one `<display name>: <text>` line per entry, the live Recap first, then every message after it. Nothing else is printed, including pruned messages. Both flags work with `--key` and `--limit`. Under `--full`, `--limit` keeps the latest N rows. Otherwise it keeps the latest N messages after the Recap.
+
+```bash
 defios cosl log
 defios cosl decode <msg-id-of-a-key-scoped-row>
 ```

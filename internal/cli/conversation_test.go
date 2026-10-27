@@ -1,8 +1,10 @@
 package cli_test
 
 import (
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -313,6 +315,133 @@ func TestConversationLogFoldsToTheLiveRecap(t *testing.T) {
 	lines = strings.Split(strings.TrimSpace(r.stdout), "\n")
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "6 ") || !strings.HasPrefix(lines[1], "7 ") {
 		t.Errorf("--limit 1 = %q", r.stdout)
+	}
+}
+
+// pruneTalk nulls the envelope of the app.freeform rows at seqs in the
+// replica under dir, as Pruning leaves a row: metadata and envelope_hash
+// only (ADR 0012). The trigger is dropped for the rewrite and put back.
+func pruneTalk(t *testing.T, dir string, seqs ...uint64) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "group", "*", "cosl.sqlite"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("replica: %v %v", err, matches)
+	}
+	db, err := sql.Open("sqlite", "file:"+matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	stmts := []string{"DROP TRIGGER cosl_no_update"}
+	for _, seq := range seqs {
+		stmts = append(stmts, fmt.Sprintf("UPDATE cosl SET envelope = NULL WHERE msg_type = %d AND seq = %d", cosl.TypeAppFreeform, seq))
+	}
+	stmts = append(stmts, "CREATE TRIGGER cosl_no_update BEFORE UPDATE ON cosl BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END")
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// --full shows the talk the Recap supersedes in seq order, a pruned row as
+// metadata only, and composes with --limit.
+func TestConversationLogFull(t *testing.T) {
+	dir := t.TempDir()
+	groupWithRecap(t, dir)
+	pruneTalk(t, dir, 2)
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("want 5 lines, got:\n%s", r.stdout)
+	}
+	wants := []struct{ prefix, suffix string }{
+		{"2 ", " alice  [pruned]"},
+		{"4 ", " bob  hi back"},
+		{"5 ", ` alice  two\nlines`},
+		{"6 ", " bob  [recap of 2 messages to seq 4] hello and hi"},
+		{"7 ", " alice  after"},
+	}
+	for i, w := range wants {
+		if !strings.HasPrefix(lines[i], w.prefix) || !strings.HasSuffix(lines[i], w.suffix) {
+			t.Errorf("line %d: %q, want %q…%q", i, lines[i], w.prefix, w.suffix)
+		}
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--json")
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 5 {
+		t.Fatalf("--json: %v\n%s", err, r.stdout)
+	}
+	if rows[0]["pruned"] != true || rows[0]["text"] != "" || rows[0]["superseded"] != true || rows[0]["sender_display_name"] != "alice" {
+		t.Errorf("pruned row = %v", rows[0])
+	}
+	if rows[1]["pruned"] != nil || rows[1]["superseded"] != true || rows[2]["superseded"] != nil {
+		t.Errorf("superseded flags: %v / %v", rows[1], rows[2])
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--limit", "2")
+	lines = strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "6 ") || !strings.HasPrefix(lines[1], "7 ") {
+		t.Errorf("--full --limit 2 = %q", r.stdout)
+	}
+}
+
+// --lean is the live Recap then every message after it, as display name and
+// text only: no seq, time, type, header or pruned placeholder.
+func TestConversationLogLean(t *testing.T) {
+	dir := t.TempDir()
+	groupWithRecap(t, dir)
+	pruneTalk(t, dir, 2, 4)
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--lean")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	if want := "bob: hello and hi\nalice: two\\nlines\nalice: after\n"; r.stdout != want {
+		t.Errorf("--lean = %q, want %q", r.stdout, want)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--limit", "1")
+	if want := "bob: hello and hi\nalice: after\n"; r.stdout != want {
+		t.Errorf("--lean --limit 1 = %q, want %q", r.stdout, want)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--json")
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 3 {
+		t.Fatalf("--json: %v\n%s", err, r.stdout)
+	}
+	if len(rows[0]) != 2 || rows[0]["sender_display_name"] != "bob" || rows[0]["text"] != "hello and hi" {
+		t.Errorf("lean row = %v", rows[0])
+	}
+
+	// A pruned row the fold does not supersede still prints nothing, and
+	// --limit counts only what --lean can show.
+	pruneTalk(t, dir, 7)
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean")
+	if want := "bob: hello and hi\nalice: two\\nlines\n"; r.stdout != want {
+		t.Errorf("--lean over pruned talk = %q, want %q", r.stdout, want)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--limit", "1")
+	if want := "bob: hello and hi\nalice: two\\nlines\n"; r.stdout != want {
+		t.Errorf("--lean --limit 1 over pruned talk = %q, want %q", r.stdout, want)
+	}
+}
+
+func TestConversationLogLeanAndFullTakeKeyAndExcludeEachOther(t *testing.T) {
+	dir := t.TempDir()
+	ecdsaPK, _ := groupWithKeys(t, dir)
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--key", "ecdsa:"+hex.EncodeToString(ecdsaPK))
+	if r.code != 0 || r.stdout != "alice: ecdsa talk\n" {
+		t.Errorf("--lean --key: exit %d, %q", r.code, r.stdout)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--key", "ecdsa:"+hex.EncodeToString(ecdsaPK))
+	if r.code != 0 || strings.Count(r.stdout, "\n") != 1 || !strings.HasSuffix(r.stdout, " alice  ecdsa talk\n") {
+		t.Errorf("--full --key: exit %d, %q", r.code, r.stdout)
+	}
+	if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--lean"); r.code != 1 {
+		t.Errorf("--full --lean: exit %d, want 1; stderr %q", r.code, r.stderr)
 	}
 }
 

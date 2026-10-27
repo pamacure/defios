@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -31,15 +32,17 @@ func conversationCommand(g *globals) *cobra.Command {
 	}
 	send.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	root.AddCommand(send)
-	var limit int
+	var opts logOptions
 	log := &cobra.Command{
 		Use:   "log",
 		Short: "Print messages: seq, time, display name, text. The live Recap stands in for the talk it covers. --key scopes to that Key",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runConversationLog(g, keyQuery, limit) },
+		RunE:  func(*cobra.Command, []string) error { return runConversationLog(g, keyQuery, opts) },
 	}
 	log.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
-	log.Flags().IntVar(&limit, "limit", 0, "only the latest N messages after the live Recap")
+	log.Flags().IntVar(&opts.limit, "limit", 0, "only the latest N messages after the live Recap (with --full, the latest N rows)")
+	log.Flags().BoolVar(&opts.full, "full", false, "also show what the live Recap supersedes; a pruned row shows as metadata only")
+	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, the live Recap then every message after it, for an agent's context")
 	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	var baseSeq uint64
@@ -139,6 +142,20 @@ type messageLine struct {
 	ContentType       string `json:"content_type"`
 	BaseSeq           uint64 `json:"base_seq,omitempty"` // app.recap only
 	Covers            int    `json:"covers,omitempty"`   // app.recap only
+	Superseded        bool   `json:"superseded,omitempty"`
+	Pruned            bool   `json:"pruned,omitempty"` // no text: only the row's metadata remains
+}
+
+// leanLine is one `conversation log --lean` entry: who said it and what.
+type leanLine struct {
+	SenderDisplayName string `json:"sender_display_name"`
+	Text              string `json:"text"`
+}
+
+// logOptions are `conversation log`'s reader flags.
+type logOptions struct {
+	limit      int
+	full, lean bool
 }
 
 func newMessageLine(rec *group.Record, r cosl.Row) messageLine {
@@ -153,9 +170,12 @@ func newMessageLine(rec *group.Record, r cosl.Row) messageLine {
 	}
 }
 
-func runConversationLog(g *globals, keyQuery string, limit int) error {
-	if limit < 0 {
+func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
+	if opts.limit < 0 {
 		return exitUsagef("--limit must be >= 0")
+	}
+	if opts.full && opts.lean {
+		return exitUsagef("--full and --lean are opposite views; pass one")
 	}
 	_, rec, err := loadGroup(g)
 	if err != nil {
@@ -185,41 +205,101 @@ func runConversationLog(g *globals, keyQuery string, limit int) error {
 	if err != nil {
 		return exitOperational(err)
 	}
-	// --limit trims the talk only: the live Recap always stands in for what
-	// it hides.
-	talk := view.Talk
-	if limit > 0 && len(talk) > limit {
-		talk = talk[len(talk)-limit:]
-	}
-	lines := make([]messageLine, 0, len(talk)+1)
-	if view.Live != nil {
-		l := newMessageLine(rec, view.Live.Row)
-		l.Text, l.BaseSeq, l.Covers = view.Live.Text, view.Live.BaseSeq, view.Live.Covers
-		lines = append(lines, l)
-	}
-	for _, r := range talk {
-		env, err := r.Decode()
+	lines := make([]messageLine, 0, len(view.Full))
+	for _, e := range logEntries(view, opts) {
+		l, err := newEntryLine(rec, e)
 		if err != nil {
 			return exitOperational(err)
 		}
-		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-		if err != nil {
-			return exitOperational(fmt.Errorf("cosl: seq %d: %w", r.Seq, err))
-		}
-		ff := msg.(*coslv1.AppFreeform)
-		l := newMessageLine(rec, r)
-		l.Text, l.ContentType = ff.Text, ff.ContentType
 		lines = append(lines, l)
+	}
+	if opts.lean {
+		return emitLean(g, lines)
 	}
 	if g.json {
 		return g.emitJSON(lines)
 	}
 	for _, l := range lines {
 		text := cosl.EscapeNewlines(l.Text)
-		if l.MsgType == cosl.TypeName(cosl.TypeAppRecap) {
+		switch {
+		case l.Pruned:
+			text = "[pruned]"
+		case l.MsgType == cosl.TypeName(cosl.TypeAppRecap):
 			text = fmt.Sprintf("[recap of %d messages to seq %d] %s", l.Covers, l.BaseSeq, text)
 		}
 		fmt.Fprintf(g.app.Stdout, "%d %s %s  %s\n", l.Seq, l.CreatedAt, l.SenderDisplayName, text)
+	}
+	return nil
+}
+
+// logEntries is what a view shows. --full is every row and --limit keeps
+// its latest ones; otherwise --limit trims only the talk, since the live
+// Recap always stands in for what it hides. --lean drops pruned talk before
+// the limit counts it: it has nothing to show for one.
+func logEntries(view recap.View, opts logOptions) []recap.Entry {
+	if opts.full {
+		return latest(view.Full, opts.limit)
+	}
+	talk := view.Talk
+	if opts.lean {
+		talk = slices.DeleteFunc(slices.Clone(talk), cosl.Row.Pruned)
+	}
+	talk = latest(talk, opts.limit)
+	entries := make([]recap.Entry, 0, len(talk)+1)
+	if view.Live != nil {
+		entries = append(entries, recap.Entry{Row: view.Live.Row, Recap: view.Live})
+	}
+	for _, r := range talk {
+		entries = append(entries, recap.Entry{Row: r})
+	}
+	return entries
+}
+
+// latest is the last n of xs, or all of them when n is 0.
+func latest[T any](xs []T, n int) []T {
+	if n > 0 && len(xs) > n {
+		return xs[len(xs)-n:]
+	}
+	return xs
+}
+
+// newEntryLine is e as a log row: a Recap, talk, or a pruned row's metadata.
+func newEntryLine(rec *group.Record, e recap.Entry) (messageLine, error) {
+	l := newMessageLine(rec, e.Row)
+	l.Superseded = e.Superseded
+	switch {
+	case e.Recap != nil:
+		l.Text, l.BaseSeq, l.Covers = e.Recap.Text, e.Recap.BaseSeq, e.Recap.Covers
+	case e.Row.Pruned():
+		l.Pruned = true
+	default:
+		env, err := e.Row.Decode()
+		if err != nil {
+			return messageLine{}, err
+		}
+		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+		if err != nil {
+			return messageLine{}, fmt.Errorf("cosl: seq %d: %w", e.Row.Seq, err)
+		}
+		ff := msg.(*coslv1.AppFreeform)
+		l.Text, l.ContentType = ff.Text, ff.ContentType
+	}
+	return l, nil
+}
+
+// emitLean prints `<display name>: <text>`, one entry per line, and nothing
+// else: timestamps are advisory and never ordering, while who said what is
+// load-bearing in a multi-party Conversation.
+func emitLean(g *globals, lines []messageLine) error {
+	lean := make([]leanLine, len(lines))
+	for i, l := range lines {
+		lean[i] = leanLine{SenderDisplayName: l.SenderDisplayName, Text: l.Text}
+	}
+	if g.json {
+		return g.emitJSON(lean)
+	}
+	for _, l := range lean {
+		fmt.Fprintf(g.app.Stdout, "%s: %s\n", l.SenderDisplayName, cosl.EscapeNewlines(l.Text))
 	}
 	return nil
 }

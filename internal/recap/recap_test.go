@@ -169,3 +169,42 @@ func TestCheck(t *testing.T) {
 		}
 	}
 }
+
+// Full is every message and every Recap that took effect, in seq order; what
+// the folded view hides is marked superseded, and each Recap counts the talk
+// at or below its own base. A Recap the fold skipped never accounted for
+// anything and is not there.
+func TestFullKeepsWhatTheFoldSupersedes(t *testing.T) {
+	v, err := Fold([]cosl.Row{
+		talk(t, 1, "a"),
+		recapRow(t, 2, 1, "a"),
+		talk(t, 3, "b"),
+		recapRow(t, 4, 1, "stale, skipped"),
+		talk(t, 5, "c"),
+		recapRow(t, 6, 3, "a and b"),
+		talk(t, 7, "d"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type line struct {
+		seq        uint64
+		covers     int // 0 for talk
+		superseded bool
+	}
+	want := []line{{1, 0, true}, {2, 1, true}, {3, 0, true}, {5, 0, false}, {6, 2, false}, {7, 0, false}}
+	var got []line
+	for _, e := range v.Full {
+		l := line{seq: e.Row.Seq, superseded: e.Superseded}
+		if e.Recap != nil {
+			l.covers = e.Recap.Covers
+		}
+		got = append(got, l)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("full = %+v\nwant %+v", got, want)
+	}
+	if v.Full[4].Recap != v.Live {
+		t.Errorf("the live Recap's entry is not v.Live")
+	}
+}
