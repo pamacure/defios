@@ -52,13 +52,11 @@ func TestBuiltReplicaReadsAsItsShape(t *testing.T) {
 	if want := shape.ECDSAKeys + shape.EdDSAKeys + shape.Signings; complete != want {
 		t.Fatalf("%d complete Sessions, want %d", complete, want)
 	}
-	talk := cosl.TypeAppFreeform
-	scoped, err := store.Log(cosl.Query{MsgType: &talk, ConversationID: r.Conversation})
+	scoped, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, ConversationID: r.Conversation})
 	if err != nil || len(scoped) != shape.Talk/2 {
 		t.Fatalf("%d messages in the signing Key's Conversation, %v; want %d", len(scoped), err, shape.Talk/2)
 	}
-	signs := cosl.TypeSessionComplete
-	completes, _ := store.Log(cosl.Query{MsgType: &signs})
+	completes, _ := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeSessionComplete}})
 	if want := 2 * (shape.ECDSAKeys + shape.EdDSAKeys + shape.Signings); len(completes) != want {
 		t.Fatalf("%d session.complete rows, want %d", len(completes), want)
 	}

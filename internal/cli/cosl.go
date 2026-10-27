@@ -75,8 +75,7 @@ func openReplica(g *globals) (*cosl.Store, error) {
 // displayNames maps sender Node IDs to the display names their
 // membership.join rows carry. Later joins win.
 func displayNames(store *cosl.Store) (map[identity.ID]string, error) {
-	typ := cosl.TypeMembershipJoin
-	rows, err := store.Log(cosl.Query{MsgType: &typ})
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeMembershipJoin}})
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +139,7 @@ func runCoslLog(g *globals, typeFlag string, limit int) error {
 		if err != nil {
 			return err
 		}
-		q.MsgType = &id
+		q.MsgTypes = []uint32{id}
 	}
 	store, err := openReplica(g)
 	if err != nil {

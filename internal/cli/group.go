@@ -498,8 +498,7 @@ func joinedNodes(coslPath string) (map[identity.ID]bool, error) {
 		return nil, err
 	}
 	defer store.Close()
-	typ := cosl.TypeMembershipJoin
-	rows, err := store.Log(cosl.Query{MsgType: &typ})
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeMembershipJoin}})
 	if err != nil {
 		return nil, err
 	}

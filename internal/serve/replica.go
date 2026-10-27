@@ -195,8 +195,7 @@ func (s *server) joinOnce(ctx context.Context, replica *raftx.Replica, store *co
 
 // joined reports whether this Node's membership.join is on the replica.
 func (s *server) joined(store *cosl.Store) (bool, error) {
-	typ := cosl.TypeMembershipJoin
-	rows, err := store.Log(cosl.Query{MsgType: &typ})
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeMembershipJoin}})
 	if err != nil {
 		return false, err
 	}

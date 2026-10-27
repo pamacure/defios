@@ -30,8 +30,7 @@ func (n *node) groupLevelRows(t *testing.T, gid group.ID, want int) []cosl.Row {
 	for time.Now().Before(deadline) {
 		store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
 		if err == nil {
-			typ := cosl.TypeAppFreeform
-			rows, err = store.Log(cosl.Query{MsgType: &typ, GroupLevel: true})
+			rows, err = store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, GroupLevel: true})
 			store.Close()
 			if err == nil && len(rows) >= want {
 				return rows

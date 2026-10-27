@@ -81,6 +81,18 @@ func TestAmbiguousPrefixErrors(t *testing.T) {
 
 func minted(t *testing.T) ([]cosl.Row, []byte) {
 	t.Helper()
+	store, pk := mintedStore(t)
+	rows, err := store.Log(cosl.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows, pk
+}
+
+// mintedStore is a replica holding one ECDSA Key, minted between messages
+// of talk.
+func mintedStore(t *testing.T) (*cosl.Store, []byte) {
+	t.Helper()
 	alice, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -118,14 +130,38 @@ func minted(t *testing.T) ([]cosl.Row, []byte) {
 	}
 	parts := [][]byte{roster.NodeIDs()[0][:], roster.NodeIDs()[1][:]}
 	pk := bytesKey(0x02, 0x11)
+	apply(alice, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "before"})
 	apply(alice, cosl.TypeSessionStart, &coslv1.SessionStart{SessionId: id[:], Curve: "ecdsa", T: 2, N: 2, Participants: parts})
+	apply(bob, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "during"})
 	apply(alice, cosl.TypeSessionComplete, &coslv1.SessionComplete{SessionId: id[:], Curve: "ecdsa", PublicKey: pk})
 	apply(bob, cosl.TypeSessionComplete, &coslv1.SessionComplete{SessionId: id[:], Curve: "ecdsa", PublicKey: pk})
-	rows, err := store.Log(cosl.Query{})
+	apply(alice, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "after"})
+	return store, pk
+}
+
+// Keys are listed from the Session rows that can mint one, read straight
+// off the replica; talk around them is not read.
+func TestReadListsKeysFromSessionRowsOnly(t *testing.T) {
+	store, pk := mintedStore(t)
+	keys, err := key.Read(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rows, pk
+	if len(keys) != 1 || keys[0].Ref() != "ecdsa:"+encode(pk) || keys[0].T != 2 || keys[0].N != 2 {
+		t.Fatalf("keys = %+v", keys)
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: key.MsgTypes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.MsgType == cosl.TypeAppFreeform {
+			t.Fatalf("seq %d: key.MsgTypes reads talk", r.Seq)
+		}
+	}
+	if len(rows) != 3 {
+		t.Fatalf("%d Session rows, want 3", len(rows))
+	}
 }
 
 func bytesKey(prefix, fill byte) []byte {

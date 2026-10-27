@@ -47,7 +47,23 @@ func (k Key) Conversation() string {
 	return hex.EncodeToString(id[:])
 }
 
-// List returns minted Keys in replica order.
+// MsgTypes are the rows that decide whether a Key is minted: session.start,
+// session.complete and session.abort. A reader listing Keys asks the
+// replica for these only (cosl.Query.MsgTypes), so talk and round traffic
+// are never decoded to find a Key (ADR 0014).
+var MsgTypes = []uint32{cosl.TypeSessionStart, cosl.TypeSessionComplete, cosl.TypeSessionAbort}
+
+// Read lists the replica's minted Keys in mint order, reading only MsgTypes.
+func Read(store *cosl.Store) ([]Key, error) {
+	rows, err := store.Log(cosl.Query{MsgTypes: MsgTypes})
+	if err != nil {
+		return nil, err
+	}
+	return List(rows)
+}
+
+// List returns minted Keys in replica order. rows may be the whole log or
+// only its MsgTypes rows; the answer is the same.
 func List(rows []cosl.Row) ([]Key, error) {
 	minted, err := session.CompletedSessions(rows)
 	if err != nil {

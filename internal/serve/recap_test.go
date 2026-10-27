@@ -97,8 +97,7 @@ func recapRows(t *testing.T, n *node) int {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	typ := cosl.TypeAppRecap
-	rows, err := store.Log(cosl.Query{MsgType: &typ})
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppRecap}})
 	if err != nil {
 		t.Fatal(err)
 	}

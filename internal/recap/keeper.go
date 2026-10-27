@@ -37,8 +37,7 @@ func (k *Keeper) Step() ([]Pruned, error) {
 	// Read the triggers first, so a Recap or restore landing mid-prune is
 	// seen by the next Step.
 	restores := k.store.Restores()
-	typ := cosl.TypeAppRecap
-	latest, err := k.store.Log(cosl.Query{MsgType: &typ, Limit: 1})
+	latest, err := k.store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppRecap}, Limit: 1})
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +59,7 @@ func (k *Keeper) Step() ([]Pruned, error) {
 // pruneAll prunes every Conversation that has a Recap, Group-level talk
 // included, in the order their first Recaps committed.
 func pruneAll(store *cosl.Store) ([]Pruned, error) {
-	typ := cosl.TypeAppRecap
-	recaps, err := store.Log(cosl.Query{MsgType: &typ})
+	recaps, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppRecap}})
 	if err != nil {
 		return nil, err
 	}

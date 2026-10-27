@@ -345,9 +345,7 @@ func TestLogFiltersByTypeAndLimitsToLatest(t *testing.T) {
 	f.apply(2, 1, f.signed(0, f.envelope(0, cosl.TypeMembershipJoin, &coslv1.MembershipJoin{DisplayName: "alice"})))
 	f.apply(3, 1, f.signed(1, f.envelope(1, cosl.TypeAppFreeform, freeform("b"))))
 	f.apply(4, 1, f.signed(1, f.envelope(1, cosl.TypeAppFreeform, freeform("c"))))
-
-	typ := cosl.TypeAppFreeform
-	rows, err := f.store.Log(cosl.Query{MsgType: &typ})
+	rows, err := f.store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
@@ -77,10 +78,14 @@ var (
 )
 
 // Store is one Node's COSL replica. The FSM is its only appender and Prune
-// its only other writer; CLI reads go through WAL.
+// its only other writer; CLI reads go through WAL. It announces each
+// committed row and each restore to whoever waits on Changed.
 type Store struct {
 	db       *sql.DB
 	restores atomic.Uint64
+
+	changeMu sync.Mutex
+	changed  chan struct{} // closed and replaced on each change
 }
 
 // Open opens or creates the replica at path.
@@ -100,7 +105,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, changed: make(chan struct{})}, nil
 }
 
 // installTriggers makes the replica's triggers exactly this binary's. When
@@ -177,11 +182,15 @@ type Meta struct {
 	ChainHead       [32]byte // genesis: 32 zero bytes
 }
 
-// Query filters Log. Limit > 0 returns the latest Limit rows, in seq order.
+// Query filters Log. MsgTypes, when set, keeps rows of those message types
+// only, so a reader decodes only what it folds (ADR 0014). AfterSeq keeps
+// rows with a seq above it, so a reader reads only what it has not seen.
 // GroupLevel keeps only rows whose conversation id is unset (§8).
 // ConversationID, when set, keeps rows where conversation_id equals it.
+// Limit > 0 returns the latest Limit matching rows, in seq order.
 type Query struct {
-	MsgType        *uint32
+	MsgTypes       []uint32
+	AfterSeq       uint64
 	GroupLevel     bool
 	ConversationID []byte
 	Limit          int
@@ -193,9 +202,15 @@ const rowColumns = "seq, term, envelope, envelope_hash, sender, msg_type, msg_id
 func (s *Store) Log(q Query) ([]Row, error) {
 	var conds []string
 	args := []any{}
-	if q.MsgType != nil {
-		conds = append(conds, "msg_type = ?")
-		args = append(args, *q.MsgType)
+	if len(q.MsgTypes) > 0 {
+		conds = append(conds, "msg_type IN (?"+strings.Repeat(", ?", len(q.MsgTypes)-1)+")")
+		for _, t := range q.MsgTypes {
+			args = append(args, t)
+		}
+	}
+	if q.AfterSeq > 0 {
+		conds = append(conds, "seq > ?")
+		args = append(args, q.AfterSeq)
 	}
 	if q.GroupLevel {
 		conds = append(conds, "conversation_id IS NULL")
@@ -360,6 +375,9 @@ func (s *Store) append(index, term uint64, data []byte, env *coslv1.Envelope) (b
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("cosl: %w", err)
+	}
+	if n == 1 {
+		s.announce()
 	}
 	return n == 1, nil
 }

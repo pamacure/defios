@@ -36,8 +36,7 @@ func (n *node) joins(t *testing.T, gid group.ID, want int) []cosl.Row {
 	for time.Now().Before(deadline) {
 		store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
 		if err == nil {
-			typ := cosl.TypeMembershipJoin
-			rows, err = store.Log(cosl.Query{MsgType: &typ})
+			rows, err = store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeMembershipJoin}})
 			store.Close()
 			if err == nil && len(rows) >= want {
 				return rows
