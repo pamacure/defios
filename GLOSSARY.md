@@ -45,8 +45,16 @@ A per-Node X25519 keypair, held by that Node alone, used to seal point-to-point 
 _Avoid_: encryption key, box key, crypto key
 
 **Vault**:
-This Node's passphrase-encrypted store of secrets, and the only thing a Node keeps encrypted at rest: the auth private key, the encryption private key, and ECDSA preparams shared across all the Node's Groups, together with this Node's shares of each Group's Keys and the credentials for each Group's Models, held separately per Group. Everything else — Identity, Group and Roster records, tailnet config, and the COSL replica — is plaintext, so a Group that is not currently being served can still be inspected.
+This Node's passphrase-encrypted store of secrets, and the only thing a Node keeps encrypted at rest: the auth private key, the encryption private key, and ECDSA preparams shared across all the Node's Groups, together with this Node's shares of each Group's Keys and each Group's Secrets, held separately per Group. Everything else — Identity, Group and Roster records, tailnet config, and the COSL replica — is plaintext, so a Group that is not currently being served can still be inspected.
 _Avoid_: keystore, wallet, keyring, container
+
+**Secret**:
+A named value a Node's config refers to but never contains, such as an API key or a key-bearing RPC URL. Found by its name in the environment of the process reading the config, or else in that Group's part of the Vault, which stores it by name alone and knows nothing of what it is for.
+_Avoid_: credential (that is what a Secret often holds), env var, vault entry
+
+**Workspace**:
+A Node's local directory of settings and agent material for one Group, or for one Conversation within it: a config that a Conversation's may partly override, plus markdown describing the agent's purpose. Never replicated; two Nodes may configure the same Conversation differently.
+_Avoid_: profile, project, config dir
 
 **Key**:
 One threshold public key held jointly by a Group, together with the per-Node shares of it. Identified by its curve and that public key, not by the Session that minted it; exists for ECDSA or Ed25519 signing.
@@ -89,7 +97,7 @@ A blockchain a Group may broadcast a signed transaction to, described by a confi
 _Avoid_: chain config, blockchain configuration, RPC, endpoint
 
 **Model**:
-A language model a Group's agent may use, described by a config the Group maintains on its COSL and recalls by a local alias, as a Network is: a provider (Anthropic or OpenAI, fixed for the alias's life), the provider's model id, and optionally an endpoint. Credentials for it never ride the COSL: each Node holds them in its Vault, or takes them from the provider's environment variable.
+A language model a Group's agent may use, described by a config the Group maintains on its COSL and recalls by a local alias, as a Network is: a provider (Anthropic or OpenAI, fixed for the alias's life), the provider's model id, and optionally an endpoint. Credentials for it never ride the COSL: each Node names a Secret for them in its own config.
 _Avoid_: LLM config, provider (that is one field of a Model), engine (that is a threshold-signing engine)
 
 **Sign Request**:

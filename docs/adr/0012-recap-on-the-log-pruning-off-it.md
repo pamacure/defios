@@ -114,13 +114,23 @@ per Node, and a Node that falls past `SnapshotThreshold` re-transfers all of it.
   plaintext config directory; encrypting keyshares while leaving a credential
   that can drain a billing account in plaintext is inconsistent, and one
   secret store is the point. Moving the RPC credentials there is a follow-up.
+  *Amended by [ADR 0013](0013-group-config-workspaces-and-named-secrets.md):
+  the Vault holds Secrets by name, not by Model alias, and `config.toml`
+  refers to them by provider (`[providers.<p>] api_key = "$NAME"`), so a
+  removed and re-added alias cannot inherit another provider's key. The RPC
+  credentials move in the same change.*
 - Per-Conversation agent config is groundwork only: the path
   `config/group/<alias>/conversation/<conversation-id>/` exists, with
   `group-level` reserved for nil-id talk (a Conversation ID is always 64 hex
   characters, so it cannot collide). Nothing parses a file inside it yet; the
   intended contents are a model alias, a token window, and a `soul.md`
   describing the agent's purpose. Model settings are Group-scoped, agent
-  settings Conversation-scoped.
+  settings Conversation-scoped. *Amended by
+  [ADR 0013](0013-group-config-workspaces-and-named-secrets.md): a
+  Conversation's Workspace is `config/group/<alias>/<conversation-id>/`, its
+  `config.toml` overrides the Group's `[networks]`, `[providers]` and `[agent]`
+  table by table, the markdown is `SOUL.md`, and `group-level` is gone: the
+  Group Workspace itself configures Group-level talk.*
 - `GLOSSARY.md` gains **Recap** and **Pruning**. "Tombstone" keeps its
   Networks meaning — a removal marker that destroys nothing — and is not used
   for Pruning.

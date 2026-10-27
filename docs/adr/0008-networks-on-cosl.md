@@ -43,7 +43,10 @@ tickets to follow.
   a **local override** that wins when it broadcasts. The override lives in the
   Node's config directory (`$XDG_CONFIG_HOME`), not the Vault and not the log:
   `group/<group-alias>/networks.toml`, one `[<network-alias>]` table with
-  `rpc_urls = [...]`.
+  `rpc_urls = [...]`. *Amended by [ADR 0013](0013-group-config-workspaces-and-named-secrets.md):
+  the override moves to `[networks.<network-alias>]` in the Group's
+  `config.toml`, and each URL is a `"$NAME"` reference to a Secret in the
+  Vault or the environment, never a plaintext URL.*
 - The fold is deterministic and skips messages that do not apply to the state
   they meet: a create of a live alias (first committed wins), an update of an
   absent alias, an update that changes the Network's type, a remove of an absent
