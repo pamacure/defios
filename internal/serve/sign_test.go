@@ -182,7 +182,7 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 	}
 	pk := priv.PubKey().SerializeCompressed()
 	started := map[string]chan session.Params{"alice": make(chan session.Params, 1), "bob": make(chan session.Params, 1)}
-	aliceJoined := make(chan struct{}) // a real protocol cannot finish before the other signer joins
+	bothJoined := make(chan struct{}) // a real protocol cannot finish before every signer joins
 
 	a, b := pairWith(t, func(n *node) {
 		store := vault.NewStore(filepath.Join(t.TempDir(), "shares"), "pw", nil)
@@ -193,11 +193,7 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 			o.Vault = store
 			o.NewEngine = func() session.Engine { return session.Unavailable{} }
 			o.NewSigner = func() session.Engine {
-				d := &signerDouble{priv: priv, done: make(chan session.Result, 1), got: started[n.name]}
-				if n.name == "bob" {
-					d.gate = aliceJoined
-				}
-				return d
+				return &signerDouble{gate: bothJoined, priv: priv, done: make(chan session.Result, 1), got: started[n.name]}
 			}
 		}
 	})
@@ -265,7 +261,7 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 			t.Fatalf("%s's engine did not start once t Nodes had accepted", name)
 		}
 	}
-	close(aliceJoined)
+	close(bothJoined)
 	if string(aliceParams.SaveData) != "share-alice" || string(bobParams.SaveData) != "share-bob" || len(aliceParams.Digests) != 1 || aliceParams.Digests != nil && !bytes.Equal(aliceParams.Digests[0], bobParams.Digests[0]) {
 		t.Fatalf("params alice %+v bob %+v", aliceParams, bobParams)
 	}
