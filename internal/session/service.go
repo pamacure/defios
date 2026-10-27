@@ -161,6 +161,7 @@ type Service struct {
 	nudged   chan struct{}
 	errs     *errlog.Reporter
 	wakeErrs []error   // this wake's failures
+	failing  bool      // the last wake failed: the next does all its work
 	next     time.Time // the nearest deadline as of the last full wake
 }
 
@@ -297,7 +298,8 @@ const (
 
 // wake is one turn of Run. Unless forced (a nudge, a deadline, a retry), it
 // reads only the replica's Mark and stops there if nothing moved since the
-// last wake it finished. It returns the nearest of the layer's deadlines,
+// last wake it finished, then looks for a row it folds since then and stops
+// there if none committed. It returns the nearest of the layer's deadlines,
 // zero if there is none, and whether the wake failed and wants a retry. A
 // failure is logged when it first appears or changes, not on every wake.
 func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, failed bool) {
@@ -305,10 +307,14 @@ func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, fai
 	case <-s.nudged:
 	default:
 	}
-	_, moved, err := s.follow.Poll()
-	if err != nil {
+	wk, moved, err := s.follow.Poll()
+	switch {
+	case err != nil:
 		err = fmt.Errorf("reading replica: %w", err)
-	} else if moved || force {
+	case !moved && !force:
+	case !force && !wk.Rescan && !s.failing && !s.touched(wk.Since, &err):
+		s.follow.Done() // only rows this layer does not fold, such as talk
+	case err == nil:
 		s.wakeErrs, s.next = nil, time.Time{}
 		s.catchUp(ctx)
 		err = errors.Join(s.wakeErrs...)
@@ -317,8 +323,24 @@ func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, fai
 			s.follow.Done()
 		}
 	}
+	s.failing = err != nil
 	s.errs.Report(err)
-	return s.next, err != nil
+	return s.next, s.failing
+}
+
+// wakeTypes are the rows that can give the layer something to do: the rows
+// it folds, and a sign.accept, which can make an accepted request startable.
+var wakeTypes = append([]uint32{cosl.TypeSignAccept}, msgTypes...)
+
+// touched is whether a row of wakeTypes committed after seq. A failed read
+// is set in *err and counts as touched.
+func (s *Service) touched(seq uint64, err *error) bool {
+	rows, e := s.cfg.Store.Log(cosl.Query{MsgTypes: wakeTypes, AfterSeq: seq, Limit: 1})
+	if e != nil {
+		*err = fmt.Errorf("reading replica: %w", e)
+		return true
+	}
+	return len(rows) > 0
 }
 
 // nudge wakes Run for something that happened in this process rather than

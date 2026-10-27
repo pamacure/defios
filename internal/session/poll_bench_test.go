@@ -89,3 +89,30 @@ func BenchmarkSessionWakeAfterARow(b *testing.B) {
 		})
 	}
 }
+
+// One wake of the Session layer after one tss.session committed: what a
+// serve pays per round of a running Session, since every round is a row
+// the layer folds. (The row's Session is not on the replica, so the wake
+// reads and folds everything but feeds no engine.)
+func BenchmarkSessionWakeAfterARound(b *testing.B) {
+	for _, shape := range coslbench.Shapes {
+		b.Run(shape.Name, func(b *testing.B) {
+			svc, fsm, author, next := benchService(b, shape)
+			ctx := context.Background()
+			svc.wake(ctx, true)
+			b.ReportAllocs()
+			for b.Loop() {
+				b.StopTimer()
+				s, err := author.Sign(cosl.TypeTssSession, nil, &coslv1.TssSession{SessionId: make([]byte, 32), Data: []byte("round")})
+				if err != nil {
+					b.Fatal(err)
+				}
+				if res, err := fsm.Apply(next(), 1, s.Bytes); err != nil || !res.Inserted {
+					b.Fatalf("apply: %+v %v", res, err)
+				}
+				b.StartTimer()
+				svc.wake(ctx, false)
+			}
+		})
+	}
+}
