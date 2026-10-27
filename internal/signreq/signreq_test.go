@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -552,5 +553,51 @@ func TestRequestStatus(t *testing.T) {
 				t.Errorf("Inspect status = %q, want %q", d.Status, c.want)
 			}
 		})
+	}
+}
+
+// Listing and inspecting a Sign Request need only MsgTypes rows, so a reader
+// asks the replica for those and never reads talk or round traffic: the
+// answer from them alone is the whole answer.
+func TestListAndInspectNeedOnlyMsgTypes(t *testing.T) {
+	start := time.Unix(10_000, 0)
+	within := start.Add(10 * time.Second)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	r := rowOf(t, 10, 0xa1, start, conv[:], req(ethTx()))
+	r.Sender = identity.ID{1}
+	sid := bytes32(0x88)
+	rows := append(mintedKey(t, start),
+		rawRow(t, 4, 1, cosl.TypeAppFreeform, start, conv[:], &coslv1.AppFreeform{Text: "talk"}),
+		r,
+		acceptRow(t, 11, 2, start.Add(time.Second), conv[:], r.MsgID),
+		rawRow(t, 12, 1, cosl.TypeSessionStart, start.Add(2*time.Second), nil,
+			&coslv1.SessionStart{SessionId: sid, Curve: "ecdsa", T: 2, N: 2, SignRequestId: r.MsgID[:], Participants: [][]byte{idBytes(1), idBytes(2)}}),
+		rawRow(t, 13, 2, cosl.TypeTssSession, start.Add(3*time.Second), nil, &coslv1.TssSession{SessionId: sid, Data: []byte("round")}),
+		rawRow(t, 14, 2, cosl.TypeSessionComplete, start.Add(4*time.Second), nil,
+			&coslv1.SessionComplete{SessionId: sid, Curve: "ecdsa", PublicKey: ecdsaKey.PublicKey, Signatures: [][]byte{make([]byte, 65)}}),
+		broadcastRow(t, 15, 2, start.Add(5*time.Second), conv[:], r.MsgID, 1),
+	)
+	var narrow []cosl.Row
+	for _, row := range rows {
+		if slices.Contains(MsgTypes, row.MsgType) {
+			narrow = append(narrow, row)
+		}
+	}
+	if len(narrow) != len(rows)-2 {
+		t.Fatalf("MsgTypes keeps %d of %d rows, want all but the talk and the round", len(narrow), len(rows))
+	}
+	list, err := List(narrow, within)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := list[0]; got.Status != "signed" || len(got.Accepted) != 2 || got.Needed != 2 || !got.KeyKnown || got.Broadcasts != 1 {
+		t.Fatalf("summary from MsgTypes rows = %+v", got)
+	}
+	d, err := Inspect(narrow, "a1", map[[32]byte]network.Network{ethID: nets[0]}, within)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Status != "signed" || len(d.BroadcastReceipts) != 1 || len(d.Details) != 1 || len(d.Details[0].Digests) != 1 {
+		t.Fatalf("detail from MsgTypes rows = %+v", d)
 	}
 }

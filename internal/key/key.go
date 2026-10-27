@@ -64,8 +64,10 @@ func Read(store *cosl.Store) ([]Key, error) {
 }
 
 // List returns minted Keys in replica order. rows may be the whole log or
-// only its MsgTypes rows; the answer is the same, and only MsgTypes rows are
-// decoded either way.
+// only its MsgTypes rows, and the answer is the same: only MsgTypes rows are
+// decoded. The cost is not the same. Rows read off the replica have already
+// been paid for, talk included, so a reader that needs nothing else asks for
+// MsgTypes only (Read).
 func List(rows []cosl.Row) ([]Key, error) {
 	var sessionRows []cosl.Row
 	for _, r := range rows {

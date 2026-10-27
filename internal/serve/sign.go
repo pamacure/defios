@@ -117,7 +117,7 @@ func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(
 		writeError(w, ErrNoReplica)
 		return
 	}
-	rows, err := store.Log(cosl.Query{})
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeSignRequest}})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -175,7 +175,7 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, ErrNoReplica)
 			return
 		}
-		rows, err := store.Log(cosl.Query{})
+		rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
 		if err != nil {
 			writeError(w, err)
 			return
@@ -205,7 +205,7 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, ErrNoReplica)
 			return
 		}
-		rows, err := store.Log(cosl.Query{})
+		rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
 		if err != nil {
 			writeError(w, err)
 			return

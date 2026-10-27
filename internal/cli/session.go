@@ -140,7 +140,7 @@ func runSessionList(g *globals) error {
 		return err
 	}
 	defer store.Close()
-	rows, err := store.Log(cosl.Query{})
+	rows, err := store.Log(cosl.Query{MsgTypes: signreq.LookupMsgTypes})
 	if err != nil {
 		return exitOperational(err)
 	}
@@ -167,7 +167,7 @@ func runSessionInspect(g *globals, hexID string) error {
 		return err
 	}
 	defer store.Close()
-	rows, err := store.Log(cosl.Query{})
+	rows, err := store.Log(cosl.Query{MsgTypes: signreq.LookupMsgTypes})
 	if err != nil {
 		return exitOperational(err)
 	}
@@ -260,7 +260,8 @@ func signEngine(getenv func(string) string, self identity.ID) func() session.Eng
 }
 
 // signInfoOf lets the listings verify a signing Session's completes against
-// the Key and Digests its sign.request implies, as serve does.
+// the Key and Digests its sign.request implies, as serve does. The listings
+// read signreq.LookupMsgTypes only: the Session rows they fold are among them.
 func signInfoOf(rows []cosl.Row) session.ReadOption {
 	return session.WithSignInfo(func(id [32]byte) (session.SignInfo, error) {
 		sg, err := signreq.Lookup(rows, id)

@@ -72,7 +72,7 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	if !running {
 		return BroadcastView{}, ErrNoReplica
 	}
-	rows, err := store.Log(cosl.Query{})
+	rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
 	if err != nil {
 		return BroadcastView{}, err
 	}

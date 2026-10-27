@@ -96,6 +96,12 @@ func rlpLength(n int, offset byte) []byte {
 // a Sign Request (ADR 0014).
 var LookupMsgTypes = slices.Concat([]uint32{cosl.TypeSignRequest, cosl.TypeSignAccept}, network.MsgTypes, key.MsgTypes)
 
+// MsgTypes are every row this package's readers fold (List, Inspect, Resolve,
+// Signed and Lookup) and the Session and Network folds shown beside them:
+// LookupMsgTypes and the sign.broadcast receipts. A Sign Request verb asks the
+// replica for these only, so talk and round traffic are never read (ADR 0014).
+var MsgTypes = slices.Concat(LookupMsgTypes, []uint32{cosl.TypeSignBroadcast})
+
 // Lookup reads the sign.request with msgID off rows and derives what signing
 // it needs (the Key, its Digests, the deadline, who accepted): the Digests are
 // flattened across its transactions in order, a keccak256 hash for Ethereum
