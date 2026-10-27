@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/internal/cosl"
 )
@@ -100,6 +101,41 @@ func TestRestoreIntoEmptyReplica(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameRows(t, want, seen)
+}
+
+// A restore that meets another writer holding the replica's write lock, as
+// a Prune does while it commits, waits for it as an append does instead of
+// failing the restore.
+func TestRestoreWaitsOutAConcurrentWriter(t *testing.T) {
+	leader := newFixture(t)
+	want := leader.fill(5)
+	snap := leader.snapshotOf()
+	follower := leader.sibling()
+
+	other, err := sql.Open("sqlite", "file:"+follower.path+"?_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	tx, err := other.Begin() // BEGIN IMMEDIATE: the write lock, as Prune's
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		close(released)
+		tx.Rollback()
+	}()
+	if err := follower.store.Restore(snap); err != nil {
+		t.Fatalf("restore alongside a writer: %v", err)
+	}
+	select {
+	case <-released:
+	default:
+		t.Fatal("restore finished while the other writer held the lock")
+	}
+	sameRows(t, want, follower.rows())
 }
 
 // A replica behind the snapshot is extended by it; the chain it already
