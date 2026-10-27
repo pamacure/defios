@@ -129,11 +129,11 @@ func (s *Service) mint(ctx context.Context, r *rec, p *party, res Result) {
 		return
 	}
 	if err := s.rememberShare(r.id, r.curve, res.PublicKey); err != nil {
-		s.note(fmt.Errorf("share %s: %w", r.id, err))
+		s.failWake(fmt.Errorf("share %s: %w", r.id, err))
 		return
 	}
 	if err := s.cfg.Shares.Put(r.curve, res.PublicKey, res.SaveData); err != nil {
-		s.note(fmt.Errorf("share %s: %w", r.id, err))
+		s.failWake(fmt.Errorf("share %s: %w", r.id, err))
 		return
 	}
 	err := s.signAndAppend(ctx, cosl.TypeSessionComplete, &coslv1.SessionComplete{
@@ -142,7 +142,7 @@ func (s *Service) mint(ctx context.Context, r *rec, p *party, res Result) {
 		PublicKey: append([]byte(nil), res.PublicKey...),
 	})
 	if err != nil {
-		s.note(fmt.Errorf("complete %s: %w", r.id, err))
+		s.failWake(fmt.Errorf("complete %s: %w", r.id, err))
 		return
 	}
 	p.minted = true

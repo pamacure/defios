@@ -182,7 +182,7 @@ func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 		// wakes the layer to look again.
 		return
 	case err != nil:
-		s.note(fmt.Errorf("reading sign request %x: %w", id[:4], err))
+		s.failWake(fmt.Errorf("reading sign request %x: %w", id[:4], err))
 		return
 	}
 	if s.now().After(info.Deadline) {
@@ -190,7 +190,7 @@ func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 		return
 	}
 	// The accept lapses at the deadline: wake then to forget it.
-	s.until(info.Deadline.Add(time.Nanosecond))
+	s.wakeAt(info.Deadline.Add(time.Nanosecond))
 	s.promote(id) // accepted before a restart, and no Session has been lost
 	signers := info.signers(0)
 	if busy || len(signers) < info.T || !slices.Contains(signers, s.cfg.Node.NodeID) || !SupportsSigning(info.Curve) {
@@ -199,7 +199,7 @@ func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 	s.starting[id] = struct{}{}
 	if err := s.appendSignStart(ctx, id, info, signers); err != nil {
 		delete(s.starting, id)
-		s.note(fmt.Errorf("starting %x: %w", id[:4], err))
+		s.failWake(fmt.Errorf("starting %x: %w", id[:4], err))
 	}
 }
 
@@ -295,7 +295,7 @@ func (s *Service) validateAll(recs []*rec) bool {
 		case errors.Is(err, ErrBadSignRequest) || errors.Is(err, ErrUnsupported):
 			r.invalid = err.Error()
 		default:
-			s.note(fmt.Errorf("reading sign request for %s: %w", r.id, err))
+			s.failWake(fmt.Errorf("reading sign request for %s: %w", r.id, err))
 			return false
 		}
 	}
@@ -409,7 +409,7 @@ func (i SignInfo) verifyOne(msg, sig []byte) bool {
 func (s *Service) finishSign(ctx context.Context, r *rec, p *party, res Result) {
 	info, err := s.signInfo(r)
 	if err != nil {
-		s.note(fmt.Errorf("reading sign request for %s: %w", r.id, err))
+		s.failWake(fmt.Errorf("reading sign request for %s: %w", r.id, err))
 		return // retried on the next wake
 	}
 	if !info.verifies(res.Signatures) {
@@ -423,7 +423,7 @@ func (s *Service) finishSign(ctx context.Context, r *rec, p *party, res Result) 
 		Signatures: cloneAll(res.Signatures),
 	})
 	if err != nil {
-		s.note(fmt.Errorf("complete %s: %w", r.id, err))
+		s.failWake(fmt.Errorf("complete %s: %w", r.id, err))
 		return
 	}
 	p.minted = true

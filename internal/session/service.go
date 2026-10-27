@@ -337,13 +337,18 @@ func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, fai
 	default:
 	}
 	wk, moved, err := s.follow.Poll()
+	gated := !force && !wk.Rescan && !s.failing // a row it reads must have committed
+	touched := true
+	if err == nil && moved && gated {
+		touched, err = s.touched(wk.Since)
+	}
 	switch {
 	case err != nil:
 		err = fmt.Errorf("reading replica: %w", err)
 	case !moved && !force:
-	case !force && !wk.Rescan && !s.failing && !s.touched(wk.Since, &err):
+	case !touched:
 		s.follow.Done() // only rows this layer does not read, such as talk
-	case err == nil:
+	default:
 		s.wakeErrs, s.next = nil, time.Time{}
 		s.catchUp(ctx)
 		err = errors.Join(s.wakeErrs...)
@@ -357,15 +362,13 @@ func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, fai
 	return s.next, s.failing
 }
 
-// touched is whether a row of wakeTypes committed after seq. A failed read
-// is set in *err and counts as touched.
-func (s *Service) touched(seq uint64, err *error) bool {
-	rows, e := s.cfg.Store.Log(cosl.Query{MsgTypes: s.wakeTypes, AfterSeq: seq, Limit: 1})
-	if e != nil {
-		*err = fmt.Errorf("reading replica: %w", e)
-		return true
+// touched is whether a row of wakeTypes committed after seq.
+func (s *Service) touched(seq uint64) (bool, error) {
+	rows, err := s.cfg.Store.Log(cosl.Query{MsgTypes: s.wakeTypes, AfterSeq: seq, Limit: 1})
+	if err != nil {
+		return false, err
 	}
-	return len(rows) > 0
+	return len(rows) > 0, nil
 }
 
 // nudge wakes Run for something that happened in this process rather than
@@ -377,11 +380,11 @@ func (s *Service) nudge() {
 	}
 }
 
-// note records a failure of this wake; the wake is retried.
-func (s *Service) note(err error) { s.wakeErrs = append(s.wakeErrs, err) }
+// failWake records a failure of this wake; the wake is retried.
+func (s *Service) failWake(err error) { s.wakeErrs = append(s.wakeErrs, err) }
 
-// until makes t a deadline of this wake: Run wakes at the nearest one.
-func (s *Service) until(t time.Time) {
+// wakeAt makes t a deadline of this wake: Run wakes at the nearest one.
+func (s *Service) wakeAt(t time.Time) {
 	if s.next.IsZero() || t.Before(s.next) {
 		s.next = t
 	}
@@ -491,12 +494,12 @@ func (s *Service) catchUp(ctx context.Context) {
 	}
 	rows, err := s.cfg.Store.Log(cosl.Query{MsgTypes: msgTypes})
 	if err != nil {
-		s.note(fmt.Errorf("reading replica: %w", err))
+		s.failWake(fmt.Errorf("reading replica: %w", err))
 		return
 	}
 	recs, err := parse(rows, s.verifySigned)
 	if err != nil {
-		s.note(err)
+		s.failWake(err)
 		return
 	}
 	if !s.validateAll(recs) {
@@ -515,7 +518,7 @@ func (s *Service) catchUp(ctx context.Context) {
 			delete(s.aborting, r.id)
 			if r.status == Aborted {
 				if err := s.dropShare(r.id); err != nil {
-					s.note(err)
+					s.failWake(err)
 				}
 			} else {
 				s.forgetShare(r.id)
@@ -539,7 +542,7 @@ func (s *Service) catchUp(ctx context.Context) {
 				s.giveUp(ctx, r.id, reasonExpired)
 				continue
 			}
-			s.until(info.Deadline.Add(time.Nanosecond))
+			s.wakeAt(info.Deadline.Add(time.Nanosecond))
 		}
 		if s.lost(r) {
 			s.giveUp(ctx, r.id, reasonPartyLost)
@@ -555,7 +558,7 @@ func (s *Service) catchUp(ctx context.Context) {
 				s.giveUp(ctx, r.id, reasonWaitingAccept)
 				continue
 			}
-			s.until(lapses)
+			s.wakeAt(lapses)
 			continue
 		}
 		s.ensureParty(ctx, r, head)
@@ -726,7 +729,7 @@ func (s *Service) checkWait(ctx context.Context, r *rec) {
 		s.giveUp(ctx, r.id, reasonTimedOut)
 		return
 	}
-	s.until(stalls)
+	s.wakeAt(stalls)
 }
 
 // giveUp stops the engine and appends session.abort. A failed append is
@@ -734,14 +737,14 @@ func (s *Service) checkWait(ctx context.Context, r *rec) {
 func (s *Service) giveUp(ctx context.Context, id ID, reason string) {
 	s.stop(id)
 	if err := s.dropShare(id); err != nil {
-		s.note(err)
+		s.failWake(err)
 	}
 	s.fail(id)
 	if _, ok := s.aborting[id]; !ok {
 		s.aborting[id] = reason
 	}
 	if err := s.abort(ctx, id, s.aborting[id]); err != nil {
-		s.note(fmt.Errorf("abort %s: %w", id, err))
+		s.failWake(fmt.Errorf("abort %s: %w", id, err))
 		return
 	}
 	delete(s.aborting, id)
