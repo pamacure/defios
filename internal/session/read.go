@@ -194,12 +194,32 @@ func (r *rec) detail() Detail {
 type verifier func(r *rec, c seen) bool
 
 func parse(rows []cosl.Row, verify verifier) ([]*rec, error) {
-	var order []ID
-	by := map[ID]*rec{}
+	f := newFold()
+	if err := f.add(rows); err != nil {
+		return nil, err
+	}
+	return f.settle(verify), nil
+}
+
+// fold is Sessions read off replica rows so far. Rows added in several
+// batches, in seq order, give what one batch of them all gives, so serve
+// keeps one between wakes and adds only rows it has not seen (ADR 0014).
+type fold struct {
+	order []ID
+	by    map[ID]*rec
+	head  uint64 // the seq of the last row added
+}
+
+func newFold() *fold { return &fold{by: map[ID]*rec{}} }
+
+// add folds rows in. An error leaves the fold part-way through a row, so
+// the caller discards it.
+func (f *fold) add(rows []cosl.Row) error {
 	for _, row := range rows {
+		f.head = row.Seq
 		env, err := row.Decode()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
 		if err != nil {
@@ -211,7 +231,7 @@ func parse(rows []cosl.Row, verify verifier) ([]*rec, error) {
 			if !ok {
 				continue
 			}
-			if _, exists := by[id]; exists {
+			if _, exists := f.by[id]; exists {
 				continue
 			}
 			r := &rec{
@@ -235,14 +255,14 @@ func parse(rows []cosl.Row, verify verifier) ([]*rec, error) {
 				}
 				r.participants = append(r.participants, identity.ID(pid))
 			}
-			by[id] = r
-			order = append(order, id)
+			f.by[id] = r
+			f.order = append(f.order, id)
 		case *coslv1.SessionAbort:
 			id, ok := idBytes(p.SessionId)
 			if !ok {
 				continue
 			}
-			r := by[id]
+			r := f.by[id]
 			if r == nil {
 				continue
 			}
@@ -255,7 +275,7 @@ func parse(rows []cosl.Row, verify verifier) ([]*rec, error) {
 			if !ok {
 				continue
 			}
-			r := by[id]
+			r := f.by[id]
 			if r == nil {
 				continue
 			}
@@ -268,20 +288,40 @@ func parse(rows []cosl.Row, verify verifier) ([]*rec, error) {
 			if !ok {
 				continue
 			}
-			r := by[id]
+			r := f.by[id]
 			if r == nil {
 				continue
 			}
 			r.rounds = append(r.rounds, round{seq: row.Seq, sender: row.Sender, msg: p})
 		}
 	}
-	out := make([]*rec, 0, len(order))
-	for _, id := range order {
-		r := by[id]
+	return nil
+}
+
+// settle works out every Session's status afresh and returns them in start
+// order. A Session no longer open drops its rounds: no engine is fed them
+// again, and they are most of what a Session's rows weigh. (A Key whose
+// completes later disagree goes back to Open without them, and is given up
+// on its conflict before any engine could want them.)
+func (f *fold) settle(verify verifier) []*rec {
+	out := make([]*rec, 0, len(f.order))
+	for _, id := range f.order {
+		r := f.by[id]
+		r.reset()
 		r.recompute(verify)
+		if r.status != Open {
+			r.rounds = nil
+		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out
+}
+
+// reset clears what is worked out on each pass rather than folded from
+// rows: serve's recs outlive a wake.
+func (r *rec) reset() {
+	r.reason = ""
+	r.dup, r.valid, r.invalid = false, false, ""
 }
 
 func (r *rec) recompute(verify verifier) {
@@ -449,8 +489,8 @@ func plan(recs []*rec) (runnable *ID, need map[ID]string) {
 		kind int // 1 start, 2 abort, 3 complete
 		id   ID
 	}
-	var evs []ev
-	by := map[ID]*rec{}
+	evs := make([]ev, 0, 2*len(recs))
+	by := make(map[ID]*rec, len(recs))
 	for _, r := range recs {
 		by[r.id] = r
 		evs = append(evs, ev{r.startSeq, 1, r.id})

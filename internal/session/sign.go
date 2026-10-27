@@ -150,8 +150,8 @@ func (s *Service) startAccepted(ctx context.Context, recs []*rec) {
 	if s.cfg.SignInfo == nil || s.cfg.NewSigner == nil {
 		return
 	}
-	started := map[ID]struct{}{}
-	sessions := map[ID]struct{}{}
+	started := make(map[ID]struct{}, len(recs))
+	sessions := make(map[ID]struct{}, len(recs))
 	busy := false
 	for _, r := range recs {
 		sessions[r.id] = struct{}{}
@@ -273,21 +273,28 @@ func (s *Service) promote(id ID) {
 	}
 }
 
-// validateAll applies Key policy to every Session. It reports false when a
-// sign.request could not be read this time, so the caller waits for the next
-// wake instead of aborting on a transient failure.
+// validateAll marks duplicate signing starts and applies Key policy to every
+// open Session. A closed Session's policy decides nothing more: plan frees
+// its slot at its close either way. It reports false when a sign.request
+// could not be read this time, so the caller waits for the next wake instead
+// of aborting on a transient failure.
 func (s *Service) validateAll(recs []*rec) bool {
-	started := map[[32]byte]struct{}{}
+	started := make(map[[32]byte]struct{}, len(recs))
 	for _, r := range recs {
+		if r.isSign {
+			if _, ok := started[r.signReq]; ok {
+				r.dup, r.invalid = true, "the request already has a session"
+				continue
+			}
+			started[r.signReq] = struct{}{}
+		}
+		if r.status != Open {
+			continue
+		}
 		if !r.isSign {
 			r.validate(s.cfg.Roster)
 			continue
 		}
-		if _, ok := started[r.signReq]; ok {
-			r.dup, r.invalid = true, "the request already has a session"
-			continue
-		}
-		started[r.signReq] = struct{}{}
 		info, err := s.signInfo(r)
 		switch {
 		case err == nil:

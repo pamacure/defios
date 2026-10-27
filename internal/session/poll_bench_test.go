@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -21,6 +22,20 @@ func benchService(b testing.TB, shape coslbench.Shape) (*Service, *cosl.FSM, cos
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { store.Close() })
+	svc := layerOn(b, r, store)
+	meta, err := store.Meta()
+	if err != nil {
+		b.Fatal(err)
+	}
+	seq := meta.LastAppliedSeq
+	next := func() uint64 { seq++; return seq }
+	alice := r.Nodes[0]
+	return svc, cosl.NewFSM(store, r.Roster), cosl.Author{Node: alice, GroupID: r.Roster.GroupID()}, next
+}
+
+// layerOn is alice's Session layer of the built replica r's Group, over store.
+func layerOn(b testing.TB, r coslbench.Replica, store *cosl.Store) *Service {
+	b.Helper()
 	alice, bob := r.Nodes[0], r.Nodes[1]
 	info := SignInfo{
 		Curve: "ecdsa", PublicKey: r.SignKey, T: 2, Digests: [][]byte{r.Digest[:]},
@@ -39,13 +54,15 @@ func benchService(b testing.TB, shape coslbench.Shape) (*Service, *cosl.FSM, cos
 	if err != nil {
 		b.Fatal(err)
 	}
-	meta, err := store.Meta()
-	if err != nil {
-		b.Fatal(err)
-	}
-	seq := meta.LastAppliedSeq
-	next := func() uint64 { seq++; return seq }
-	return svc, cosl.NewFSM(store, r.Roster), cosl.Author{Node: alice, GroupID: r.Roster.GroupID()}, next
+	return svc
+}
+
+// liveHeap is the live heap after a collection.
+func liveHeap() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
 }
 
 // One wake of the Session layer while nothing has changed on the replica,
@@ -93,13 +110,16 @@ func BenchmarkSessionWakeAfterARow(b *testing.B) {
 // One wake of the Session layer after one tss.session committed: what a
 // serve pays per round of a running Session, since every round is a row
 // the layer folds. (The row's Session is not on the replica, so the wake
-// reads and folds everything but feeds no engine.)
+// folds it but feeds no engine.) held-B is the heap the layer keeps between
+// wakes once it has folded the replica.
 func BenchmarkSessionWakeAfterARound(b *testing.B) {
 	for _, shape := range coslbench.Shapes {
 		b.Run(shape.Name, func(b *testing.B) {
 			svc, fsm, author, next := benchService(b, shape)
 			ctx := context.Background()
+			before := liveHeap()
 			svc.wake(ctx, true)
+			held := float64(liveHeap()) - float64(before)
 			b.ReportAllocs()
 			for b.Loop() {
 				b.StopTimer()
@@ -113,6 +133,7 @@ func BenchmarkSessionWakeAfterARound(b *testing.B) {
 				b.StartTimer()
 				svc.wake(ctx, false)
 			}
+			b.ReportMetric(held, "held-B")
 		})
 	}
 }

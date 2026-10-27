@@ -162,6 +162,7 @@ type Service struct {
 
 	// Run's own, between wakes.
 	wakeTypes []uint32 // the rows whose commit can give the layer something to do
+	folded    *fold    // the Sessions folded so far; nil until the first wake, or after a fold failed
 	follow    *cosl.Follower
 	nudged    chan struct{}
 	errs      *errlog.Reporter
@@ -350,7 +351,7 @@ func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, fai
 		s.follow.Done() // only rows this layer does not read, such as talk
 	default:
 		s.wakeErrs, s.next = nil, time.Time{}
-		s.catchUp(ctx)
+		s.catchUp(ctx, wk.Rescan)
 		err = errors.Join(s.wakeErrs...)
 		s.wakeErrs = nil
 		if err == nil {
@@ -488,29 +489,32 @@ func (s *Service) Abort(ctx context.Context, id ID, reason string) error {
 	return nil
 }
 
-func (s *Service) catchUp(ctx context.Context) {
+// catchUp folds the rows committed since the last wake, or every row when
+// rescan says a restore rewrote the replica, and acts on the Sessions.
+func (s *Service) catchUp(ctx context.Context, rescan bool) {
 	if ctx.Err() != nil {
 		return
 	}
-	rows, err := s.cfg.Store.Log(cosl.Query{MsgTypes: msgTypes})
+	if rescan || s.folded == nil {
+		s.folded = newFold()
+	}
+	rows, err := s.cfg.Store.Log(cosl.Query{MsgTypes: msgTypes, AfterSeq: s.folded.head})
 	if err != nil {
 		s.failWake(fmt.Errorf("reading replica: %w", err))
 		return
 	}
-	recs, err := parse(rows, s.verifySigned)
-	if err != nil {
+	if err := s.folded.add(rows); err != nil {
+		s.folded = nil // part-way through a row: fold afresh next time
 		s.failWake(err)
 		return
 	}
+	recs := s.folded.settle(s.verifySigned)
 	if !s.validateAll(recs) {
 		return
 	}
 	s.startAccepted(ctx, recs)
 	runnable, need := plan(recs)
-	var head uint64
-	if len(rows) > 0 {
-		head = rows[len(rows)-1].Seq
-	}
+	head := s.folded.head
 	for _, r := range recs {
 		if r.status != Open {
 			s.stop(r.id)

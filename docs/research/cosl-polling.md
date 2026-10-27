@@ -288,3 +288,32 @@ loading the machine (load average 10–14), gave noisy figures:
 `KeeperIdleWake`, whose code did not change, came out 3× slower. That run
 was discarded. The run recorded here was made with the load average under
 1, and `KeeperIdleWake` matches the baseline (0.11 ms).
+
+#### #58: the Session layer folds only rows it has not seen ([`after-58.txt`](cosl-polling/after-58.txt))
+
+Same machine and method, load average about 2.5. The Session layer keeps
+its fold between wakes and reads only the Session rows after the last seq
+it folded (`AfterSeq`), rebuilding from scratch only when a restore asks for
+a rescan. A Session that is no longer open drops its rounds, the bulk of
+its rows. Key policy is checked only for open Sessions, since a closed
+one's no longer decides anything.
+
+Per wake, median of 6, against #55's run:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| SessionWakeAfterARound, #55 | 3.76 ms, 5.0 MiB | 26.9 ms, 23.9 MiB | 113 ms, 95.6 MiB |
+| SessionWakeAfterARound, #58 | 381 µs, 12 KiB | 436 µs, 40 KiB | 705 µs, 238 KiB |
+| held between wakes (`held-B`) | 25 KiB | 201 KiB | 1.0 MiB |
+
+`SessionIdleWake` and `SessionWakeAfterARow` run code this ticket did not
+change; their medians are within noise of #55's (the spread here is up to
+±60%).
+
+A round now costs under 1 ms on the large replica, with the same 181
+allocations on every shape. What still grows with history is small: one
+pass over the folded Sessions to plan the open slot and check each one's
+status, about 2 KiB of state per Session held, and the per-wake bytes those
+passes touch. At 500 signing Sessions that is the 0.3 ms the large replica
+adds over the small one, so the next order of magnitude (5,000 Sessions)
+would put a round at a few milliseconds, not a second.
