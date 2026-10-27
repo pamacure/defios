@@ -27,8 +27,8 @@ func (s *server) keepPruned(ctx context.Context, store *cosl.Store) {
 	p := s.newPrunePolicy(store)
 	tick := time.NewTicker(cosl.FallbackTick)
 	defer tick.Stop()
+	p.wake()
 	for {
-		p.wake()
 		var changes <-chan struct{} // nil while off: only the tick wakes it
 		if p.on {
 			changes = p.follow.Changes()
@@ -37,8 +37,9 @@ func (s *server) keepPruned(ctx context.Context, store *cosl.Store) {
 		case <-ctx.Done():
 			return
 		case <-changes:
+			p.wake()
 		case <-tick.C:
-			p.reread()
+			p.fallback()
 		}
 	}
 }
@@ -119,11 +120,11 @@ func (p *prunePolicy) reread() {
 		return
 	}
 	p.set(cfg.Prune)
+	state := "off"
 	if cfg.Prune {
-		p.s.opts.Logf("serve: prune policy: on, as config.toml now says")
-	} else {
-		p.s.opts.Logf("serve: prune policy: off, as config.toml now says")
+		state = "on"
 	}
+	p.s.opts.Logf("serve: prune policy: %s, as config.toml now says", state)
 }
 
 // wake is one turn of the loop. With the policy off it does nothing. With
@@ -134,22 +135,21 @@ func (p *prunePolicy) wake() {
 	if !p.on {
 		return
 	}
-	// A wake not finished is handed out again, so a Poll with nothing new
-	// means the last one succeeded: reporting its nil clears nothing early.
-	_, ok, err := p.follow.Poll()
-	if err == nil && ok {
-		var pruned []recap.Pruned
-		if pruned, err = p.keeper.Step(); err == nil {
-			p.follow.Done()
-			if len(pruned) > 0 {
-				names := conversationNames(p.store)
-				for _, r := range pruned {
-					p.s.opts.Logf("serve: prune policy: pruned %d messages of %s up to seq %d", r.Messages, names(r.ConversationID), r.BaseSeq)
-				}
-			}
-		}
+	p.errs.Report(p.follow.Act(p.prune))
+}
+
+// prune lets the Keeper prune what a Recap or a restore uncovered, and logs
+// what it dropped.
+func (p *prunePolicy) prune(cosl.Wake) error {
+	pruned, err := p.keeper.Step()
+	if err != nil || len(pruned) == 0 {
+		return err
 	}
-	p.errs.Report(err)
+	names := conversationNames(p.store)
+	for _, r := range pruned {
+		p.s.opts.Logf("serve: prune policy: pruned %d messages of %s up to seq %d", r.Messages, names(r.ConversationID), r.BaseSeq)
+	}
+	return nil
 }
 
 // conversationNames names a Conversation for the log as its Workspace is

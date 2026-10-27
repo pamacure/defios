@@ -101,6 +101,24 @@ func (f *Follower) Poll() (Wake, bool, error) {
 // not finish, say after an error, is handed out again by the next Poll.
 func (f *Follower) Done() { f.acted, f.hasActed = f.pending, true }
 
+// Act is one turn of a reader that only reacts to the replica: if the
+// replica moved since it last acted, act runs on the Wake, which is Done
+// only if act succeeds. It returns the Poll's or act's error, nil when
+// nothing moved. A failed wake is handed out again, so a nil from a Poll
+// with nothing new means the last act succeeded: a reader reporting it
+// (errlog) clears nothing early.
+func (f *Follower) Act(act func(Wake) error) error {
+	wk, moved, err := f.Poll()
+	if err != nil || !moved {
+		return err
+	}
+	if err := act(wk); err != nil {
+		return err
+	}
+	f.Done()
+	return nil
+}
+
 // Changes is closed at the first change since the last Poll. A reader that
 // waits on other things too (nudges, deadlines) selects on it and on its
 // own fallback timer in place of Wait.

@@ -52,18 +52,7 @@ func (s *server) newWorkspaceWatcher(store *cosl.Store) *workspaceWatcher {
 // only its Mark. Otherwise it looks for a session.complete since the last
 // wake it finished, and only if there is one (or the replica was
 // restored) lists Keys, from the Session rows alone.
-func (w *workspaceWatcher) wake() {
-	// A wake not finished is handed out again, so a Poll with nothing new
-	// means the last one succeeded: reporting its nil clears nothing early.
-	wk, ok, err := w.follow.Poll()
-	if err == nil && ok {
-		err = w.catchUp(wk)
-		if err == nil {
-			w.follow.Done()
-		}
-	}
-	w.errs.Report(err)
-}
+func (w *workspaceWatcher) wake() { w.errs.Report(w.follow.Act(w.catchUp)) }
 
 func (w *workspaceWatcher) catchUp(wk cosl.Wake) error {
 	if !wk.Rescan {

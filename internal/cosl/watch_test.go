@@ -2,6 +2,7 @@ package cosl_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -108,6 +109,34 @@ func TestFollowerWakesOnlyWhenTheReplicaMoved(t *testing.T) {
 	fw.Done()
 	if w, ok := poll(); ok {
 		t.Fatalf("poll after acting on the restore = %+v", w)
+	}
+}
+
+// Act runs the reader only when the replica moved, and marks the wake done
+// only if the reader succeeded: a failed one is handed out again.
+func TestFollowerActRunsOnlyOnAMoveAndRetriesAFailure(t *testing.T) {
+	f := newFixture(t)
+	fw := f.store.Follow(time.Hour)
+	var got []cosl.Wake
+	fail := errors.New("reader failed")
+	act := func(err error) func(cosl.Wake) error {
+		return func(w cosl.Wake) error { got = append(got, w); return err }
+	}
+	if err := fw.Act(act(nil)); err != nil || len(got) != 1 || !got[0].Rescan {
+		t.Fatalf("first Act: %v, wakes %+v", err, got)
+	}
+	if err := fw.Act(act(nil)); err != nil || len(got) != 1 {
+		t.Fatalf("Act with nothing new: %v, wakes %+v", err, got)
+	}
+	f.apply(1, 1, f.signed(0, f.envelope(0, cosl.TypeAppFreeform, freeform("a"))))
+	if err := fw.Act(act(fail)); !errors.Is(err, fail) || len(got) != 2 {
+		t.Fatalf("failing Act: %v, wakes %+v", err, got)
+	}
+	if err := fw.Act(act(nil)); err != nil || len(got) != 3 || got[2].Since != 0 {
+		t.Fatalf("Act after a failure: %v, wakes %+v", err, got)
+	}
+	if err := fw.Act(act(nil)); err != nil || len(got) != 3 {
+		t.Fatalf("Act after the retry succeeded: %v, wakes %+v", err, got)
 	}
 }
 
