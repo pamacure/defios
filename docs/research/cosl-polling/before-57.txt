@@ -1,0 +1,24 @@
+goos: linux
+goarch: amd64
+pkg: defios.com/internal/cli
+cpu: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz
+BenchmarkKeyListing/small-8         	      10	   7538238 ns/op	 8679991 B/op	   42745 allocs/op
+BenchmarkKeyListing/small-8         	      10	   7542634 ns/op	 8679398 B/op	   42744 allocs/op
+BenchmarkKeyListing/small-8         	      10	   7543575 ns/op	 8679422 B/op	   42744 allocs/op
+BenchmarkKeyListing/small-8         	      10	   7435862 ns/op	 8679428 B/op	   42744 allocs/op
+BenchmarkKeyListing/small-8         	      10	   7675102 ns/op	 8679448 B/op	   42744 allocs/op
+BenchmarkKeyListing/small-8         	      10	   7578575 ns/op	 8679403 B/op	   42744 allocs/op
+BenchmarkKeyListing/medium-8        	      10	  67765940 ns/op	65568483 B/op	  421086 allocs/op
+BenchmarkKeyListing/medium-8        	      10	 110941876 ns/op	65568516 B/op	  421086 allocs/op
+BenchmarkKeyListing/medium-8        	      10	  68596282 ns/op	65568497 B/op	  421086 allocs/op
+BenchmarkKeyListing/medium-8        	      10	  66482263 ns/op	65568483 B/op	  421086 allocs/op
+BenchmarkKeyListing/medium-8        	      10	  67518177 ns/op	65568570 B/op	  421086 allocs/op
+BenchmarkKeyListing/medium-8        	      10	  67662378 ns/op	65568456 B/op	  421086 allocs/op
+BenchmarkKeyListing/large-8         	      10	 320114430 ns/op	307386606 B/op	 2098847 allocs/op
+BenchmarkKeyListing/large-8         	      10	 327692711 ns/op	307386660 B/op	 2098847 allocs/op
+BenchmarkKeyListing/large-8         	      10	 338340172 ns/op	307386702 B/op	 2098847 allocs/op
+BenchmarkKeyListing/large-8         	      10	 332373539 ns/op	307386659 B/op	 2098847 allocs/op
+BenchmarkKeyListing/large-8         	      10	 338778458 ns/op	307386686 B/op	 2098847 allocs/op
+BenchmarkKeyListing/large-8         	      10	 327919624 ns/op	307386667 B/op	 2098847 allocs/op
+PASS
+ok  	defios.com/internal/cli	27.696s

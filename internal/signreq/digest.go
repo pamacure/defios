@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/sha3"
@@ -87,6 +88,13 @@ func rlpLength(n int, offset byte) []byte {
 	}
 	return append([]byte{offset + 55 + byte(len(be))}, be...)
 }
+
+// LookupMsgTypes are every row Lookup reads: the sign.request and its
+// accepts, the Networks it was proposed against, and the Session rows that
+// mint its Key. A caller asks the replica for these only
+// (cosl.Query.MsgTypes), so talk and round traffic are never read to look up
+// a Sign Request (ADR 0014).
+var LookupMsgTypes = slices.Concat([]uint32{cosl.TypeSignRequest, cosl.TypeSignAccept}, network.MsgTypes, key.MsgTypes)
 
 // Lookup reads the sign.request with msgID off rows and derives what signing
 // it needs (the Key, its Digests, the deadline, who accepted): the Digests are

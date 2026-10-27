@@ -100,7 +100,7 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	if err != nil {
 		return BroadcastView{}, err
 	}
-	overrides, unresolved, err := s.localOverrides(rows, info.Conversation)
+	overrides, unresolved, err := s.localOverrides(store, info.Conversation)
 	if err != nil {
 		return BroadcastView{}, err
 	}
@@ -158,14 +158,14 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 // it, every reference resolved. Both files are read at each use, so an edit
 // needs no restart. A Network whose override does not resolve to a URL is
 // reported in unresolved, never sent to the log's endpoints instead.
-func (s *server) localOverrides(rows []cosl.Row, conversation []byte) (ov network.Overrides, unresolved map[string]error, err error) {
+func (s *server) localOverrides(store *cosl.Store, conversation []byte) (ov network.Overrides, unresolved map[string]error, err error) {
 	p, alias := s.opts.Paths, s.opts.Alias
 	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, err
 	}
 	ws := cfg.Workspace
-	keys, err := key.List(rows)
+	keys, err := key.Read(store)
 	if err != nil {
 		return nil, nil, err
 	}

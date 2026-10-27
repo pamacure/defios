@@ -35,15 +35,15 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 	if !running || !held {
 		return SendView{}, ErrNoReplica
 	}
-	rows, err := store.Log(cosl.Query{})
-	if err != nil {
-		return SendView{}, err
-	}
-	keys, err := key.List(rows)
+	keys, err := key.Read(store)
 	if err != nil {
 		return SendView{}, err
 	}
 	k, err := key.Resolve(keys, req.Key)
+	if err != nil {
+		return SendView{}, err
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: network.MsgTypes})
 	if err != nil {
 		return SendView{}, err
 	}
@@ -86,7 +86,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 // layer calls it while stopReplica holds the server lock waiting for it.
 func signInfoFrom(store *cosl.Store) func([32]byte) (session.SignInfo, error) {
 	return func(id [32]byte) (session.SignInfo, error) {
-		rows, err := store.Log(cosl.Query{})
+		rows, err := store.Log(cosl.Query{MsgTypes: signreq.LookupMsgTypes})
 		if err != nil {
 			return session.SignInfo{}, err
 		}

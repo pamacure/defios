@@ -164,6 +164,25 @@ func TestReadListsKeysFromSessionRowsOnly(t *testing.T) {
 	}
 }
 
+// Listing Keys from rows already read for something else decodes only the
+// Session rows among them: a row of talk is never opened, so one that cannot
+// be read does not stop the listing.
+func TestListDecodesSessionRowsOnly(t *testing.T) {
+	rows, pk := minted(t)
+	for i := range rows {
+		if rows[i].MsgType == cosl.TypeAppFreeform {
+			rows[i].Envelope = []byte{0xff, 0xff, 0xff}
+		}
+	}
+	keys, err := key.List(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].Ref() != "ecdsa:"+encode(pk) {
+		t.Fatalf("keys = %+v", keys)
+	}
+}
+
 func bytesKey(prefix, fill byte) []byte {
 	b := make([]byte, 33)
 	b[0] = prefix

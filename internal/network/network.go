@@ -139,6 +139,10 @@ func contains(set []string, s string) bool {
 	return false
 }
 
+// MsgTypes are the rows Fold and History read: a reader folding Networks
+// asks the replica for these only (cosl.Query.MsgTypes, ADR 0014).
+var MsgTypes = []uint32{cosl.TypeNetworkCreate, cosl.TypeNetworkUpdate, cosl.TypeNetworkRemove}
+
 // Fold replays rows in order into the live Networks, sorted by alias. A
 // message that does not apply to the state it meets is skipped, identically
 // on every Node: a create of a live alias (the create race), an update of an
