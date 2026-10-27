@@ -122,28 +122,24 @@ func TestAliasPathsSplitConfigAndData(t *testing.T) {
 	}
 }
 
-// A Conversation's agent config lives under its Group's config, named by the
-// hex Conversation ID; nil-id talk gets group-level, which is not 64 hex
-// characters and so is never a Conversation's name.
-func TestConversationConfigDirIsHexIDOrGroupLevel(t *testing.T) {
+// A Conversation's Workspace sits in its Group's, named by the hex
+// Conversation ID.
+func TestConversationWorkspaceIsTheHexIDInTheGroupWorkspace(t *testing.T) {
 	p := nodedir.Resolve(nodedir.Lookup{Dir: "/n"})
-	id := make([]byte, 32)
+	var id [32]byte
 	id[0], id[31] = 0xab, 0x01
-	want := "/n/group/home/conversation/ab" + strings.Repeat("00", 30) + "01"
-	if got := p.ConversationConfigDir("home", id); got != want {
-		t.Fatalf("conversation dir = %q, want %q", got, want)
+	want := "/n/group/home/ab" + strings.Repeat("00", 30) + "01"
+	if got := p.ConversationWorkspace("home", id); got != want {
+		t.Fatalf("conversation workspace = %q, want %q", got, want)
 	}
-	if got := p.ConversationConfigDir("home", nil); got != "/n/group/home/conversation/group-level" {
-		t.Fatalf("group-level dir = %q", got)
-	}
-	if nodedir.GroupLevel != "group-level" {
-		t.Fatalf("GroupLevel = %q", nodedir.GroupLevel)
+	if got := p.ConversationConfigFile("home", id); got != want+"/config.toml" {
+		t.Fatalf("conversation config = %q", got)
 	}
 }
 
-func TestVaultCredentialsFileIsPerGroupInTheVault(t *testing.T) {
+func TestVaultSecretsFileIsPerGroupInTheVault(t *testing.T) {
 	p := nodedir.Resolve(nodedir.Lookup{Dir: "/n"})
-	if got := p.VaultCredentialsFile("home"); got != "/n/vault/credentials-home" {
-		t.Fatalf("credentials file = %q", got)
+	if got := p.VaultSecretsFile("home"); got != "/n/vault/secrets-home" {
+		t.Fatalf("secrets file = %q", got)
 	}
 }

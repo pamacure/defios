@@ -3,6 +3,7 @@ package serve_test
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,10 +15,10 @@ import (
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// Once a Key is minted, every Node serving the Group holds an empty agent
-// config directory for its Conversation, named by the hex Conversation ID;
-// group-level exists from the moment Raft is up, without group new.
-func TestMintedKeyGetsAConversationConfigDirOnEveryNode(t *testing.T) {
+// Once a Key is minted, every Node serving the Group holds an empty
+// Workspace for its Conversation in the Group's, named by the hex
+// Conversation ID; there is no group-level directory.
+func TestMintedKeyGetsAConversationWorkspaceOnEveryNode(t *testing.T) {
 	a, b := pair(t)
 	gid := formValid(t, a, b)
 	a.joins(t, gid, 2)
@@ -43,10 +44,7 @@ func TestMintedKeyGetsAConversationConfigDirOnEveryNode(t *testing.T) {
 	conv := key.ConversationID("ecdsa", pk)
 
 	for _, n := range []*node{a, b} {
-		if _, err := os.Stat(n.paths.ConversationConfigDir(group.ImplicitAlias, nil)); err != nil {
-			t.Fatalf("%s: group-level: %v", n.name, err)
-		}
-		dir := n.paths.ConversationConfigDir(group.ImplicitAlias, conv[:])
+		dir := n.paths.ConversationWorkspace(group.ImplicitAlias, conv)
 		deadline := time.Now().Add(20 * time.Second)
 		for {
 			info, err := os.Stat(dir)
@@ -57,6 +55,9 @@ func TestMintedKeyGetsAConversationConfigDirOnEveryNode(t *testing.T) {
 				entries, _ := os.ReadDir(dir)
 				if len(entries) != 0 {
 					t.Fatalf("%s: %s holds %d entries, want none", n.name, dir, len(entries))
+				}
+				if _, err := os.Stat(filepath.Join(n.paths.GroupConfigDir(group.ImplicitAlias), "conversation")); !os.IsNotExist(err) {
+					t.Fatalf("%s: conversation/ directory: %v", n.name, err)
 				}
 				break
 			}

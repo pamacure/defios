@@ -33,8 +33,8 @@ func modelCommand(g *globals) *cobra.Command {
 		Short: "Define the Models this Group's agent may use",
 		Long: `Model configs live on the Group's COSL, identical on every Node, and are named by a local alias.
 They name a provider, a model id and optionally an endpoint; credentials never replicate.
-A credential lives in this Node's Vault (model credential), and the provider's environment
-variable, ANTHROPIC_API_KEY or OPENAI_API_KEY, takes precedence when set.`,
+Each Node names its credential per provider in its own config.toml, as
+[providers.<provider>] api_key = "$NAME", a Secret (see secret).`,
 	}
 
 	var add modelFlags
@@ -111,7 +111,7 @@ variable, ANTHROPIC_API_KEY or OPENAI_API_KEY, takes precedence when set.`,
 	}
 	bindGroupFlag(g, showCmd)
 
-	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd, credentialCommand(g))
+	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd)
 	return root
 }
 

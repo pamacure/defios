@@ -3,14 +3,18 @@ package serve
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 
 	"defios.com/internal/btcrpc"
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/ethrpc"
 	"defios.com/internal/network"
 	"defios.com/internal/raftx"
+	"defios.com/internal/secret"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 	"defios.com/internal/solrpc"
@@ -95,7 +99,7 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	if err != nil {
 		return BroadcastView{}, err
 	}
-	overrides, err := network.LoadOverrides(s.opts.Paths.NetworkOverridesFile(s.opts.Alias))
+	overrides, unresolved, err := s.localOverrides(info.Conversation)
 	if err != nil {
 		return BroadcastView{}, err
 	}
@@ -119,8 +123,13 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 		if cur, err := network.Get(live, n.Alias); err == nil && cur.ChainID == n.ChainID {
 			n = cur
 		}
-		urls, _ := overrides.Effective(n)
 		out := NetworkBroadcast{Network: n.Alias, Transactions: []BroadcastedTx{}}
+		if err := unresolved[n.Alias]; err != nil {
+			out.Error = fmt.Sprintf("broadcasting to %s: %v", n.Alias, err)
+			view.Networks = append(view.Networks, out)
+			continue
+		}
+		urls, _ := overrides.Effective(n)
 		receipt := &coslv1.SignBroadcast{SignRequestId: id[:]}
 		for _, tx := range group {
 			known, err := submit(ctx, n, urls, tx)
@@ -141,6 +150,48 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 		view.Networks = append(view.Networks, out)
 	}
 	return view, nil
+}
+
+// localOverrides is this Node's RPC endpoints for a Key's broadcasts: the Group
+// config.toml's [networks] with the Key's Conversation Workspace merged over
+// it, every reference resolved. Both files are read at each use, so an edit
+// needs no restart. A Network whose override does not resolve to a URL is
+// reported in unresolved, never sent to the log's endpoints instead.
+func (s *server) localOverrides(conversation []byte) (ov network.Overrides, unresolved map[string]error, err error) {
+	p, alias := s.opts.Paths, s.opts.Alias
+	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, err
+	}
+	ws := cfg.Workspace
+	if len(conversation) == 32 {
+		conv, err := config.ReadWorkspace(p.ConversationConfigFile(alias, [32]byte(conversation)))
+		if err != nil {
+			return nil, nil, err
+		}
+		ws = ws.Merge(conv)
+	}
+	r := &secret.Resolver{Group: alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
+	ov, unresolved = network.Overrides{}, map[string]error{}
+	for name, n := range ws.Networks {
+		var urls []string
+		for _, ref := range n.RPCURLs {
+			u, err := r.Resolve(ref)
+			if err == nil && network.ValidateRPCURL(u) != nil {
+				// Not the URL itself: it is a Secret.
+				err = fmt.Errorf("%s does not resolve to an http, https, ws or wss URL with a host", ref)
+			}
+			if err != nil {
+				unresolved[name] = err
+				break
+			}
+			urls = append(urls, u)
+		}
+		if len(urls) > 0 && unresolved[name] == nil {
+			ov[name] = urls
+		}
+	}
+	return ov, unresolved, nil
 }
 
 // submit sends tx to its Network's node; known says the node already had it.

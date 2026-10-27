@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/network"
 	"defios.com/internal/serve"
@@ -37,8 +38,9 @@ func networkCommand(g *globals) *cobra.Command {
 		Use:   "network",
 		Short: "Define the blockchain Networks this Group can broadcast to",
 		Long: `Networks live on the Group's COSL, identical on every Node, and are named by a local alias.
-A Node may override a Network's RPC endpoints locally, so API keys never replicate: list them
-under [<alias>] rpc_urls = [...] in group/<group-alias>/networks.toml in the Node's config directory.`,
+A Node may override a Network's RPC endpoints locally, so API keys never replicate: name them as
+Secrets under [networks.<alias>] rpc_urls = ["$NAME", ...] in the Group's config.toml (see secret).
+A Conversation's config.toml may override them again for its Key's broadcasts.`,
 	}
 
 	var add networkFlags
@@ -158,7 +160,8 @@ type networkView struct {
 }
 
 // foldNetworks reads the folded Networks of the targeted Group and this
-// Node's overrides for them.
+// Node's Group-level overrides for them, which are shown as the references
+// they are: resolving one would print a Secret.
 func foldNetworks(g *globals) ([]networkView, error) {
 	store, err := openReplica(g)
 	if err != nil {
@@ -177,9 +180,15 @@ func foldNetworks(g *globals) ([]networkView, error) {
 	if err != nil {
 		return nil, err
 	}
-	ov, err := network.LoadOverrides(g.paths().NetworkOverridesFile(alias))
+	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
 	if err != nil {
 		return nil, exitOperational(err)
+	}
+	ov := network.Overrides{}
+	for a, n := range cfg.Networks {
+		if len(n.RPCURLs) > 0 {
+			ov[a] = n.RPCURLs
+		}
 	}
 	views := make([]networkView, len(nets))
 	for i, n := range nets {

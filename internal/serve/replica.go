@@ -56,7 +56,7 @@ func (s *server) startReplica() {
 	s.startSessions(replica, store, rec.Roster())
 	dirCtx, dirCancel := context.WithCancel(s.ctx)
 	s.convDirCancel, s.convDirDone = dirCancel, make(chan struct{})
-	go func() { s.watchConversationDirs(dirCtx, store); close(s.convDirDone) }()
+	go func() { s.watchWorkspaces(dirCtx, store); close(s.convDirDone) }()
 	go s.join(s.ctx, replica, store, gid)
 }
 

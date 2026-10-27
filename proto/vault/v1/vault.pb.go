@@ -30,11 +30,11 @@ type VaultContents struct {
 	EncryptionPrivateKey []byte                 `protobuf:"bytes,3,opt,name=encryption_private_key,json=encryptionPrivateKey,proto3" json:"encryption_private_key,omitempty"` // 32-byte X25519
 	EcdsaPreparams       []byte                 `protobuf:"bytes,4,opt,name=ecdsa_preparams,json=ecdsaPreparams,proto3" json:"ecdsa_preparams,omitempty"`                     // opaque adapter bytes (JSON of tss-lib LocalPreParams)
 	Shares               []*KeyShare            `protobuf:"bytes,5,rep,name=shares,proto3" json:"shares,omitempty"`
-	// Model alias -> credential (an API key). Set only in a Group's
-	// credentials file; never on the COSL, never in a config file (ADR 0012).
-	ModelCredentials map[string]string `protobuf:"bytes,6,rep,name=model_credentials,json=modelCredentials,proto3" json:"model_credentials,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Secret name -> value. Set only in a Group's secrets file; a config
+	// refers to a Secret by name and never holds it (ADR 0013).
+	Secrets       map[string]string `protobuf:"bytes,6,rep,name=secrets,proto3" json:"secrets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *VaultContents) Reset() {
@@ -102,9 +102,9 @@ func (x *VaultContents) GetShares() []*KeyShare {
 	return nil
 }
 
-func (x *VaultContents) GetModelCredentials() map[string]string {
+func (x *VaultContents) GetSecrets() map[string]string {
 	if x != nil {
-		return x.ModelCredentials
+		return x.Secrets
 	}
 	return nil
 }
@@ -173,15 +173,15 @@ var File_vault_v1_vault_proto protoreflect.FileDescriptor
 
 const file_vault_v1_vault_proto_rawDesc = "" +
 	"\n" +
-	"\x14vault/v1/vault.proto\x12\x0fdefios.vault.v1\"\x80\x03\n" +
+	"\x14vault/v1/vault.proto\x12\x0fdefios.vault.v1\"\xdb\x02\n" +
 	"\rVaultContents\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\x1b\n" +
 	"\tauth_seed\x18\x02 \x01(\fR\bauthSeed\x124\n" +
 	"\x16encryption_private_key\x18\x03 \x01(\fR\x14encryptionPrivateKey\x12'\n" +
 	"\x0fecdsa_preparams\x18\x04 \x01(\fR\x0eecdsaPreparams\x121\n" +
-	"\x06shares\x18\x05 \x03(\v2\x19.defios.vault.v1.KeyShareR\x06shares\x12a\n" +
-	"\x11model_credentials\x18\x06 \x03(\v24.defios.vault.v1.VaultContents.ModelCredentialsEntryR\x10modelCredentials\x1aC\n" +
-	"\x15ModelCredentialsEntry\x12\x10\n" +
+	"\x06shares\x18\x05 \x03(\v2\x19.defios.vault.v1.KeyShareR\x06shares\x12E\n" +
+	"\asecrets\x18\x06 \x03(\v2+.defios.vault.v1.VaultContents.SecretsEntryR\asecrets\x1a:\n" +
+	"\fSecretsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\\\n" +
 	"\bKeyShare\x12\x14\n" +
@@ -206,11 +206,11 @@ var file_vault_v1_vault_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_vault_v1_vault_proto_goTypes = []any{
 	(*VaultContents)(nil), // 0: defios.vault.v1.VaultContents
 	(*KeyShare)(nil),      // 1: defios.vault.v1.KeyShare
-	nil,                   // 2: defios.vault.v1.VaultContents.ModelCredentialsEntry
+	nil,                   // 2: defios.vault.v1.VaultContents.SecretsEntry
 }
 var file_vault_v1_vault_proto_depIdxs = []int32{
 	1, // 0: defios.vault.v1.VaultContents.shares:type_name -> defios.vault.v1.KeyShare
-	2, // 1: defios.vault.v1.VaultContents.model_credentials:type_name -> defios.vault.v1.VaultContents.ModelCredentialsEntry
+	2, // 1: defios.vault.v1.VaultContents.secrets:type_name -> defios.vault.v1.VaultContents.SecretsEntry
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name

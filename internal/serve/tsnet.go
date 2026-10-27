@@ -15,7 +15,7 @@ type TsnetOptions struct {
 	Dir        string // state dir, $XDG_DATA_HOME/defios/tsnet
 	Hostname   string // config.toml hostname
 	ControlURL string // config.toml headscale_url
-	AuthKey    string // TS_AUTHKEY (or config.toml auth_key, discouraged)
+	AuthKey    string // config.toml tailnet_auth_key, resolved; "" joins on saved state
 	Logf       func(format string, args ...any)
 }
 

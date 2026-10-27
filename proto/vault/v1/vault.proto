@@ -12,9 +12,9 @@ message VaultContents {
   bytes encryption_private_key = 3;   // 32-byte X25519
   bytes ecdsa_preparams = 4;          // opaque adapter bytes (JSON of tss-lib LocalPreParams)
   repeated KeyShare shares = 5;
-  // Model alias -> credential (an API key). Set only in a Group's
-  // credentials file; never on the COSL, never in a config file (ADR 0012).
-  map<string, string> model_credentials = 6;
+  // Secret name -> value. Set only in a Group's secrets file; a config
+  // refers to a Secret by name and never holds it (ADR 0013).
+  map<string, string> secrets = 6;
 }
 
 message KeyShare {

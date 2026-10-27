@@ -80,7 +80,9 @@ to a deployed Node, so nothing is migrated.
   `tailnet_auth_key = "$TS_AUTHKEY"`, so `TS_AUTHKEY` in the environment works as
   before, and an operator may instead `secret set TS_AUTHKEY` before the
   first serve. The serve unlocks the Vault before it joins the tailnet, so a
-  Vault-held preauth key is available on first boot. The field was `auth_key`
+  Vault-held preauth key is available on first boot. A Node already joined
+  needs no preauth key, so here alone an unresolved reference is logged and
+  the serve joins on its saved tailnet state rather than refusing to start. The field was `auth_key`
   and accepted a literal; it is renamed because the glossary's **Auth
   keypair** is the Ed25519 key that signs COSL messages, which lives only in
   the Vault's shared secrets and never in any config.

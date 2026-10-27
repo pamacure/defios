@@ -9,6 +9,7 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/identity"
+	"defios.com/internal/secret"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
 )
@@ -84,9 +85,28 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	if err != nil {
 		return exitOperational(err)
 	}
-	authKey := g.app.Getenv("TS_AUTHKEY")
-	if authKey == "" {
-		authKey = cfg.AuthKey
+	// The Group's Secrets are read at each use, so a `secret set` while this
+	// serve runs takes effect without a restart.
+	secrets := func() (map[string]string, error) {
+		s, err := vault.OpenSecrets(p.VaultSecretsFile(alias), passphrase)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // no Secret set for this Group yet
+		}
+		return s, err
+	}
+	// The Vault is open before the tailnet join, so a Vault-held preauth key
+	// works on first boot. A Node already joined needs none, so a reference
+	// that resolves nowhere is reported and the join goes ahead on the saved
+	// tailnet state.
+	var authKey string
+	if cfg.TailnetAuthKey != "" {
+		r := &secret.Resolver{Group: alias, Getenv: g.app.Getenv, Vault: secrets}
+		authKey, err = r.Resolve(cfg.TailnetAuthKey)
+		if errors.Is(err, secret.ErrUnresolved) {
+			logf("serve: tailnet_auth_key: %v; joining on this Node's saved tailnet state", err)
+		} else if err != nil {
+			return exitOperational(err)
+		}
 	}
 	tailnet := serve.NewTsnet(serve.TsnetOptions{
 		Dir:        p.TsnetDir(alias),
@@ -107,6 +127,8 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 		SessionWaitingFor: wait,
 		NewEngine:         engine,
 		NewSigner:         signEngine(g.app.Getenv, node.NodeID),
+		Getenv:            g.app.Getenv,
+		Secrets:           secrets,
 	})
 	if err != nil {
 		return exitOperational(err)

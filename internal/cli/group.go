@@ -122,12 +122,12 @@ func runGroupNew(g *globals, alias string, o groupNewOptions) error {
 		hostname = "defios-" + pub.NodeID.String()[:8] + "-" + alias
 	}
 
-	for _, dir := range []string{p.GroupConfigDir(alias), p.ConversationConfigDir(alias, nil), p.GroupDir(alias)} {
+	for _, dir := range []string{p.GroupConfigDir(alias), p.GroupDir(alias)} {
 		if err := mkdirPrivate(dir); err != nil {
 			return exitOperational(err)
 		}
 	}
-	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname}
+	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname, TailnetAuthKey: "$TS_AUTHKEY"}
 	if err := config.WriteFile(p.GroupConfigFile(alias), cfg); err != nil {
 		return exitOperational(err)
 	}

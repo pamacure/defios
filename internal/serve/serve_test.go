@@ -123,6 +123,9 @@ type node struct {
 	name    string
 	stop    func() // stops the running serve; set by start
 	tune    func(*serve.Options)
+	// secrets stand in for this Node's Vault Secrets file; a test sets them
+	// before the call that resolves them.
+	secrets map[string]string
 }
 
 func newNode(t *testing.T, name string) *node { return newNodeOn(t, newFakeNet(), name) }
@@ -135,7 +138,7 @@ func newNodeOn(t *testing.T, n *fakeNet, name string) *node {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), name)
-	return &node{id: id, paths: nodedir.Resolve(nodedir.Lookup{Dir: dir}), tailnet: newFakeTailnet(n, "defios-"+name), name: name}
+	return &node{id: id, paths: nodedir.Resolve(nodedir.Lookup{Dir: dir}), tailnet: newFakeTailnet(n, "defios-"+name), name: name, secrets: map[string]string{}}
 }
 
 // restart reuses this Node's dir and identity with a fresh fake tailnet
@@ -162,6 +165,8 @@ func (n *node) baseOptions() serve.Options {
 		Config:  config.Config{DisplayName: n.name, Hostname: "defios-" + n.name},
 		Tailnet: n.tailnet,
 		Logf:    func(string, ...any) {},
+		Getenv:  func(string) string { return "" },
+		Secrets: func() (map[string]string, error) { return n.secrets, nil },
 	}
 }
 

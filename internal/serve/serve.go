@@ -76,6 +76,12 @@ type Options struct {
 	NewEngine         func() session.Engine
 	// NewSigner is the signing engine; nil means this serve does not sign.
 	NewSigner func() session.Engine
+	// Getenv and Secrets resolve a config.toml's "$NAME" references: the
+	// serve's environment, else the Group's Secrets in the Vault, read at
+	// each use so a `secret set` needs no restart (ADR 0013). nil Getenv is
+	// os.Getenv; nil Secrets is none.
+	Getenv  func(string) string
+	Secrets func() (map[string]string, error)
 }
 
 // Run binds the socket and answers the local API at once, then joins the
@@ -87,6 +93,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 	if o.Alias == "" {
 		o.Alias = group.ImplicitAlias
+	}
+	if o.Getenv == nil {
+		o.Getenv = os.Getenv
 	}
 	self, err := group.SignIdentity(o.Node, o.Config.DisplayName, o.Config.Hostname)
 	if err != nil {
@@ -158,7 +167,7 @@ type server struct {
 	sessionCancel context.CancelFunc
 	sessionDone   chan struct{}
 
-	convDirCancel context.CancelFunc // stops watchConversationDirs
+	convDirCancel context.CancelFunc // stops watchWorkspaces
 	convDirDone   chan struct{}
 }
 

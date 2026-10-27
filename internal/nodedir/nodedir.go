@@ -20,7 +20,7 @@ type Lookup struct {
 
 // Paths is a resolved Node layout.
 type Paths struct {
-	Config string // holds group/<alias>/config.toml and conversation/
+	Config string // holds group/<alias>/, each Group's Workspace
 	Data   string // holds identity, vault/, group/<alias>/
 	Socket string // serve.sock
 }
@@ -79,11 +79,11 @@ func (p Paths) VaultSharesFile(alias string) string {
 	return filepath.Join(p.VaultDir(), "shares-"+alias)
 }
 
-// VaultCredentialsFile holds one Group's Model credentials, by Model alias.
-// Vault, not config or log: a credential can drain a billing account, so it
-// is encrypted with the keyshares and never replicates (ADR 0012).
-func (p Paths) VaultCredentialsFile(alias string) string {
-	return filepath.Join(p.VaultDir(), "credentials-"+alias)
+// VaultSecretsFile holds one Group's Secrets, by name. A config refers to a
+// Secret and never holds it, so a key-bearing value is encrypted with the
+// keyshares and never replicates (ADR 0013).
+func (p Paths) VaultSecretsFile(alias string) string {
+	return filepath.Join(p.VaultDir(), "secrets-"+alias)
 }
 
 // CurrentGroupFile is the plaintext Current Group pointer at the config root:
@@ -101,7 +101,8 @@ func (p Paths) DisplayNameFile() string { return filepath.Join(p.Config, "displa
 // tree.
 func (p Paths) GroupsConfigDir() string { return filepath.Join(p.Config, "group") }
 
-// GroupConfigDir is the per-Group config subtree, config/group/<alias>/.
+// GroupConfigDir is the Group's Workspace, config/group/<alias>/: its
+// config.toml, and one Conversation Workspace per minted Key (ADR 0013).
 func (p Paths) GroupConfigDir(alias string) string {
 	return filepath.Join(p.GroupsConfigDir(), alias)
 }
@@ -131,31 +132,15 @@ func (p Paths) TsnetDir(alias string) string {
 	return filepath.Join(p.GroupDir(alias), "tsnet")
 }
 
-// NetworkOverridesFile holds this Node's local RPC endpoints for a Group's
-// Networks, by Network alias. Config, not Vault or log: provider URLs often
-// embed API keys that must not replicate (ADR 0008).
-func (p Paths) NetworkOverridesFile(alias string) string {
-	return filepath.Join(p.GroupConfigDir(alias), "networks.toml")
+// ConversationWorkspace is config/group/<alias>/<conversation-id>/, named by
+// the hex Conversation ID. A Conversation ID is always 64 hex characters, so
+// it cannot collide with a file in the Group Workspace (ADR 0013).
+func (p Paths) ConversationWorkspace(alias string, id [32]byte) string {
+	return filepath.Join(p.GroupConfigDir(alias), hex.EncodeToString(id[:]))
 }
 
-// GroupLevel names the agent config directory for Group-level talk (a nil
-// conversation id). A Conversation ID is always 64 hex characters, so it can
-// never collide with this name.
-const GroupLevel = "group-level"
-
-// ConversationsConfigDir holds one agent config directory per Conversation
-// of a Group, plus GroupLevel.
-func (p Paths) ConversationsConfigDir(alias string) string {
-	return filepath.Join(p.GroupConfigDir(alias), "conversation")
-}
-
-// ConversationConfigDir is config/group/<alias>/conversation/<id>/, named by
-// the hex Conversation ID, or GroupLevel when id is nil. Nothing parses it
-// yet; it is meant for a model alias, a token window and a soul.md (ADR 0012).
-func (p Paths) ConversationConfigDir(alias string, id []byte) string {
-	name := GroupLevel
-	if len(id) > 0 {
-		name = hex.EncodeToString(id)
-	}
-	return filepath.Join(p.ConversationsConfigDir(alias), name)
+// ConversationConfigFile is a Conversation Workspace's config.toml, which
+// overrides part of the Group's.
+func (p Paths) ConversationConfigFile(alias string, id [32]byte) string {
+	return filepath.Join(p.ConversationWorkspace(alias, id), "config.toml")
 }

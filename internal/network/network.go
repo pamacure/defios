@@ -7,11 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"regexp"
 	"sort"
-
-	"github.com/BurntSushi/toml"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
@@ -245,36 +242,14 @@ func Check(nets []Network, typ uint32, cfg *coslv1.NetworkConfig, alias string) 
 	return nil
 }
 
-// Overrides are this Node's local RPC endpoints by Network alias. They hold
-// secret-bearing URLs that must not replicate, so they live in the Node's
-// config directory, not on the log (ADR 0008).
+// Overrides are this Node's local RPC endpoints by Network alias, from the
+// [networks] of its config.toml. They hold secret-bearing URLs that must not
+// replicate, so they never ride the log (ADR 0008, ADR 0013).
 type Overrides map[string][]string
 
-type overrideFile map[string]struct {
-	RPCURLs []string `toml:"rpc_urls"`
-}
-
-// LoadOverrides reads the per-Group overrides file; a missing file is none.
-func LoadOverrides(path string) (Overrides, error) {
-	var f overrideFile
-	if _, err := toml.DecodeFile(path, &f); errors.Is(err, os.ErrNotExist) {
-		return Overrides{}, nil
-	} else if err != nil {
-		return nil, fmt.Errorf("network: %w", err)
-	}
-	out := Overrides{}
-	for alias, e := range f {
-		for _, u := range e.RPCURLs {
-			if err := validURL(u); err != nil {
-				return nil, fmt.Errorf("%s [%s]: %w", path, alias, err)
-			}
-		}
-		if len(e.RPCURLs) > 0 {
-			out[alias] = e.RPCURLs
-		}
-	}
-	return out, nil
-}
+// ValidateRPCURL checks that s is an http(s) or ws(s) URL with a host, as
+// every RPC URL must be, on the log or resolved from a local Secret.
+func ValidateRPCURL(s string) error { return validURL(s) }
 
 // Effective is the RPC endpoints a broadcast from this Node uses: its local
 // override when it has one, else the log's.

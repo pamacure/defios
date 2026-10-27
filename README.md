@@ -74,6 +74,8 @@ export TS_AUTHKEY='<preauth key for this machine>'
 defios serve
 ```
 
+The Group's `config.toml` says `tailnet_auth_key = "$TS_AUTHKEY"`: a reference to a Secret, found in the environment or else in the Group's Vault. To keep the key out of the environment, run `defios secret set TS_AUTHKEY` (value on stdin) before the first `serve` instead. A config never holds a secret itself: RPC URLs under `[networks.<alias>]` and `api_key` under `[providers.<provider>]` are `"$NAME"` references too.
+
 `serve` prompts for the passphrase once unless `DEFIOS_PASSPHRASE` or `--passphrase-file` is set. It serves the Current Group. One Node has one socket, so only one Group is live at a time: a second `serve` — for any Group — exits 2 with an "already running" message while the first keeps running. The first successful join stores that Group's tailnet state under its subtree; later serves reuse it.
 
 From the other terminal on each machine:

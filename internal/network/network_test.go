@@ -2,8 +2,6 @@ package network
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -119,14 +117,7 @@ func TestRemovedAliasCanBeCreatedAgain(t *testing.T) {
 }
 
 func TestOverrideBeatsLogRPC(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "networks.toml")
-	if err := os.WriteFile(path, []byte("[ethereum-mainnet]\nrpc_urls = [\"https://key.example/SECRET\"]\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ov, err := LoadOverrides(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ov := Overrides{"ethereum-mainnet": {"https://key.example/SECRET"}}
 	n := Network{Alias: "ethereum-mainnet", RPCURLs: []string{"https://public.example"}}
 	if urls, overridden := ov.Effective(n); !overridden || !reflect.DeepEqual(urls, []string{"https://key.example/SECRET"}) {
 		t.Fatalf("override: %v %v", urls, overridden)
@@ -134,23 +125,5 @@ func TestOverrideBeatsLogRPC(t *testing.T) {
 	other := Network{Alias: "other", RPCURLs: []string{"https://public.example"}}
 	if urls, overridden := ov.Effective(other); overridden || !reflect.DeepEqual(urls, other.RPCURLs) {
 		t.Fatalf("no override: %v %v", urls, overridden)
-	}
-}
-
-func TestMissingOverrideFileIsEmpty(t *testing.T) {
-	ov, err := LoadOverrides(filepath.Join(t.TempDir(), "absent.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, overridden := ov.Effective(Network{Alias: "x"}); overridden {
-		t.Fatal("empty overrides overrode")
-	}
-}
-
-func TestOverrideRejectsBadURL(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "networks.toml")
-	os.WriteFile(path, []byte("[x]\nrpc_urls = [\"gopher://nope\"]\n"), 0o600)
-	if _, err := LoadOverrides(path); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("got %v", err)
 	}
 }

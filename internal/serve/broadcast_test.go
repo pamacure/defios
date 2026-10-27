@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -655,25 +656,34 @@ func TestSignBroadcastFailsPerNetwork(t *testing.T) {
 	}
 }
 
-// A Node's local override beats the log's rpc urls, and a rejected broadcast
-// commits no receipt.
+// writeConfig writes body as the config.toml at path, making its Workspace.
+func writeConfig(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A Node's local override, a Secret named in its Group config.toml, beats
+// the log's rpc urls, and a rejected broadcast commits no receipt.
 func TestSignBroadcastUsesTheLocalOverrideAndFailsLoudly(t *testing.T) {
 	onLog, local := newChain(t), newChain(t)
 	a, b, _, msgID, _ := signedRequest(t, onLog.srv.URL)
 	ctx := context.Background()
 
-	path := a.paths.NetworkOverridesFile(group.ImplicitAlias)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("[eth]\nrpc_urls = ['"+local.srv.URL+"']\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), "[networks.eth]\nrpc_urls = [\"$LOCAL_ETH\"]\n")
+	a.secrets["LOCAL_ETH"] = local.srv.URL
 	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || v.Failed() {
 		t.Fatalf("%+v, %v", v, err)
 	}
 	if local.sends() != 1 || onLog.sends() != 0 {
 		t.Fatalf("override sends %d, log sends %d", local.sends(), onLog.sends())
+	}
+	if hit := fileContaining(t, a.paths.Config, local.srv.URL); hit != "" {
+		t.Fatalf("the resolved URL is in the clear in %s", hit)
 	}
 
 	waitReceipts(t, b, msgID, 1)
@@ -685,6 +695,50 @@ func TestSignBroadcastUsesTheLocalOverrideAndFailsLoudly(t *testing.T) {
 	if d, err := b.client().SignInspect(ctx, msgID[:8]); err != nil || len(d.BroadcastReceipts) != 1 {
 		t.Fatalf("receipts = %+v, %v: a failed broadcast must not commit one", d.BroadcastReceipts, err)
 	}
+}
+
+// A Sign Request is Key-scoped, so its broadcast takes its Key's
+// Conversation Workspace over the Group's; a reference that resolves
+// nowhere fails that Network, naming the reference, and sends nothing.
+func TestSignBroadcastUsesTheKeysConversationWorkspace(t *testing.T) {
+	onLog, groupWide, perKey := newChain(t), newChain(t), newChain(t)
+	a, b, _, msgID, conv := signedRequest(t, onLog.srv.URL)
+	ctx := context.Background()
+
+	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), "[networks.eth]\nrpc_urls = [\"$GROUP_ETH\"]\n")
+	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, [32]byte(conv)), "[networks.eth]\nrpc_urls = [\"$KEY_ETH\"]\n")
+	a.secrets["GROUP_ETH"], a.secrets["KEY_ETH"] = groupWide.srv.URL, perKey.srv.URL
+	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || v.Failed() {
+		t.Fatalf("%+v, %v", v, err)
+	}
+	if perKey.sends() != 1 || groupWide.sends() != 0 || onLog.sends() != 0 {
+		t.Fatalf("per-Key sends %d, Group sends %d, log sends %d", perKey.sends(), groupWide.sends(), onLog.sends())
+	}
+
+	writeConfig(t, b.paths.GroupConfigFile(group.ImplicitAlias), "[networks.eth]\nrpc_urls = [\"$NOWHERE_ETH\"]\n")
+	v, err := b.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil || !v.Failed() || v.Networks[0].Receipt != nil || !strings.Contains(v.Networks[0].Error, "$NOWHERE_ETH") {
+		t.Fatalf("an unresolved reference must fail its Network by name: %+v, %v", v, err)
+	}
+	if onLog.sends() != 0 {
+		t.Fatal("an unresolved local override fell back to the log's endpoint")
+	}
+}
+
+// fileContaining names the first file under dir whose bytes contain s.
+func fileContaining(t *testing.T, dir, s string) string {
+	t.Helper()
+	var hit string
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || hit != "" {
+			return nil
+		}
+		if raw, _ := os.ReadFile(path); bytes.Contains(raw, []byte(s)) {
+			hit = path
+		}
+		return nil
+	})
+	return hit
 }
 
 // waitReceipts polls until the Node's replica shows want receipts for the request.
