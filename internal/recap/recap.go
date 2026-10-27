@@ -2,7 +2,9 @@
 // (docs/adr/0012-recap-on-the-log-pruning-off-it.md): the live Recap stands in
 // place of the app.freeform rows it accounts for. As with Networks
 // (docs/adr/0008-networks-on-cosl.md) Raft order is the authority and a Recap
-// supersedes by fold, never by a write to the replica.
+// supersedes by fold, never by a write to the replica. Pruning is the one
+// write here, and it is Node-local: it destroys the payloads of the talk the
+// live Recap already accounts for.
 package recap
 
 import (

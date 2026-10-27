@@ -61,6 +61,15 @@ func conversationCommand(g *globals) *cobra.Command {
 	recapCmd.MarkFlagRequired("base-seq")
 	recapCmd.MarkFlagRequired("text")
 	root.AddCommand(recapCmd)
+	prune := &cobra.Command{
+		Use:   "prune",
+		Short: "Destroy, on this Node only, the payloads of the talk the live Recap covers. --key scopes it to that Key",
+		Args:  cobra.NoArgs,
+		RunE:  func(*cobra.Command, []string) error { return runConversationPrune(g, keyQuery) },
+	}
+	prune.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	bindGroupFlag(g, prune)
+	root.AddCommand(prune)
 	return root
 }
 
@@ -110,6 +119,44 @@ func runConversationRecap(cmd *cobra.Command, g *globals, keyQuery string, baseS
 		return g.emitJSON(v)
 	}
 	fmt.Fprintf(g.app.Stdout, "recap as seq %d (msg_id %s)\n", v.Seq, v.MsgID)
+	return nil
+}
+
+// pruneLine is `conversation prune`'s result: how many messages it pruned
+// now, up to which seq.
+type pruneLine struct {
+	BaseSeq  uint64 `json:"base_seq"`
+	Messages int    `json:"messages"`
+}
+
+// runConversationPrune writes this Node's replica directly: Pruning is
+// Node-local, appends nothing and tells no other Node, so it needs no serve
+// (ADR 0012).
+func runConversationPrune(g *globals, keyQuery string) error {
+	store, err := openReplica(g)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	var conv []byte
+	if keyQuery != "" {
+		if conv, err = conversationID(store, keyQuery); err != nil {
+			return err
+		}
+	}
+	baseSeq, n, err := recap.Prune(store, conv)
+	if errors.Is(err, recap.ErrNoRecap) {
+		return exitUsagef("%w; account for it first with `conversation recap`", err)
+	}
+	if err != nil {
+		return exitOperational(err)
+	}
+	// There is no prune policy yet (#52), so it is always off here.
+	fmt.Fprintln(g.app.Stderr, "warning: this Node's prune policy is off, so a later snapshot restore from a Node that kept this talk brings it back")
+	if g.json {
+		return g.emitJSON(pruneLine{BaseSeq: baseSeq, Messages: n})
+	}
+	fmt.Fprintf(g.app.Stdout, "pruned %d messages up to seq %d\n", n, baseSeq)
 	return nil
 }
 

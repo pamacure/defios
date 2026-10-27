@@ -320,7 +320,7 @@ func TestConversationLogFoldsToTheLiveRecap(t *testing.T) {
 
 // pruneTalk nulls the envelope of the app.freeform rows at seqs in the
 // replica under dir, as Pruning leaves a row: metadata and envelope_hash
-// only (ADR 0012). The trigger is dropped for the rewrite and put back.
+// only (ADR 0012).
 func pruneTalk(t *testing.T, dir string, seqs ...uint64) {
 	t.Helper()
 	matches, err := filepath.Glob(filepath.Join(dir, "group", "*", "cosl.sqlite"))
@@ -332,13 +332,8 @@ func pruneTalk(t *testing.T, dir string, seqs ...uint64) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	stmts := []string{"DROP TRIGGER cosl_no_update"}
 	for _, seq := range seqs {
-		stmts = append(stmts, fmt.Sprintf("UPDATE cosl SET envelope = NULL WHERE msg_type = %d AND seq = %d", cosl.TypeAppFreeform, seq))
-	}
-	stmts = append(stmts, "CREATE TRIGGER cosl_no_update BEFORE UPDATE ON cosl BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END")
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := db.Exec(fmt.Sprintf("UPDATE cosl SET envelope = NULL WHERE msg_type = %d AND seq = %d", cosl.TypeAppFreeform, seq)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -618,5 +613,59 @@ func TestConversationSendExitCodesFromServe(t *testing.T) {
 		if r.code != c.code || !strings.Contains(r.stderr, c.body) {
 			t.Errorf("%s: exit %d want %d; stderr %q", c.name, r.code, c.code, r.stderr)
 		}
+	}
+}
+
+// conversation prune with no Recap destroys nothing and points at
+// `conversation recap`: no talk has been accounted for.
+func TestConversationPruneWithoutRecap(t *testing.T) {
+	dir := t.TempDir()
+	groupWithTalk(t, dir)
+	r := run(t, nil, "", "--dir", dir, "conversation", "prune")
+	if r.code != 1 || !strings.Contains(r.stderr, "conversation recap") {
+		t.Fatalf("exit %d, stderr %q; want 1 pointing at conversation recap", r.code, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
+	if strings.Contains(r.stdout, "[pruned]") {
+		t.Fatalf("pruned without a Recap:\n%s", r.stdout)
+	}
+}
+
+// conversation prune destroys the talk the live Recap covers, appends
+// nothing, warns that a restore undoes it while the prune policy is off,
+// and is harmless run again.
+func TestConversationPrune(t *testing.T) {
+	dir := t.TempDir()
+	groupWithRecap(t, dir)
+	before := run(t, nil, "", "--dir", dir, "cosl", "log", "--json").stdout
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "prune")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	if strings.TrimSpace(r.stdout) != "pruned 2 messages up to seq 4" {
+		t.Errorf("stdout = %q", r.stdout)
+	}
+	if !strings.Contains(r.stderr, "restore") {
+		t.Errorf("stderr = %q, want a warning that a restore undoes it", r.stderr)
+	}
+	if after := run(t, nil, "", "--dir", dir, "cosl", "log", "--json").stdout; strings.Count(after, `"seq"`) != strings.Count(before, `"seq"`) {
+		t.Errorf("cosl log changed row count:\n%s\n%s", before, after)
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(lines) != 5 || !strings.HasSuffix(lines[0], " alice  [pruned]") || !strings.HasSuffix(lines[1], " bob  [pruned]") ||
+		!strings.HasSuffix(lines[2], ` alice  two\nlines`) || !strings.HasSuffix(lines[3], "hello and hi") {
+		t.Errorf("log --full after prune:\n%s", r.stdout)
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "prune", "--json")
+	var got map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil || r.code != 0 {
+		t.Fatalf("second prune: exit %d %v\n%s", r.code, err, r.stdout)
+	}
+	if got["base_seq"] != float64(4) || got["messages"] != float64(0) {
+		t.Errorf("second prune = %v, want base_seq 4, messages 0", got)
 	}
 }

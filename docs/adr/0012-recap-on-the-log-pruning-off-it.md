@@ -78,6 +78,12 @@ per Node, and a Node that falls past `SnapshotThreshold` re-transfers all of it.
 - Pruning destroys `app.freeform` payloads only. Recaps keep their text
   forever — each is at most 64 KB and they arrive once per window, so the
   ladder of historical accounts is nearly free.
+- Pruning is the one UPDATE the append-only triggers admit: an
+  `app.freeform`'s envelope set to NULL with every other column unchanged.
+  A replica's triggers are always its own binary's, reinstalled on open and
+  after a snapshot restore. Pruning tells no Node, but a snapshot a pruned
+  Node ships carries no payload it destroyed, so a Node restored from it
+  holds that much less talk.
 - Pruning never reaches talk no Recap has accounted for: the prunable set is
   the rows at or below the live Recap's `base_seq`. `conversation prune` with
   no Recap errors and points at `conversation recap`.

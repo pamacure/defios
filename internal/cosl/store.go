@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 
@@ -40,12 +41,25 @@ CREATE TABLE IF NOT EXISTS cosl_meta (
   key   TEXT PRIMARY KEY,
   value BLOB NOT NULL
 );
-
-CREATE TRIGGER IF NOT EXISTS cosl_no_update BEFORE UPDATE ON cosl
-BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS cosl_no_delete BEFORE DELETE ON cosl
-BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END;
 `
+
+// triggers keep the replica append-only, by name. The one UPDATE they
+// admit is Pruning: an app.freeform's (msg_type 6) envelope set to NULL,
+// every other column unchanged. Open and Restore reinstall them when they
+// differ, so a replica's guard is always this binary's, never an older
+// one's or a snapshot's.
+var triggers = map[string]string{
+	"cosl_no_update": `CREATE TRIGGER cosl_no_update BEFORE UPDATE ON cosl
+WHEN NOT (OLD.msg_type = 6 AND NEW.envelope IS NULL
+  AND NEW.seq IS OLD.seq AND NEW.term IS OLD.term
+  AND NEW.envelope_hash IS OLD.envelope_hash AND NEW.sender IS OLD.sender
+  AND NEW.msg_type IS OLD.msg_type AND NEW.msg_id IS OLD.msg_id
+  AND NEW.conversation_id IS OLD.conversation_id
+  AND NEW.created_at IS OLD.created_at AND NEW.prev_hash IS OLD.prev_hash)
+BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END`,
+	"cosl_no_delete": `CREATE TRIGGER cosl_no_delete BEFORE DELETE ON cosl
+BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END`,
+}
 
 // cosl_meta keys.
 const (
@@ -61,8 +75,8 @@ var (
 	ErrAmbiguous = errors.New("cosl: ambiguous msg_id prefix")
 )
 
-// Store is one Node's COSL replica. The FSM is its only writer; CLI reads
-// go through WAL.
+// Store is one Node's COSL replica. The FSM is its only appender and Prune
+// its only other writer; CLI reads go through WAL.
 type Store struct {
 	db *sql.DB
 }
@@ -80,7 +94,59 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("cosl: schema: %w", err)
 	}
+	if err := installTriggers(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// installTriggers makes the replica's triggers exactly this binary's. When
+// they already are it only reads, so opening a replica for a CLI read never
+// contends with serve's FSM for the write lock; otherwise it replaces them
+// in one transaction, so no writer sees the replica unguarded in between.
+func installTriggers(db *sql.DB) error {
+	rows, err := db.Query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'cosl'")
+	if err != nil {
+		return fmt.Errorf("cosl: triggers: %w", err)
+	}
+	have := map[string]string{}
+	for rows.Next() {
+		var name, stmt string
+		if err := rows.Scan(&name, &stmt); err != nil {
+			rows.Close()
+			return fmt.Errorf("cosl: triggers: %w", err)
+		}
+		have[name] = stmt
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("cosl: triggers: %w", err)
+	}
+	if maps.Equal(have, triggers) {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("cosl: triggers: %w", err)
+	}
+	defer tx.Rollback()
+	for name := range have {
+		// The name may come from a snapshot, so quote it as an identifier.
+		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS "` + strings.ReplaceAll(name, `"`, `""`) + `"`); err != nil {
+			return fmt.Errorf("cosl: triggers: %w", err)
+		}
+	}
+	for _, stmt := range triggers {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("cosl: triggers: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("cosl: triggers: %w", err)
+	}
+	return nil
 }
 
 // Close releases the database.
@@ -200,6 +266,31 @@ func (s *Store) VacuumInto(path string) error {
 		return fmt.Errorf("cosl: vacuum into: %w", err)
 	}
 	return nil
+}
+
+// Prune destroys the payload of one Conversation's app.freeform rows at or
+// below seq through (nil conversationID is Group-level talk), keeping each
+// row, its envelope_hash and so its place in the chain (ADR 0012). It is
+// Node-local and appends nothing; a row already pruned is skipped. It
+// reports how many payloads it destroyed. Which seq is safe to prune
+// through is the caller's: the live Recap's base_seq.
+func (s *Store) Prune(conversationID []byte, through uint64) (int, error) {
+	conv := "conversation_id IS NULL"
+	args := []any{TypeAppFreeform, through}
+	if conversationID != nil {
+		conv = "conversation_id = ?"
+		args = append(args, conversationID)
+	}
+	res, err := s.db.Exec(`UPDATE cosl SET envelope = NULL
+		WHERE msg_type = ? AND seq <= ? AND envelope IS NOT NULL AND `+conv, args...)
+	if err != nil {
+		return 0, fmt.Errorf("cosl: prune: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("cosl: prune: %w", err)
+	}
+	return int(n), nil
 }
 
 // Meta reads cosl_meta; a fresh replica reports zeroes and a genesis head.

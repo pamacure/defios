@@ -4,7 +4,7 @@
 
 A self-hosted multi-party wallet. Two machines each run one Node, form a Group on a headscale tailnet, and mint a 2-of-2 ECDSA Key and a 2-of-2 Ed25519 Key. Talk between them is carried on the COSL.
 
-`serve` is the Node online: the Vault stays unlocked, the Node is on the tailnet, and Raft is running. Quit `serve` and the Node stops sending and receiving. The COSL replica stays on disk at the last applied row. Reads of that replica (`node inspect`, `group list`, `group inspect`, `session list`, `session inspect`, `key list`, `key inspect`, `conversation log`, `cosl log`, `cosl decode`) still work. Anything that appends, forms a Group, or runs a Session needs `serve`.
+`serve` is the Node online: the Vault stays unlocked, the Node is on the tailnet, and Raft is running. Quit `serve` and the Node stops sending and receiving. The COSL replica stays on disk at the last applied row. Reads of that replica (`node inspect`, `group list`, `group inspect`, `session list`, `session inspect`, `key list`, `key inspect`, `conversation log`, `cosl log`, `cosl decode`) and `conversation prune` still work. Anything that appends, forms a Group, or runs a Session needs `serve`.
 
 Run `serve` in one terminal and the other commands in a second terminal, as the same user. The local socket is mode `0600`.
 
@@ -182,6 +182,12 @@ defios conversation log --key ecdsa:<hex> --lean
 ```
 
 `--full` also shows the messages and earlier Recaps that the live Recap supersedes. A message whose payload this Node has pruned shows as `[pruned]` with only its seq, time and sender. `--lean` gives an agent its starting context: one `<display name>: <text>` line per entry, the live Recap first, then every message after it. Nothing else is printed, including pruned messages. Both flags work with `--key` and `--limit`. Under `--full`, `--limit` keeps the latest N rows. Otherwise it keeps the latest N messages after the Recap.
+
+```bash
+defios conversation prune --key ecdsa:<hex>
+```
+
+`prune` destroys the text of the messages the live Recap covers, on this machine only. Every row, its hash and its place in the chain stay, so the replica still verifies and still replicates. Nothing is appended and the other Node is not told, so the two machines can hold different amounts of talk. Recaps are never pruned. With no Recap it exits 1 and points at `conversation recap`. Running it again prunes nothing new. It does not need `serve`. A later snapshot restore from a Node that kept the messages brings them back, and `prune` prints a warning saying so.
 
 ```bash
 defios cosl log

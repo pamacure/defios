@@ -183,8 +183,8 @@ func TestRestoreOfOlderSnapshotIsNoOp(t *testing.T) {
 }
 
 // prune strips every freeform envelope from a snapshot copy, as Pruning
-// will leave rows: metadata and envelope_hash only (ADR 0012). The trigger
-// is dropped for the rewrite and put back, so the copy stays append-only.
+// leaves rows: metadata and envelope_hash only (ADR 0012). The append-only
+// trigger admits exactly this update.
 func (f *fixture) prune(snap string) {
 	f.t.Helper()
 	db, err := sql.Open("sqlite", "file:"+snap)
@@ -192,14 +192,8 @@ func (f *fixture) prune(snap string) {
 		f.t.Fatal(err)
 	}
 	defer db.Close()
-	for _, stmt := range []string{
-		"DROP TRIGGER cosl_no_update",
-		fmt.Sprintf("UPDATE cosl SET envelope = NULL WHERE msg_type = %d", cosl.TypeAppFreeform),
-		"CREATE TRIGGER cosl_no_update BEFORE UPDATE ON cosl BEGIN SELECT RAISE(ABORT, 'cosl is append-only'); END",
-	} {
-		if _, err := db.Exec(stmt); err != nil {
-			f.t.Fatal(err)
-		}
+	if _, err := db.Exec(fmt.Sprintf("UPDATE cosl SET envelope = NULL WHERE msg_type = %d", cosl.TypeAppFreeform)); err != nil {
+		f.t.Fatal(err)
 	}
 }
 
@@ -255,5 +249,42 @@ func TestRestoreAcrossPrunedAndUnprunedReplicas(t *testing.T) {
 	defer db.Close()
 	if _, err := db.Exec("UPDATE cosl SET term = 9"); err == nil || !strings.Contains(err.Error(), "append-only") {
 		t.Fatalf("update on restored pruned replica = %v, want append-only", err)
+	}
+}
+
+// A replica's triggers are this binary's, never a snapshot's: a snapshot
+// without the append-only guard does not strip it from the replica it
+// restores into, and Pruning still works there.
+func TestRestoreKeepsThisReplicasTriggers(t *testing.T) {
+	leader := newFixture(t)
+	leader.fill(2)
+	snap := leader.snapshotOf()
+	db, err := sql.Open("sqlite", "file:"+snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{"DROP TRIGGER cosl_no_update", "DROP TRIGGER cosl_no_delete"} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	follower := leader.sibling()
+	if err := follower.store.Restore(snap); err != nil {
+		t.Fatal(err)
+	}
+	live, err := sql.Open("sqlite", "file:"+follower.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	for _, stmt := range []string{"UPDATE cosl SET term = 9", "DELETE FROM cosl"} {
+		if _, err := live.Exec(stmt); err == nil || !strings.Contains(err.Error(), "append-only") {
+			t.Errorf("%s after restore = %v, want append-only", stmt, err)
+		}
+	}
+	if n, err := follower.store.Prune(nil, 2); err != nil || n != 2 {
+		t.Fatalf("Prune after restore = %d, %v; want 2", n, err)
 	}
 }

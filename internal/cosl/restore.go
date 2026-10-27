@@ -19,8 +19,9 @@ var ErrBadChain = errors.New("cosl: snapshot chain does not verify")
 // snapshot's chain is verified from genesis to its recorded head, this
 // replica's own rows must be its prefix, and then the sqlite Online Backup
 // API copies it over the live file: the one legitimate rewrite, below the
-// append-only triggers. A snapshot no further along than this replica
-// changes nothing. On any error the live replica is untouched.
+// append-only triggers, which are then reinstalled since the copy brought
+// the snapshot's. A snapshot no further along than this replica changes
+// nothing. On any error before the copy the live replica is untouched.
 func (s *Store) Restore(snapshotPath string) error {
 	uri := "file:" + snapshotPath + "?mode=ro"
 	snap, err := sql.Open("sqlite", uri)
@@ -69,7 +70,7 @@ func (s *Store) Restore(snapshotPath string) error {
 	if err != nil {
 		return fmt.Errorf("cosl: restore: %w", err)
 	}
-	return nil
+	return installTriggers(s.db)
 }
 
 // verifyChain recomputes the prev_hash chain of a replica file from

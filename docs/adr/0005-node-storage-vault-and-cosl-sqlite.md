@@ -53,6 +53,10 @@ peer's `session.start`. Decided in
   ticket resolution; `conversation log` is a `conversation_id` filter, not a
   second table
   ([ADR 0004](0004-conversation-on-cosl.md)).
+  *Amended by [ADR 0012](0012-recap-on-the-log-pruning-off-it.md): the
+  triggers admit one UPDATE, Pruning (an `app.freeform`'s envelope set to
+  NULL, every other column unchanged), and `Open` and a snapshot restore
+  reinstall them, so a replica's guard is never a snapshot's.*
 - Amends [ADR 0003](0003-keygen-session-orchestration.md): engine `Start()`
   on apply **and** local accept. The initiator accepted by submitting.
 - Reads of plaintext identity and sqlite work locked and without `serve`.
