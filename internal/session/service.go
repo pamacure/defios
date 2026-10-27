@@ -136,6 +136,7 @@ type Service struct {
 	waitLog  map[ID]struct{}
 	signs    map[ID]SignInfo       // resolved sign.requests, by Session
 	starting map[[32]byte]struct{} // sign.requests this Node has appended a start for
+	verified map[[32]byte]bool     // whether a session.complete's signatures verify, by envelope hash
 }
 
 type shareRef struct {
@@ -213,6 +214,7 @@ func New(cfg Config) (*Service, error) {
 		parties:  map[ID]*party{},
 		waitLog:  map[ID]struct{}{},
 		signs:    map[ID]SignInfo{},
+		verified: map[[32]byte]bool{},
 		starting: map[[32]byte]struct{}{},
 	}, nil
 }

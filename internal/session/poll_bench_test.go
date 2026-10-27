@@ -13,7 +13,7 @@ import (
 // benchService is alice's Session layer over a built replica, signing with
 // the replica's Key so every completed signing Session's signatures are
 // checked as serve's would be.
-func benchService(b *testing.B, shape coslbench.Shape) (*Service, *cosl.FSM, cosl.Author, func() uint64) {
+func benchService(b testing.TB, shape coslbench.Shape) (*Service, *cosl.FSM, cosl.Author, func() uint64) {
 	b.Helper()
 	r := coslbench.Build(b, shape)
 	store, err := cosl.Open(r.Path)

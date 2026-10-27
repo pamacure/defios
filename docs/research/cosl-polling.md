@@ -106,4 +106,23 @@ None of that work has a result that changed since the last wake.
 
 ### After
 
-*To be filled in as the ADR 0014 tickets land.*
+#### #53: signature checks remembered per row ([`after-53.txt`](cosl-polling/after-53.txt))
+
+The Session layer remembers whether each `session.complete` row's
+signatures verify, keyed by the row's envelope hash, so a wake re-checks
+none of the completes it has already seen. Per wake, median of 6, against
+the baseline:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| SessionIdleWake | 7.65 ms (−24%) | 69.6 ms (−25%) | 334 ms (−26%) |
+| SessionWakeAfterARow | 7.58 ms (−34%) | 82.6 ms (~) | 334 ms (~) |
+
+Allocation barely moves (−0.2% bytes, −0.7% allocs), since checking a
+signature allocates little next to reading and decoding every row. The run
+was noisy: another build shared the machine, the WakeAfterARow spreads
+reach ±123%, and `WorkspaceIdleWake`, whose code did not change, also ran
+9–17% faster. So read the saving as roughly the 17% the profile gave
+`VerifyECDSA`, not as the full quarter. An idle wake on the large replica
+still reads and decodes every row, which the remaining ADR 0014 tickets
+deal with.
