@@ -90,8 +90,13 @@ type Store struct {
 
 // Open opens or creates the replica at path.
 func Open(path string) (*Store, error) {
+	// Every transaction here writes, so each takes the write lock as it
+	// begins and waits out busy_timeout for it. A deferred one would read
+	// first and then fail at once, with no wait, if a Prune committed in
+	// between, losing the FSM's row.
 	dsn := "file:" + path + "?" + url.Values{
 		"_pragma": {"journal_mode(WAL)", "synchronous(FULL)", "busy_timeout(5000)"},
+		"_txlock": {"immediate"},
 	}.Encode()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
