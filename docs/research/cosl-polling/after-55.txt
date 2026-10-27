@@ -1,0 +1,108 @@
+goos: linux
+goarch: amd64
+pkg: defios.com/internal/session
+cpu: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz
+BenchmarkSessionIdleWake/small-8    	      10	     26251 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/small-8    	      10	     25282 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/small-8    	      10	     24956 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/small-8    	      10	     28050 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/small-8    	      10	     25546 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/small-8    	      10	     25265 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/medium-8   	      10	     44448 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/medium-8   	      10	     29947 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/medium-8   	      10	     27635 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/medium-8   	      10	     30845 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/medium-8   	      10	     30378 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/medium-8   	      10	     28986 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/large-8    	      10	     29405 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/large-8    	      10	     29721 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/large-8    	      10	     28565 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/large-8    	      10	     30258 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/large-8    	      10	     29086 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionIdleWake/large-8    	      10	     29709 ns/op	     624 B/op	      22 allocs/op
+BenchmarkSessionWakeAfterARow/small-8         	      10	    181801 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/small-8         	      10	    169040 ns/op	    3044 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/small-8         	      10	    168172 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/small-8         	      10	    173263 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/small-8         	      10	    171912 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/small-8         	      10	    165868 ns/op	    3044 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/medium-8        	      10	    177803 ns/op	    3044 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/medium-8        	      10	    172751 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/medium-8        	      10	    171272 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/medium-8        	      10	    176899 ns/op	    3049 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/medium-8        	      10	    179134 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/medium-8        	      10	    169524 ns/op	    3043 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/large-8         	      10	    170565 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/large-8         	      10	    167532 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/large-8         	      10	    171258 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/large-8         	      10	    167723 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/large-8         	      10	    168447 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARow/large-8         	      10	    171670 ns/op	    3038 B/op	      66 allocs/op
+BenchmarkSessionWakeAfterARound/small-8       	      10	   3743713 ns/op	 5276139 B/op	    9134 allocs/op
+BenchmarkSessionWakeAfterARound/small-8       	      10	   3607327 ns/op	 5276155 B/op	    9134 allocs/op
+BenchmarkSessionWakeAfterARound/small-8       	      10	   3736897 ns/op	 5276139 B/op	    9134 allocs/op
+BenchmarkSessionWakeAfterARound/small-8       	      10	   3769675 ns/op	 5276156 B/op	    9134 allocs/op
+BenchmarkSessionWakeAfterARound/small-8       	      10	   3796706 ns/op	 5276129 B/op	    9134 allocs/op
+BenchmarkSessionWakeAfterARound/small-8       	      10	   3986545 ns/op	 5276140 B/op	    9134 allocs/op
+BenchmarkSessionWakeAfterARound/medium-8      	      10	  27070045 ns/op	25103388 B/op	   80665 allocs/op
+BenchmarkSessionWakeAfterARound/medium-8      	      10	  26784861 ns/op	25103379 B/op	   80665 allocs/op
+BenchmarkSessionWakeAfterARound/medium-8      	      10	  26588777 ns/op	25103371 B/op	   80665 allocs/op
+BenchmarkSessionWakeAfterARound/medium-8      	      10	  26487741 ns/op	25103384 B/op	   80665 allocs/op
+BenchmarkSessionWakeAfterARound/medium-8      	      10	  27218975 ns/op	25103398 B/op	   80665 allocs/op
+BenchmarkSessionWakeAfterARound/medium-8      	      10	  27072084 ns/op	25103395 B/op	   80665 allocs/op
+BenchmarkSessionWakeAfterARound/large-8       	      10	 112977365 ns/op	100205388 B/op	  395088 allocs/op
+BenchmarkSessionWakeAfterARound/large-8       	      10	 113756532 ns/op	100205384 B/op	  395088 allocs/op
+BenchmarkSessionWakeAfterARound/large-8       	      10	 113160054 ns/op	100205388 B/op	  395088 allocs/op
+BenchmarkSessionWakeAfterARound/large-8       	      10	 113139959 ns/op	100205420 B/op	  395088 allocs/op
+BenchmarkSessionWakeAfterARound/large-8       	      10	 112013031 ns/op	100205390 B/op	  395088 allocs/op
+BenchmarkSessionWakeAfterARound/large-8       	      10	 119409739 ns/op	100205408 B/op	  395088 allocs/op
+PASS
+ok  	defios.com/internal/session	14.642s
+goos: linux
+goarch: amd64
+pkg: defios.com/internal/serve
+cpu: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz
+BenchmarkWorkspaceIdleWake/small-8         	      10	     20456 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/small-8         	      10	     20492 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/small-8         	      10	     19471 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/small-8         	      10	     19294 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/small-8         	      10	     21100 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/small-8         	      10	     20242 ns/op	     628 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/medium-8        	      10	     21254 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/medium-8        	      10	     20877 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/medium-8        	      10	     20650 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/medium-8        	      10	     21802 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/medium-8        	      10	     21327 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/medium-8        	      10	     21291 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/large-8         	      10	     29042 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/large-8         	      10	     24481 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/large-8         	      10	     27961 ns/op	     628 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/large-8         	      10	     26575 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/large-8         	      10	     25617 ns/op	     624 B/op	      22 allocs/op
+BenchmarkWorkspaceIdleWake/large-8         	      10	     31674 ns/op	     624 B/op	      22 allocs/op
+PASS
+ok  	defios.com/internal/serve	0.483s
+goos: linux
+goarch: amd64
+pkg: defios.com/internal/recap
+cpu: Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz
+BenchmarkKeeperIdleWake/small-8         	      10	    120268 ns/op	    3790 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/small-8         	      10	    109021 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/small-8         	      10	    103164 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/small-8         	      10	    106134 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/small-8         	      10	    104914 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/small-8         	      10	    105132 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/medium-8        	      10	    109289 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/medium-8        	      10	    112314 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/medium-8        	      10	    111961 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/medium-8        	      10	    111784 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/medium-8        	      10	    110067 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/medium-8        	      10	    110150 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/large-8         	      10	    115054 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/large-8         	      10	    115643 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/large-8         	      10	    111022 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/large-8         	      10	    109968 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/large-8         	      10	    110663 ns/op	    3789 B/op	      64 allocs/op
+BenchmarkKeeperIdleWake/large-8         	      10	    110559 ns/op	    3789 B/op	      64 allocs/op
+PASS
+ok  	defios.com/internal/recap	2.950s

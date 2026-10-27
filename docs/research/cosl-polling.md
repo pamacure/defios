@@ -50,12 +50,14 @@ Each benchmark measures one wake against that replica:
   of an idle serve.
 - `SessionWakeAfterARow`: one message of talk has committed since the last
   wake, which is the most a wake has to react to.
+- `SessionWakeAfterARound` (added in #55): one `tss.session` has committed
+  since the last wake, which is what each round of a running Session costs.
 
 Run it again with:
 
 ```bash
 go test ./internal/session/ ./internal/serve/ ./internal/recap/ -run '^$' \
-  -bench 'IdleWake|WakeAfterARow' -benchtime 10x -count 6 > after.txt
+  -bench 'IdleWake|WakeAfterA' -benchtime 10x -count 6 > after.txt
 go run golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e \
   docs/research/cosl-polling/before.txt after.txt
 ```
@@ -156,3 +158,47 @@ replica to one 26 µs read a minute.
 This run was made on a branch without #53, so its Session numbers are the
 baseline's within noise (`SessionIdleWake/large` 421 ms) and say nothing
 about #53. `KeeperIdleWake` is unchanged at 0.11 ms.
+
+#### #55: the Session layer wakes on change, nudge or its own deadline (`after-55.txt`)
+
+[`after-55.txt`](cosl-polling/after-55.txt), same machine and method, on
+top of #53 and #54. The 50 ms tick is gone. The Session layer waits on the
+replica's announcement, a nudge from this process (a local accept or
+decline, a keygen start, an engine's output or result), a timer for its
+nearest deadline (the accept wait, an engine's stall timeout, a Sign
+Request's deadline; none while nothing is open or pending), a backed-off
+retry after a failed wake, or the fallback tick. A wake that is not forced
+reads the `Mark` and stops if it did not move. If it moved, the wake looks
+for a row the layer folds (`session.*`, `tss.session`) or a `sign.accept`
+after the seq it last acted on, and stops if there is none. Only then
+does it read and fold, and it reads only those message types.
+
+Per wake, median of 6, against the baseline:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| SessionIdleWake, before | 10.0 ms, 8.3 MiB | 92.6 ms, 62.8 MiB | 451 ms, 294 MiB |
+| SessionIdleWake, after | 25.4 µs, 624 B | 30.2 µs, 624 B | 29.6 µs, 624 B |
+| SessionWakeAfterARow, before | 11.4 ms | 100 ms | 479 ms |
+| SessionWakeAfterARow, after | 171 µs, 3.0 KiB | 175 µs, 3.0 KiB | 170 µs, 3.0 KiB |
+| SessionWakeAfterARound (new) | 3.76 ms, 5.0 MiB | 26.9 ms, 23.9 MiB | 113 ms, 95.6 MiB |
+
+`SessionIdleWake` measures the wake the fallback tick costs an idle serve,
+and between ticks the layer does no work. So the Session layer goes from a
+whole core on the medium and large replicas to one 30 µs read a minute. A
+row of talk costs one narrowed lookup, 170 µs, whatever the replica's size.
+
+A round of a running Session still reads and folds every Session row
+(about 11.5k rows on the large replica, a third of its bytes), and that
+costs 113 ms. Before, it was a full 479 ms wake, which the old tick then
+delayed by up to 50 ms. Each round is now acted on as it commits, with no
+tick to wait for. But 113 ms a round, 20 rounds a signature, is still more
+than a round's worth of latency on the large replica. By ADR 0014, that
+makes incremental folds the next ticket. A real EdDSA keygen across two
+Session layers over a fresh replica took 0.27 s end to end.
+
+An earlier run of this branch, made while other agents' test suites were
+loading the machine (load average 10–14), gave noisy figures:
+`KeeperIdleWake`, whose code did not change, came out 3× slower. That run
+was discarded. The run recorded here was made with the load average under
+1, and `KeeperIdleWake` matches the baseline (0.11 ms).
