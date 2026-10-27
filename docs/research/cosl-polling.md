@@ -156,3 +156,46 @@ replica to one 26 µs read a minute.
 This run was made on a branch without #53, so its Session numbers are the
 baseline's within noise (`SessionIdleWake/large` 421 ms) and say nothing
 about #53. `KeeperIdleWake` is unchanged at 0.11 ms.
+
+#### #56: the prune policy wakes on change and rereads its config (`after-56.txt`)
+
+[`after-56.txt`](cosl-polling/after-56.txt), same machine and method. The
+prune policy now waits on `Store.Changed` or the one-minute fallback tick,
+as the Workspace watcher does. A wake reads the replica's `Mark` and stops
+there if it has not moved; if it has, `recap.Keeper`'s own gate reads the
+latest `app.recap` row and prunes only after a new Recap or a restore. With
+the policy off, a wake touches nothing, and only the fallback tick wakes
+it. On that tick it also stats the Group's `config.toml` and rereads it if
+its modification time changed, so `prune` takes effect without a restart.
+
+`PrunePolicyIdleWake` is new: the gated wake with the policy on, which is
+what an idle serve's prune policy costs at each fallback tick, less the
+stat. `KeeperIdleWake` is re-run as the issue asked; it measures the
+Keeper's gate, which a wake now reaches only when the Mark moved. Per wake,
+median of 6:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| KeeperIdleWake (#54 run) | 106 µs, 3.7 KiB | 111 µs | 110 µs |
+| KeeperIdleWake (this run) | 131 µs, 3.7 KiB | 133 µs | 127 µs |
+| PrunePolicyIdleWake | 28.5 µs, 624 B | 32.1 µs, 624 B | 31.3 µs, 624 B |
+
+Between ticks an idle serve's prune policy does no work at all, where #52's
+ran the Keeper's 0.11 ms gate every second. It now costs one ~30 µs read a
+minute, 22 allocations, on every shape.
+
+This run is noisy. Other agents were building and testing on the machine
+(load average 11 as it started), and code this ticket did not touch ran
+slower too: `WorkspaceIdleWake` +13–27%, `KeeperIdleWake` +15–24% with
+spreads up to ±66%, and `SessionIdleWake/large` 562 ms ± 56% against #53's
+334 ms. Read the absolute times as upper bounds. The allocation counts,
+which load does not move, are the same as #54's.
+
+Building this turned up a lost-row hazard. The FSM's append began a
+deferred sqlite transaction, read `cosl_meta`, then wrote. A `Prune`
+committing in between made that write fail at once with `SQLITE_BUSY`,
+without waiting out `busy_timeout`, and the entry was applied with no row.
+Waking on change made it likely, because the policy now prunes just as a
+Recap commits, while the next rows are still being applied. The Store now
+begins every transaction `IMMEDIATE` (`_txlock=immediate`), so a write
+waits for the lock instead.

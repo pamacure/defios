@@ -60,14 +60,13 @@ func (s *server) startReplica() {
 }
 
 // startWatchers runs what follows the replica on this Node's behalf: the
-// Conversation Workspaces and, if this Node's policy is on, pruning.
+// Conversation Workspaces and the prune policy, which follows config.toml
+// and does nothing while it is off.
 func (s *server) startWatchers(store *cosl.Store) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() { s.watchWorkspaces(ctx, store) })
-	if s.opts.Config.Prune {
-		wg.Go(func() { s.keepPruned(ctx, store) })
-	}
+	wg.Go(func() { s.keepPruned(ctx, store) })
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	s.watchCancel, s.watchDone = cancel, done
