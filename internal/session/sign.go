@@ -175,8 +175,15 @@ func (s *Service) startAccepted(ctx context.Context, recs []*rec) {
 // this Node is one, and the slot is free.
 func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 	info, err := s.cfg.SignInfo(id)
-	if err != nil {
-		return // not readable yet, or no longer a sign.request
+	switch {
+	case errors.Is(err, ErrBadSignRequest) || errors.Is(err, ErrUnsupported):
+		// Not on this replica yet (a follower's own proposal), or never a
+		// request this Node can sign: the commit of a row SignInfo reads
+		// wakes the layer to look again.
+		return
+	case err != nil:
+		s.note(fmt.Errorf("reading sign request %x: %w", id[:4], err))
+		return
 	}
 	if s.now().After(info.Deadline) {
 		s.forget(id)

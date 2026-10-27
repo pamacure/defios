@@ -11,6 +11,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 )
 
 // joinRetry paces membership.join attempts while the other Node is still
@@ -81,18 +82,19 @@ func (s *server) startSessions(replica *raftx.Replica, store *cosl.Store, roster
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	svc, err := session.New(session.Config{
-		Node:        s.opts.Node,
-		Roster:      roster,
-		Store:       store,
-		Preparams:   s.opts.Preparams,
-		WaitingFor:  s.opts.SessionWaitingFor,
-		NewEngine:   s.opts.NewEngine,
-		NewSigner:   s.opts.NewSigner,
-		SignInfo:    signInfoFrom(store),
-		Logf:        s.opts.Logf,
-		Shares:      s.opts.Vault,
-		AcceptPath:  filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "local-accept.json"),
-		PendingPath: filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "pending-shares.json"),
+		Node:          s.opts.Node,
+		Roster:        roster,
+		Store:         store,
+		Preparams:     s.opts.Preparams,
+		WaitingFor:    s.opts.SessionWaitingFor,
+		NewEngine:     s.opts.NewEngine,
+		NewSigner:     s.opts.NewSigner,
+		SignInfo:      signInfoFrom(store),
+		SignInfoReads: signreq.LookupMsgTypes,
+		Logf:          s.opts.Logf,
+		Shares:        s.opts.Vault,
+		AcceptPath:    filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "local-accept.json"),
+		PendingPath:   filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "pending-shares.json"),
 		Append: func(ctx context.Context, signed cosl.Signed) error {
 			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
 			defer cancel()

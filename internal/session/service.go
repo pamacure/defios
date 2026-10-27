@@ -101,6 +101,10 @@ type Config struct {
 	NewSigner func() Engine
 	// SignInfo resolves a sign.request by msg_id. Nil refuses to sign.
 	SignInfo func(requestID [32]byte) (SignInfo, error)
+	// SignInfoReads are the message types SignInfo reads. A commit of one can
+	// change its answer, so it wakes the layer. Nil means sign.request and
+	// sign.accept, which any SignInfo reads.
+	SignInfoReads []uint32
 	// Preparams are this Node's ECDSA preparams, already unlocked. They are
 	// passed through on an ecdsa Start and are not a COSL field.
 	Preparams []byte
@@ -157,12 +161,13 @@ type Service struct {
 	verified map[[32]byte]bool     // whether a session.complete's signatures verify, by envelope hash
 
 	// Run's own, between wakes.
-	follow   *cosl.Follower
-	nudged   chan struct{}
-	errs     *errlog.Reporter
-	wakeErrs []error   // this wake's failures
-	failing  bool      // the last wake failed: the next does all its work
-	next     time.Time // the nearest deadline as of the last full wake
+	wakeTypes []uint32 // the rows whose commit can give the layer something to do
+	follow    *cosl.Follower
+	nudged    chan struct{}
+	errs      *errlog.Reporter
+	wakeErrs  []error   // this wake's failures
+	failing   bool      // the last wake failed: the next does all its work
+	next      time.Time // the nearest deadline as of the last full wake
 }
 
 type shareRef struct {
@@ -226,22 +231,29 @@ func New(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	reads := cfg.SignInfoReads
+	if reads == nil {
+		reads = []uint32{cosl.TypeSignRequest, cosl.TypeSignAccept}
+	}
+	wakeTypes := slices.Concat(msgTypes, reads)
+	slices.Sort(wakeTypes)
 	return &Service{
-		cfg:      cfg,
-		pending:  map[ID]struct{}{},
-		onDisk:   onDisk,
-		inflight: map[ID]struct{}{},
-		failed:   map[ID]struct{}{},
-		aborting: map[ID]string{},
-		held:     held,
-		parties:  map[ID]*party{},
-		waitLog:  map[ID]struct{}{},
-		signs:    map[ID]SignInfo{},
-		verified: map[[32]byte]bool{},
-		starting: map[[32]byte]struct{}{},
-		follow:   cfg.Store.Follow(cosl.FallbackTick),
-		nudged:   make(chan struct{}, 1),
-		errs:     errlog.New(cfg.Logf, "session"),
+		cfg:       cfg,
+		wakeTypes: slices.Compact(wakeTypes),
+		pending:   map[ID]struct{}{},
+		onDisk:    onDisk,
+		inflight:  map[ID]struct{}{},
+		failed:    map[ID]struct{}{},
+		aborting:  map[ID]string{},
+		held:      held,
+		parties:   map[ID]*party{},
+		waitLog:   map[ID]struct{}{},
+		signs:     map[ID]SignInfo{},
+		verified:  map[[32]byte]bool{},
+		starting:  map[[32]byte]struct{}{},
+		follow:    cfg.Store.Follow(cosl.FallbackTick),
+		nudged:    make(chan struct{}, 1),
+		errs:      errlog.New(cfg.Logf, "session"),
 	}, nil
 }
 
@@ -298,8 +310,8 @@ const (
 
 // wake is one turn of Run. Unless forced (a nudge, a deadline, a retry), it
 // reads only the replica's Mark and stops there if nothing moved since the
-// last wake it finished, then looks for a row it folds since then and stops
-// there if none committed. It returns the nearest of the layer's deadlines,
+// last wake it finished, then looks for a row it folds or SignInfo reads
+// since then and stops there if none committed. It returns the nearest of the layer's deadlines,
 // zero if there is none, and whether the wake failed and wants a retry. A
 // failure is logged when it first appears or changes, not on every wake.
 func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, failed bool) {
@@ -313,7 +325,7 @@ func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, fai
 		err = fmt.Errorf("reading replica: %w", err)
 	case !moved && !force:
 	case !force && !wk.Rescan && !s.failing && !s.touched(wk.Since, &err):
-		s.follow.Done() // only rows this layer does not fold, such as talk
+		s.follow.Done() // only rows this layer does not read, such as talk
 	case err == nil:
 		s.wakeErrs, s.next = nil, time.Time{}
 		s.catchUp(ctx)
@@ -328,14 +340,10 @@ func (s *Service) wake(ctx context.Context, force bool) (deadline time.Time, fai
 	return s.next, s.failing
 }
 
-// wakeTypes are the rows that can give the layer something to do: the rows
-// it folds, and a sign.accept, which can make an accepted request startable.
-var wakeTypes = append([]uint32{cosl.TypeSignAccept}, msgTypes...)
-
 // touched is whether a row of wakeTypes committed after seq. A failed read
 // is set in *err and counts as touched.
 func (s *Service) touched(seq uint64, err *error) bool {
-	rows, e := s.cfg.Store.Log(cosl.Query{MsgTypes: wakeTypes, AfterSeq: seq, Limit: 1})
+	rows, e := s.cfg.Store.Log(cosl.Query{MsgTypes: s.wakeTypes, AfterSeq: seq, Limit: 1})
 	if e != nil {
 		*err = fmt.Errorf("reading replica: %w", e)
 		return true

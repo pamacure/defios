@@ -271,7 +271,7 @@ func (n *node) start() {
 
 func (n *node) lookupSign(id [32]byte) (session.SignInfo, error) {
 	if n.signInfo == nil {
-		return session.SignInfo{}, errors.New("no sign request")
+		return session.SignInfo{}, fmt.Errorf("%w: no sign request", session.ErrBadSignRequest)
 	}
 	return n.signInfo(id)
 }

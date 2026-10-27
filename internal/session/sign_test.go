@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"math/big"
 	"slices"
 	"testing"
@@ -497,4 +498,28 @@ func TestNoTimerIsSetOnceNothingIsPending(t *testing.T) {
 	c.alice.engines()[0].done <- session.Result{Signatures: [][]byte{f.sig}}
 	wait(t, func() bool { return statusOf(t, c.bob, sum.SessionID) == session.Complete })
 	wait(t, func() bool { return c.clock.pending() == 0 })
+}
+
+// On a follower, the proposer's local accept comes before its sign.request is
+// applied to its own replica, so the first look finds no request. The row's
+// commit must still start the Session when the proposer's accept alone is t.
+func TestSignSessionStartsWhenTheRequestLandsAfterTheProposersAccept(t *testing.T) {
+	f := newSignFixtureOn(t, newPair(t, time.Hour), 1)
+	c := f.c
+	readable := c.alice.signInfo
+	c.alice.signInfo = func(id [32]byte) (session.SignInfo, error) {
+		if len(c.alice.ofType(t, cosl.TypeSignRequest)) == 0 {
+			return session.SignInfo{}, fmt.Errorf("%w: not on this replica yet", session.ErrBadSignRequest)
+		}
+		return readable(id)
+	}
+	c.alice.restart(c.alice.acceptPath)
+	f.propose(t)
+	noSession(t, c.alice)
+
+	req := c.signIn(c.alice, cosl.TypeSignRequest, f.info.Conversation, &coslv1.SignRequest{})
+	if err := c.fan.Append(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	f.liveSession(t, c.alice)
 }
