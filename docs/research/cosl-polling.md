@@ -4,7 +4,8 @@ Measured October 2026 at `1c253c6`, on an Intel i5-10210U (4 cores, 8
 threads), Linux, Go 1.27. The decision this supports is
 [ADR 0014](../adr/0014-serve-reads-the-cosl-on-change.md). This file is the
 before/after record: each change made under that ADR adds its run beside
-[`before.txt`](cosl-polling/before.txt) and a row to **Results**.
+[`before.txt`](cosl-polling/before.txt), named for its ticket
+(`after-54.txt`), and a subsection under **After**.
 
 ## The question
 
@@ -106,4 +107,31 @@ None of that work has a result that changed since the last wake.
 
 ### After
 
-*To be filled in as the ADR 0014 tickets land.*
+#### #54: the replica announces change; the Workspace watcher wakes on it (`after-54.txt`)
+
+[`after-54.txt`](cosl-polling/after-54.txt), same machine and method.
+`cosl.Store` now announces each committed row and each restore
+(`Store.Changed`), and the Workspace watcher waits on that or on the
+one-minute fallback tick (`cosl.Follower`). A wake first reads the
+replica's `Mark` (`last_applied_seq` from `cosl_meta`, and the restore
+count) and stops there if neither moved since the last wake it finished.
+If one did, it looks for a `session.complete` after the seq it last acted
+on, and lists Keys from `session.start`/`complete`/`abort` rows only
+(`key.Read`) if it finds one or the replica was restored.
+
+`WorkspaceIdleWake` measures that gated wake, which is what the fallback
+tick costs an idle serve; between ticks the watcher does no work at all.
+Per wake, median of 6:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| WorkspaceIdleWake, before | 9.3 ms, 8.3 MiB | 79.3 ms, 62.6 MiB | 378 ms, 293 MiB |
+| WorkspaceIdleWake, after | 20.8 µs, 624 B | 22.2 µs, 624 B | 25.6 µs, 624 B |
+
+The cost no longer grows with the replica: 22 allocations a wake on every
+shape. On an idle serve the watcher goes from 38% of a core on the large
+replica to one 26 µs read a minute.
+
+The other loops are not changed by #54 and measure as before, within noise:
+`SessionIdleWake/large` 421 ms, `SessionWakeAfterARow/large` 421 ms,
+`KeeperIdleWake` 0.11 ms.

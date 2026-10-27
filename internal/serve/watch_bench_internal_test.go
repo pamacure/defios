@@ -12,7 +12,8 @@ import (
 )
 
 // One wake of the Conversation Workspace watcher while nothing has changed:
-// every Workspace exists, as on an idle serve.
+// every Workspace exists, as on an idle serve. Since ADR 0014 an idle serve
+// wakes only at the fallback tick, and this is what that wake costs.
 func BenchmarkWorkspaceIdleWake(b *testing.B) {
 	for _, shape := range coslbench.Shapes {
 		b.Run(shape.Name, func(b *testing.B) {
@@ -27,14 +28,14 @@ func BenchmarkWorkspaceIdleWake(b *testing.B) {
 				Alias: group.ImplicitAlias,
 				Logf:  func(format string, args ...any) { b.Fatalf(format, args...) },
 			}, ctx: context.Background()}
-			made := map[[32]byte]bool{}
-			s.ensureWorkspaces(store, made)
-			if len(made) != shape.ECDSAKeys+shape.EdDSAKeys {
-				b.Fatalf("%d Workspaces made, want %d", len(made), shape.ECDSAKeys+shape.EdDSAKeys)
+			w := s.newWorkspaceWatcher(store)
+			w.wake()
+			if len(w.made) != shape.ECDSAKeys+shape.EdDSAKeys {
+				b.Fatalf("%d Workspaces made, want %d", len(w.made), shape.ECDSAKeys+shape.EdDSAKeys)
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				s.ensureWorkspaces(store, made)
+				w.wake()
 			}
 		})
 	}
