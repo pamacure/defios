@@ -68,9 +68,13 @@ per Node, and a Node that falls past `SnapshotThreshold` re-transfers all of it.
   and the replica gains an `envelope_hash` column. This is what lets a pruned
   row still verify from genesis, and it is the one part of this work that
   touches the chain's integrity code — it lands before either verb.
-- A Recap's `base_seq` must exceed the live Recap's for that Conversation. The
-  fold enforces it by skipping; the writer pre-checks so an operator gets an
-  error, and accepts the same stale-read race the Networks writer has.
+- A Recap's `base_seq` must exceed the live Recap's for that Conversation, and
+  must name an earlier `app.freeform` of that same Conversation, so a Recap
+  never covers another Conversation's rows. The fold enforces both by
+  skipping, as it does a Recap whose payload is undecodable or whose text
+  `app.freeform` would refuse (the FSM does not parse payloads). The writer
+  pre-checks so an operator gets an error, and accepts the same stale-read
+  race the Networks writer has.
 - Pruning destroys `app.freeform` payloads only. Recaps keep their text
   forever — each is at most 64 KB and they arrive once per window, so the
   ladder of historical accounts is nearly free.

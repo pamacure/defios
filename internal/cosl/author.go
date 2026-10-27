@@ -76,13 +76,31 @@ var ErrBadText = fmt.Errorf("cosl: text must be non-empty UTF-8 of at most %d by
 
 // Freeform is an app.freeform payload for text, content type text/plain.
 func Freeform(text string) (*coslv1.AppFreeform, error) {
-	switch {
-	case text == "":
-		return nil, fmt.Errorf("%w: it is empty", ErrBadText)
-	case len(text) > MaxFreeformBytes:
-		return nil, fmt.Errorf("%w: got %d bytes", ErrBadText, len(text))
-	case !utf8.ValidString(text):
-		return nil, fmt.Errorf("%w: it is not valid UTF-8", ErrBadText)
+	if err := CheckText(text); err != nil {
+		return nil, err
 	}
 	return &coslv1.AppFreeform{Text: text, ContentType: "text/plain"}, nil
+}
+
+// Recap is an app.recap payload accounting for talk up to baseSeq. Its text
+// is bounded as app.freeform's is.
+func Recap(text string, baseSeq uint64) (*coslv1.AppRecap, error) {
+	if err := CheckText(text); err != nil {
+		return nil, err
+	}
+	return &coslv1.AppRecap{Text: text, BaseSeq: baseSeq}, nil
+}
+
+// CheckText reports whether text is within the app.freeform bound, which
+// app.recap shares.
+func CheckText(text string) error {
+	switch {
+	case text == "":
+		return fmt.Errorf("%w: it is empty", ErrBadText)
+	case len(text) > MaxFreeformBytes:
+		return fmt.Errorf("%w: got %d bytes", ErrBadText, len(text))
+	case !utf8.ValidString(text):
+		return fmt.Errorf("%w: it is not valid UTF-8", ErrBadText)
+	}
+	return nil
 }

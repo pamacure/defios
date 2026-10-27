@@ -201,33 +201,7 @@ func groupWithKeys(t *testing.T, dir string) (ecdsaPK, eddsaPK []byte) {
 	for i := 1; i < len(eddsaPK); i++ {
 		eddsaPK[i] = 0x22
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "group", "*", "cosl.sqlite"))
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("replica: %v %v", err, matches)
-	}
-	store, err := cosl.Open(matches[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	rec, err := group.OpenSlot(filepath.Join(dir, "group"), group.ImplicitAlias, alice)
-	if err != nil {
-		t.Fatal(err)
-	}
-	held, _ := rec.Current()
-	fsm := cosl.NewFSM(store, held.Roster())
-	seq := uint64(5) // groupWithTalk applied 1..5
-	apply := func(n *identity.Node, conv []byte, msg proto.Message, typ uint32) {
-		t.Helper()
-		seq++
-		s, err := (cosl.Author{Node: n, GroupID: held.GroupID()}).Sign(typ, conv, msg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res, err := fsm.Apply(seq, 1, s.Bytes); err != nil || !res.Inserted {
-			t.Fatalf("apply %d: %v %+v", seq, err, res)
-		}
-	}
+	apply := appender(t, dir, alice, 5) // groupWithTalk applied 1..5
 	mint := func(curve string, pk []byte) {
 		var id [32]byte
 		copy(id[:], pk)
@@ -250,6 +224,144 @@ func groupWithKeys(t *testing.T, dir string) (ecdsaPK, eddsaPK []byte) {
 	apply(alice, ecdsaConv[:], ff("ecdsa talk"), cosl.TypeAppFreeform)
 	apply(bob, eddsaConv[:], ff("eddsa talk"), cosl.TypeAppFreeform)
 	return ecdsaPK, eddsaPK
+}
+
+// appender commits further rows to the replica under dir after seq, signed
+// by whichever Roster Node is passed; holder opens the Group record.
+func appender(t *testing.T, dir string, holder *identity.Node, seq uint64) func(n *identity.Node, conv []byte, msg proto.Message, typ uint32) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "group", "*", "cosl.sqlite"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("replica: %v %v", err, matches)
+	}
+	store, err := cosl.Open(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	rec, err := group.OpenSlot(filepath.Join(dir, "group"), group.ImplicitAlias, holder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, _ := rec.Current()
+	fsm := cosl.NewFSM(store, held.Roster())
+	return func(n *identity.Node, conv []byte, msg proto.Message, typ uint32) {
+		t.Helper()
+		seq++
+		s, err := (cosl.Author{Node: n, GroupID: held.GroupID()}).Sign(typ, conv, msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := fsm.Apply(seq, 1, s.Bytes); err != nil || !res.Inserted {
+			t.Fatalf("apply %d: %v %+v", seq, err, res)
+		}
+	}
+}
+
+// groupWithRecap is groupWithTalk plus bob's Group-level Recap of seqs 2..4
+// at seq 6, alice's "after" at 7, and a stale Recap at 8 the fold skips.
+// Group-level talk folds to the Recap, then seqs 5 and 7.
+func groupWithRecap(t *testing.T, dir string) {
+	t.Helper()
+	alice, bob := groupWithTalk(t, dir)
+	apply := appender(t, dir, alice, 5)
+	recapOf := func(text string, base uint64) proto.Message {
+		m, err := cosl.Recap(text, base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	apply(bob, nil, recapOf("hello and hi", 4), cosl.TypeAppRecap)
+	ff, _ := cosl.Freeform("after")
+	apply(alice, nil, ff, cosl.TypeAppFreeform)
+	apply(alice, nil, recapOf("stale", 2), cosl.TypeAppRecap)
+}
+
+func TestConversationLogFoldsToTheLiveRecap(t *testing.T) {
+	dir := t.TempDir()
+	groupWithRecap(t, dir)
+	r := run(t, nil, "", "--dir", dir, "conversation", "log")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want the Recap and 2 lines, got:\n%s", r.stdout)
+	}
+	if !strings.HasPrefix(lines[0], "6 ") || !strings.HasSuffix(lines[0], " bob  [recap of 2 messages to seq 4] hello and hi") {
+		t.Errorf("recap line: %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "5 ") || !strings.HasPrefix(lines[2], "7 ") || !strings.HasSuffix(lines[2], " alice  after") {
+		t.Errorf("talk lines: %q", lines[1:])
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--json")
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 3 {
+		t.Fatalf("--json: %v\n%s", err, r.stdout)
+	}
+	if rows[0]["msg_type"] != "app.recap" || rows[0]["base_seq"] != float64(4) || rows[0]["covers"] != float64(2) || rows[0]["text"] != "hello and hi" {
+		t.Errorf("recap row = %v", rows[0])
+	}
+	if rows[1]["msg_type"] != "app.freeform" || rows[1]["covers"] != nil {
+		t.Errorf("talk row = %v", rows[1])
+	}
+
+	// --limit trims talk; the live Recap still stands in for what it hides.
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--limit", "1")
+	lines = strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "6 ") || !strings.HasPrefix(lines[1], "7 ") {
+		t.Errorf("--limit 1 = %q", r.stdout)
+	}
+}
+
+func TestCoslLogNeverFolds(t *testing.T) {
+	dir := t.TempDir()
+	groupWithRecap(t, dir)
+	r := run(t, nil, "", "--dir", dir, "cosl", "log")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	for _, want := range []string{"hello group", "hi back", "app.recap", "base_seq=4 text=hello and hi", "base_seq=2 text=stale"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("cosl log lacks %q:\n%s", want, r.stdout)
+		}
+	}
+}
+
+func TestConversationRecapUsageAndServe(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	for _, args := range [][]string{
+		{"conversation", "recap", "--text", "no base"},
+		{"conversation", "recap", "--base-seq", "3"},
+		{"conversation", "recap", "--base-seq", "3", "--text", ""},
+	} {
+		if r := run(t, nil, "", append([]string{"--dir", dir}, args...)...); r.code != 1 {
+			t.Errorf("%v: exit %d, want 1; stderr %q", args, r.code, r.stderr)
+		}
+	}
+	last := fakeLocalServe(t, dir, "/v1/conversation/", 200, "", `{"seq":8,"term":2,"msg_id":"`+strings.Repeat("ab", 32)+`"}`)
+	r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "3", "--text", "so far")
+	if r.code != 0 || last.Load() != "/v1/conversation/recap" || !strings.Contains(r.stdout, "8") {
+		t.Fatalf("exit %d, path %s, stdout %q, stderr %q", r.code, last.Load(), r.stdout, r.stderr)
+	}
+}
+
+func TestConversationRecapRefusalsExitUsage(t *testing.T) {
+	for kind, body := range map[string]string{
+		"stale-recap":    "recap: base seq must be beyond the live Recap's: it covers up to seq 4",
+		"bad-recap-base": "recap: base seq must name an app.freeform of this Conversation: seq 9 is not one",
+	} {
+		dir := t.TempDir()
+		mustInit(t, dir)
+		fakeLocalServe(t, dir, "/v1/conversation/", 400, kind, body)
+		r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "3", "--text", "so far")
+		if r.code != 1 || !strings.Contains(r.stderr, body) {
+			t.Errorf("%s: exit %d, want 1; stderr %q", kind, r.code, r.stderr)
+		}
+	}
 }
 
 func TestConversationLogKeyShowsOnlyThatConversation(t *testing.T) {

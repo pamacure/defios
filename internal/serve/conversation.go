@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"net/http"
 
+	"google.golang.org/protobuf/proto"
+
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/raftx"
+	"defios.com/internal/recap"
 )
 
 var (
@@ -34,14 +37,63 @@ type sendRequest struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 }
 
+type recapRequest struct {
+	Text           string `json:"text"`
+	BaseSeq        uint64 `json:"base_seq"`
+	ConversationID string `json:"conversation_id,omitempty"`
+}
+
+// requestConversation is a request's Conversation ID, nil for Group-level
+// talk.
+func requestConversation(hexID string) ([]byte, error) {
+	if hexID == "" {
+		return nil, nil
+	}
+	conv, err := hex.DecodeString(hexID)
+	if err != nil || len(conv) != 32 {
+		return nil, fmt.Errorf("serve: conversation id must be 32-byte hex")
+	}
+	return conv, nil
+}
+
 // conversationSend is `conversation send` (§8): author an app.freeform and
-// commit it through Raft, bounded by the §4.2 apply timeout; with the other
-// Node down that bound is the failure. A nil conversationID is Group-level.
+// commit it. A nil conversationID is Group-level.
 func (s *server) conversationSend(ctx context.Context, text string, conversationID []byte) (SendView, error) {
 	payload, err := cosl.Freeform(text)
 	if err != nil {
 		return SendView{}, err
 	}
+	return s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, nil)
+}
+
+// conversationRecap is `conversation recap`: author an app.recap accounting
+// for the Conversation's talk up to baseSeq and commit it. The writer checks
+// it against the folded Conversation first so a Recap the fold would skip
+// fails loudly; like the Networks writer it accepts that a Recap committing
+// between this read and the append can still make the fold skip it.
+func (s *server) conversationRecap(ctx context.Context, text string, baseSeq uint64, conversationID []byte) (SendView, error) {
+	payload, err := cosl.Recap(text, baseSeq)
+	if err != nil {
+		return SendView{}, err
+	}
+	return s.conversationAppend(ctx, cosl.TypeAppRecap, conversationID, payload, func(store *cosl.Store) error {
+		rows, err := store.Log(cosl.Query{GroupLevel: conversationID == nil, ConversationID: conversationID})
+		if err != nil {
+			return err
+		}
+		v, err := recap.Fold(rows)
+		if err != nil {
+			return err
+		}
+		return recap.Check(v, baseSeq)
+	})
+}
+
+// conversationAppend signs payload as typ in the Conversation (Group-level
+// when conversationID is nil) and commits it through Raft, bounded by the
+// §4.2 apply timeout; with the other Node down that bound is the failure.
+// check, when set, is the writer's precondition against the replica.
+func (s *server) conversationAppend(ctx context.Context, typ uint32, conversationID []byte, payload proto.Message, check func(*cosl.Store) error) (SendView, error) {
 	if conversationID != nil && len(conversationID) != 32 {
 		return SendView{}, fmt.Errorf("serve: conversation id is %d bytes, want 32", len(conversationID))
 	}
@@ -53,8 +105,13 @@ func (s *server) conversationSend(ctx context.Context, text string, conversation
 	if err := requireConversation(store, conversationID); err != nil {
 		return SendView{}, err
 	}
+	if check != nil {
+		if err := check(store); err != nil {
+			return SendView{}, err
+		}
+	}
 	author := cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}
-	signed, err := author.Sign(cosl.TypeAppFreeform, conversationID, payload)
+	signed, err := author.Sign(typ, conversationID, payload)
 	if err != nil {
 		return SendView{}, fmt.Errorf("serve: %w", err)
 	}
@@ -97,16 +154,29 @@ func (s *server) conversationRoutes(mux *http.ServeMux) {
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		var conv []byte
-		if req.ConversationID != "" {
-			var err error
-			conv, err = hex.DecodeString(req.ConversationID)
-			if err != nil || len(conv) != 32 {
-				writeError(w, fmt.Errorf("serve: conversation id must be 32-byte hex"))
-				return
-			}
+		conv, err := requestConversation(req.ConversationID)
+		if err != nil {
+			writeError(w, err)
+			return
 		}
 		v, err := s.conversationSend(r.Context(), req.Text, conv)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, v)
+	})
+	mux.HandleFunc("POST /v1/conversation/recap", func(w http.ResponseWriter, r *http.Request) {
+		var req recapRequest
+		if !s.readLocal(w, r, &req) {
+			return
+		}
+		conv, err := requestConversation(req.ConversationID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		v, err := s.conversationRecap(r.Context(), req.Text, req.BaseSeq, conv)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -147,5 +217,18 @@ func (c Client) ConversationSend(ctx context.Context, text string, conversationI
 		req.ConversationID = hex.EncodeToString(conversationID)
 	}
 	err := c.do(ctx, "/v1/conversation/send", req, &v)
+	return v, err
+}
+
+// ConversationRecap is `conversation recap`: commit an app.recap accounting
+// for the Conversation's talk up to baseSeq. A nil conversationID recaps
+// Group-level talk.
+func (c Client) ConversationRecap(ctx context.Context, text string, baseSeq uint64, conversationID []byte) (SendView, error) {
+	var v SendView
+	req := recapRequest{Text: text, BaseSeq: baseSeq}
+	if conversationID != nil {
+		req.ConversationID = hex.EncodeToString(conversationID)
+	}
+	err := c.do(ctx, "/v1/conversation/recap", req, &v)
 	return v, err
 }

@@ -613,6 +613,63 @@ func (x *AppFreeform) GetContentType() string {
 	return ""
 }
 
+// AppRecap is the payload of app.recap, a Recap
+// (docs/adr/0012-recap-on-the-log-pruning-off-it.md): one Node's account of
+// its Conversation's talk up to base_seq, which stands in place of that talk
+// for readers. The envelope's conversation_id is the Conversation's, unset for
+// Group-level talk, as for app.freeform.
+type AppRecap struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`                       // UTF-8, max 65536 bytes, as app.freeform
+	BaseSeq       uint64                 `protobuf:"varint,2,opt,name=base_seq,json=baseSeq,proto3" json:"base_seq,omitempty"` // the highest seq it accounts for: an app.freeform of the same Conversation
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AppRecap) Reset() {
+	*x = AppRecap{}
+	mi := &file_cosl_v1_cosl_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppRecap) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppRecap) ProtoMessage() {}
+
+func (x *AppRecap) ProtoReflect() protoreflect.Message {
+	mi := &file_cosl_v1_cosl_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppRecap.ProtoReflect.Descriptor instead.
+func (*AppRecap) Descriptor() ([]byte, []int) {
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *AppRecap) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *AppRecap) GetBaseSeq() uint64 {
+	if x != nil {
+		return x.BaseSeq
+	}
+	return 0
+}
+
 // NetworkConfig is the payload of network.create and network.update
 // (docs/adr/0008-networks-on-cosl.md). An update carries the whole config and
 // supersedes the alias's current one. Only the fields of `type` may be set.
@@ -631,7 +688,7 @@ type NetworkConfig struct {
 
 func (x *NetworkConfig) Reset() {
 	*x = NetworkConfig{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[8]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -643,7 +700,7 @@ func (x *NetworkConfig) String() string {
 func (*NetworkConfig) ProtoMessage() {}
 
 func (x *NetworkConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[8]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -656,7 +713,7 @@ func (x *NetworkConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkConfig.ProtoReflect.Descriptor instead.
 func (*NetworkConfig) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{8}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *NetworkConfig) GetAlias() string {
@@ -717,7 +774,7 @@ type NetworkRemove struct {
 
 func (x *NetworkRemove) Reset() {
 	*x = NetworkRemove{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[9]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -729,7 +786,7 @@ func (x *NetworkRemove) String() string {
 func (*NetworkRemove) ProtoMessage() {}
 
 func (x *NetworkRemove) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[9]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -742,7 +799,7 @@ func (x *NetworkRemove) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkRemove.ProtoReflect.Descriptor instead.
 func (*NetworkRemove) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{9}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *NetworkRemove) GetAlias() string {
@@ -770,7 +827,7 @@ type ModelConfig struct {
 
 func (x *ModelConfig) Reset() {
 	*x = ModelConfig{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[10]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -782,7 +839,7 @@ func (x *ModelConfig) String() string {
 func (*ModelConfig) ProtoMessage() {}
 
 func (x *ModelConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[10]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -795,7 +852,7 @@ func (x *ModelConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelConfig.ProtoReflect.Descriptor instead.
 func (*ModelConfig) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{10}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ModelConfig) GetAlias() string {
@@ -842,7 +899,7 @@ type ModelRemove struct {
 
 func (x *ModelRemove) Reset() {
 	*x = ModelRemove{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -854,7 +911,7 @@ func (x *ModelRemove) String() string {
 func (*ModelRemove) ProtoMessage() {}
 
 func (x *ModelRemove) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -867,7 +924,7 @@ func (x *ModelRemove) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelRemove.ProtoReflect.Descriptor instead.
 func (*ModelRemove) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{11}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ModelRemove) GetAlias() string {
@@ -892,7 +949,7 @@ type SignRequest struct {
 
 func (x *SignRequest) Reset() {
 	*x = SignRequest{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -904,7 +961,7 @@ func (x *SignRequest) String() string {
 func (*SignRequest) ProtoMessage() {}
 
 func (x *SignRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -917,7 +974,7 @@ func (x *SignRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignRequest.ProtoReflect.Descriptor instead.
 func (*SignRequest) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{12}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SignRequest) GetTransactions() []*SignTransaction {
@@ -954,7 +1011,7 @@ type SignAccept struct {
 
 func (x *SignAccept) Reset() {
 	*x = SignAccept{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[13]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -966,7 +1023,7 @@ func (x *SignAccept) String() string {
 func (*SignAccept) ProtoMessage() {}
 
 func (x *SignAccept) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[13]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -979,7 +1036,7 @@ func (x *SignAccept) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignAccept.ProtoReflect.Descriptor instead.
 func (*SignAccept) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{13}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SignAccept) GetSignRequestId() []byte {
@@ -1004,7 +1061,7 @@ type SignBroadcast struct {
 
 func (x *SignBroadcast) Reset() {
 	*x = SignBroadcast{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[14]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1016,7 +1073,7 @@ func (x *SignBroadcast) String() string {
 func (*SignBroadcast) ProtoMessage() {}
 
 func (x *SignBroadcast) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[14]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1029,7 +1086,7 @@ func (x *SignBroadcast) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignBroadcast.ProtoReflect.Descriptor instead.
 func (*SignBroadcast) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{14}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *SignBroadcast) GetSignRequestId() []byte {
@@ -1057,7 +1114,7 @@ type BroadcastedTx struct {
 
 func (x *BroadcastedTx) Reset() {
 	*x = BroadcastedTx{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[15]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1069,7 +1126,7 @@ func (x *BroadcastedTx) String() string {
 func (*BroadcastedTx) ProtoMessage() {}
 
 func (x *BroadcastedTx) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[15]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1082,7 +1139,7 @@ func (x *BroadcastedTx) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastedTx.ProtoReflect.Descriptor instead.
 func (*BroadcastedTx) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{15}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *BroadcastedTx) GetNetworkConfigId() []byte {
@@ -1121,7 +1178,7 @@ type SignTransaction struct {
 
 func (x *SignTransaction) Reset() {
 	*x = SignTransaction{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[16]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1133,7 +1190,7 @@ func (x *SignTransaction) String() string {
 func (*SignTransaction) ProtoMessage() {}
 
 func (x *SignTransaction) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[16]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1146,7 +1203,7 @@ func (x *SignTransaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignTransaction.ProtoReflect.Descriptor instead.
 func (*SignTransaction) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{16}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SignTransaction) GetNetworkConfigId() []byte {
@@ -1229,7 +1286,7 @@ type EthereumIntent struct {
 
 func (x *EthereumIntent) Reset() {
 	*x = EthereumIntent{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[17]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1241,7 +1298,7 @@ func (x *EthereumIntent) String() string {
 func (*EthereumIntent) ProtoMessage() {}
 
 func (x *EthereumIntent) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[17]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1254,7 +1311,7 @@ func (x *EthereumIntent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EthereumIntent.ProtoReflect.Descriptor instead.
 func (*EthereumIntent) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{17}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *EthereumIntent) GetTo() []byte {
@@ -1319,7 +1376,7 @@ type BitcoinIntent struct {
 
 func (x *BitcoinIntent) Reset() {
 	*x = BitcoinIntent{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[18]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1331,7 +1388,7 @@ func (x *BitcoinIntent) String() string {
 func (*BitcoinIntent) ProtoMessage() {}
 
 func (x *BitcoinIntent) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[18]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1344,7 +1401,7 @@ func (x *BitcoinIntent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BitcoinIntent.ProtoReflect.Descriptor instead.
 func (*BitcoinIntent) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{18}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *BitcoinIntent) GetInputs() []*BitcoinInput {
@@ -1380,7 +1437,7 @@ type BitcoinInput struct {
 
 func (x *BitcoinInput) Reset() {
 	*x = BitcoinInput{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[19]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1392,7 +1449,7 @@ func (x *BitcoinInput) String() string {
 func (*BitcoinInput) ProtoMessage() {}
 
 func (x *BitcoinInput) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[19]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1405,7 +1462,7 @@ func (x *BitcoinInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BitcoinInput.ProtoReflect.Descriptor instead.
 func (*BitcoinInput) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{19}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *BitcoinInput) GetTxid() string {
@@ -1446,7 +1503,7 @@ type BitcoinOutput struct {
 
 func (x *BitcoinOutput) Reset() {
 	*x = BitcoinOutput{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[20]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +1515,7 @@ func (x *BitcoinOutput) String() string {
 func (*BitcoinOutput) ProtoMessage() {}
 
 func (x *BitcoinOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[20]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1471,7 +1528,7 @@ func (x *BitcoinOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BitcoinOutput.ProtoReflect.Descriptor instead.
 func (*BitcoinOutput) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{20}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BitcoinOutput) GetAddress() string {
@@ -1499,7 +1556,7 @@ type SolanaIntent struct {
 
 func (x *SolanaIntent) Reset() {
 	*x = SolanaIntent{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[21]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1511,7 +1568,7 @@ func (x *SolanaIntent) String() string {
 func (*SolanaIntent) ProtoMessage() {}
 
 func (x *SolanaIntent) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[21]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1524,7 +1581,7 @@ func (x *SolanaIntent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SolanaIntent.ProtoReflect.Descriptor instead.
 func (*SolanaIntent) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{21}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SolanaIntent) GetFeePayer() string {
@@ -1559,7 +1616,7 @@ type SolanaInstruction struct {
 
 func (x *SolanaInstruction) Reset() {
 	*x = SolanaInstruction{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[22]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1571,7 +1628,7 @@ func (x *SolanaInstruction) String() string {
 func (*SolanaInstruction) ProtoMessage() {}
 
 func (x *SolanaInstruction) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[22]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1584,7 +1641,7 @@ func (x *SolanaInstruction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SolanaInstruction.ProtoReflect.Descriptor instead.
 func (*SolanaInstruction) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{22}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SolanaInstruction) GetProgramId() string {
@@ -1619,7 +1676,7 @@ type SolanaAccount struct {
 
 func (x *SolanaAccount) Reset() {
 	*x = SolanaAccount{}
-	mi := &file_cosl_v1_cosl_proto_msgTypes[23]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1631,7 +1688,7 @@ func (x *SolanaAccount) String() string {
 func (*SolanaAccount) ProtoMessage() {}
 
 func (x *SolanaAccount) ProtoReflect() protoreflect.Message {
-	mi := &file_cosl_v1_cosl_proto_msgTypes[23]
+	mi := &file_cosl_v1_cosl_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1644,7 +1701,7 @@ func (x *SolanaAccount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SolanaAccount.ProtoReflect.Descriptor instead.
 func (*SolanaAccount) Descriptor() ([]byte, []int) {
-	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{23}
+	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SolanaAccount) GetPubkey() string {
@@ -1731,7 +1788,10 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\x04data\x18\x05 \x01(\fR\x04data\"D\n" +
 	"\vAppFreeform\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12!\n" +
-	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\"\xc6\x01\n" +
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\"9\n" +
+	"\bAppRecap\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x19\n" +
+	"\bbase_seq\x18\x02 \x01(\x04R\abaseSeq\"\xc6\x01\n" +
 	"\rNetworkConfig\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x19\n" +
@@ -1819,7 +1879,7 @@ func file_cosl_v1_cosl_proto_rawDescGZIP() []byte {
 	return file_cosl_v1_cosl_proto_rawDescData
 }
 
-var file_cosl_v1_cosl_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_cosl_v1_cosl_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_cosl_v1_cosl_proto_goTypes = []any{
 	(*Envelope)(nil),          // 0: defios.cosl.v1.Envelope
 	(*MembershipJoin)(nil),    // 1: defios.cosl.v1.MembershipJoin
@@ -1829,34 +1889,35 @@ var file_cosl_v1_cosl_proto_goTypes = []any{
 	(*SessionComplete)(nil),   // 5: defios.cosl.v1.SessionComplete
 	(*TssSession)(nil),        // 6: defios.cosl.v1.TssSession
 	(*AppFreeform)(nil),       // 7: defios.cosl.v1.AppFreeform
-	(*NetworkConfig)(nil),     // 8: defios.cosl.v1.NetworkConfig
-	(*NetworkRemove)(nil),     // 9: defios.cosl.v1.NetworkRemove
-	(*ModelConfig)(nil),       // 10: defios.cosl.v1.ModelConfig
-	(*ModelRemove)(nil),       // 11: defios.cosl.v1.ModelRemove
-	(*SignRequest)(nil),       // 12: defios.cosl.v1.SignRequest
-	(*SignAccept)(nil),        // 13: defios.cosl.v1.SignAccept
-	(*SignBroadcast)(nil),     // 14: defios.cosl.v1.SignBroadcast
-	(*BroadcastedTx)(nil),     // 15: defios.cosl.v1.BroadcastedTx
-	(*SignTransaction)(nil),   // 16: defios.cosl.v1.SignTransaction
-	(*EthereumIntent)(nil),    // 17: defios.cosl.v1.EthereumIntent
-	(*BitcoinIntent)(nil),     // 18: defios.cosl.v1.BitcoinIntent
-	(*BitcoinInput)(nil),      // 19: defios.cosl.v1.BitcoinInput
-	(*BitcoinOutput)(nil),     // 20: defios.cosl.v1.BitcoinOutput
-	(*SolanaIntent)(nil),      // 21: defios.cosl.v1.SolanaIntent
-	(*SolanaInstruction)(nil), // 22: defios.cosl.v1.SolanaInstruction
-	(*SolanaAccount)(nil),     // 23: defios.cosl.v1.SolanaAccount
+	(*AppRecap)(nil),          // 8: defios.cosl.v1.AppRecap
+	(*NetworkConfig)(nil),     // 9: defios.cosl.v1.NetworkConfig
+	(*NetworkRemove)(nil),     // 10: defios.cosl.v1.NetworkRemove
+	(*ModelConfig)(nil),       // 11: defios.cosl.v1.ModelConfig
+	(*ModelRemove)(nil),       // 12: defios.cosl.v1.ModelRemove
+	(*SignRequest)(nil),       // 13: defios.cosl.v1.SignRequest
+	(*SignAccept)(nil),        // 14: defios.cosl.v1.SignAccept
+	(*SignBroadcast)(nil),     // 15: defios.cosl.v1.SignBroadcast
+	(*BroadcastedTx)(nil),     // 16: defios.cosl.v1.BroadcastedTx
+	(*SignTransaction)(nil),   // 17: defios.cosl.v1.SignTransaction
+	(*EthereumIntent)(nil),    // 18: defios.cosl.v1.EthereumIntent
+	(*BitcoinIntent)(nil),     // 19: defios.cosl.v1.BitcoinIntent
+	(*BitcoinInput)(nil),      // 20: defios.cosl.v1.BitcoinInput
+	(*BitcoinOutput)(nil),     // 21: defios.cosl.v1.BitcoinOutput
+	(*SolanaIntent)(nil),      // 22: defios.cosl.v1.SolanaIntent
+	(*SolanaInstruction)(nil), // 23: defios.cosl.v1.SolanaInstruction
+	(*SolanaAccount)(nil),     // 24: defios.cosl.v1.SolanaAccount
 }
 var file_cosl_v1_cosl_proto_depIdxs = []int32{
 	2,  // 0: defios.cosl.v1.SessionStart.nonce_boxes:type_name -> defios.cosl.v1.SealedBox
-	16, // 1: defios.cosl.v1.SignRequest.transactions:type_name -> defios.cosl.v1.SignTransaction
-	15, // 2: defios.cosl.v1.SignBroadcast.transactions:type_name -> defios.cosl.v1.BroadcastedTx
-	17, // 3: defios.cosl.v1.SignTransaction.ethereum:type_name -> defios.cosl.v1.EthereumIntent
-	18, // 4: defios.cosl.v1.SignTransaction.bitcoin:type_name -> defios.cosl.v1.BitcoinIntent
-	21, // 5: defios.cosl.v1.SignTransaction.solana:type_name -> defios.cosl.v1.SolanaIntent
-	19, // 6: defios.cosl.v1.BitcoinIntent.inputs:type_name -> defios.cosl.v1.BitcoinInput
-	20, // 7: defios.cosl.v1.BitcoinIntent.outputs:type_name -> defios.cosl.v1.BitcoinOutput
-	22, // 8: defios.cosl.v1.SolanaIntent.instructions:type_name -> defios.cosl.v1.SolanaInstruction
-	23, // 9: defios.cosl.v1.SolanaInstruction.accounts:type_name -> defios.cosl.v1.SolanaAccount
+	17, // 1: defios.cosl.v1.SignRequest.transactions:type_name -> defios.cosl.v1.SignTransaction
+	16, // 2: defios.cosl.v1.SignBroadcast.transactions:type_name -> defios.cosl.v1.BroadcastedTx
+	18, // 3: defios.cosl.v1.SignTransaction.ethereum:type_name -> defios.cosl.v1.EthereumIntent
+	19, // 4: defios.cosl.v1.SignTransaction.bitcoin:type_name -> defios.cosl.v1.BitcoinIntent
+	22, // 5: defios.cosl.v1.SignTransaction.solana:type_name -> defios.cosl.v1.SolanaIntent
+	20, // 6: defios.cosl.v1.BitcoinIntent.inputs:type_name -> defios.cosl.v1.BitcoinInput
+	21, // 7: defios.cosl.v1.BitcoinIntent.outputs:type_name -> defios.cosl.v1.BitcoinOutput
+	23, // 8: defios.cosl.v1.SolanaIntent.instructions:type_name -> defios.cosl.v1.SolanaInstruction
+	24, // 9: defios.cosl.v1.SolanaInstruction.accounts:type_name -> defios.cosl.v1.SolanaAccount
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
@@ -1870,7 +1931,7 @@ func file_cosl_v1_cosl_proto_init() {
 		return
 	}
 	file_cosl_v1_cosl_proto_msgTypes[0].OneofWrappers = []any{}
-	file_cosl_v1_cosl_proto_msgTypes[16].OneofWrappers = []any{
+	file_cosl_v1_cosl_proto_msgTypes[17].OneofWrappers = []any{
 		(*SignTransaction_Ethereum)(nil),
 		(*SignTransaction_Bitcoin)(nil),
 		(*SignTransaction_Solana)(nil),
@@ -1881,7 +1942,7 @@ func file_cosl_v1_cosl_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cosl_v1_cosl_proto_rawDesc), len(file_cosl_v1_cosl_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   24,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

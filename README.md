@@ -165,6 +165,15 @@ defios conversation log --key <ecdsa-conversation-id>
 
 `--key` accepts `curve:hex`, a unique hex prefix of the public key, or the full Conversation ID hex. `conversation log` with no `--key` shows Group-level text. `conversation log --key` shows that Key's text. The same filter matches on both machines.
 
+A Recap stands in for a stretch of talk. You supply the text; nothing in the Node writes it:
+
+```bash
+defios conversation recap --key ecdsa:<hex> --base-seq <seq-of-a-message> --text "what was said so far"
+defios conversation log --key ecdsa:<hex>
+```
+
+`--base-seq` must be the seq of a message in that same Conversation, past the base of any earlier Recap. Without `--key` it recaps Group-level talk. `conversation log` then prints the Recap first, as `[recap of <n> messages to seq <base>] <text>`, followed only by the messages after its base. `cosl log` still shows every row.
+
 ```bash
 defios cosl log
 defios cosl decode <msg-id-of-a-key-scoped-row>
