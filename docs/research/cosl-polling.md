@@ -253,6 +253,12 @@ for a row the layer folds (`session.*`, `tss.session`) or a `sign.accept`
 after the seq it last acted on, and stops if there is none. Only then
 does it read and fold, and it reads only those message types.
 
+Review fix: the gate now also looks for every row the layer's sign.request
+lookup reads (`sign.request`, and in serve the Network rows too), so a
+follower's own Sign Request starts when its row lands. A rerun of
+`SessionWakeAfterARow` after the fix gave 176 µs, 3.0 KiB on every shape,
+the same as below within noise.
+
 Per wake, median of 6, against the baseline:
 
 | Benchmark | small | medium | large |
