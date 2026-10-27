@@ -112,7 +112,12 @@ func TestPrunePolicyKeepsALightNodeLight(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitPruned(t, b, []uint64{sent[0].Seq, sent[1].Seq})
-	if got := bobLog.matching("pruned 2 messages of Group-level talk up to seq " + fmt.Sprint(sent[1].Seq)); len(got) != 1 {
+	// The line follows the prune, so it may land a moment after.
+	line := "pruned 2 messages of Group-level talk up to seq " + fmt.Sprint(sent[1].Seq)
+	for deadline := time.Now().Add(5 * time.Second); len(bobLog.matching(line)) == 0 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := bobLog.matching(line); len(got) != 1 {
 		t.Errorf("bob's log has %v, want one line saying what was pruned", bobLog.matching("pruned"))
 	}
 

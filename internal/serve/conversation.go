@@ -131,11 +131,7 @@ func requireConversation(store *cosl.Store, conversationID []byte) error {
 	if conversationID == nil {
 		return nil
 	}
-	rows, err := store.Log(cosl.Query{})
-	if err != nil {
-		return err
-	}
-	keys, err := key.List(rows)
+	keys, err := key.Read(store)
 	if err != nil {
 		return err
 	}

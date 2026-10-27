@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 
 	"defios.com/internal/cosl"
@@ -63,9 +64,16 @@ func Read(store *cosl.Store) ([]Key, error) {
 }
 
 // List returns minted Keys in replica order. rows may be the whole log or
-// only its MsgTypes rows; the answer is the same.
+// only its MsgTypes rows; the answer is the same, and only MsgTypes rows are
+// decoded either way.
 func List(rows []cosl.Row) ([]Key, error) {
-	minted, err := session.CompletedSessions(rows)
+	var sessionRows []cosl.Row
+	for _, r := range rows {
+		if slices.Contains(MsgTypes, r.MsgType) {
+			sessionRows = append(sessionRows, r)
+		}
+	}
+	minted, err := session.CompletedSessions(sessionRows)
 	if err != nil {
 		return nil, err
 	}

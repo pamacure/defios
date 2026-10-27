@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
@@ -121,11 +120,7 @@ func loadKeys(ctx context.Context, g *globals, pass passphraseSource) ([]key.Key
 		return nil, nil, err
 	}
 	defer store.Close()
-	rows, err := store.Log(cosl.Query{})
-	if err != nil {
-		return nil, nil, exitOperational(err)
-	}
-	keys, err := key.List(rows)
+	keys, err := key.Read(store)
 	if err != nil {
 		return nil, nil, exitOperational(err)
 	}

@@ -387,11 +387,7 @@ func resolveConversation(g *globals, query string) ([]byte, error) {
 }
 
 func conversationID(store *cosl.Store, query string) ([]byte, error) {
-	rows, err := store.Log(cosl.Query{})
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	keys, err := key.List(rows)
+	keys, err := key.Read(store)
 	if err != nil {
 		return nil, exitOperational(err)
 	}

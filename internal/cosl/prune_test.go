@@ -3,6 +3,7 @@ package cosl_test
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -69,6 +70,47 @@ func TestPruneDestroysOnlyCoveredTalk(t *testing.T) {
 		t.Fatalf("restore from unpruned Node: %v", err)
 	}
 	sameRows(t, archive.rows(), f.rows())
+}
+
+// Pruning while the FSM appends never fails an append: the prune policy
+// prunes as soon as a Recap commits, while the rows after it are still
+// being applied, and an entry the FSM fails to apply is a row this Node
+// never holds.
+func TestPruneAlongsideAppendsFailsNone(t *testing.T) {
+	f := newFixture(t)
+	talk := func(text string) []byte {
+		return f.signed(0, f.envelope(0, cosl.TypeAppFreeform, freeform(text)))
+	}
+	f.apply(1, 1, talk("first"))
+	f.apply(2, 1, f.signed(0, f.envelope(0, cosl.TypeAppRecap, &coslv1.AppRecap{Text: "first", BaseSeq: 1})))
+	const n = 300
+	entries := make([][]byte, n)
+	for i := range entries {
+		entries[i] = talk(fmt.Sprint("talk ", i))
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i, e := range entries {
+			if _, err := f.fsm.Apply(uint64(3+i), 1, e); err != nil {
+				t.Errorf("Apply(%d) while pruning: %v", 3+i, err)
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			if got := len(f.rows()); got != n+2 {
+				t.Fatalf("%d rows, want %d", got, n+2)
+			}
+			return
+		default:
+		}
+		if _, err := f.store.Prune(nil, uint64(n+2)); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // The append-only trigger admits exactly Pruning: an app.freeform's

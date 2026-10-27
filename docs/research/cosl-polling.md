@@ -159,10 +159,90 @@ This run was made on a branch without #53, so its Session numbers are the
 baseline's within noise (`SessionIdleWake/large` 421 ms) and say nothing
 about #53. `KeeperIdleWake` is unchanged at 0.11 ms.
 
+#### #56: the prune policy wakes on change and rereads its config (`after-56.txt`)
+
+[`after-56.txt`](cosl-polling/after-56.txt), same machine and method. The
+prune policy now waits on `Store.Changed` or the one-minute fallback tick,
+as the Workspace watcher does. A wake reads the replica's `Mark` and stops
+there if it has not moved; if it has, `recap.Keeper`'s own gate reads the
+latest `app.recap` row and prunes only after a new Recap or a restore. With
+the policy off, a wake touches nothing, and only the fallback tick wakes
+it. On that tick it also stats the Group's `config.toml` and rereads it if
+its modification time changed, so `prune` takes effect without a restart.
+
+`PrunePolicyIdleWake` is new: the gated wake with the policy on, which is
+what an idle serve's prune policy costs at each fallback tick, less the
+stat. `KeeperIdleWake` is re-run as the issue asked; it measures the
+Keeper's gate, which a wake now reaches only when the Mark moved. Per wake,
+median of 6:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| KeeperIdleWake (#54 run) | 106 µs, 3.7 KiB | 111 µs | 110 µs |
+| KeeperIdleWake (this run) | 131 µs, 3.7 KiB | 133 µs | 127 µs |
+| PrunePolicyIdleWake | 28.5 µs, 624 B | 32.1 µs, 624 B | 31.3 µs, 624 B |
+
+Between ticks an idle serve's prune policy does no work at all, where #52's
+ran the Keeper's 0.11 ms gate every second. It now costs one ~30 µs read a
+minute, 22 allocations, on every shape.
+
+This run is noisy. Other agents were building and testing on the machine
+(load average 11 as it started), and code this ticket did not touch ran
+slower too: `WorkspaceIdleWake` +13–27%, `KeeperIdleWake` +15–24% with
+spreads up to ±66%, and `SessionIdleWake/large` 562 ms ± 56% against #53's
+334 ms. Read the absolute times as upper bounds. The allocation counts,
+which load does not move, are the same as #54's.
+
+Building this turned up a lost-row hazard. The FSM's append began a
+deferred sqlite transaction, read `cosl_meta`, then wrote. A `Prune`
+committing in between made that write fail at once with `SQLITE_BUSY`,
+without waiting out `busy_timeout`, and the entry was applied with no row.
+Waking on change made it likely, because the policy now prunes just as a
+Recap commits, while the next rows are still being applied. The Store now
+begins every transaction `IMMEDIATE` (`_txlock=immediate`), so a write
+waits for the lock instead.
+
+#### #57: listing Keys reads Session rows only ([`after-57.txt`](cosl-polling/after-57.txt))
+
+Against [`before-57.txt`](cosl-polling/before-57.txt), same machine and
+method, run with:
+
+```bash
+go test ./internal/cli/ -run '^$' -bench KeyListing -benchtime 10x -count 6
+```
+
+Every reader that lists Keys and nothing else (`key list` and
+`key inspect`, `--key` and Conversation resolution in the CLI, the
+Conversation check on `conversation send`, `sign propose`, a broadcast's
+Workspace overrides, the prune policy's Conversation names) now reads
+`session.start`, `session.complete` and `session.abort` rows only
+(`key.Read`). A Sign Request lookup, which the Session layer makes for
+every signing Session and a broadcast makes once, reads only the request
+types, the Networks and those Session rows (`signreq.LookupMsgTypes`).
+Readers that already hold the whole log for another fold (`sign list`,
+`sign inspect`) still list Keys from it, but `key.List` now decodes only
+the Session rows among them.
+
+`KeyListing` is one `--key` resolution: list every Key and resolve a
+public-key prefix. Per listing, median of 6:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| KeyListing, before | 7.54 ms, 8.3 MiB | 67.7 ms, 62.5 MiB | 330 ms, 293 MiB |
+| KeyListing, after | 316 µs, 175 KiB | 2.39 ms, 1.4 MiB | 12.9 ms, 6.8 MiB |
+
+About 96% less time and 98% less memory on every shape. What remains grows
+with the number of Sessions, not with talk: the large replica holds 515
+Sessions, and each signing Session's start and completes are still read to
+learn that it minted no Key. The machine was shared with two other builds
+during both runs (load average 2.5 to 4.5 on 8 threads), so the medium
+baseline spreads ±64%; the large and small runs are within ±15%.
+
 #### #55: the Session layer wakes on change, nudge or its own deadline (`after-55.txt`)
 
 [`after-55.txt`](cosl-polling/after-55.txt), same machine and method, on
-top of #53 and #54. The 50 ms tick is gone. The Session layer waits on the
+top of #53 and #54 but before #56 and #57 were merged; neither changes
+what these benchmarks run. The 50 ms tick is gone. The Session layer waits on the
 replica's announcement, a nudge from this process (a local accept or
 decline, a keygen start, an engine's output or result), a timer for its
 nearest deadline (the accept wait, an engine's stall timeout, a Sign
