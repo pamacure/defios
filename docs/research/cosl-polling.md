@@ -156,3 +156,39 @@ replica to one 26 µs read a minute.
 This run was made on a branch without #53, so its Session numbers are the
 baseline's within noise (`SessionIdleWake/large` 421 ms) and say nothing
 about #53. `KeeperIdleWake` is unchanged at 0.11 ms.
+
+#### #57: listing Keys reads Session rows only ([`after-57.txt`](cosl-polling/after-57.txt))
+
+Against [`before-57.txt`](cosl-polling/before-57.txt), same machine and
+method, run with:
+
+```bash
+go test ./internal/cli/ -run '^$' -bench KeyListing -benchtime 10x -count 6
+```
+
+Every reader that lists Keys and nothing else (`key list` and
+`key inspect`, `--key` and Conversation resolution in the CLI, the
+Conversation check on `conversation send`, `sign propose`, a broadcast's
+Workspace overrides, the prune policy's Conversation names) now reads
+`session.start`, `session.complete` and `session.abort` rows only
+(`key.Read`). A Sign Request lookup, which the Session layer makes for
+every signing Session and a broadcast makes once, reads only the request
+types, the Networks and those Session rows (`signreq.LookupMsgTypes`).
+Readers that already hold the whole log for another fold (`sign list`,
+`sign inspect`) still list Keys from it, but `key.List` now decodes only
+the Session rows among them.
+
+`KeyListing` is one `--key` resolution: list every Key and resolve a
+public-key prefix. Per listing, median of 6:
+
+| Benchmark | small | medium | large |
+| --- | --- | --- | --- |
+| KeyListing, before | 7.54 ms, 8.3 MiB | 67.7 ms, 62.5 MiB | 330 ms, 293 MiB |
+| KeyListing, after | 316 µs, 175 KiB | 2.39 ms, 1.4 MiB | 12.9 ms, 6.8 MiB |
+
+About 96% less time and 98% less memory on every shape. What remains grows
+with the number of Sessions, not with talk: the large replica holds 515
+Sessions, and each signing Session's start and completes are still read to
+learn that it minted no Key. The machine was shared with two other builds
+during both runs (load average 2.5 to 4.5 on 8 threads), so the medium
+baseline spreads ±64%; the large and small runs are within ±15%.

@@ -44,10 +44,8 @@ func (s *server) keepPruned(ctx context.Context, store *cosl.Store) {
 // named, falling back to its ID if the Key cannot be read.
 func conversationNames(store *cosl.Store) func([]byte) string {
 	var names map[[32]byte]string
-	if rows, err := store.Log(cosl.Query{}); err == nil {
-		if keys, err := key.List(rows); err == nil {
-			names = key.WorkspaceNames(keys)
-		}
+	if keys, err := key.Read(store); err == nil {
+		names = key.WorkspaceNames(keys)
 	}
 	return func(id []byte) string {
 		if id == nil {
