@@ -95,3 +95,8 @@ either of them computes on an idle wake differs from the wake before.
 - **Incremental folds** wait until these changes are measured. If a Session
   wake after one committed row still costs more than a round's worth of
   latency on the large replica, that is the next ticket.
+  Measured after #53–#57: a wake after one round's row still reads every
+  Session row ever committed, 113 ms on the large replica, so its cost grows
+  with the Group's signing history. That is #58. The state the Session layer
+  holds between wakes is a small summary per Session, not the Session's
+  rows, so it never becomes the in-memory replica rejected above.
