@@ -1,7 +1,8 @@
 // Package vault seals and opens the Node's secrets. The Vault is a directory
 // (ADR 0007) of binary age files, scrypt work factor 18, sole recipient,
-// protobuf VaultContents inside: one shared-secrets file for the Node and one
-// shares file per Group, all under the same passphrase (docs/spec/mvp.md §3.4).
+// protobuf VaultContents inside: one shared-secrets file for the Node, and per
+// Group one shares file and one Model credentials file, all under the same
+// passphrase (docs/spec/mvp.md §3.4, ADR 0012).
 package vault
 
 import (
@@ -104,4 +105,20 @@ func OpenShares(path, passphrase string) ([]*vaultv1.KeyShare, error) {
 		return nil, err
 	}
 	return contents.Shares, nil
+}
+
+// OpenCredentials decrypts the Group credentials file at path: Model alias
+// to credential. As with OpenShares, a file never written yields
+// os.ErrNotExist and a wrong passphrase ErrBadPassphrase.
+func OpenCredentials(path, passphrase string) (map[string]string, error) {
+	contents, err := Open(path, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	return contents.ModelCredentials, nil
+}
+
+// SealCredentials writes the Group credentials file at path, replacing it.
+func SealCredentials(path string, creds map[string]string, passphrase string) error {
+	return Seal(path, &vaultv1.VaultContents{Version: 1, ModelCredentials: creds}, passphrase)
 }

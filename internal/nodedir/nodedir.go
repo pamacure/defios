@@ -2,7 +2,10 @@
 // socket (docs/spec/mvp.md §3.1).
 package nodedir
 
-import "path/filepath"
+import (
+	"encoding/hex"
+	"path/filepath"
+)
 
 // Lookup is the environment the resolution reads. Every input is explicit so
 // the order of precedence is testable without touching the process env.
@@ -17,7 +20,7 @@ type Lookup struct {
 
 // Paths is a resolved Node layout.
 type Paths struct {
-	Config string // holds group/<alias>/config.toml
+	Config string // holds group/<alias>/config.toml and conversation/
 	Data   string // holds identity, vault/, group/<alias>/
 	Socket string // serve.sock
 }
@@ -76,6 +79,13 @@ func (p Paths) VaultSharesFile(alias string) string {
 	return filepath.Join(p.VaultDir(), "shares-"+alias)
 }
 
+// VaultCredentialsFile holds one Group's Model credentials, by Model alias.
+// Vault, not config or log: a credential can drain a billing account, so it
+// is encrypted with the keyshares and never replicates (ADR 0012).
+func (p Paths) VaultCredentialsFile(alias string) string {
+	return filepath.Join(p.VaultDir(), "credentials-"+alias)
+}
+
 // CurrentGroupFile is the plaintext Current Group pointer at the config root:
 // one line holding the local alias of the Group a serve serves and read verbs
 // default to (ADR 0006). `group use` writes it; `group new` auto-focuses by
@@ -126,4 +136,26 @@ func (p Paths) TsnetDir(alias string) string {
 // embed API keys that must not replicate (ADR 0008).
 func (p Paths) NetworkOverridesFile(alias string) string {
 	return filepath.Join(p.GroupConfigDir(alias), "networks.toml")
+}
+
+// GroupLevel names the agent config directory for Group-level talk (a nil
+// conversation id). A Conversation ID is always 64 hex characters, so it can
+// never collide with this name.
+const GroupLevel = "group-level"
+
+// ConversationsConfigDir holds one agent config directory per Conversation
+// of a Group, plus GroupLevel.
+func (p Paths) ConversationsConfigDir(alias string) string {
+	return filepath.Join(p.GroupConfigDir(alias), "conversation")
+}
+
+// ConversationConfigDir is config/group/<alias>/conversation/<id>/, named by
+// the hex Conversation ID, or GroupLevel when id is nil. Nothing parses it
+// yet; it is meant for a model alias, a token window and a soul.md (ADR 0012).
+func (p Paths) ConversationConfigDir(alias string, id []byte) string {
+	name := GroupLevel
+	if len(id) > 0 {
+		name = hex.EncodeToString(id)
+	}
+	return filepath.Join(p.ConversationsConfigDir(alias), name)
 }

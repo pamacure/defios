@@ -45,7 +45,7 @@ A per-Node X25519 keypair, held by that Node alone, used to seal point-to-point 
 _Avoid_: encryption key, box key, crypto key
 
 **Vault**:
-This Node's passphrase-encrypted store of secrets, and the only thing a Node keeps encrypted at rest: the auth private key, the encryption private key, and ECDSA preparams shared across all the Node's Groups, together with this Node's shares of each Group's Keys held separately per Group. Everything else — Identity, Group and Roster records, tailnet config, and the COSL replica — is plaintext, so a Group that is not currently being served can still be inspected.
+This Node's passphrase-encrypted store of secrets, and the only thing a Node keeps encrypted at rest: the auth private key, the encryption private key, and ECDSA preparams shared across all the Node's Groups, together with this Node's shares of each Group's Keys and the credentials for each Group's Models, held separately per Group. Everything else — Identity, Group and Roster records, tailnet config, and the COSL replica — is plaintext, so a Group that is not currently being served can still be inspected.
 _Avoid_: keystore, wallet, keyring, container
 
 **Key**:
@@ -89,7 +89,7 @@ A blockchain a Group may broadcast a signed transaction to, described by a confi
 _Avoid_: chain config, blockchain configuration, RPC, endpoint
 
 **Model**:
-A language model a Group's agent may use, described by a config the Group maintains on its COSL and recalls by a local alias, as a Network is: a provider (Anthropic or OpenAI, fixed for the alias's life), the provider's model id, and optionally an endpoint. Credentials for it never ride the COSL.
+A language model a Group's agent may use, described by a config the Group maintains on its COSL and recalls by a local alias, as a Network is: a provider (Anthropic or OpenAI, fixed for the alias's life), the provider's model id, and optionally an endpoint. Credentials for it never ride the COSL: each Node holds them in its Vault, or takes them from the provider's environment variable.
 _Avoid_: LLM config, provider (that is one field of a Model), engine (that is a threshold-signing engine)
 
 **Sign Request**:

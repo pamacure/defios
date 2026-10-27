@@ -140,3 +140,38 @@ func TestEmptyPassphraseRejectedOnSeal(t *testing.T) {
 		t.Fatal("vault file was written despite empty passphrase")
 	}
 }
+
+// A Group's Model credentials are sealed into their own file and read back
+// only with the passphrase; the secret never sits on disk in the clear.
+func TestCredentialsSealThenOpenRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials-home")
+	creds := map[string]string{"claude": "sk-ant-secret", "gpt": "sk-openai-secret"}
+	if err := vault.SealCredentials(path, creds, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("sk-ant-secret")) {
+		t.Fatal("credential is in the clear on disk")
+	}
+	got, err := vault.OpenCredentials(path, "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["claude"] != "sk-ant-secret" || got["gpt"] != "sk-openai-secret" {
+		t.Fatalf("credentials = %v", got)
+	}
+	if _, err := vault.OpenCredentials(path, "nope"); !errors.Is(err, vault.ErrBadPassphrase) {
+		t.Fatalf("wrong passphrase err = %v, want ErrBadPassphrase", err)
+	}
+}
+
+// No credential was ever set: os.ErrNotExist, as for a shares file.
+func TestOpenCredentialsMissingFileIsNotExist(t *testing.T) {
+	_, err := vault.OpenCredentials(filepath.Join(t.TempDir(), "credentials-home"), "pw")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("err = %v, want os.ErrNotExist", err)
+	}
+}

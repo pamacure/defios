@@ -54,6 +54,9 @@ func (s *server) startReplica() {
 	s.replica, s.store = replica, store
 	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(s.opts.Alias))
 	s.startSessions(replica, store, rec.Roster())
+	dirCtx, dirCancel := context.WithCancel(s.ctx)
+	s.convDirCancel, s.convDirDone = dirCancel, make(chan struct{})
+	go func() { s.watchConversationDirs(dirCtx, store); close(s.convDirDone) }()
 	go s.join(s.ctx, replica, store, gid)
 }
 
@@ -108,6 +111,8 @@ func (s *server) stopReplica() {
 		s.sessionCancel = nil
 		s.sessions = nil
 	}
+	s.convDirCancel()
+	<-s.convDirDone
 	if err := s.replica.Close(); err != nil {
 		s.opts.Logf("serve: stopping Raft: %v", err)
 	}

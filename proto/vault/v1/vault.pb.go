@@ -30,8 +30,11 @@ type VaultContents struct {
 	EncryptionPrivateKey []byte                 `protobuf:"bytes,3,opt,name=encryption_private_key,json=encryptionPrivateKey,proto3" json:"encryption_private_key,omitempty"` // 32-byte X25519
 	EcdsaPreparams       []byte                 `protobuf:"bytes,4,opt,name=ecdsa_preparams,json=ecdsaPreparams,proto3" json:"ecdsa_preparams,omitempty"`                     // opaque adapter bytes (JSON of tss-lib LocalPreParams)
 	Shares               []*KeyShare            `protobuf:"bytes,5,rep,name=shares,proto3" json:"shares,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Model alias -> credential (an API key). Set only in a Group's
+	// credentials file; never on the COSL, never in a config file (ADR 0012).
+	ModelCredentials map[string]string `protobuf:"bytes,6,rep,name=model_credentials,json=modelCredentials,proto3" json:"model_credentials,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *VaultContents) Reset() {
@@ -95,6 +98,13 @@ func (x *VaultContents) GetEcdsaPreparams() []byte {
 func (x *VaultContents) GetShares() []*KeyShare {
 	if x != nil {
 		return x.Shares
+	}
+	return nil
+}
+
+func (x *VaultContents) GetModelCredentials() map[string]string {
+	if x != nil {
+		return x.ModelCredentials
 	}
 	return nil
 }
@@ -163,13 +173,17 @@ var File_vault_v1_vault_proto protoreflect.FileDescriptor
 
 const file_vault_v1_vault_proto_rawDesc = "" +
 	"\n" +
-	"\x14vault/v1/vault.proto\x12\x0fdefios.vault.v1\"\xd8\x01\n" +
+	"\x14vault/v1/vault.proto\x12\x0fdefios.vault.v1\"\x80\x03\n" +
 	"\rVaultContents\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\x1b\n" +
 	"\tauth_seed\x18\x02 \x01(\fR\bauthSeed\x124\n" +
 	"\x16encryption_private_key\x18\x03 \x01(\fR\x14encryptionPrivateKey\x12'\n" +
 	"\x0fecdsa_preparams\x18\x04 \x01(\fR\x0eecdsaPreparams\x121\n" +
-	"\x06shares\x18\x05 \x03(\v2\x19.defios.vault.v1.KeyShareR\x06shares\"\\\n" +
+	"\x06shares\x18\x05 \x03(\v2\x19.defios.vault.v1.KeyShareR\x06shares\x12a\n" +
+	"\x11model_credentials\x18\x06 \x03(\v24.defios.vault.v1.VaultContents.ModelCredentialsEntryR\x10modelCredentials\x1aC\n" +
+	"\x15ModelCredentialsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\\\n" +
 	"\bKeyShare\x12\x14\n" +
 	"\x05curve\x18\x01 \x01(\tR\x05curve\x12\x1d\n" +
 	"\n" +
@@ -188,18 +202,20 @@ func file_vault_v1_vault_proto_rawDescGZIP() []byte {
 	return file_vault_v1_vault_proto_rawDescData
 }
 
-var file_vault_v1_vault_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_vault_v1_vault_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_vault_v1_vault_proto_goTypes = []any{
 	(*VaultContents)(nil), // 0: defios.vault.v1.VaultContents
 	(*KeyShare)(nil),      // 1: defios.vault.v1.KeyShare
+	nil,                   // 2: defios.vault.v1.VaultContents.ModelCredentialsEntry
 }
 var file_vault_v1_vault_proto_depIdxs = []int32{
 	1, // 0: defios.vault.v1.VaultContents.shares:type_name -> defios.vault.v1.KeyShare
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 1: defios.vault.v1.VaultContents.model_credentials:type_name -> defios.vault.v1.VaultContents.ModelCredentialsEntry
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_vault_v1_vault_proto_init() }
@@ -213,7 +229,7 @@ func file_vault_v1_vault_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vault_v1_vault_proto_rawDesc), len(file_vault_v1_vault_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

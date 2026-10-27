@@ -157,6 +157,9 @@ type server struct {
 	sessions      *session.Service
 	sessionCancel context.CancelFunc
 	sessionDone   chan struct{}
+
+	convDirCancel context.CancelFunc // stops watchConversationDirs
+	convDirDone   chan struct{}
 }
 
 // bindSocket listens on path with mode 0600. A live listener there means
