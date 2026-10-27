@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/url"
 	"strings"
+	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite" // pure-Go sqlite driver
@@ -78,7 +79,8 @@ var (
 // Store is one Node's COSL replica. The FSM is its only appender and Prune
 // its only other writer; CLI reads go through WAL.
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	restores atomic.Uint64
 }
 
 // Open opens or creates the replica at path.
@@ -292,6 +294,10 @@ func (s *Store) Prune(conversationID []byte, through uint64) (int, error) {
 	}
 	return int(n), nil
 }
+
+// Restores is how many times Restore has rewritten this replica since Open.
+// Each one may bring back payloads this Node pruned.
+func (s *Store) Restores() uint64 { return s.restores.Load() }
 
 // Meta reads cosl_meta; a fresh replica reports zeroes and a genesis head.
 func (s *Store) Meta() (Meta, error) {

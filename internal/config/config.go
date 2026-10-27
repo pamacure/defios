@@ -28,6 +28,10 @@ type Config struct {
 	// TailnetAuthKey is a reference to the tailnet preauth key; group new
 	// writes "$TS_AUTHKEY".
 	TailnetAuthKey string `toml:"tailnet_auth_key,omitempty"`
+	// Prune is this Node's prune policy for the Group: when set, serve
+	// destroys the payload of all talk a live Recap accounts for, again
+	// after every Recap and snapshot restore (ADR 0012). Off by default.
+	Prune bool `toml:"prune,omitempty"`
 	Workspace
 }
 

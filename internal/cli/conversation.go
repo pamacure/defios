@@ -4,10 +4,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
@@ -138,6 +140,10 @@ func runConversationPrune(g *globals, keyQuery string) error {
 		return err
 	}
 	defer store.Close()
+	policy, err := prunePolicy(g)
+	if err != nil {
+		return err
+	}
 	var conv []byte
 	if keyQuery != "" {
 		if conv, err = conversationID(store, keyQuery); err != nil {
@@ -151,13 +157,31 @@ func runConversationPrune(g *globals, keyQuery string) error {
 	if err != nil {
 		return exitOperational(err)
 	}
-	// There is no prune policy yet (#52), so it is always off here.
-	fmt.Fprintln(g.app.Stderr, "warning: this Node's prune policy is off, so a later snapshot restore from a Node that kept this talk brings it back")
+	if !policy {
+		fmt.Fprintln(g.app.Stderr, "warning: this Node's prune policy is off, so a later snapshot restore from a Node that kept this talk brings it back; set `prune = true` in this Group's config.toml to keep it pruned")
+	}
 	if g.json {
 		return g.emitJSON(pruneLine{BaseSeq: baseSeq, Messages: n})
 	}
 	fmt.Fprintf(g.app.Stdout, "pruned %d messages up to seq %d\n", n, baseSeq)
 	return nil
+}
+
+// prunePolicy is whether this Node's config.toml for the Current Group sets
+// `prune = true`. A Node with no config.toml has the default, off.
+func prunePolicy(g *globals) (bool, error) {
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return false, err
+	}
+	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, exitOperational(err)
+	}
+	return cfg.Prune, nil
 }
 
 // sendError maps an append failure from serve to an exit code: a commit

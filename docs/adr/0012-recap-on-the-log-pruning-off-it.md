@@ -87,13 +87,14 @@ per Node, and a Node that falls past `SnapshotThreshold` re-transfers all of it.
 - Pruning never reaches talk no Recap has accounted for: the prunable set is
   the rows at or below the live Recap's `base_seq`. `conversation prune` with
   no Recap errors and points at `conversation recap`.
-- `prune = on` on a Node's per-Group `config.toml` means that Node holds no
-  superseded `app.freeform` payload: `serve` re-applies it when a Recap
+- `prune = true` on a Node's per-Group `config.toml` (a TOML boolean, so
+  `prune = on` does not parse) means that Node holds no superseded
+  `app.freeform` payload: `serve` re-applies it on startup, when a Recap
   commits and after an `InstallSnapshot` restore, because a restore from an
-  archival Node resurrects everything that Node still has. The verb overrides
-  the policy and warns when it is off, since a manual prune on such a Node is
-  undone by the next restore. Default off: a custody tool should not destroy
-  payloads the first time it syncs.
+  archival Node resurrects everything that Node still has, and logs what each
+  prune dropped. The verb overrides the policy and warns when it is off,
+  since a manual prune on such a Node is undone by the next restore. Default
+  off: a custody tool should not destroy payloads the first time it syncs.
 - `conversation log` folds by default; `--full` shows the superseded rows with
   pruned ones as metadata-only placeholders; `--lean` emits only
   `<display name>: <text>` lines, the live Recap then everything after it, for

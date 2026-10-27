@@ -204,3 +204,22 @@ model = "gpt"
 		t.Fatal("Merge changed the Group's Workspace")
 	}
 }
+
+// prune is this Node's policy for the Group, off unless set, and only the
+// Group's config.toml may set it.
+func TestPrunePolicyDefaultsOffAndIsGroupOnly(t *testing.T) {
+	c, err := config.ReadFile(write(t, groupConfig))
+	if err != nil || c.Prune {
+		t.Fatalf("prune unset = %v, %v; want off", c.Prune, err)
+	}
+	c, err = config.ReadFile(write(t, "prune = true\n"+groupConfig))
+	if err != nil || !c.Prune {
+		t.Fatalf("prune = true read as %v, %v", c.Prune, err)
+	}
+	if _, err := config.ReadFile(write(t, `prune = "on"`)); err == nil {
+		t.Fatal(`prune = "on" must be an error: the policy is a boolean`)
+	}
+	if _, err := config.ReadWorkspace(write(t, "prune = true")); err == nil {
+		t.Fatal("prune in a Conversation config must be an error")
+	}
+}

@@ -89,7 +89,7 @@ A COSL message (`app.recap`) carrying one Node's account of a Conversation's tal
 _Avoid_: summary (that is the one-line payload line `cosl log` prints), digest, compaction, checkpoint
 
 **Pruning**:
-One Node's destruction of the `app.freeform` payloads a Recap has already accounted for, keeping each row, its hash, and its place in the chain. Node-local and written nowhere on the COSL, so two replicas of one Group legitimately hold different amounts of talk.
+One Node's destruction of the `app.freeform` payloads a Recap has already accounted for, keeping each row, its hash, and its place in the chain. Node-local and written nowhere on the COSL, so two replicas of one Group legitimately hold different amounts of talk. A Node's **prune policy** (`prune = true` in its Group `config.toml`) has `serve` prune again whenever a Recap commits or a restore brings talk back; a Node with it off is an archival Node.
 _Avoid_: tombstone (that is a Network removal marker, which destroys nothing), delete, compaction, garbage collection
 
 **Network**:

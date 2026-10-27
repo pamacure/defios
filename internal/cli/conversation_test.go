@@ -17,10 +17,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
+	"defios.com/internal/nodedir"
 	coslv1 "defios.com/proto/cosl/v1"
 	groupv1 "defios.com/proto/group/v1"
 )
@@ -667,5 +669,23 @@ func TestConversationPrune(t *testing.T) {
 	}
 	if got["base_seq"] != float64(4) || got["messages"] != float64(0) {
 		t.Errorf("second prune = %v, want base_seq 4, messages 0", got)
+	}
+}
+
+// With this Node's prune policy on, a restore cannot undo conversation
+// prune, so it does not warn that one would.
+func TestConversationPruneWithPolicyOnDoesNotWarn(t *testing.T) {
+	dir := t.TempDir()
+	groupWithRecap(t, dir)
+	path := nodedir.Resolve(nodedir.Lookup{Dir: dir}).GroupConfigFile(group.ImplicitAlias)
+	if err := config.WriteFile(path, config.Config{DisplayName: "alice", Hostname: "defios-alice", Prune: true}); err != nil {
+		t.Fatal(err)
+	}
+	r := run(t, nil, "", "--dir", dir, "conversation", "prune")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "pruned 2 messages up to seq 4" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if r.stderr != "" {
+		t.Errorf("stderr = %q, want no warning with the policy on", r.stderr)
 	}
 }

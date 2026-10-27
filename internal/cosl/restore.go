@@ -70,6 +70,7 @@ func (s *Store) Restore(snapshotPath string) error {
 	if err != nil {
 		return fmt.Errorf("cosl: restore: %w", err)
 	}
+	s.restores.Add(1)
 	return installTriggers(s.db)
 }
 

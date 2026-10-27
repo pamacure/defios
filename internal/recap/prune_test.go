@@ -25,28 +25,71 @@ type entry struct {
 // replica commits entries at seqs 1.. through the FSM of a one-Node Group.
 func replica(t *testing.T, entries ...entry) *cosl.Store {
 	t.Helper()
+	l := newLog(t)
+	l.add(entries...)
+	return l.store
+}
+
+// testLog is a one-Node Group's replica that entries can be committed to.
+type testLog struct {
+	t      *testing.T
+	store  *cosl.Store
+	roster group.Roster
+	fsm    *cosl.FSM
+	author cosl.Author
+	signed [][]byte // every entry committed, in seq order
+}
+
+func newLog(t *testing.T) *testLog {
+	t.Helper()
 	n, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
 	roster := group.NewRoster(group.RosterNode{Public: n.Public, DisplayName: "alice", TsnetHostname: "defios-alice"})
+	return openLog(t, roster, cosl.Author{Node: n, GroupID: roster.GroupID()})
+}
+
+func openLog(t *testing.T, roster group.Roster, author cosl.Author) *testLog {
+	t.Helper()
 	store, err := cosl.Open(filepath.Join(t.TempDir(), "cosl.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	fsm := cosl.NewFSM(store, roster)
-	author := cosl.Author{Node: n, GroupID: roster.GroupID()}
-	for i, e := range entries {
-		s, err := author.Sign(e.typ, e.conv, e.msg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res, err := fsm.Apply(uint64(i+1), 1, s.Bytes); err != nil || !res.Inserted {
-			t.Fatalf("apply %d: %+v %v", i+1, res, err)
-		}
+	return &testLog{t: t, store: store, roster: roster, fsm: cosl.NewFSM(store, roster), author: author}
+}
+
+// sibling is another Node's replica of the same Group holding the first n
+// entries this one committed, so the two chains agree that far.
+func (l *testLog) sibling(n int) *testLog {
+	l.t.Helper()
+	s := openLog(l.t, l.roster, l.author)
+	for _, b := range l.signed[:n] {
+		s.apply(b)
 	}
-	return store
+	return s
+}
+
+// add commits entries at the next seqs.
+func (l *testLog) add(entries ...entry) {
+	l.t.Helper()
+	for _, e := range entries {
+		s, err := l.author.Sign(e.typ, e.conv, e.msg)
+		if err != nil {
+			l.t.Fatal(err)
+		}
+		l.apply(s.Bytes)
+	}
+}
+
+func (l *testLog) apply(b []byte) {
+	l.t.Helper()
+	l.signed = append(l.signed, b)
+	seq := uint64(len(l.signed))
+	if res, err := l.fsm.Apply(seq, 1, b); err != nil || !res.Inserted {
+		l.t.Fatalf("apply %d: %+v %v", seq, res, err)
+	}
 }
 
 func said(conv []byte, text string) entry {

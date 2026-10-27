@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"defios.com/internal/cosl"
@@ -54,10 +55,22 @@ func (s *server) startReplica() {
 	s.replica, s.store = replica, store
 	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(s.opts.Alias))
 	s.startSessions(replica, store, rec.Roster())
-	dirCtx, dirCancel := context.WithCancel(s.ctx)
-	s.convDirCancel, s.convDirDone = dirCancel, make(chan struct{})
-	go func() { s.watchWorkspaces(dirCtx, store); close(s.convDirDone) }()
+	s.startWatchers(store)
 	go s.join(s.ctx, replica, store, gid)
+}
+
+// startWatchers runs what follows the replica on this Node's behalf: the
+// Conversation Workspaces and, if this Node's policy is on, pruning.
+func (s *server) startWatchers(store *cosl.Store) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	var wg sync.WaitGroup
+	wg.Go(func() { s.watchWorkspaces(ctx, store) })
+	if s.opts.Config.Prune {
+		wg.Go(func() { s.keepPruned(ctx, store) })
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	s.watchCancel, s.watchDone = cancel, done
 }
 
 // startSessions runs the keygen Session layer for this replica. A nil
@@ -111,8 +124,8 @@ func (s *server) stopReplica() {
 		s.sessionCancel = nil
 		s.sessions = nil
 	}
-	s.convDirCancel()
-	<-s.convDirDone
+	s.watchCancel()
+	<-s.watchDone
 	if err := s.replica.Close(); err != nil {
 		s.opts.Logf("serve: stopping Raft: %v", err)
 	}
