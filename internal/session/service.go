@@ -186,9 +186,10 @@ type party struct {
 	waitSince  time.Time
 	minted     bool
 
-	mu      sync.Mutex
-	result  Result
-	doneSet bool
+	mu         sync.Mutex
+	result     Result
+	doneSet    bool
+	progressed bool // the engine has put out a round since the last wake
 }
 
 func (p *party) finishReplay() { p.once.Do(func() { close(p.replayDone) }) }
@@ -197,6 +198,22 @@ func (p *party) setDone(res Result) {
 	p.mu.Lock()
 	p.result, p.doneSet = res, true
 	p.mu.Unlock()
+}
+
+// progress records that the engine moved on: the stall clock starts again.
+func (p *party) progress() {
+	p.mu.Lock()
+	p.progressed = true
+	p.mu.Unlock()
+}
+
+// takeProgress is whether the engine has moved on since it was last asked.
+func (p *party) takeProgress() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ok := p.progressed
+	p.progressed = false
+	return ok
 }
 
 func (p *party) takeDone() (Result, bool) {
@@ -694,6 +711,9 @@ func (s *Service) checkWait(ctx context.Context, r *rec) {
 	if res, ok := p.takeDone(); ok && res.Err == nil {
 		return
 	}
+	if p.takeProgress() {
+		p.waitSince = time.Time{} // the engine moved on: it is not stalled
+	}
 	if len(p.engine.WaitingFor()) == 0 {
 		p.waitSince = time.Time{}
 		return
@@ -744,6 +764,7 @@ func (s *Service) pump(ctx context.Context, id ID, p *party) {
 				s.emit(ctx, id, o)
 			}
 			held = nil
+			p.progress()
 			s.nudge()
 		case o, ok := <-out:
 			if !ok {
@@ -755,6 +776,7 @@ func (s *Service) pump(ctx context.Context, id ID, p *party) {
 				continue
 			}
 			s.emit(ctx, id, o)
+			p.progress()
 			s.nudge()
 		case res, ok := <-done:
 			if !ok {

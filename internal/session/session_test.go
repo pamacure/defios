@@ -1030,6 +1030,50 @@ func TestLiveWaitAbortIsRetriedWhenAppendFails(t *testing.T) {
 	}
 }
 
+// An engine that keeps producing rounds is making progress, even though it is
+// always waiting on someone for the next one: the stall timeout runs from its
+// last output, not from when it first waited.
+func TestStallTimeoutRestartsOnEachEngineOutput(t *testing.T) {
+	c := newPair(t, time.Hour)
+	c.alice.setWaiting([][32]byte{[32]byte(c.bob.id.NodeID)})
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := session.ParseID(sum.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.bob.svc.Accept(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, func() bool {
+		return len(c.alice.engines()) == 1 && len(c.alice.engines()[0].started()) == 1
+	})
+	time.Sleep(30 * time.Millisecond)
+	for i := range 3 {
+		c.advance(40 * time.Minute)
+		round := fmt.Sprintf("round %d", i)
+		c.alice.engines()[0].out <- session.Outgoing{Data: []byte(round)}
+		wait(t, func() bool {
+			for _, row := range c.alice.ofType(t, cosl.TypeTssSession) {
+				if string(decode(t, row).(*coslv1.TssSession).Data) == round {
+					return true
+				}
+			}
+			return false
+		})
+		time.Sleep(30 * time.Millisecond) // let the output's wake run
+		if abortedReason(t, c.alice, sum.SessionID, "timed out waiting for parties") {
+			t.Fatalf("aborted as stalled after %d outputs %v apart", i+1, 40*time.Minute)
+		}
+	}
+	c.advance(time.Hour + time.Second)
+	wait(t, func() bool {
+		return abortedReason(t, c.alice, sum.SessionID, "timed out waiting for parties")
+	})
+}
+
 // A failure that repeats on every retry is logged once, and once more when
 // it clears.
 func TestPersistentFailureIsLoggedOnce(t *testing.T) {
