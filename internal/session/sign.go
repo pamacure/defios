@@ -348,10 +348,26 @@ func (r *rec) validateSign(roster group.Roster, info SignInfo) {
 }
 
 // verifySigned is the parse hook: a session.complete only counts when every
-// signature verifies against the Key and its Digest.
+// signature verifies against the Key and its Digest. The answer cannot change
+// once the row is committed, so it is worked out once per row, keyed by the
+// row's envelope hash (ADR 0014). A sign.request that cannot be read yet is
+// not an answer, so it is asked again on the next wake.
 func (s *Service) verifySigned(r *rec, c seen) bool {
+	s.mu.Lock()
+	ok, known := s.verified[c.hash]
+	s.mu.Unlock()
+	if known {
+		return ok
+	}
 	info, err := s.signInfo(r)
-	return err == nil && info.verifies(c.signatures)
+	if err != nil {
+		return false
+	}
+	ok = info.verifies(c.signatures)
+	s.mu.Lock()
+	s.verified[c.hash] = ok
+	s.mu.Unlock()
+	return ok
 }
 
 // verifies reports whether sigs are exactly one valid signature per Digest.

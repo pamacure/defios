@@ -139,6 +139,7 @@ type rec struct {
 
 type seen struct {
 	seq        uint64
+	hash       [32]byte // the row's EnvelopeHash
 	sender     identity.ID
 	curve      string
 	publicKey  []byte
@@ -259,7 +260,7 @@ func parse(rows []cosl.Row, verify verifier) ([]*rec, error) {
 				continue
 			}
 			r.completes = append(r.completes, seen{
-				seq: row.Seq, sender: row.Sender, curve: p.Curve, publicKey: append([]byte(nil), p.PublicKey...),
+				seq: row.Seq, hash: row.EnvelopeHash, sender: row.Sender, curve: p.Curve, publicKey: append([]byte(nil), p.PublicKey...),
 				signatures: cloneAll(p.Signatures),
 			})
 		case *coslv1.TssSession:
