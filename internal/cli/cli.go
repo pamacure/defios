@@ -57,7 +57,7 @@ func (a App) Run(ctx context.Context, args []string) int {
 		if errors.As(err, &exit) {
 			code = exit.Code
 		}
-		fmt.Fprintf(a.Stderr, "defios: %v\n", err)
+		fmt.Fprintf(a.Stderr, "%s %v\n", paletteFor(a.Stderr, a.Getenv).concern("defios:"), err)
 		return code
 	}
 	return ExitOK

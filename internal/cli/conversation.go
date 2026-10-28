@@ -158,7 +158,7 @@ func runConversationPrune(g *globals, keyQuery string) error {
 		return exitOperational(err)
 	}
 	if !policy {
-		fmt.Fprintln(g.app.Stderr, "warning: this Node's prune policy is off, so a later snapshot restore from a Node that kept this talk brings it back; set `prune = true` in this Group's config.toml to keep it pruned")
+		fmt.Fprintln(g.app.Stderr, paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:")+" this Node's prune policy is off, so a later snapshot restore from a Node that kept this talk brings it back; set `prune = true` in this Group's config.toml to keep it pruned")
 	}
 	if g.json {
 		return g.emitJSON(pruneLine{BaseSeq: baseSeq, Messages: n})
@@ -290,15 +290,16 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if g.json {
 		return g.emitJSON(lines)
 	}
+	p := g.out()
 	for _, l := range lines {
 		text := cosl.EscapeNewlines(l.Text)
 		switch {
 		case l.Pruned:
-			text = "[pruned]"
+			text = p.dim("[pruned]")
 		case l.MsgType == cosl.TypeName(cosl.TypeAppRecap):
-			text = fmt.Sprintf("[recap of %d messages to seq %d] %s", l.Covers, l.BaseSeq, text)
+			text = p.dim(fmt.Sprintf("[recap of %d messages to seq %d]", l.Covers, l.BaseSeq)) + " " + text
 		}
-		fmt.Fprintf(g.app.Stdout, "%d %s %s  %s\n", l.Seq, l.CreatedAt, l.SenderDisplayName, text)
+		fmt.Fprintf(g.app.Stdout, "%s %s %s  %s\n", p.primary(fmt.Sprint(l.Seq)), p.dim(l.CreatedAt), p.primary(l.SenderDisplayName), text)
 	}
 	return nil
 }
@@ -369,8 +370,9 @@ func emitLean(g *globals, lines []messageLine) error {
 	if g.json {
 		return g.emitJSON(lean)
 	}
+	p := g.out()
 	for _, l := range lean {
-		fmt.Fprintf(g.app.Stdout, "%s: %s\n", l.SenderDisplayName, cosl.EscapeNewlines(l.Text))
+		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(l.SenderDisplayName+":"), cosl.EscapeNewlines(l.Text))
 	}
 	return nil
 }

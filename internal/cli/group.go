@@ -369,6 +369,7 @@ func runGroupList(g *globals) error {
 	if g.json {
 		return g.emitJSON(lines)
 	}
+	pal := g.out()
 	for _, l := range lines {
 		marker := " "
 		if l.Current {
@@ -378,7 +379,7 @@ func runGroupList(g *globals) error {
 		if gid == "" {
 			gid = "-"
 		}
-		fmt.Fprintf(g.app.Stdout, "%s %s  %s  %s\n", marker, l.Alias, l.Status, gid)
+		fmt.Fprintf(g.app.Stdout, "%s %s  %s  %s\n", marker, pal.primary(l.Alias), pal.status(l.Status), pal.dim(gid))
 	}
 	return nil
 }
@@ -465,12 +466,12 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 	if g.json {
 		return g.emitJSON(v)
 	}
-	w := g.app.Stdout
-	fmt.Fprintf(w, "Group ID: %s\n", v.GroupID)
-	fmt.Fprintf(w, "Status:   %s\n", v.Status)
+	w, pal := g.app.Stdout, g.out()
+	fmt.Fprintf(w, "Group ID: %s\n", pal.primary(v.GroupID))
+	fmt.Fprintf(w, "Status:   %s\n", pal.status(v.Status.String()))
 	fmt.Fprintln(w, "Roster:")
 	for _, r := range v.Roster {
-		fmt.Fprintf(w, "  %s  %s  %s  reachable=%s  joined=%s\n", r.NodeID, r.DisplayName, r.Hostname, yesNo(r.Reachable), yesNo(r.Joined))
+		fmt.Fprintf(w, "  %s  %s  %s  reachable=%s  joined=%s\n", pal.primary(r.NodeID), r.DisplayName, r.Hostname, pal.yesNo(r.Reachable), pal.yesNo(r.Joined))
 		fmt.Fprintf(w, "    auth public key:       %s\n", r.AuthPublicKey)
 		fmt.Fprintf(w, "    encryption public key: %s\n", r.EncryptionPublicKey)
 	}

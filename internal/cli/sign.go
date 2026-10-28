@@ -76,8 +76,9 @@ Every referenced Network must be of the Key's curve.`,
 			if g.json {
 				return g.emitJSON(rows)
 			}
+			p := g.out()
 			for _, s := range rows {
-				fmt.Fprintf(g.app.Stdout, "%s  %s  %s accepted  txs=%d  broadcasts=%d%s  %s\n", s.MsgID[:8], s.Status, acceptedOf(s), s.Transactions, s.Broadcasts, fully(s.FullyBroadcast), s.Reason)
+				fmt.Fprintf(g.app.Stdout, "%s  %s  %s accepted  txs=%d  broadcasts=%d%s  %s\n", p.primary(s.MsgID[:8]), p.status(s.Status), acceptedOf(s), s.Transactions, s.Broadcasts, p.dim(fully(s.FullyBroadcast)), s.Reason)
 			}
 			return nil
 		},
@@ -95,9 +96,9 @@ Every referenced Network must be of the Key's curve.`,
 			if g.json {
 				return g.emitJSON(d)
 			}
-			out := g.app.Stdout
+			out, p := g.app.Stdout, g.out()
 			fmt.Fprintf(out, "sign_request %s\nstatus %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
-				d.MsgID, d.Status, d.Proposer, d.CreatedAt, d.DeadlineSeconds, d.Conversation, d.Reason)
+				p.primary(d.MsgID), p.status(d.Status), d.Proposer, p.dim(d.CreatedAt), d.DeadlineSeconds, d.Conversation, d.Reason)
 			fmt.Fprintf(out, "accepted %s\n", acceptedOf(d.Summary))
 			for _, a := range d.Accepted {
 				fmt.Fprintf(out, "  %s\n", a)
@@ -106,13 +107,13 @@ Every referenced Network must be of the Key's curve.`,
 				fmt.Fprintf(out, "session %s\n", d.Session)
 			}
 			for _, b := range d.BroadcastReceipts {
-				fmt.Fprintf(out, "broadcast by %s at %s (seq %d)\n", b.Broadcaster, b.At, b.Seq)
+				fmt.Fprintf(out, "broadcast by %s at %s %s\n", b.Broadcaster, p.dim(b.At), p.dim(fmt.Sprintf("(seq %d)", b.Seq)))
 				for _, t := range b.Transactions {
 					fmt.Fprintf(out, "  tx %d  %s  %s\n", t.Index, t.Network, t.TxHash)
 				}
 			}
 			for i, t := range d.Details {
-				fmt.Fprintf(out, "\ntransaction %d: %s (%s)\n", i, t.Network, t.Type)
+				fmt.Fprintf(out, "\n%s %s\n", p.primary(fmt.Sprintf("transaction %d: %s", i, t.Network)), p.dim("("+t.Type+")"))
 				for _, l := range t.Lines {
 					fmt.Fprintf(out, "  %s\n", l)
 				}
@@ -200,7 +201,7 @@ failed Network is retried. Only http(s) rpc urls are used.`,
 					if n.Receipt != nil {
 						fmt.Fprintf(g.app.Stdout, "%s: receipt recorded as seq %d (msg_id %s)\n", n.Network, n.Receipt.Seq, n.Receipt.MsgID)
 					} else {
-						fmt.Fprintf(g.app.Stdout, "%s: FAILED, no receipt recorded: %s\n", n.Network, n.Error)
+						fmt.Fprintf(g.app.Stdout, "%s: %s %s\n", n.Network, g.out().concern("FAILED, no receipt recorded:"), n.Error)
 					}
 				}
 			}

@@ -68,8 +68,9 @@ func runKeyList(ctx context.Context, g *globals, pass passphraseSource) error {
 	if g.json {
 		return g.emitJSON(views)
 	}
+	p := g.out()
 	for _, v := range views {
-		fmt.Fprintf(g.app.Stdout, "%s  t=%d n=%d  share=%s\n", v.Key, v.T, v.N, yesNo(v.Share))
+		fmt.Fprintf(g.app.Stdout, "%s  t=%d n=%d  share=%s\n", p.primary(v.Key), v.T, v.N, yesNo(v.Share))
 	}
 	return nil
 }
@@ -94,7 +95,7 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 		return g.emitJSON(v)
 	}
 	fmt.Fprintf(g.app.Stdout, "key %s\npublic_key %s\nconversation %s\nsession %s\ncurve %s\nt %d\nn %d\nshare %s\n",
-		v.Key, v.PublicKey, v.ConversationID, v.SessionID, v.Curve, v.T, v.N, yesNo(v.Share))
+		g.out().primary(v.Key), v.PublicKey, v.ConversationID, v.SessionID, v.Curve, v.T, v.N, yesNo(v.Share))
 	if v.Address != "" {
 		fmt.Fprintf(g.app.Stdout, "ethereum_address %s\n", v.Address)
 	}

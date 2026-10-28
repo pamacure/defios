@@ -245,8 +245,9 @@ func runNetworkList(g *globals) error {
 	if g.json {
 		return g.emitJSON(views)
 	}
+	p := g.out()
 	for _, v := range views {
-		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", v.Alias, v.Type, v.identifier())
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", p.primary(v.Alias), v.Type, v.identifier())
 	}
 	return nil
 }
@@ -263,8 +264,8 @@ func runNetworkShow(g *globals, alias string) error {
 		if g.json {
 			return g.emitJSON(v)
 		}
-		out := g.app.Stdout
-		fmt.Fprintf(out, "alias %s\ntype %s\ncurve %s\n%s\n", v.Alias, v.Type, v.Curve, strings.Replace(v.identifier(), "=", " ", 1))
+		out, p := g.app.Stdout, g.out()
+		fmt.Fprintf(out, "alias %s\ntype %s\ncurve %s\n%s\n", p.primary(v.Alias), v.Type, v.Curve, strings.Replace(v.identifier(), "=", " ", 1))
 		if v.GenesisHash != "" {
 			fmt.Fprintf(out, "genesis_hash %s\n", v.GenesisHash)
 		}
@@ -273,7 +274,7 @@ func runNetworkShow(g *globals, alias string) error {
 			src = "local override"
 		}
 		for _, u := range v.RPCURLs {
-			fmt.Fprintf(out, "rpc_url %s (%s)\n", u, src)
+			fmt.Fprintf(out, "rpc_url %s %s\n", u, p.dim("("+src+")"))
 		}
 		return nil
 	}

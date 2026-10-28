@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -198,14 +198,19 @@ func sizeOf(path string) int64 {
 }
 
 func printUsage(g *globals, v usageView) {
-	tw := tabwriter.NewWriter(g.app.Stdout, 0, 0, 2, ' ', 0)
-	r := func(label, detail string, n int64) { fmt.Fprintf(tw, "%s\t%s\t%10s\n", label, detail, humanBytes(n)) }
+	type row struct {
+		label, detail string
+		n             int64
+		heading       bool
+	}
+	var rows []row
+	r := func(label, detail string, n int64) { rows = append(rows, row{label: label, detail: detail, n: n}) }
 	r("binary", v.Binary.Path, v.Binary.Bytes)
 	r("identity", "", v.Data.Identity)
 	r("vault", "shared", v.Data.VaultShared)
 	r("config", "root files", v.Config.Root)
 	for _, gu := range v.Groups {
-		r(groupHeading(gu), "", gu.Bytes)
+		rows = append(rows, row{label: groupHeading(gu), n: gu.Bytes, heading: true})
 		r("  COSL", fmt.Sprintf("%d rows, %d pruned", gu.COSL.Rows, gu.COSL.Pruned), gu.COSL.Bytes)
 		r("  Raft", "", gu.Raft)
 		r("  tsnet", "", gu.Tsnet)
@@ -216,16 +221,32 @@ func printUsage(g *globals, v usageView) {
 	r("data", v.Data.Path, v.Data.Bytes)
 	r("config", v.Config.Path, v.Config.Bytes)
 	r("total", "", v.Total)
-	tw.Flush()
 
+	// Aligned by hand, not tabwriter: color codes would count toward its
+	// cell widths.
+	var lw, dw int
+	for _, x := range rows {
+		lw = max(lw, utf8.RuneCountInString(x.label))
+		dw = max(dw, utf8.RuneCountInString(x.detail))
+	}
+	pad := func(s string, w int) string { return strings.Repeat(" ", w+2-utf8.RuneCountInString(s)) }
+	p := g.out()
 	w := g.app.Stdout
+	for _, x := range rows {
+		label := x.label
+		if x.heading {
+			label = p.primary(label)
+		}
+		fmt.Fprintf(w, "%s%s%s%s%10s\n", label, pad(x.label, lw), p.dim(x.detail), pad(x.detail, dw), humanBytes(x.n))
+	}
+
 	fmt.Fprintln(w)
 	s := v.Serve
 	if s == nil {
-		fmt.Fprintln(w, "serve not running")
+		fmt.Fprintln(w, p.caution("serve not running"))
 		return
 	}
-	fmt.Fprintf(w, "serve (%s)\n", s.Alias)
+	fmt.Fprintf(w, "%s\n", p.primary(fmt.Sprintf("serve (%s)", s.Alias)))
 	fmt.Fprintf(w, "  pid         %d\n", s.PID)
 	fmt.Fprintf(w, "  uptime      %s\n", s.Uptime.Truncate(time.Second))
 	if s.UserCPU != nil && s.SystemCPU != nil {
@@ -233,7 +254,7 @@ func printUsage(g *globals, v usageView) {
 	}
 	switch {
 	case s.RSS != nil && s.PeakRSS != nil:
-		fmt.Fprintf(w, "  rss         %s (peak %s)\n", humanBytes(int64(*s.RSS)), humanBytes(int64(*s.PeakRSS)))
+		fmt.Fprintf(w, "  rss         %s %s\n", humanBytes(int64(*s.RSS)), p.dim(fmt.Sprintf("(peak %s)", humanBytes(int64(*s.PeakRSS)))))
 	case s.PeakRSS != nil:
 		fmt.Fprintf(w, "  rss         peak %s\n", humanBytes(int64(*s.PeakRSS)))
 	}

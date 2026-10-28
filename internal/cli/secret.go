@@ -180,7 +180,7 @@ func runSecretShow(g *globals, pass passphraseSource, name string, reveal bool) 
 		return g.emitJSON(v)
 	}
 	out := g.app.Stdout
-	fmt.Fprintf(out, "name %s\nsource %s\n", v.Name, v.Source)
+	fmt.Fprintf(out, "name %s\nsource %s\n", g.out().primary(v.Name), v.Source)
 	if v.Value != "" {
 		fmt.Fprintf(out, "value %s\n", v.Value)
 	}

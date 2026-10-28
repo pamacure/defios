@@ -107,7 +107,7 @@ func runNodeInspect(g *globals) error {
 		case err == nil:
 			gid := rec.GroupID().String()
 			v.GroupID = &gid
-			groupState = fmt.Sprintf("%s (%s)", gid, rec.Status())
+			groupState = fmt.Sprintf("%s (%s)", gid, g.out().status(rec.Status().String()))
 		case errors.Is(err, group.ErrNoGroup):
 		default:
 			return exitOperational(err)
@@ -121,12 +121,12 @@ func runNodeInspect(g *globals) error {
 		serveState = "up"
 	}
 	w := g.app.Stdout
-	fmt.Fprintf(w, "Node ID:               %s\n", v.NodeID)
+	fmt.Fprintf(w, "Node ID:               %s\n", g.out().primary(v.NodeID))
 	fmt.Fprintf(w, "Display name:          %s\n", v.DisplayName)
 	fmt.Fprintf(w, "Hostname:              %s\n", v.Hostname)
 	fmt.Fprintf(w, "Auth public key:       %s\n", v.AuthPublicKey)
 	fmt.Fprintf(w, "Encryption public key: %s\n", v.EncryptionPublicKey)
-	fmt.Fprintf(w, "Serve:                 %s\n", serveState)
+	fmt.Fprintf(w, "Serve:                 %s\n", g.out().status(serveState))
 	fmt.Fprintf(w, "Group:                 %s\n", groupState)
 	return nil
 }
@@ -149,8 +149,9 @@ func runNodeList(cmd *cobra.Command, g *globals) error {
 	if g.json {
 		return g.emitJSON(nodes)
 	}
+	p := g.out()
 	for _, n := range nodes {
-		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", n.NodeID, n.DisplayName, n.Hostname)
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", p.primary(n.NodeID), n.DisplayName, n.Hostname)
 	}
 	return nil
 }

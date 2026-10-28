@@ -151,8 +151,9 @@ func runSessionList(g *globals) error {
 	if g.json {
 		return g.emitJSON(list)
 	}
+	p := g.out()
 	for _, s := range list {
-		fmt.Fprintf(g.app.Stdout, "%s  %s  %s  t=%d n=%d\n", s.SessionID, s.Status, s.Curve, s.T, s.N)
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s  t=%d n=%d\n", p.primary(s.SessionID), p.status(s.Status), s.Curve, s.T, s.N)
 	}
 	return nil
 }
@@ -181,13 +182,14 @@ func runSessionInspect(g *globals, hexID string) error {
 	if g.json {
 		return g.emitJSON(detail)
 	}
-	fmt.Fprintf(g.app.Stdout, "session %s\nstatus %s\ncurve %s\nt %d\nn %d\n", detail.SessionID, detail.Status, detail.Curve, detail.T, detail.N)
+	p := g.out()
+	fmt.Fprintf(g.app.Stdout, "session %s\nstatus %s\ncurve %s\nt %d\nn %d\n", p.primary(detail.SessionID), p.status(detail.Status), detail.Curve, detail.T, detail.N)
 	if detail.Reason != "" {
 		fmt.Fprintf(g.app.Stdout, "reason %s\n", detail.Reason)
 	}
 	fmt.Fprintf(g.app.Stdout, "participants\n")
-	for _, p := range detail.Participants {
-		fmt.Fprintf(g.app.Stdout, "  %s\n", p)
+	for _, part := range detail.Participants {
+		fmt.Fprintf(g.app.Stdout, "  %s\n", part)
 	}
 	fmt.Fprintf(g.app.Stdout, "completes\n")
 	if len(detail.Completes) == 0 {

@@ -186,8 +186,9 @@ func runModelList(g *globals) error {
 	if g.json {
 		return g.emitJSON(views)
 	}
+	p := g.out()
 	for _, v := range views {
-		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", v.Alias, v.Provider, v.Model)
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", p.primary(v.Alias), v.Provider, v.Model)
 	}
 	return nil
 }
@@ -202,7 +203,7 @@ func runModelShow(g *globals, alias string) error {
 		return g.emitJSON(v)
 	}
 	out := g.app.Stdout
-	fmt.Fprintf(out, "alias %s\nprovider %s\nmodel %s\n", v.Alias, v.Provider, v.Model)
+	fmt.Fprintf(out, "alias %s\nprovider %s\nmodel %s\n", g.out().primary(v.Alias), v.Provider, v.Model)
 	if v.BaseURL != "" {
 		fmt.Fprintf(out, "base_url %s\n", v.BaseURL)
 	}

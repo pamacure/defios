@@ -182,8 +182,9 @@ func runCoslLog(g *globals, typeFlag string, limit int) error {
 	if g.json {
 		return g.emitJSON(lines)
 	}
+	p := g.out()
 	for _, l := range lines {
-		fmt.Fprintf(g.app.Stdout, "%d %s %s  %s  %s\n", l.Seq, l.CreatedAt, l.SenderDisplayName, l.TypeName, l.Summary)
+		fmt.Fprintf(g.app.Stdout, "%s %s %s  %s  %s\n", p.primary(fmt.Sprint(l.Seq)), p.dim(l.CreatedAt), p.primary(l.SenderDisplayName), p.status(l.TypeName), l.Summary)
 	}
 	return nil
 }
@@ -260,19 +261,19 @@ func runCoslDecode(g *globals, arg string) error {
 		return g.emitJSON(d)
 	}
 
-	w := g.app.Stdout
-	conv := "(unset: Group-level)"
+	w, p := g.app.Stdout, g.out()
+	conv := p.dim("(unset: Group-level)")
 	if d.ConversationID != nil {
 		conv = *d.ConversationID
 	}
-	fmt.Fprintf(w, "seq:             %d\n", d.Seq)
+	fmt.Fprintf(w, "seq:             %s\n", p.primary(fmt.Sprint(d.Seq)))
 	fmt.Fprintf(w, "term:            %d\n", d.Term)
 	fmt.Fprintf(w, "prev_hash:       %s\n", d.PrevHash)
 	fmt.Fprintf(w, "version:         %d\n", d.Version)
 	fmt.Fprintf(w, "group_id:        %s\n", d.GroupID)
-	fmt.Fprintf(w, "msg_type:        %d (%s)\n", d.MsgType, d.TypeName)
+	fmt.Fprintf(w, "msg_type:        %d (%s)\n", d.MsgType, p.status(d.TypeName))
 	fmt.Fprintf(w, "sender:          %s\n", d.Sender)
-	fmt.Fprintf(w, "msg_id:          %s\n", d.MsgID)
+	fmt.Fprintf(w, "msg_id:          %s\n", p.primary(d.MsgID))
 	fmt.Fprintf(w, "conversation_id: %s\n", conv)
 	fmt.Fprintf(w, "created_at:      %s\n", d.CreatedAt)
 	fmt.Fprintf(w, "sig:             %s\n", d.Sig)
