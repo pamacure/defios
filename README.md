@@ -209,6 +209,12 @@ defios conversation send --key ecdsa:<hex> --handle @auditor --depth 2 "and so d
 
 `--depth` defaults to 1, works only with `--handle`, and must be between 1 and `max_depth`. Leaving out `--handle` means the message is a person's. `serve` checks the same rules for any client of its socket.
 
+A person's message that mentions an agent (`@` followed by a Handle, with no letter, digit or `@` right before the `@`, so `a@b.com` is not a mention) must name a Handle included where it is sent. Otherwise the send exits 1, names the Handle and lists the included ones, and nothing is appended:
+
+```bash
+defios conversation send --key ecdsa:<hex> "@nobody, take a look"
+```
+
 An unknown Key exits 1:
 
 ```bash

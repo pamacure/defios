@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -342,5 +343,62 @@ max_depth = 2
 		if ff := msg.(*coslv1.AppFreeform); ff.Handle != want.handle || ff.Depth != want.depth {
 			t.Errorf("row %d: handle %q depth %d, want %q %d", i, ff.Handle, ff.Depth, want.handle, want.depth)
 		}
+	}
+}
+
+// A person's message that mentions a Handle not included where it is sent is
+// refused, naming the Handle and what is included, and nothing is appended.
+// One whose mentions are all included, or that mentions nobody, commits.
+func TestConversationSendRefusesUnresolvedMention(t *testing.T) {
+	a, b := pair(t)
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), `
+[agents.auditor]
+model = "claude"
+
+[agents.scribe]
+model = "claude"
+
+[agent]
+profiles = ["auditor"]
+`)
+	ctx := context.Background()
+	for _, text := range []string{"@scribe, look", "@auditor and @nobody", "@user hi"} {
+		_, err := a.client().ConversationSend(ctx, text, nil)
+		if !errors.Is(err, serve.ErrBadHandle) || !strings.Contains(err.Error(), "@auditor") {
+			t.Errorf("send %q = %v, want ErrBadHandle listing @auditor", text, err)
+		}
+	}
+	if _, err := a.client().ConversationSend(ctx, "@scribe", nil); err == nil || !strings.Contains(err.Error(), "@scribe") {
+		t.Errorf("refusal does not name the Handle: %v", err)
+	}
+	// b's config includes nothing, and says so.
+	if _, err := b.client().ConversationSend(ctx, "@auditor?", nil); !errors.Is(err, serve.ErrBadHandle) || !strings.Contains(err.Error(), "none") {
+		t.Errorf("@auditor on a Node without it = %v, want ErrBadHandle saying none is included", err)
+	}
+	// A Conversation that sets profiles replaces the Group's list.
+	name := mintKey(t, a, b, gid)
+	waitWorkspace(t, a, name)
+	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
+	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, name), "[agent]\nprofiles = [\"scribe\"]\n")
+	if _, err := a.client().ConversationSend(ctx, "@auditor", id[:]); !errors.Is(err, serve.ErrBadHandle) {
+		t.Errorf("@auditor where the Conversation includes only scribe = %v, want ErrBadHandle", err)
+	}
+	if rows := conversationRows(t, a, gid, id[:]); len(rows) != 0 {
+		t.Fatalf("refused message stored: %+v", rows)
+	}
+	if _, err := a.client().ConversationSend(ctx, "@scribe", id[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, text := range []string{"ask @auditor, @auditor", "mail a@b.com", "no one"} {
+		if _, err := a.client().ConversationSend(ctx, text, nil); err != nil {
+			t.Fatalf("send %q: %v", text, err)
+		}
+	}
+	if rows := b.groupLevelRows(t, gid, 3); len(rows) != 3 {
+		t.Fatalf("%d group-level rows, want the 3 that resolve", len(rows))
 	}
 }

@@ -791,14 +791,17 @@ func TestConversationSendHandle(t *testing.T) {
 	}
 }
 
-// The serve refusing a Handle is the caller's error.
+// The serve refusing a Handle, as the agent writing or in a person's
+// mention, is the caller's error.
 func TestConversationSendBadHandleFromServeExitsUsage(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	fakeLocalServe(t, dir, "/v1/conversation/", 400, "bad-handle", "serve: @auditor is not included here")
-	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--handle", "@auditor", "hi")
-	if r.code != 1 || !strings.Contains(r.stderr, "not included") {
-		t.Errorf("exit %d; stderr %q", r.code, r.stderr)
+	for _, args := range [][]string{{"--handle", "@auditor", "hi"}, {"hi @auditor"}} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "send"}, args...)...)
+		if r.code != 1 || !strings.Contains(r.stderr, "not included") {
+			t.Errorf("%v: exit %d; stderr %q", args, r.code, r.stderr)
+		}
 	}
 }
 

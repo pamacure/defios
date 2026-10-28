@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
+	"defios.com/internal/mention"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 )
@@ -26,8 +28,10 @@ var (
 	// ErrNoConversation means the id is not the Conversation ID of a Key this
 	// replica has minted. A Conversation exists iff the Key exists (§8).
 	ErrNoConversation = errors.New("serve: no such Conversation; the Key has not been minted")
-	// ErrBadHandle means a message names a Handle this Group's config.toml
-	// does not include where it is sent, or a depth outside 1 to max_depth
+	// ErrBadHandle means a message names a Handle, as the agent writing it or
+	// in a person's mention, that this Group's config.toml does not include
+	// where it is sent, or an agent's message is at a depth outside 1 to
+	// max_depth
 	// (ADR 0015).
 	ErrBadHandle = errors.New("serve: that Handle may not write here")
 )
@@ -77,20 +81,19 @@ func (s *server) conversationSend(ctx context.Context, text, handle string, dept
 		return SendView{}, err
 	}
 	return s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, func(store *cosl.Store) error {
-		return s.checkHandle(store, conversationID, handle, depth)
+		return s.checkHandle(store, conversationID, handle, depth, text)
 	})
 }
 
-// checkHandle allows a person's message at depth 0, and an agent's whose
-// Handle the merged [agent] profiles where it is sent includes, at a depth
-// from 1 to max_depth. Like requireConversation it is the writer's check, not
-// the FSM's: another Node's config is not this Node's to know.
-func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle string, depth uint32) error {
+// checkHandle allows a person's message at depth 0 whose mentions all name
+// Handles included where it is sent, and an agent's whose Handle is included
+// there, at a depth from 1 to max_depth. An agent's mentions are not checked:
+// the chain skips those it cannot summon (ADR 0015). Like requireConversation
+// it is the writer's check, not the FSM's: another Node's config is not this
+// Node's to know.
+func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle string, depth uint32, text string) error {
 	if handle == "" {
-		if depth != 0 {
-			return fmt.Errorf("%w: a person's message has no depth; name the agent", ErrBadHandle)
-		}
-		return nil
+		return s.checkMentions(store, conversationID, depth, mention.Handles(text))
 	}
 	cfg, conv, err := s.readConfig(store, conversationID)
 	if err != nil {
@@ -99,18 +102,64 @@ func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle st
 	if _, ok := cfg.Agents[handle]; !ok {
 		return fmt.Errorf("%w: no [agents.%s] is defined in this Group's config.toml", ErrBadHandle, handle)
 	}
-	home, _ := os.UserHomeDir() // only for profile directories, unused here
-	inc, err := cfg.Included(conv, s.opts.Paths.Config, home)
+	inc, err := s.included(cfg, conv)
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(inc.Profiles, func(p config.ResolvedProfile) bool { return p.Handle == handle }) {
+	if !includes(inc, handle) {
 		return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent", ErrBadHandle, handle)
 	}
 	if depth < 1 || depth > uint32(inc.MaxDepth) {
 		return fmt.Errorf("%w: depth %d is outside 1 to max_depth %d", ErrBadHandle, depth, inc.MaxDepth)
 	}
 	return nil
+}
+
+// checkMentions refuses a person's message with a depth, or one that
+// mentions a Handle not included where it is sent, naming it and what is.
+// A message that mentions nobody reads no config.
+func (s *server) checkMentions(store *cosl.Store, conversationID []byte, depth uint32, mentions []string) error {
+	if depth != 0 {
+		return fmt.Errorf("%w: a person's message has no depth; name the agent", ErrBadHandle)
+	}
+	if len(mentions) == 0 {
+		return nil
+	}
+	cfg, conv, err := s.readConfig(store, conversationID)
+	if err != nil {
+		return err
+	}
+	inc, err := s.included(cfg, conv)
+	if err != nil {
+		return err
+	}
+	for _, m := range mentions {
+		if !includes(inc, m) {
+			return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent; included: %s", ErrBadHandle, m, listHandles(inc.Profiles))
+		}
+	}
+	return nil
+}
+
+func (s *server) included(cfg config.Config, conv config.Workspace) (config.Included, error) {
+	home, _ := os.UserHomeDir() // only for profile directories, unused here
+	return cfg.Included(conv, s.opts.Paths.Config, home)
+}
+
+func includes(inc config.Included, handle string) bool {
+	return slices.ContainsFunc(inc.Profiles, func(p config.ResolvedProfile) bool { return p.Handle == handle })
+}
+
+// listHandles is profiles' Handles as "@a, @b", or "none".
+func listHandles(profiles []config.ResolvedProfile) string {
+	if len(profiles) == 0 {
+		return "none"
+	}
+	hs := make([]string, len(profiles))
+	for i, p := range profiles {
+		hs[i] = "@" + p.Handle
+	}
+	return strings.Join(hs, ", ")
 }
 
 // conversationRecap is `conversation recap`: author an app.recap accounting
