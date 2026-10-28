@@ -235,15 +235,16 @@ func TestPrunePolicyDefaultsOffAndIsGroupOnly(t *testing.T) {
 }
 
 // An Agent Profile is defined only in the Group's config.toml, under a Handle
-// that follows the alias rule, ends in a letter or digit so a mention can
-// name it, and is not "user", and names the Model it runs on; [agent]
-// includes only Handles the Group defines, at a depth of at least 1.
+// that a mention can name (ADR 0016) and is not "user", and names the Model
+// it runs on; [agent] includes only Handles the Group defines, at a depth of
+// at least 1.
 func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 	for name, body := range map[string]string{
 		"bad handle":          "[agents.Auditor]\nmodel = \"claude\"",
 		"reserved handle":     "[agents.user]\nmodel = \"claude\"",
 		"handle ending in -":  "[agents.auditor-]\nmodel = \"claude\"",
 		"handle ending in _":  "[agents.auditor_]\nmodel = \"claude\"",
+		"handle with --":      "[agents.au--di]\nmodel = \"claude\"",
 		"missing model":       "[agents.auditor]\ndir = \"agents/auditor\"",
 		"bad model alias":     "[agents.auditor]\nmodel = \"Claude!\"",
 		"undefined handle":    "[agents.auditor]\nmodel = \"claude\"\n[agent]\nprofiles = [\"trader\"]",

@@ -64,6 +64,10 @@ _Avoid_: agent (that is the running thing, not its definition), persona, bot, wo
 The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`.
 _Avoid_: agent name, username, alias (that is a Group's, Network's or Model's local label)
 
+**Mention**:
+`@` and a Handle in talk, which summons that agent where the message is sent. Found from the text alone, case-insensitively and at a word boundary, never by matching against the Handles that exist; `\@` writes one without summoning. A person's mention that names no included Handle is refused; an agent's is skipped.
+_Avoid_: tag, ping, at-reference
+
 **Key**:
 One threshold public key held jointly by a Group, together with the per-Node shares of it. Identified by its curve and that public key, not by the Session that minted it; exists for ECDSA or Ed25519 signing.
 _Avoid_: keypair, wallet, wallet key

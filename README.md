@@ -209,7 +209,7 @@ defios conversation send --key ecdsa:<hex> --handle @auditor --depth 2 "and so d
 
 `--depth` defaults to 1, works only with `--handle`, and must be between 1 and `max_depth`. Leaving out `--handle` means the message is a person's. `serve` checks the same rules for any client of its socket.
 
-A person's message that mentions an agent (`@` followed by a Handle, with no letter, digit or `@` right before the `@` and no letter or digit right after the Handle, so neither `a@b.com` nor `@auditorX` is a mention, while `@auditor--` mentions `auditor`) must name a Handle included where it is sent. Otherwise the send exits 1, names the Handle and lists the included ones, and nothing is appended:
+A person's message that mentions an agent must name a Handle included where it is sent. Otherwise the send exits 1, names the Handle and lists the included ones, and nothing is appended. A mention is `@` and a Handle, case-insensitive, at a word boundary: `@Auditor,` and `@auditor--` mention `auditor`, while `a@b.com` and `@auditoré` are not mentions. Write `\@auditor` to name an agent without summoning it. [ADR 0016](docs/adr/0016-what-a-mention-is.md) gives the full rule, and [`docs/mentions/vectors.json`](docs/mentions/vectors.json) the cases a client should pass:
 
 ```bash
 defios conversation send --key ecdsa:<hex> "@nobody, take a look"

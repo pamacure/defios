@@ -365,7 +365,7 @@ model = "claude"
 profiles = ["auditor"]
 `)
 	ctx := context.Background()
-	for _, text := range []string{"@scribe, look", "@auditor and @nobody", "@user hi"} {
+	for _, text := range []string{"@scribe, look", "@Scribe?", "@auditor and @nobody", "@user hi"} {
 		_, err := a.client().ConversationSend(ctx, text, nil)
 		if !errors.Is(err, serve.ErrBadHandle) || !strings.Contains(err.Error(), "@auditor") {
 			t.Errorf("send %q = %v, want ErrBadHandle listing @auditor", text, err)
@@ -393,12 +393,12 @@ profiles = ["auditor"]
 		t.Fatal(err)
 	}
 
-	for _, text := range []string{"ask @auditor, @auditor", "mail a@b.com", "no one"} {
+	for _, text := range []string{"ask @auditor, @auditor", "@Auditor?", `quoting \@scribe`, "mail a@b.com", "no one"} {
 		if _, err := a.client().ConversationSend(ctx, text, nil); err != nil {
 			t.Fatalf("send %q: %v", text, err)
 		}
 	}
-	if rows := b.groupLevelRows(t, gid, 3); len(rows) != 3 {
-		t.Fatalf("%d group-level rows, want the 3 that resolve", len(rows))
+	if rows := b.groupLevelRows(t, gid, 5); len(rows) != 5 {
+		t.Fatalf("%d group-level rows, want the 5 that resolve", len(rows))
 	}
 }

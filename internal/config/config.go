@@ -17,6 +17,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"defios.com/internal/group"
+	"defios.com/internal/mention"
 	"defios.com/internal/model"
 	"defios.com/internal/secret"
 )
@@ -213,18 +214,15 @@ func (c Config) validateAgents() error {
 	return nil
 }
 
-// ValidateHandle checks a Handle: the alias rule, ending in a letter or
-// digit, since a mention takes a trailing "-" or "_" as punctuation, and not
-// "user", which is how a person's talk is shown (ADR 0015).
+// ValidateHandle checks a Handle against ADR 0016's grammar, so every Handle
+// a config defines can be mentioned, and that it is not "user", which is how
+// a person's talk is shown.
 func ValidateHandle(h string) error {
 	if h == "user" {
 		return errors.New(`"user" is reserved for a person and cannot be a Handle`)
 	}
-	if err := group.ValidateAlias(h); err != nil {
-		return fmt.Errorf("handle: %w", err)
-	}
-	if strings.HasSuffix(h, "-") || strings.HasSuffix(h, "_") {
-		return fmt.Errorf("handle: %q must end in a letter or digit, so a mention can name it", h)
+	if !mention.ValidHandle(h) {
+		return fmt.Errorf("handle: %q is not a valid Handle; use 1–64 chars of [a-z0-9] runs joined by single - or _", h)
 	}
 	return nil
 }
