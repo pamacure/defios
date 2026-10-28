@@ -53,8 +53,16 @@ A named value a Node's config refers to but never contains, such as an API key o
 _Avoid_: credential (that is what a Secret often holds), env var, vault entry
 
 **Workspace**:
-A Node's local directory of settings and agent material for one Group, or for one Conversation within it: a config that a Conversation's may partly override, plus markdown describing the agent's purpose. Never replicated; two Nodes may configure the same Conversation differently.
-_Avoid_: profile, project, config dir
+A Node's local directory of settings for one Group, or for one Conversation within it: a config that a Conversation's may partly override. Never replicated; two Nodes may configure the same Conversation differently. An agent's markdown lives in its Agent Profile, not here.
+_Avoid_: profile, project, config dir, profile directory
+
+**Agent Profile**:
+One agent persona a Node can summon into talk: a profile directory holding its system prompt, and the Model it runs on, that a Group's config binds to a Handle. Node-local and never replicated; one profile may serve any of the Node's Groups and Keys, but answers only in a Conversation (or Group-level talk) whose config includes its Handle.
+_Avoid_: agent (that is the running thing, not its definition), persona, bot, workspace
+
+**Handle**:
+The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`.
+_Avoid_: agent name, username, alias (that is a Group's, Network's or Model's local label)
 
 **Key**:
 One threshold public key held jointly by a Group, together with the per-Node shares of it. Identified by its curve and that public key, not by the Session that minted it; exists for ECDSA or Ed25519 signing.
