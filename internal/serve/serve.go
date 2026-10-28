@@ -82,6 +82,9 @@ type Options struct {
 	// os.Getenv; nil Secrets is none.
 	Getenv  func(string) string
 	Secrets func() (map[string]string, error)
+	// AgentBackoff is the wait before an agent's first retry, doubling
+	// after each; zero is a second (ADR 0015).
+	AgentBackoff time.Duration
 }
 
 // Run binds the socket and answers the local API at once, then joins the
@@ -168,8 +171,10 @@ type server struct {
 	sessionCancel context.CancelFunc
 	sessionDone   chan struct{}
 
-	watchCancel context.CancelFunc // stops watchWorkspaces and keepPruned
+	watchCancel context.CancelFunc // stops watchWorkspaces, keepPruned and followMentions
 	watchDone   chan struct{}
+
+	chains chainHub // this Node's chains of agents, and their watchers
 }
 
 // bindSocket listens on path with mode 0600. A live listener there means

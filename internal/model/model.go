@@ -93,6 +93,10 @@ func validModelID(s string) bool {
 		strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || !unicode.IsPrint(r) }) < 0
 }
 
+// MsgTypes are the rows Fold reads: a reader folding Models asks the replica
+// for these only (cosl.Query.MsgTypes, ADR 0014).
+var MsgTypes = []uint32{cosl.TypeModelCreate, cosl.TypeModelUpdate, cosl.TypeModelRemove}
+
 // Fold replays rows in order into the live Models, sorted by alias. A
 // message that does not apply to the state it meets is skipped, identically
 // on every Node: a create of a live alias (the create race), an update of an

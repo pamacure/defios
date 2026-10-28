@@ -208,3 +208,40 @@ func TestFullKeepsWhatTheFoldSupersedes(t *testing.T) {
 		t.Errorf("the live Recap's entry is not v.Live")
 	}
 }
+
+// The lean view is the live Recap, then the talk after it this replica still
+// holds, each with the Handle that wrote it; an agent reads it as its context.
+func TestLeanIsTheLiveRecapThenHeldTalk(t *testing.T) {
+	pruned := talk(t, 6, "gone")
+	pruned.Envelope = nil
+	rows := []cosl.Row{
+		talk(t, 1, "a"),
+		recapRow(t, 2, 1, "about a"),
+		rowOf(t, 3, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "b", ContentType: "text/plain", Handle: "auditor", Depth: 1}),
+		pruned,
+		talk(t, 7, "c"),
+	}
+	v, err := Fold(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lean, err := v.Lean()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Said{{Row: rows[1], Text: "about a"}, {Row: rows[2], Handle: "auditor", Text: "b"}, {Row: rows[4], Text: "c"}}
+	if !slices.EqualFunc(lean, want, func(a, b Said) bool { return a.Row.Seq == b.Row.Seq && a.Handle == b.Handle && a.Text == b.Text }) {
+		t.Fatalf("lean = %+v", lean)
+	}
+}
+
+// A lean line names a person by display name and an agent by display name
+// and Handle, and keeps to one line.
+func TestLeanLine(t *testing.T) {
+	if got := LeanLine("alice", "", "hi\nthere"); got != `alice: hi\nthere` {
+		t.Errorf("person: %q", got)
+	}
+	if got := LeanLine("alice", "auditor", "ok"); got != "alice/@auditor: ok" {
+		t.Errorf("agent: %q", got)
+	}
+}

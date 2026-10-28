@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +18,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
+	"defios.com/internal/mention"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/serve"
@@ -30,7 +34,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	var as sendAs
 	send := &cobra.Command{
 		Use:   "send <text>",
-		Short: "Append a message (requires serve). --key scopes it to that Key; --handle posts it as an agent",
+		Short: "Append a message (requires serve) and stream the replies of the agents it mentions; Ctrl-C cancels them. --key scopes it to that Key; --handle posts it as an agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			as.depthSet = cmd.Flags().Changed("depth")
@@ -40,6 +44,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	send.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	send.Flags().StringVar(&as.handle, "handle", "", "@handle: post as that agent, for an external runner; it must be included here")
 	send.Flags().Uint32Var(&as.depth, "depth", 1, "with --handle, the reply's depth in its chain: 1 to max_depth")
+	send.Flags().BoolVar(&as.detach, "detach", false, "return once the message commits, without streaming the agents it mentions")
 	root.AddCommand(send)
 	var opts logOptions
 	log := &cobra.Command{
@@ -82,11 +87,12 @@ func conversationCommand(g *globals) *cobra.Command {
 	return root
 }
 
-// sendAs is `conversation send`'s --handle and --depth.
+// sendAs is `conversation send`'s --handle, --depth and --detach.
 type sendAs struct {
 	handle   string
 	depth    uint32
 	depthSet bool
+	detach   bool
 }
 
 // parseHandle is the Handle the flags name, without its "@", or "" for a
@@ -129,20 +135,110 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 		conv = id
 	}
 	client := serve.Client{Socket: g.paths().Socket}
+	ctx := cmd.Context()
+	// A person's mention runs a chain of agents. Watch before sending, so
+	// the chain cannot start unseen (ADR 0015).
+	var stream *serve.ChainStream
+	if handle == "" && !as.detach && len(mention.Handles(text)) > 0 {
+		if stream, err = client.ConversationStream(ctx, conv); err != nil {
+			return sendError(err)
+		}
+		defer stream.Close()
+	}
 	var v serve.SendView
 	if handle == "" {
-		v, err = client.ConversationSend(cmd.Context(), text, conv)
+		v, err = client.ConversationSend(ctx, text, conv)
 	} else {
-		v, err = client.ConversationSendAs(cmd.Context(), text, handle, as.depth, conv)
+		v, err = client.ConversationSendAs(ctx, text, handle, as.depth, conv)
 	}
 	if err != nil {
 		return sendError(err)
 	}
-	if g.json {
+	if g.json && stream != nil {
+		if err := json.NewEncoder(g.app.Stdout).Encode(v); err != nil {
+			return err
+		}
+	} else if g.json {
 		return g.emitJSON(v)
+	} else {
+		fmt.Fprintf(g.app.Stdout, "sent as seq %d (msg_id %s)\n", v.Seq, v.MsgID)
 	}
-	fmt.Fprintf(g.app.Stdout, "sent as seq %d (msg_id %s)\n", v.Seq, v.MsgID)
-	return nil
+	if stream == nil {
+		return nil
+	}
+	err = followChain(g, stream, v.Seq)
+	if ctx.Err() != nil {
+		// Ctrl-C: cancel this message's chain, running or still queued.
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, cerr := client.ConversationCancel(cctx, conv, v.Seq); cerr != nil {
+			return exitOperationalf("interrupted, but cancelling the agents failed: %w", cerr)
+		}
+		return exitOperationalf("cancelled: nothing is committed for the agent that was answering, and the rest of the chain is dropped; your message stays")
+	}
+	return err
+}
+
+// followChain prints the chain the message at seq started, until it ends:
+// each agent's reply as it streams, labelled @handle:, or under --json each
+// event as a line. Other chains in the Conversation are not this send's.
+func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
+	p := g.out()
+	out := g.app.Stdout
+	enc := json.NewEncoder(out)
+	var handle string
+	var failed error
+	for {
+		ev, err := stream.Next()
+		if err != nil {
+			return exitOperationalf("lost the serve while the agents were answering: %w; check `conversation log`", err)
+		}
+		if ev.Chain != seq {
+			continue
+		}
+		if g.json {
+			if err := enc.Encode(ev); err != nil {
+				return err
+			}
+		}
+		switch ev.Type {
+		case serve.EventAgentStart:
+			handle = ev.Handle
+			if !g.json {
+				fmt.Fprint(out, p.primary("@"+handle+":")+" ")
+			}
+		case serve.EventAgentDelta:
+			if !g.json {
+				fmt.Fprint(out, ev.Text)
+			}
+		case serve.EventAgentReset:
+			if !g.json {
+				fmt.Fprintln(out, "\n"+p.dim("[retrying; the reply starts over]"))
+				fmt.Fprint(out, p.primary("@"+handle+":")+" ")
+			}
+		case serve.EventAgentCommit:
+			if !g.json {
+				fmt.Fprintln(out)
+			}
+		case serve.EventAgentSkipped:
+			if !g.json {
+				fmt.Fprintln(out, p.dim("@"+ev.Handle+" skipped: "+ev.Reason))
+			}
+		case serve.EventAgentError:
+			if !g.json && handle != "" {
+				fmt.Fprintln(out)
+			}
+			failed = exitOperationalf("@%s: %s; nothing is committed for it", ev.Handle, ev.Error)
+		case serve.EventChainEnd:
+			if failed == nil && ev.Error != "" {
+				return exitOperationalf("%s; check `conversation log`", ev.Error)
+			}
+			if failed == nil && ev.Cancelled {
+				return exitOperationalf("the agents were cancelled; nothing is committed for the one that was answering")
+			}
+			return failed
+		}
+	}
 }
 
 func runConversationRecap(cmd *cobra.Command, g *globals, keyQuery string, baseSeq uint64, text string) error {
@@ -445,11 +541,7 @@ func emitLean(g *globals, lines []messageLine) error {
 	}
 	p := g.out()
 	for _, l := range lean {
-		who := l.SenderDisplayName
-		if l.Handle != "" {
-			who += "/@" + l.Handle
-		}
-		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(who+":"), cosl.EscapeNewlines(l.Text))
+		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(recap.Speaker(l.SenderDisplayName, l.Handle)+":"), cosl.EscapeNewlines(l.Text))
 	}
 	return nil
 }

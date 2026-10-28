@@ -61,13 +61,20 @@ func (s *server) startReplica() {
 }
 
 // startWatchers runs what follows the replica on this Node's behalf: the
-// Conversation Workspaces and the prune policy, which follows config.toml
-// and does nothing while it is off.
+// Conversation Workspaces, the prune policy, which follows config.toml
+// and does nothing while it is off, and the agents a mention summons. The
+// mentions follower takes the replica as it is now before any send can
+// commit, so it misses none of this serve's and replays none before it.
 func (s *server) startWatchers(store *cosl.Store) {
 	ctx, cancel := context.WithCancel(s.ctx)
+	mentions := store.Follow(cosl.FallbackTick)
+	if err := mentions.Act(func(cosl.Wake) error { return nil }); err != nil {
+		s.opts.Logf("serve: agent mentions: %v", err)
+	}
 	var wg sync.WaitGroup
 	wg.Go(func() { s.watchWorkspaces(ctx, store) })
 	wg.Go(func() { s.keepPruned(ctx, store) })
+	wg.Go(func() { s.followMentions(ctx, store, mentions) })
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	s.watchCancel, s.watchDone = cancel, done

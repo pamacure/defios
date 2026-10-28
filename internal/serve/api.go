@@ -172,6 +172,7 @@ func (s *server) localHandler() http.Handler {
 		s.answer(w, v, err)
 	})
 	s.conversationRoutes(mux)
+	s.chainRoutes(mux)
 	s.networkRoutes(mux)
 	s.modelRoutes(mux)
 	s.signRoutes(mux)

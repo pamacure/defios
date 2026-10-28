@@ -215,6 +215,15 @@ A person's message that mentions an agent must name a Handle included where it i
 defios conversation send --key ecdsa:<hex> "@nobody, take a look"
 ```
 
+When a mention resolves, this machine's `serve` runs the agent and no other machine does. The agent gets its profile's `SYSTEM.md` and a short preamble from `serve` as its system prompt, and the talk in the `--lean` format as its message. Its Model alias must be on the log (`model add`). The key is the Conversation's `[providers.<provider>] api_key`, and it is sent only to this machine's own `base_url` or to the provider's default. `send` stays attached and streams each reply as `@handle: ...` until the chain ends. Each reply commits as one message from that Handle at depth 1. The agents a message mentions run one at a time, in mention order, and each sees the replies before it. A mention sent while another chain is running in that Conversation waits for it. Rate limits, overload, 5xx responses and dropped connections are retried up to 3 times. Any other error stops the chain, commits nothing for that agent and exits 2. Ctrl-C cancels the chain: nothing is committed for the agent that was answering, the rest are dropped, and your message stays. `--detach` returns once your message commits:
+
+```bash
+defios conversation send --key ecdsa:<hex> "@auditor, is this transfer sane?"
+defios conversation send --detach "@auditor, summarise the day"
+```
+
+A client can watch the same chains with `GET /v1/conversation/stream` on the socket (newline-delimited JSON events) and cancel one with `POST /v1/conversation/cancel`, as [ADR 0015](docs/adr/0015-agent-profiles-handles-and-agent-chains.md) describes.
+
 An unknown Key exits 1:
 
 ```bash

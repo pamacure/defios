@@ -1,0 +1,575 @@
+package serve
+
+import (
+	"bufio"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+
+	"defios.com/internal/agent"
+	"defios.com/internal/config"
+	"defios.com/internal/cosl"
+	"defios.com/internal/errlog"
+	"defios.com/internal/group"
+	"defios.com/internal/key"
+	"defios.com/internal/mention"
+	"defios.com/internal/model"
+	"defios.com/internal/raftx"
+	"defios.com/internal/recap"
+	"defios.com/internal/secret"
+	coslv1 "defios.com/proto/cosl/v1"
+)
+
+// Chain events on GET /v1/conversation/stream, one JSON object per line
+// (ADR 0015). Every event names its chain by the seq of the person's message
+// that started it.
+const (
+	EventChainStart   = "chain.start"
+	EventAgentStart   = "agent.start"   // handle, depth
+	EventAgentDelta   = "agent.delta"   // text
+	EventAgentReset   = "agent.reset"   // a retry starts the reply over
+	EventAgentSkipped = "agent.skipped" // handle, reason
+	EventAgentCommit  = "agent.commit"  // seq
+	EventAgentError   = "agent.error"   // handle, error
+	EventChainEnd     = "chain.end"     // cancelled
+)
+
+// ChainEvent is one event of a chain of agents answering a mention.
+type ChainEvent struct {
+	Type   string `json:"type"`
+	Chain  uint64 `json:"chain"` // the seq of the message that started it
+	Handle string `json:"handle,omitempty"`
+	Depth  uint32 `json:"depth,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Seq    uint64 `json:"seq,omitempty"` // agent.commit: the reply's row
+	// Cancelled, on chain.end, means the chain was cut short by a cancel.
+	// Error, on chain.end, means the serve stopped and the chain is lost.
+	Cancelled bool `json:"cancelled,omitempty"`
+}
+
+// watcherBuffer is how many events a watcher may fall behind by before it
+// is dropped: a stuck client must not hold up a chain.
+const watcherBuffer = 4096
+
+// chainHub runs this Node's chains, one at a time per Conversation, and
+// fans their events out to watchers. Its zero value is ready; it outlives a
+// replica, so a watcher stays attached across a restart of Raft.
+type chainHub struct {
+	mu    sync.Mutex
+	convs map[string]*conversationChains // by hex Conversation ID, "" for Group-level; only while in use
+}
+
+// conversationChains is one Conversation's queue and watchers.
+type conversationChains struct {
+	queue    []*chain // queue[0] is running while running is set
+	running  bool
+	watchers map[chan ChainEvent]struct{}
+}
+
+// chain is the agents one person's message summons, in mention order.
+type chain struct {
+	seq     uint64
+	conv    []byte
+	handles []string
+	ctx     context.Context
+	cancel  context.CancelFunc
+	// cancelled tells a cancel from the serve stopping; both end ctx.
+	cancelled atomic.Bool
+}
+
+func conversationKey(conv []byte) string { return hex.EncodeToString(conv) }
+
+// conversation is key's entry, made if create is set; nil otherwise.
+func (h *chainHub) conversation(key string, create bool) *conversationChains {
+	cc, ok := h.convs[key]
+	if !ok && create {
+		if h.convs == nil {
+			h.convs = map[string]*conversationChains{}
+		}
+		cc = &conversationChains{watchers: map[chan ChainEvent]struct{}{}}
+		h.convs[key] = cc
+	}
+	return cc
+}
+
+// release drops key's entry once nothing queues or watches there.
+func (h *chainHub) release(key string, cc *conversationChains) {
+	if !cc.running && len(cc.queue) == 0 && len(cc.watchers) == 0 {
+		delete(h.convs, key)
+	}
+}
+
+// enqueue queues c behind its Conversation's chains, under ctx, and starts
+// the Conversation's worker in wg if none runs.
+func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, run func(*chain)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c.ctx, c.cancel = context.WithCancel(ctx)
+	key := conversationKey(c.conv)
+	cc := h.conversation(key, true)
+	cc.queue = append(cc.queue, c)
+	if cc.running {
+		return
+	}
+	cc.running = true
+	wg.Go(func() {
+		for {
+			h.mu.Lock()
+			if len(cc.queue) == 0 {
+				cc.running = false
+				h.release(key, cc)
+				h.mu.Unlock()
+				return
+			}
+			next := cc.queue[0]
+			h.mu.Unlock()
+			run(next)
+			next.cancel()
+			h.mu.Lock()
+			cc.queue = cc.queue[1:]
+			h.mu.Unlock()
+		}
+	})
+}
+
+// cancel cancels the chain started by seq in the Conversation, running or
+// queued, or with seq 0 the running one. It reports whether there was one.
+func (h *chainHub) cancel(conv []byte, seq uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cc := h.conversation(conversationKey(conv), false)
+	if cc == nil {
+		return false
+	}
+	for i, c := range cc.queue {
+		if c.seq == seq || (seq == 0 && i == 0 && cc.running) {
+			c.cancelled.Store(true)
+			c.cancel()
+			return true
+		}
+	}
+	return false
+}
+
+// subscribe adds a watcher of the Conversation's chains; stop removes it.
+// The channel closes if the watcher falls too far behind.
+func (h *chainHub) subscribe(conv []byte) (events <-chan ChainEvent, stop func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ch := make(chan ChainEvent, watcherBuffer)
+	key := conversationKey(conv)
+	cc := h.conversation(key, true)
+	cc.watchers[ch] = struct{}{}
+	return ch, func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if _, ok := cc.watchers[ch]; ok {
+			delete(cc.watchers, ch)
+			close(ch)
+		}
+		h.release(key, cc)
+	}
+}
+
+func (h *chainHub) publish(conv []byte, ev ChainEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cc := h.conversation(conversationKey(conv), false)
+	if cc == nil {
+		return
+	}
+	for ch := range cc.watchers {
+		select {
+		case ch <- ev:
+		default:
+			delete(cc.watchers, ch)
+			close(ch)
+		}
+	}
+}
+
+// followMentions runs a chain for each of this Node's people's messages
+// that mentions agents, as it commits, until ctx ends; then it waits for
+// the chains it started. follow has already acted on the replica as it was
+// when the serve started: a chain cut off by a restart is lost, never
+// replayed (ADR 0015), and so is a mention in history a restore brings.
+func (s *server) followMentions(ctx context.Context, store *cosl.Store, follow *cosl.Follower) {
+	var chains sync.WaitGroup
+	defer chains.Wait()
+	errs := errlog.New(s.opts.Logf, "serve: agent mentions")
+	for follow.Wait(ctx) {
+		errs.Report(follow.Act(func(wk cosl.Wake) error {
+			if wk.Rescan {
+				return nil
+			}
+			return s.startChains(ctx, &chains, store, wk.Since)
+		}))
+	}
+}
+
+// startChains queues a chain, in wg, for each person's message from this
+// Node after seq that mentions agents.
+func (s *server) startChains(ctx context.Context, wg *sync.WaitGroup, store *cosl.Store, since uint64) error {
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, AfterSeq: since})
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if r.Sender != s.opts.Node.NodeID || r.Pruned() {
+			continue
+		}
+		env, err := r.Decode()
+		if err != nil {
+			return err
+		}
+		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+		if err != nil {
+			continue // the FSM does not parse payloads; this one says nothing
+		}
+		ff := msg.(*coslv1.AppFreeform)
+		if ff.Handle != "" {
+			continue // an agent's mentions do not summon yet (#66)
+		}
+		if handles := mention.Handles(ff.Text); len(handles) > 0 {
+			s.chains.enqueue(ctx, wg, &chain{seq: r.Seq, conv: r.ConversationID, handles: handles}, s.runChain)
+		}
+	}
+	return nil
+}
+
+// runChain runs each agent c summons in turn, each reply committed before
+// the next starts. It stops at the first error or a cancel, and commits
+// nothing for the agent it stopped at.
+func (s *server) runChain(c *chain) {
+	publish := func(ev ChainEvent) {
+		ev.Chain = c.seq
+		s.chains.publish(c.conv, ev)
+	}
+	if c.ctx.Err() == nil {
+		publish(ChainEvent{Type: EventChainStart})
+		for _, h := range c.handles {
+			err := s.runAgent(c.ctx, c.conv, h, 1, publish)
+			if c.ctx.Err() != nil {
+				break
+			}
+			if err != nil {
+				s.opts.Logf("serve: @%s answering seq %d: %v", h, c.seq, err)
+				publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
+				break
+			}
+		}
+	}
+	end := ChainEvent{Type: EventChainEnd, Cancelled: c.cancelled.Load()}
+	if c.ctx.Err() != nil && !end.Cancelled {
+		end.Error = "the serve stopped; this chain is lost and will not resume"
+	}
+	publish(end)
+}
+
+// errSkipped is an agent the chain passes over: it is no longer included.
+var errSkipped = errors.New("skipped")
+
+// runAgent generates the agent's reply to the talk so far and commits it.
+func (s *server) runAgent(ctx context.Context, conv []byte, handle string, depth uint32, publish func(ChainEvent)) error {
+	_, store, ok := s.current()
+	if !ok {
+		return ErrNoReplica
+	}
+	req, err := s.agentRequest(store, conv, handle, depth)
+	if errors.Is(err, errSkipped) {
+		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	publish(ChainEvent{Type: EventAgentStart, Handle: handle, Depth: depth})
+	client := agent.Client{Backoff: s.opts.AgentBackoff}
+	text, err := client.Generate(ctx, req, agent.Events{
+		Delta: func(t string) { publish(ChainEvent{Type: EventAgentDelta, Text: t}) },
+		Reset: func() { publish(ChainEvent{Type: EventAgentReset}) },
+	})
+	if err != nil {
+		return err
+	}
+	// Once the reply is whole, a cancel no longer cuts it: an append in
+	// flight could land anyway, and agent.commit must report it if it does.
+	commit := context.WithoutCancel(ctx)
+	v, err := s.conversationSend(commit, text, handle, depth, conv)
+	if err != nil {
+		return err
+	}
+	// The next agent reads this reply from the replica.
+	wait, cancel := context.WithTimeout(commit, raftx.ApplyTimeout)
+	defer cancel()
+	if err := waitApplied(wait, store, v.Seq); err != nil {
+		return err
+	}
+	publish(ChainEvent{Type: EventAgentCommit, Seq: v.Seq})
+	return nil
+}
+
+// waitApplied returns once the replica has applied seq.
+func waitApplied(ctx context.Context, store *cosl.Store, seq uint64) error {
+	for {
+		changed := store.Changed()
+		m, err := store.Mark()
+		if err != nil {
+			return err
+		}
+		if m.LastAppliedSeq >= seq {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+// agentRequest is the call to the Model that answers as handle: its
+// SYSTEM.md and the serve's preamble, then the talk so far in the lean
+// format, sent where this Node's config says with its key (ADR 0013).
+func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, error) {
+	_, ws, inc, err := s.included(store, conv)
+	if err != nil {
+		return agent.Request{}, err
+	}
+	i := slices.IndexFunc(inc.Profiles, func(p config.ResolvedProfile) bool { return p.Handle == handle })
+	if i < 0 {
+		return agent.Request{}, errSkipped
+	}
+	p := inc.Profiles[i]
+	system, err := os.ReadFile(filepath.Join(p.Dir, "SYSTEM.md"))
+	if err != nil {
+		return agent.Request{}, fmt.Errorf("@%s's profile: %w", handle, err)
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: model.MsgTypes})
+	if err != nil {
+		return agent.Request{}, err
+	}
+	models, err := model.Fold(rows)
+	if err != nil {
+		return agent.Request{}, err
+	}
+	m, err := model.Get(models, p.Model)
+	if err != nil {
+		return agent.Request{}, fmt.Errorf("@%s runs on %w", handle, err)
+	}
+	local := ws.Providers[m.Provider]
+	base, withKey := model.Endpoint(m, local.BaseURL)
+	req := agent.Request{Provider: m.Provider, URL: model.CallURL(m, base), Model: m.ModelID}
+	if withKey && local.APIKey != "" {
+		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
+		if req.APIKey, err = r.Resolve(local.APIKey); err != nil {
+			return agent.Request{}, fmt.Errorf("[providers.%s] api_key: %w", m.Provider, err)
+		}
+	}
+	where, err := s.whereSaid(store, conv)
+	if err != nil {
+		return agent.Request{}, err
+	}
+	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + preamble(handle, depth, inc, where)
+	if req.Prompt, err = s.talkSoFar(store, conv); err != nil {
+		return agent.Request{}, err
+	}
+	return req, nil
+}
+
+// whereSaid names where conv's talk is: a Key's Conversation by its curve
+// and short public key, or Group-level talk.
+func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
+	if conv == nil {
+		return "Group-level talk, which belongs to no Key", nil
+	}
+	keys, err := key.Read(store)
+	if err != nil {
+		return "", err
+	}
+	for _, k := range keys {
+		if k.Conversation() == conversationKey(conv) {
+			pub := hex.EncodeToString(k.PublicKey)
+			return fmt.Sprintf("the Conversation of the %s Key %s", k.Curve, pub[:min(12, len(pub))]), nil
+		}
+	}
+	return "", ErrNoConversation
+}
+
+// preamble is what the serve tells an agent after its SYSTEM.md: who it is,
+// where it is answering, how the talk reads, and either the Handles it may
+// summon or that it may summon none at its depth (ADR 0015).
+func preamble(handle string, depth uint32, inc config.Included, where string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
+	b.WriteString("The talk so far follows, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for an agent's.\n")
+	fmt.Fprintf(&b, "Your reply is committed as one message from @%s.\n", handle)
+	var others []config.ResolvedProfile
+	for _, p := range inc.Profiles {
+		if p.Handle != handle {
+			others = append(others, p)
+		}
+	}
+	if int(depth) >= inc.MaxDepth || len(others) == 0 {
+		b.WriteString("You may summon no agent at your depth: an @handle in your reply summons nobody.\n")
+	} else {
+		fmt.Fprintf(&b, "You may summon another agent by mentioning it: %s.\n", listHandles(others))
+	}
+	return b.String()
+}
+
+// talkSoFar is conv's talk as `conversation log --lean` prints it.
+func (s *server) talkSoFar(store *cosl.Store, conv []byte) (string, error) {
+	q := cosl.Query{GroupLevel: conv == nil, ConversationID: conv}
+	rows, err := store.Log(q)
+	if err != nil {
+		return "", err
+	}
+	v, err := recap.Fold(rows)
+	if err != nil {
+		return "", err
+	}
+	said, err := v.Lean()
+	if err != nil {
+		return "", err
+	}
+	rec, _ := s.slot.Current()
+	lines := make([]string, len(said))
+	for i, l := range said {
+		lines[i] = recap.LeanLine(displayName(rec, l.Row), l.Handle, l.Text)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// displayName is the name the Roster pins for r's sender.
+func displayName(rec *group.Record, r cosl.Row) string {
+	if rec != nil {
+		if n, ok := rec.Roster().Lookup(r.Sender); ok {
+			return n.DisplayName
+		}
+	}
+	return r.Sender.String()[:8]
+}
+
+type cancelRequest struct {
+	ConversationID string `json:"conversation_id,omitempty"`
+	// Chain is the seq of the message that started the chain to cancel,
+	// running or queued; 0 is whichever is running.
+	Chain uint64 `json:"chain,omitempty"`
+}
+
+// CancelView reports whether a cancel found a chain to cancel.
+type CancelView struct {
+	Cancelled bool `json:"cancelled"`
+}
+
+func (s *server) chainRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/conversation/stream", func(w http.ResponseWriter, r *http.Request) {
+		conv, err := requestConversation(r.URL.Query().Get("conversation_id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		events, stop := s.chains.subscribe(conv)
+		defer stop()
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		if flusher != nil {
+			flusher.Flush() // the watcher is subscribed once headers arrive
+		}
+		enc := json.NewEncoder(w)
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-s.ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok || enc.Encode(ev) != nil {
+					return
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+		}
+	})
+	mux.HandleFunc("POST /v1/conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
+		var req cancelRequest
+		if !s.readLocal(w, r, &req) {
+			return
+		}
+		conv, err := requestConversation(req.ConversationID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, CancelView{Cancelled: s.chains.cancel(conv, req.Chain)})
+	})
+}
+
+// ChainStream reads chain events from the serve until closed.
+type ChainStream struct {
+	resp *http.Response
+	dec  *json.Decoder
+}
+
+// Next is the next event; it blocks until one arrives or the stream ends.
+func (s *ChainStream) Next() (ChainEvent, error) {
+	var ev ChainEvent
+	err := s.dec.Decode(&ev)
+	return ev, err
+}
+
+// Close ends the stream.
+func (s *ChainStream) Close() error { return s.resp.Body.Close() }
+
+// ConversationStream watches the chains of agents in a Conversation (nil
+// for Group-level talk) on this Node. Every chain that starts after it
+// returns is seen from its start.
+func (c Client) ConversationStream(ctx context.Context, conversationID []byte) (*ChainStream, error) {
+	path := "/v1/conversation/stream"
+	if conversationID != nil {
+		path += "?conversation_id=" + hex.EncodeToString(conversationID)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://serve"+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	hc := c.http()
+	hc.Timeout = 0 // a stream lasts as long as its watcher
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w (no socket at %s)", ErrNotRunning, c.Socket)
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, localError(path, resp)
+	}
+	return &ChainStream{resp: resp, dec: json.NewDecoder(bufio.NewReader(resp.Body))}, nil
+}
+
+// ConversationCancel cancels the chain started by seq in a Conversation,
+// running or queued, or with chain 0 whichever is running. The person's
+// message stays; nothing is committed for the agent it stops.
+func (c Client) ConversationCancel(ctx context.Context, conversationID []byte, chain uint64) (CancelView, error) {
+	var v CancelView
+	req := cancelRequest{Chain: chain}
+	if conversationID != nil {
+		req.ConversationID = hex.EncodeToString(conversationID)
+	}
+	err := c.do(ctx, "/v1/conversation/cancel", req, &v)
+	return v, err
+}

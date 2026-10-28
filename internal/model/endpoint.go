@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 // DefaultBaseURL is the provider's own endpoint.
 func DefaultBaseURL(provider string) string {
 	switch provider {
@@ -25,4 +27,25 @@ func Endpoint(m Model, localBaseURL string) (url string, withKey bool) {
 	}
 	url = DefaultBaseURL(m.Provider)
 	return url, url != ""
+}
+
+// DefaultAPIPath is the provider's streaming API path under its base URL.
+func DefaultAPIPath(provider string) string {
+	switch provider {
+	case Anthropic:
+		return "/v1/messages"
+	case OpenAI:
+		return "/chat/completions"
+	}
+	return ""
+}
+
+// CallURL is base, as Endpoint gives it, joined with m's api_path or else the
+// provider's.
+func CallURL(m Model, base string) string {
+	path := m.APIPath
+	if path == "" {
+		path = DefaultAPIPath(m.Provider)
+	}
+	return strings.TrimRight(base, "/") + path
 }

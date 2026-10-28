@@ -17,29 +17,37 @@ import (
 // (a nil conversation) or a Key with no Workspace config.toml. Both are read
 // at each use, so an edit needs no restart.
 func (s *server) readConfig(store *cosl.Store, conversation []byte) (config.Config, config.Workspace, error) {
+	cfg, conv, _, err := s.readConfigFrom(store, conversation)
+	return cfg, conv, err
+}
+
+// readConfigFrom is readConfig, and the path of the Conversation's
+// config.toml, empty for Group-level talk or a Key with no Workspace.
+func (s *server) readConfigFrom(store *cosl.Store, conversation []byte) (config.Config, config.Workspace, string, error) {
 	p, alias := s.opts.Paths, s.opts.Alias
 	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config.Config{}, config.Workspace{}, err
+		return config.Config{}, config.Workspace{}, "", err
 	}
 	var id [32]byte
 	if len(conversation) != len(id) {
-		return cfg, config.Workspace{}, nil
+		return cfg, config.Workspace{}, "", nil
 	}
 	keys, err := key.Read(store)
 	if err != nil {
-		return config.Config{}, config.Workspace{}, err
+		return config.Config{}, config.Workspace{}, "", err
 	}
 	copy(id[:], conversation)
 	name, ok := key.WorkspaceNames(keys)[id]
 	if !ok {
-		return cfg, config.Workspace{}, nil
+		return cfg, config.Workspace{}, "", nil
 	}
-	conv, err := config.ReadWorkspace(p.ConversationConfigFile(alias, name))
+	path := p.ConversationConfigFile(alias, name)
+	conv, err := config.ReadWorkspace(path)
 	if err != nil {
-		return config.Config{}, config.Workspace{}, err
+		return config.Config{}, config.Workspace{}, "", err
 	}
-	return cfg, conv, nil
+	return cfg, conv, path, nil
 }
 
 // watchWorkspaces gives every minted Key's Conversation a Workspace in

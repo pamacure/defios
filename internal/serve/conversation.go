@@ -95,16 +95,12 @@ func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle st
 	if handle == "" {
 		return s.checkMentions(store, conversationID, depth, mention.Handles(text))
 	}
-	cfg, conv, err := s.readConfig(store, conversationID)
+	cfg, _, inc, err := s.included(store, conversationID)
 	if err != nil {
 		return err
 	}
 	if _, ok := cfg.Agents[handle]; !ok {
 		return fmt.Errorf("%w: no [agents.%s] is defined in this Group's config.toml", ErrBadHandle, handle)
-	}
-	inc, err := s.included(cfg, conv)
-	if err != nil {
-		return err
 	}
 	if !includes(inc, handle) {
 		return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent", ErrBadHandle, handle)
@@ -125,11 +121,7 @@ func (s *server) checkMentions(store *cosl.Store, conversationID []byte, depth u
 	if len(mentions) == 0 {
 		return nil
 	}
-	cfg, conv, err := s.readConfig(store, conversationID)
-	if err != nil {
-		return err
-	}
-	inc, err := s.included(cfg, conv)
+	_, _, inc, err := s.included(store, conversationID)
 	if err != nil {
 		return err
 	}
@@ -141,9 +133,27 @@ func (s *server) checkMentions(store *cosl.Store, conversationID []byte, depth u
 	return nil
 }
 
-func (s *server) included(cfg config.Config, conv config.Workspace) (config.Included, error) {
-	home, _ := os.UserHomeDir() // only for profile directories, unused here
-	return cfg.Included(conv, s.opts.Paths.Config, home)
+// included is what may answer where conversation's talk is sent, with the
+// Group's config and the Workspace merged for that place, all from one read.
+// Included sees only the merged Workspace, so an [agent] profiles entry that
+// names no [agents.*] table is reported here with the file that lists it.
+func (s *server) included(store *cosl.Store, conversation []byte) (config.Config, config.Workspace, config.Included, error) {
+	cfg, conv, convPath, err := s.readConfigFrom(store, conversation)
+	if err != nil {
+		return config.Config{}, config.Workspace{}, config.Included{}, err
+	}
+	home, _ := os.UserHomeDir()
+	inc, err := cfg.Included(conv, s.opts.Paths.Config, home)
+	if err != nil {
+		groupPath := s.opts.Paths.GroupConfigFile(s.opts.Alias)
+		if conv.Agent.Profiles != nil {
+			err = fmt.Errorf("%w: fix [agent] profiles in %s, or define it in %s", err, convPath, groupPath)
+		} else {
+			err = fmt.Errorf("%w: fix %s", err, groupPath)
+		}
+		return config.Config{}, config.Workspace{}, config.Included{}, err
+	}
+	return cfg, cfg.Workspace.Merge(conv), inc, nil
 }
 
 func includes(inc config.Included, handle string) bool {
