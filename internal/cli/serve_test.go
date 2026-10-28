@@ -27,6 +27,10 @@ func fakeServe(t *testing.T, dir string, nodes string) {
 	mux.HandleFunc("/v1/nodes", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(nodes))
 	})
+	mux.HandleFunc("/v1/usage", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"alias":"other","pid":4242,"uptime_ns":3723000000000,"user_cpu_ns":1500000000,"system_cpu_ns":250000000,` +
+			`"goroutines":37,"heap_in_use_bytes":4194304,"go_sys_bytes":16777216,"gc_count":9,"rss_bytes":12582912,"peak_rss_bytes":14680064}`))
+	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })

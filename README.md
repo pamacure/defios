@@ -4,7 +4,7 @@
 
 A self-hosted multi-party wallet. Two machines each run one Node, form a Group on a headscale tailnet, and mint a 2-of-2 ECDSA Key and a 2-of-2 Ed25519 Key. Talk between them is carried on the COSL.
 
-`serve` is the Node online: the Vault stays unlocked, the Node is on the tailnet, and Raft is running. Quit `serve` and the Node stops sending and receiving. The COSL replica stays on disk at the last applied row. Reads of that replica (`node inspect`, `group list`, `group inspect`, `session list`, `session inspect`, `key list`, `key inspect`, `conversation log`, `cosl log`, `cosl decode`) and `conversation prune` still work. Anything that appends, forms a Group, or runs a Session needs `serve`.
+`serve` is the Node online: the Vault stays unlocked, the Node is on the tailnet, and Raft is running. Quit `serve` and the Node stops sending and receiving. The COSL replica stays on disk at the last applied row. Reads of that replica (`node inspect`, `node usage`, `group list`, `group inspect`, `session list`, `session inspect`, `key list`, `key inspect`, `conversation log`, `cosl log`, `cosl decode`) and `conversation prune` still work. Anything that appends, forms a Group, or runs a Session needs `serve`.
 
 Run `serve` in one terminal and the other commands in a second terminal, as the same user. The local socket is mode `0600`.
 
@@ -57,13 +57,15 @@ defios group new personal --headscale https://headscale.example
 
 The alias (`personal` here) is local to this machine, must match `[a-z0-9][a-z0-9_-]{0,63}`, and never travels on the wire. A Node may hold any number of Groups, each on its own tailnet and with its own isolated state; `group new` focuses the one it creates. Switch the Current Group later with `defios group use <alias>` — it takes effect on the next `serve`, so a running `serve` keeps serving the Group it started on. `defios group list` shows every Group's alias, status, Group ID, and which is current (`*`).
 
-Read verbs (`group inspect`, `cosl log`, `conversation log`, `key list`, `key inspect`) accept `--group <alias>` to read any Group off disk regardless of which is current or served — all non-secret state is plaintext, and a Key's `share=yes` comes from that Group's own encrypted shares over the passphrase.
+Read verbs (`group inspect`, `node usage`, `cosl log`, `conversation log`, `key list`, `key inspect`) accept `--group <alias>` to read any Group off disk regardless of which is current or served — all non-secret state is plaintext, and a Key's `share=yes` comes from that Group's own encrypted shares over the passphrase.
 
 ```bash
 defios node inspect
 ```
 
 Record each Node ID. `group create` needs both.
+
+`defios node usage` prints what this Node takes up on the machine: the binary, `identity` and the Vault, and each Group's COSL (with row and pruned-row counts), Raft, tsnet, Vault files and Workspace, with data, config and grand totals. While `serve` runs it adds serve's PID, uptime, CPU time, RSS, Go heap and goroutines; otherwise it says `serve not running`. It is a one-shot snapshot; use `top` or your OS's monitor for a live view.
 
 ### 4. Serve
 

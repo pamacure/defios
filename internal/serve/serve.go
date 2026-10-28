@@ -111,7 +111,7 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	s := &server{opts: o, self: self, slot: slot, ctx: ctx}
+	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now()}
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()
@@ -158,6 +158,7 @@ type server struct {
 	slot      *group.Slot       // the Current Group this serve serves (§1.2)
 	tailnetUp atomic.Bool       // set once Up and the formation listener succeed
 	ctx       context.Context   // Run's, set before any handler runs; bounds the join
+	started   time.Time         // when Run began, for `node usage` uptime
 
 	replicaMu sync.Mutex
 	replica   *raftx.Replica // nil until the Group is valid

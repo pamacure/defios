@@ -327,3 +327,25 @@ func TestNodesDiscoversVerifiedPeersOnly(t *testing.T) {
 		t.Fatalf("node = %+v", nodes[0])
 	}
 }
+
+// serve measures itself: the process and Go runtime, labelled with the
+// Group it serves. CLI verbs are short-lived clients, so this is the
+// Node's memory.
+func TestUsageOverSocket(t *testing.T) {
+	a := newNode(t, "alice")
+	a.start(t)
+
+	u, err := serve.Client{Socket: a.paths.Socket}.Usage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Alias != group.ImplicitAlias || u.PID != os.Getpid() {
+		t.Fatalf("alias %q pid %d, want %q %d", u.Alias, u.PID, group.ImplicitAlias, os.Getpid())
+	}
+	if u.Uptime <= 0 || u.Goroutines == 0 || u.HeapInUse == 0 || u.Sys < u.HeapInUse {
+		t.Fatalf("usage = %+v", u)
+	}
+	if u.UserCPU == nil || u.PeakRSS == nil {
+		t.Fatalf("CPU %v peak RSS %v, want both on Unix", u.UserCPU, u.PeakRSS)
+	}
+}

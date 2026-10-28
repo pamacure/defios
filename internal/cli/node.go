@@ -31,6 +31,14 @@ func nodeCommand(g *globals) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runNodeList(cmd, g) },
 	})
+	usage := &cobra.Command{
+		Use:   "usage",
+		Short: "Print this Node's disk use, and serve's memory and CPU when it runs",
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runNodeUsage(cmd, g) },
+	}
+	bindGroupFlag(g, usage)
+	node.AddCommand(usage)
 	return node
 }
 

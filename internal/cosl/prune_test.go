@@ -48,6 +48,9 @@ func TestPruneDestroysOnlyCoveredTalk(t *testing.T) {
 	if m, _ := f.store.Meta(); m != meta {
 		t.Fatalf("meta %+v, want %+v unchanged", m, meta)
 	}
+	if c, err := f.store.Counts(); err != nil || c != (cosl.Counts{Rows: 5, Pruned: 2}) {
+		t.Fatalf("Counts = %+v, %v; want 5 rows, 2 pruned", c, err)
+	}
 	if n, err := f.store.Prune(nil, 4); err != nil || n != 0 {
 		t.Fatalf("second Prune = %d, %v; want 0", n, err)
 	}

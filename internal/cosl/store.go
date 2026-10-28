@@ -315,6 +315,23 @@ func (s *Store) Prune(conversationID []byte, through uint64) (int, error) {
 	return int(n), nil
 }
 
+// Counts is how many rows a replica holds and how many of those this Node
+// has pruned, which is what explains its size next to a sibling's.
+type Counts struct {
+	Rows   uint64 `json:"rows"`
+	Pruned uint64 `json:"pruned_rows"`
+}
+
+// Counts reads the replica's row and pruned-row counts.
+func (s *Store) Counts() (Counts, error) {
+	var c Counts
+	err := s.db.QueryRow(`SELECT COUNT(*), COUNT(*) - COUNT(envelope) FROM cosl`).Scan(&c.Rows, &c.Pruned)
+	if err != nil {
+		return Counts{}, fmt.Errorf("cosl: counts: %w", err)
+	}
+	return c, nil
+}
+
 // Restores is how many times Restore has rewritten this replica since Open.
 // Each one may bring back payloads this Node pruned.
 func (s *Store) Restores() uint64 { return s.restores.Load() }

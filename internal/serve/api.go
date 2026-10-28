@@ -178,6 +178,7 @@ func (s *server) localHandler() http.Handler {
 	s.broadcastRoutes(mux)
 	s.sessionRoutes(mux)
 	s.snapshotRoutes(mux)
+	s.usageRoutes(mux)
 	return mux
 }
 
