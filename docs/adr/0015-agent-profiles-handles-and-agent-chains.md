@@ -59,7 +59,8 @@ because nothing read them, so nothing is migrated.
   ```
 
   The table key is the Handle, which follows the alias rule
-  (`[a-z0-9][a-z0-9_-]*`, 1 to 64 characters). `user` is reserved. `dir`
+  (`[a-z0-9][a-z0-9_-]*`, 1 to 64 characters) and ends in a letter or digit,
+  so a mention can name it. `user` is reserved. `dir`
   expands `~`, and a relative path resolves against the config directory
   (`~/.config/defios/`). `[agent]` holds `profiles = ["auditor", ...]` and
   `max_depth` (default 1). It appears in Group and Conversation configs and
@@ -78,7 +79,9 @@ because nothing read them, so nothing is migrated.
   shows the Handle in human output and JSON, and `--lean` prints
   `<display name>/@handle: ...` for an agent.
 - **Mentions.** A mention is `@` followed by a Handle, where the `@` is not
-  preceded by a letter, digit or `@`. `conversation send` refuses a person's
+  preceded by a letter, digit or `@` and the Handle is not followed by a
+  letter or digit: `a@b.com` and `@auditorX` are not mentions. A trailing `-`
+  or `_` is punctuation, so `@auditor--` mentions `auditor`. `conversation send` refuses a person's
   message whose mention names no Handle included in that Conversation, and
   nothing is appended. A mention inside an agent's reply that cannot summon,
   because its Handle is unknown or not included or because the reply is at
