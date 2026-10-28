@@ -746,10 +746,10 @@ func TestConversationLogShowsWhoWroteIt(t *testing.T) {
 	}
 }
 
-// send --sender posts as that agent, at depth 1 unless --depth says
+// send --handle posts as that agent, at depth 1 unless --depth says
 // otherwise; leaving it out is a person. Flags that cannot name an agent at
 // a depth are refused before serve is asked.
-func TestConversationSendSender(t *testing.T) {
+func TestConversationSendHandle(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	body := fakeConversationSend(t, dir)
@@ -762,27 +762,27 @@ func TestConversationSendSender(t *testing.T) {
 		body.Store("")
 		return m
 	}
-	if r := run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "hi"); r.code != 0 {
+	if r := run(t, nil, "", "--dir", dir, "conversation", "send", "--handle", "@auditor", "hi"); r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
-	if m := posted(); m["sender"] != "auditor" || m["depth"] != float64(1) {
-		t.Errorf("--sender posted %v", m)
+	if m := posted(); m["handle"] != "auditor" || m["depth"] != float64(1) {
+		t.Errorf("--handle posted %v", m)
 	}
-	run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "--depth", "2", "hi")
-	if m := posted(); m["sender"] != "auditor" || m["depth"] != float64(2) {
+	run(t, nil, "", "--dir", dir, "conversation", "send", "--handle", "@auditor", "--depth", "2", "hi")
+	if m := posted(); m["handle"] != "auditor" || m["depth"] != float64(2) {
 		t.Errorf("--depth 2 posted %v", m)
 	}
 	run(t, nil, "", "--dir", dir, "conversation", "send", "hi")
-	if m := posted(); m["sender"] != nil || m["depth"] != nil {
+	if m := posted(); m["handle"] != nil || m["depth"] != nil {
 		t.Errorf("a person's send posted %v", m)
 	}
 
 	for _, args := range [][]string{
 		{"--depth", "1", "hi"},
-		{"--sender", "@auditor", "--depth", "0", "hi"},
-		{"--sender", "@user", "hi"},
-		{"--sender", "auditor", "hi"},
-		{"--sender", "@Bad!", "hi"},
+		{"--handle", "@auditor", "--depth", "0", "hi"},
+		{"--handle", "@user", "hi"},
+		{"--handle", "auditor", "hi"},
+		{"--handle", "@Bad!", "hi"},
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "send"}, args...)...)
 		if r.code != 1 || body.Load() != "" {
@@ -791,12 +791,12 @@ func TestConversationSendSender(t *testing.T) {
 	}
 }
 
-// The serve refusing a sender is the caller's error.
-func TestConversationSendBadSenderFromServeExitsUsage(t *testing.T) {
+// The serve refusing a Handle is the caller's error.
+func TestConversationSendBadHandleFromServeExitsUsage(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
-	fakeLocalServe(t, dir, "/v1/conversation/", 400, "bad-sender", "serve: @auditor is not included here")
-	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "hi")
+	fakeLocalServe(t, dir, "/v1/conversation/", 400, "bad-handle", "serve: @auditor is not included here")
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--handle", "@auditor", "hi")
 	if r.code != 1 || !strings.Contains(r.stderr, "not included") {
 		t.Errorf("exit %d; stderr %q", r.code, r.stderr)
 	}
@@ -807,7 +807,7 @@ func TestConversationSendDepthOverflowExitsUsage(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	body := fakeConversationSend(t, dir)
-	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "--depth", "4294967297", "hi")
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--handle", "@auditor", "--depth", "4294967297", "hi")
 	if r.code != 1 || body.Load() != "" {
 		t.Errorf("exit %d, posted %q; stderr %q", r.code, body.Load(), r.stderr)
 	}

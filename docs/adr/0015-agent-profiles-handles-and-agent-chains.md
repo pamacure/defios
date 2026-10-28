@@ -42,7 +42,7 @@ because nothing read them, so nothing is migrated.
   `conversation log --lean` and posts back). Rejected as the only path:
   streaming, cancel and retry belong where the provider connection is held,
   and the serve already holds Model configs and provider credentials. It is
-  kept as a second path through `send --sender`.
+  kept as a second path through `send --handle`.
 - **Agents that cannot summon agents.** Rejected: delegation is useful. Loops
   are bounded by depth, not forbidden.
 - **Committing a cancelled reply's partial text.** Rejected: a half-written
@@ -111,7 +111,7 @@ because nothing read them, so nothing is migrated.
   commits and streams the chain until it ends. Ctrl-C cancels the chain, and
   `--detach` returns once the message commits. `conversation follow` watches
   a Conversation's chains on this Node, and Ctrl-C only detaches it.
-  `conversation cancel` cancels the running chain. `send --sender @handle
+  `conversation cancel` cancels the running chain. `send --handle @handle
   [--depth n]` lets an external runner post as an agent. The Handle must be
   defined and included, and `--depth` defaults to 1.
 - **Cancel.** Cancel ends the provider request, commits nothing for the

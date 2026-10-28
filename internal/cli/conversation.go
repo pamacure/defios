@@ -30,7 +30,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	var as sendAs
 	send := &cobra.Command{
 		Use:   "send <text>",
-		Short: "Append a message (requires serve). --key scopes it to that Key; --sender posts it as an agent",
+		Short: "Append a message (requires serve). --key scopes it to that Key; --handle posts it as an agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			as.depthSet = cmd.Flags().Changed("depth")
@@ -38,8 +38,8 @@ func conversationCommand(g *globals) *cobra.Command {
 		},
 	}
 	send.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
-	send.Flags().StringVar(&as.sender, "sender", "", "@handle: post as that agent, for an external runner; it must be included here")
-	send.Flags().Uint32Var(&as.depth, "depth", 1, "with --sender, the reply's depth in its chain: 1 to max_depth")
+	send.Flags().StringVar(&as.handle, "handle", "", "@handle: post as that agent, for an external runner; it must be included here")
+	send.Flags().Uint32Var(&as.depth, "depth", 1, "with --handle, the reply's depth in its chain: 1 to max_depth")
 	root.AddCommand(send)
 	var opts logOptions
 	log := &cobra.Command{
@@ -82,28 +82,29 @@ func conversationCommand(g *globals) *cobra.Command {
 	return root
 }
 
-// sendAs is `conversation send`'s --sender and --depth.
+// sendAs is `conversation send`'s --handle and --depth.
 type sendAs struct {
-	sender   string
+	handle   string
 	depth    uint32
 	depthSet bool
 }
 
-// handle is the agent the flags name, "" for a person. Whether it may answer
-// here, and at that depth, is serve's to check against config.toml.
-func (a sendAs) handle() (string, error) {
-	if a.sender == "" {
+// parseHandle is the Handle the flags name, without its "@", or "" for a
+// person. Whether it may answer here, and at that depth, is serve's to check
+// against config.toml.
+func (a sendAs) parseHandle() (string, error) {
+	if a.handle == "" {
 		if a.depthSet {
-			return "", exitUsagef("--depth is only for an agent's message; pass --sender @handle")
+			return "", exitUsagef("--depth is only for an agent's message; pass --handle @handle")
 		}
 		return "", nil
 	}
-	h, ok := strings.CutPrefix(a.sender, "@")
+	h, ok := strings.CutPrefix(a.handle, "@")
 	if !ok {
-		return "", exitUsagef("--sender %q must be @handle", a.sender)
+		return "", exitUsagef("--handle %q must be @handle", a.handle)
 	}
 	if err := config.ValidateHandle(h); err != nil {
-		return "", exitUsagef("--sender: %w", err)
+		return "", exitUsagef("--handle: %w", err)
 	}
 	if a.depth < 1 {
 		return "", exitUsagef("--depth %d must be at least 1", a.depth)
@@ -115,7 +116,7 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 	if _, err := cosl.Freeform(text); err != nil {
 		return exitUsagef("%w", err)
 	}
-	handle, err := as.handle()
+	handle, err := as.parseHandle()
 	if err != nil {
 		return err
 	}
@@ -231,14 +232,14 @@ func prunePolicy(g *globals) (bool, error) {
 }
 
 // sendError maps an append failure from serve to an exit code: a commit
-// the FSM rejected is a protocol reject (3); bad text or a sender that may
+// the FSM rejected is a protocol reject (3); bad text or a Handle that may
 // not write here is usage (1);
 // everything else, including no leader, is operational (2).
 func sendError(err error) error {
 	switch {
 	case errors.Is(err, raftx.ErrNotInserted):
 		return &ExitError{Code: ExitProtocol, Err: err}
-	case errors.Is(err, cosl.ErrBadText), errors.Is(err, serve.ErrBadSender):
+	case errors.Is(err, cosl.ErrBadText), errors.Is(err, serve.ErrBadHandle):
 		return exitUsagef("%w", err)
 	case errors.Is(err, raftx.ErrNoLeader):
 		return exitOperationalf("%w; not committed now, but if this Node was leading it may still land when the other Node returns: check `conversation log` before re-sending", err)
@@ -354,16 +355,16 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 		}
 		who := p.primary(l.SenderDisplayName)
 		if l.Handle != nil {
-			who += " " + p.primary(writer(*l.Handle))
+			who += " " + p.primary(handleLabel(*l.Handle))
 		}
 		fmt.Fprintf(g.app.Stdout, "%s %s %s  %s\n", p.primary(fmt.Sprint(l.Seq)), p.dim(l.CreatedAt), who, text)
 	}
 	return nil
 }
 
-// writer is who wrote a message on its Node: @handle for an agent, user for
-// a person.
-func writer(handle string) string {
+// handleLabel is how a message's Handle shows: @handle for an agent's, user
+// for a person's.
+func handleLabel(handle string) string {
 	if handle == "" {
 		return "user"
 	}

@@ -26,10 +26,10 @@ var (
 	// ErrNoConversation means the id is not the Conversation ID of a Key this
 	// replica has minted. A Conversation exists iff the Key exists (§8).
 	ErrNoConversation = errors.New("serve: no such Conversation; the Key has not been minted")
-	// ErrBadSender means an agent's message names a Handle this Group's
-	// config.toml does not include where it is sent, or a depth outside 1 to
-	// max_depth (ADR 0015).
-	ErrBadSender = errors.New("serve: that agent may not write here")
+	// ErrBadHandle means a message names a Handle this Group's config.toml
+	// does not include where it is sent, or a depth outside 1 to max_depth
+	// (ADR 0015).
+	ErrBadHandle = errors.New("serve: that Handle may not write here")
 )
 
 // SendView is the local API's report of a committed COSL append.
@@ -42,9 +42,9 @@ type SendView struct {
 type sendRequest struct {
 	Text           string `json:"text"`
 	ConversationID string `json:"conversation_id,omitempty"`
-	// Sender is the Handle of the agent writing it, empty for a person, and
-	// Depth its place in a chain.
-	Sender string `json:"sender,omitempty"`
+	// Handle is the agent that wrote it, empty for a person, and Depth its
+	// place in a chain.
+	Handle string `json:"handle,omitempty"`
 	Depth  uint32 `json:"depth,omitempty"`
 }
 
@@ -77,18 +77,18 @@ func (s *server) conversationSend(ctx context.Context, text, handle string, dept
 		return SendView{}, err
 	}
 	return s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, func(store *cosl.Store) error {
-		return s.checkSender(store, conversationID, handle, depth)
+		return s.checkHandle(store, conversationID, handle, depth)
 	})
 }
 
-// checkSender allows a person's message at depth 0, and an agent's whose
+// checkHandle allows a person's message at depth 0, and an agent's whose
 // Handle the merged [agent] profiles where it is sent includes, at a depth
 // from 1 to max_depth. Like requireConversation it is the writer's check, not
 // the FSM's: another Node's config is not this Node's to know.
-func (s *server) checkSender(store *cosl.Store, conversationID []byte, handle string, depth uint32) error {
+func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle string, depth uint32) error {
 	if handle == "" {
 		if depth != 0 {
-			return fmt.Errorf("%w: a person's message has no depth; name the agent", ErrBadSender)
+			return fmt.Errorf("%w: a person's message has no depth; name the agent", ErrBadHandle)
 		}
 		return nil
 	}
@@ -97,7 +97,7 @@ func (s *server) checkSender(store *cosl.Store, conversationID []byte, handle st
 		return err
 	}
 	if _, ok := cfg.Agents[handle]; !ok {
-		return fmt.Errorf("%w: no [agents.%s] is defined in this Group's config.toml", ErrBadSender, handle)
+		return fmt.Errorf("%w: no [agents.%s] is defined in this Group's config.toml", ErrBadHandle, handle)
 	}
 	home, _ := os.UserHomeDir() // only for profile directories, unused here
 	inc, err := cfg.Included(conv, s.opts.Paths.Config, home)
@@ -105,10 +105,10 @@ func (s *server) checkSender(store *cosl.Store, conversationID []byte, handle st
 		return err
 	}
 	if !slices.ContainsFunc(inc.Profiles, func(p config.ResolvedProfile) bool { return p.Handle == handle }) {
-		return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent", ErrBadSender, handle)
+		return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent", ErrBadHandle, handle)
 	}
 	if depth < 1 || depth > uint32(inc.MaxDepth) {
-		return fmt.Errorf("%w: depth %d is outside 1 to max_depth %d", ErrBadSender, depth, inc.MaxDepth)
+		return fmt.Errorf("%w: depth %d is outside 1 to max_depth %d", ErrBadHandle, depth, inc.MaxDepth)
 	}
 	return nil
 }
@@ -202,7 +202,7 @@ func (s *server) conversationRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		v, err := s.conversationSend(r.Context(), req.Text, req.Sender, req.Depth, conv)
+		v, err := s.conversationSend(r.Context(), req.Text, req.Handle, req.Depth, conv)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -257,12 +257,12 @@ func (c Client) ConversationSend(ctx context.Context, text string, conversationI
 	return c.ConversationSendAs(ctx, text, "", 0, conversationID)
 }
 
-// ConversationSendAs is `conversation send --sender`: as ConversationSend,
+// ConversationSendAs is `conversation send --handle`: as ConversationSend,
 // written by the agent with this Handle at depth in its chain. An empty
 // handle, at depth 0, is a person's message.
 func (c Client) ConversationSendAs(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
 	var v SendView
-	req := sendRequest{Text: text, Sender: handle, Depth: depth}
+	req := sendRequest{Text: text, Handle: handle, Depth: depth}
 	if conversationID != nil {
 		req.ConversationID = hex.EncodeToString(conversationID)
 	}

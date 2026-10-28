@@ -203,11 +203,11 @@ That row's `conversation_id` equals the `conversation` line from `key inspect` f
 An external runner can post an agent's reply. The Handle must be defined in this Group's `config.toml` and included in that Conversation's `[agent] profiles`. Otherwise the send exits 1 and nothing is appended:
 
 ```bash
-defios conversation send --key ecdsa:<hex> --sender @auditor "looks fine"
-defios conversation send --key ecdsa:<hex> --sender @auditor --depth 2 "and so does this"
+defios conversation send --key ecdsa:<hex> --handle @auditor "looks fine"
+defios conversation send --key ecdsa:<hex> --handle @auditor --depth 2 "and so does this"
 ```
 
-`--depth` defaults to 1, works only with `--sender`, and must be between 1 and `max_depth`. Leaving out `--sender` means the message is a person's. `serve` checks the same rules for any client of its socket.
+`--depth` defaults to 1, works only with `--handle`, and must be between 1 and `max_depth`. Leaving out `--handle` means the message is a person's. `serve` checks the same rules for any client of its socket.
 
 An unknown Key exits 1:
 

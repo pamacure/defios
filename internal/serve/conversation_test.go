@@ -303,8 +303,8 @@ max_depth = 2
 		{"scribe", 1}, // defined, not included
 		{"nobody", 1}, // not defined
 	} {
-		if _, err := a.client().ConversationSendAs(ctx, "nope", c.handle, c.depth, nil); !errors.Is(err, serve.ErrBadSender) {
-			t.Errorf("@%s at depth %d = %v, want ErrBadSender", c.handle, c.depth, err)
+		if _, err := a.client().ConversationSendAs(ctx, "nope", c.handle, c.depth, nil); !errors.Is(err, serve.ErrBadHandle) {
+			t.Errorf("@%s at depth %d = %v, want ErrBadHandle", c.handle, c.depth, err)
 		}
 	}
 	// A Conversation that sets profiles replaces the Group's list.
@@ -312,12 +312,12 @@ max_depth = 2
 	waitWorkspace(t, a, name)
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, name), "[agent]\nprofiles = []\n")
-	if _, err := a.client().ConversationSendAs(ctx, "nope", "auditor", 1, id[:]); !errors.Is(err, serve.ErrBadSender) {
-		t.Errorf("@auditor where the Conversation includes none = %v, want ErrBadSender", err)
+	if _, err := a.client().ConversationSendAs(ctx, "nope", "auditor", 1, id[:]); !errors.Is(err, serve.ErrBadHandle) {
+		t.Errorf("@auditor where the Conversation includes none = %v, want ErrBadHandle", err)
 	}
 	// b's config defines no agents, so b cannot post as one.
-	if _, err := b.client().ConversationSendAs(ctx, "nope", "auditor", 1, nil); !errors.Is(err, serve.ErrBadSender) {
-		t.Errorf("@auditor on a Node without it = %v, want ErrBadSender", err)
+	if _, err := b.client().ConversationSendAs(ctx, "nope", "auditor", 1, nil); !errors.Is(err, serve.ErrBadHandle) {
+		t.Errorf("@auditor on a Node without it = %v, want ErrBadHandle", err)
 	}
 
 	if _, err := a.client().ConversationSend(ctx, "a person", nil); err != nil {
