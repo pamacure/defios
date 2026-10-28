@@ -82,6 +82,18 @@ func Freeform(text string) (*coslv1.AppFreeform, error) {
 	return &coslv1.AppFreeform{Text: text, ContentType: "text/plain"}, nil
 }
 
+// AgentFreeform is Freeform written by the agent with this Handle, depth deep
+// in a chain (ADR 0015). Whether the Handle may answer, and at that depth, is
+// the writer's to check against its config.
+func AgentFreeform(text, handle string, depth uint32) (*coslv1.AppFreeform, error) {
+	ff, err := Freeform(text)
+	if err != nil {
+		return nil, err
+	}
+	ff.Handle, ff.Depth = handle, depth
+	return ff, nil
+}
+
 // Recap is an app.recap payload accounting for talk up to baseSeq. Its text
 // is bounded as app.freeform's is.
 func Recap(text string, baseSeq uint64) (*coslv1.AppRecap, error) {

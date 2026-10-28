@@ -158,3 +158,31 @@ func TestPruneWithoutRecapRefuses(t *testing.T) {
 		t.Fatalf("pruned seqs = %v, want none", got)
 	}
 }
+
+// An agent's message is talk like a person's (ADR 0015): a Recap counts it
+// among what it covers, and Pruning destroys it.
+func TestAgentTalkIsCoveredAndPrunedLikeAPersons(t *testing.T) {
+	store := replica(t,
+		said(nil, "@auditor is this safe?"), // 1
+		entry{cosl.TypeAppFreeform, nil, &coslv1.AppFreeform{Text: "yes", Handle: "auditor", Depth: 1}},   // 2
+		recapped(nil, 2, "auditor says it is safe"),                                                       // 3
+		entry{cosl.TypeAppFreeform, nil, &coslv1.AppFreeform{Text: "later", Handle: "auditor", Depth: 1}}, // 4
+	)
+	rows, err := store.Log(cosl.Query{GroupLevel: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := Fold(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Live == nil || v.Live.Covers != 2 || !slices.Equal(seqs(v.Talk), []uint64{4}) {
+		t.Fatalf("view: live %+v, talk %v; want a Recap covering 2, then seq 4", v.Live, seqs(v.Talk))
+	}
+	if _, n, err := Prune(store, nil); err != nil || n != 2 {
+		t.Fatalf("Prune = %d, %v; want 2 pruned", n, err)
+	}
+	if got := pruned(t, store); !slices.Equal(got, []uint64{1, 2}) {
+		t.Fatalf("pruned seqs = %v, want [1 2]", got)
+	}
+}

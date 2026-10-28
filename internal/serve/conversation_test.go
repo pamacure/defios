@@ -269,3 +269,78 @@ func TestConversationSendErrors(t *testing.T) {
 		t.Fatalf("send empty = %v, want ErrBadText", err)
 	}
 }
+
+// An agent's message commits with its Handle and depth when this Node's
+// config includes the Handle where it is sent and the depth is within
+// max_depth. Anything else is refused on the socket, and nothing is
+// appended.
+func TestConversationSendAsAgent(t *testing.T) {
+	a, b := pair(t)
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), `
+[agents.auditor]
+model = "claude"
+
+[agents.scribe]
+model = "claude"
+
+[agent]
+profiles = ["auditor"]
+max_depth = 2
+`)
+	ctx := context.Background()
+	if _, err := a.client().ConversationSendAs(ctx, "looks fine", "auditor", 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		handle string
+		depth  uint32
+	}{
+		{"auditor", 0},
+		{"auditor", 3},
+		{"scribe", 1}, // defined, not included
+		{"nobody", 1}, // not defined
+	} {
+		if _, err := a.client().ConversationSendAs(ctx, "nope", c.handle, c.depth, nil); !errors.Is(err, serve.ErrBadSender) {
+			t.Errorf("@%s at depth %d = %v, want ErrBadSender", c.handle, c.depth, err)
+		}
+	}
+	// A Conversation that sets profiles replaces the Group's list.
+	name := mintKey(t, a, b, gid)
+	waitWorkspace(t, a, name)
+	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
+	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, name), "[agent]\nprofiles = []\n")
+	if _, err := a.client().ConversationSendAs(ctx, "nope", "auditor", 1, id[:]); !errors.Is(err, serve.ErrBadSender) {
+		t.Errorf("@auditor where the Conversation includes none = %v, want ErrBadSender", err)
+	}
+	// b's config defines no agents, so b cannot post as one.
+	if _, err := b.client().ConversationSendAs(ctx, "nope", "auditor", 1, nil); !errors.Is(err, serve.ErrBadSender) {
+		t.Errorf("@auditor on a Node without it = %v, want ErrBadSender", err)
+	}
+
+	if _, err := a.client().ConversationSend(ctx, "a person", nil); err != nil {
+		t.Fatal(err)
+	}
+	rows := b.groupLevelRows(t, gid, 2)
+	if len(rows) != 2 {
+		t.Fatalf("%d group-level rows, want the agent's and the person's", len(rows))
+	}
+	if rows := conversationRows(t, a, gid, id[:]); len(rows) != 0 {
+		t.Fatalf("refused agent message stored: %+v", rows)
+	}
+	for i, want := range []struct {
+		handle string
+		depth  uint32
+	}{{"auditor", 2}, {"", 0}} {
+		env, _ := rows[i].Decode()
+		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ff := msg.(*coslv1.AppFreeform); ff.Handle != want.handle || ff.Depth != want.depth {
+			t.Errorf("row %d: handle %q depth %d, want %q %d", i, ff.Handle, ff.Depth, want.handle, want.depth)
+		}
+	}
+}

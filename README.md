@@ -155,7 +155,7 @@ defios conversation send "hello group"
 defios conversation log
 ```
 
-Both machines show the same lines. The human line is `<seq> <time> <display name>  <text>`.
+Both machines show the same lines. The human line is `<seq> <time> <display name> <writer>  <text>`, where the writer is `user` for a person's message and `@handle` for an agent's. `--json` gives each row its `handle` (`""` for a person) and `depth` (0 for a person).
 
 After both Keys exist:
 
@@ -183,7 +183,7 @@ defios conversation log --key ecdsa:<hex> --full
 defios conversation log --key ecdsa:<hex> --lean
 ```
 
-`--full` also shows the messages and earlier Recaps that the live Recap supersedes. A message whose payload this Node has pruned shows as `[pruned]` with only its seq, time and sender. `--lean` gives an agent its starting context: one `<display name>: <text>` line per entry, the live Recap first, then every message after it. Nothing else is printed, including pruned messages. Both flags work with `--key` and `--limit`. Under `--full`, `--limit` keeps the latest N rows. Otherwise it keeps the latest N messages after the Recap.
+`--full` also shows the messages and earlier Recaps that the live Recap supersedes. A message whose payload this Node has pruned shows as `[pruned]` with only its seq, time and sender. `--lean` gives an agent its starting context: one `<display name>: <text>` line per entry (`<display name>/@handle: <text>` for an agent's), the live Recap first, then every message after it. Nothing else is printed, including pruned messages. Both flags work with `--key` and `--limit`. Under `--full`, `--limit` keeps the latest N rows. Otherwise it keeps the latest N messages after the Recap.
 
 ```bash
 defios conversation prune --key ecdsa:<hex>
@@ -199,6 +199,15 @@ defios cosl decode <msg-id-of-a-key-scoped-row>
 ```
 
 That row's `conversation_id` equals the `conversation` line from `key inspect` for that Key. `cosl log` for the whole run includes `membership.join`, `session.start`, `tss.session`, `session.complete`, and `app.freeform`.
+
+An external runner can post an agent's reply. The Handle must be defined in this Group's `config.toml` and included in that Conversation's `[agent] profiles`. Otherwise the send exits 1 and nothing is appended:
+
+```bash
+defios conversation send --key ecdsa:<hex> --sender @auditor "looks fine"
+defios conversation send --key ecdsa:<hex> --sender @auditor --depth 2 "and so does this"
+```
+
+`--depth` defaults to 1, works only with `--sender`, and must be between 1 and `max_depth`. Leaving out `--sender` means the message is a person's. `serve` checks the same rules for any client of its socket.
 
 An unknown Key exits 1:
 

@@ -562,9 +562,14 @@ func (x *TssSession) GetData() []byte {
 }
 
 type AppFreeform struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`                                  // UTF-8, max 65536 bytes
-	ContentType   string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // default text/plain
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Text        string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`                                  // UTF-8, max 65536 bytes
+	ContentType string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // default text/plain
+	// handle is the Agent Profile that wrote it, empty when a person did
+	// (docs/adr/0015-agent-profiles-handles-and-agent-chains.md); depth is
+	// its place in a chain of agents, 0 for a person.
+	Handle        string `protobuf:"bytes,3,opt,name=handle,proto3" json:"handle,omitempty"`
+	Depth         uint32 `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -611,6 +616,20 @@ func (x *AppFreeform) GetContentType() string {
 		return x.ContentType
 	}
 	return ""
+}
+
+func (x *AppFreeform) GetHandle() string {
+	if x != nil {
+		return x.Handle
+	}
+	return ""
+}
+
+func (x *AppFreeform) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
 }
 
 // AppRecap is the payload of app.recap, a Recap
@@ -1785,10 +1804,12 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"routingTag\x120\n" +
 	"\x14ephemeral_public_key\x18\x03 \x01(\fR\x12ephemeralPublicKey\x12\x14\n" +
 	"\x05nonce\x18\x04 \x01(\fR\x05nonce\x12\x12\n" +
-	"\x04data\x18\x05 \x01(\fR\x04data\"D\n" +
+	"\x04data\x18\x05 \x01(\fR\x04data\"r\n" +
 	"\vAppFreeform\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12!\n" +
-	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\"9\n" +
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x16\n" +
+	"\x06handle\x18\x03 \x01(\tR\x06handle\x12\x14\n" +
+	"\x05depth\x18\x04 \x01(\rR\x05depth\"9\n" +
 	"\bAppRecap\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x19\n" +
 	"\bbase_seq\x18\x02 \x01(\x04R\abaseSeq\"\xc6\x01\n" +

@@ -6,10 +6,41 @@ import (
 	"fmt"
 	"os"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/errlog"
 	"defios.com/internal/key"
 )
+
+// readConfig is this Node's Group config.toml, the defaults when there is
+// none, and the Workspace of the Conversation, empty for Group-level talk
+// (a nil conversation) or a Key with no Workspace config.toml. Both are read
+// at each use, so an edit needs no restart.
+func (s *server) readConfig(store *cosl.Store, conversation []byte) (config.Config, config.Workspace, error) {
+	p, alias := s.opts.Paths, s.opts.Alias
+	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return config.Config{}, config.Workspace{}, err
+	}
+	var id [32]byte
+	if len(conversation) != len(id) {
+		return cfg, config.Workspace{}, nil
+	}
+	keys, err := key.Read(store)
+	if err != nil {
+		return config.Config{}, config.Workspace{}, err
+	}
+	copy(id[:], conversation)
+	name, ok := key.WorkspaceNames(keys)[id]
+	if !ok {
+		return cfg, config.Workspace{}, nil
+	}
+	conv, err := config.ReadWorkspace(p.ConversationConfigFile(alias, name))
+	if err != nil {
+		return config.Config{}, config.Workspace{}, err
+	}
+	return cfg, conv, nil
+}
 
 // watchWorkspaces gives every minted Key's Conversation a Workspace in
 // this Group's, named by key.WorkspaceNames (ADR 0013), on startup and as

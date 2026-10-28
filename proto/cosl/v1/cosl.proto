@@ -73,6 +73,11 @@ message TssSession {
 message AppFreeform {
   string text = 1;                    // UTF-8, max 65536 bytes
   string content_type = 2;            // default text/plain
+  // handle is the Agent Profile that wrote it, empty when a person did
+  // (docs/adr/0015-agent-profiles-handles-and-agent-chains.md); depth is
+  // its place in a chain of agents, 0 for a person.
+  string handle = 3;
+  uint32 depth = 4;
 }
 
 // AppRecap is the payload of app.recap, a Recap

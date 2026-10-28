@@ -113,14 +113,14 @@ func TestConversationLogHumanLinesFromRoster(t *testing.T) {
 	}
 	// <seq> <RFC3339> <display_name>  <text>; names come from the Roster,
 	// so bob is named although he never appended membership.join.
-	if !strings.HasPrefix(lines[0], "2 ") || !strings.HasSuffix(lines[0], " alice  hello group") {
+	if !strings.HasPrefix(lines[0], "2 ") || !strings.HasSuffix(lines[0], " alice user  hello group") {
 		t.Errorf("line 1: %q", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], "4 ") || !strings.HasSuffix(lines[1], " bob  hi back") {
+	if !strings.HasPrefix(lines[1], "4 ") || !strings.HasSuffix(lines[1], " bob user  hi back") {
 		t.Errorf("line 2: %q", lines[1])
 	}
 	// A newline in the text never breaks the one-line format.
-	if !strings.HasSuffix(lines[2], ` alice  two\nlines`) {
+	if !strings.HasSuffix(lines[2], ` alice user  two\nlines`) {
 		t.Errorf("line 3: %q", lines[2])
 	}
 	stamp := strings.Fields(lines[0])[1]
@@ -293,10 +293,10 @@ func TestConversationLogFoldsToTheLiveRecap(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("want the Recap and 2 lines, got:\n%s", r.stdout)
 	}
-	if !strings.HasPrefix(lines[0], "6 ") || !strings.HasSuffix(lines[0], " bob  [recap of 2 messages to seq 4] hello and hi") {
+	if !strings.HasPrefix(lines[0], "6 ") || !strings.HasSuffix(lines[0], " bob user  [recap of 2 messages to seq 4] hello and hi") {
 		t.Errorf("recap line: %q", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], "5 ") || !strings.HasPrefix(lines[2], "7 ") || !strings.HasSuffix(lines[2], " alice  after") {
+	if !strings.HasPrefix(lines[1], "5 ") || !strings.HasPrefix(lines[2], "7 ") || !strings.HasSuffix(lines[2], " alice user  after") {
 		t.Errorf("talk lines: %q", lines[1:])
 	}
 
@@ -357,10 +357,10 @@ func TestConversationLogFull(t *testing.T) {
 	}
 	wants := []struct{ prefix, suffix string }{
 		{"2 ", " alice  [pruned]"},
-		{"4 ", " bob  hi back"},
-		{"5 ", ` alice  two\nlines`},
-		{"6 ", " bob  [recap of 2 messages to seq 4] hello and hi"},
-		{"7 ", " alice  after"},
+		{"4 ", " bob user  hi back"},
+		{"5 ", ` alice user  two\nlines`},
+		{"6 ", " bob user  [recap of 2 messages to seq 4] hello and hi"},
+		{"7 ", " alice user  after"},
 	}
 	for i, w := range wants {
 		if !strings.HasPrefix(lines[i], w.prefix) || !strings.HasSuffix(lines[i], w.suffix) {
@@ -434,7 +434,7 @@ func TestConversationLogLeanAndFullTakeKeyAndExcludeEachOther(t *testing.T) {
 		t.Errorf("--lean --key: exit %d, %q", r.code, r.stdout)
 	}
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--key", "ecdsa:"+hex.EncodeToString(ecdsaPK))
-	if r.code != 0 || strings.Count(r.stdout, "\n") != 1 || !strings.HasSuffix(r.stdout, " alice  ecdsa talk\n") {
+	if r.code != 0 || strings.Count(r.stdout, "\n") != 1 || !strings.HasSuffix(r.stdout, " alice user  ecdsa talk\n") {
 		t.Errorf("--full --key: exit %d, %q", r.code, r.stdout)
 	}
 	if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--lean"); r.code != 1 {
@@ -658,7 +658,7 @@ func TestConversationPrune(t *testing.T) {
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
 	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
 	if len(lines) != 5 || !strings.HasSuffix(lines[0], " alice  [pruned]") || !strings.HasSuffix(lines[1], " bob  [pruned]") ||
-		!strings.HasSuffix(lines[2], ` alice  two\nlines`) || !strings.HasSuffix(lines[3], "hello and hi") {
+		!strings.HasSuffix(lines[2], ` alice user  two\nlines`) || !strings.HasSuffix(lines[3], "hello and hi") {
 		t.Errorf("log --full after prune:\n%s", r.stdout)
 	}
 
@@ -687,5 +687,128 @@ func TestConversationPruneWithPolicyOnDoesNotWarn(t *testing.T) {
 	}
 	if r.stderr != "" {
 		t.Errorf("stderr = %q, want no warning with the policy on", r.stderr)
+	}
+}
+
+// groupWithAgentTalk is groupWithTalk plus alice's @auditor reply at depth
+// 1, seq 6, in Group-level talk.
+func groupWithAgentTalk(t *testing.T, dir string) {
+	t.Helper()
+	alice, _ := groupWithTalk(t, dir)
+	ff, err := cosl.AgentFreeform("looks fine", "auditor", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appender(t, dir, alice, 5)(alice, nil, ff, cosl.TypeAppFreeform)
+}
+
+// An agent's message names its Handle beside the Node's display name, and a
+// person's, including every row written before Handles, shows as user.
+func TestConversationLogShowsWhoWroteIt(t *testing.T) {
+	dir := t.TempDir()
+	groupWithAgentTalk(t, dir)
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "log")
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if r.code != 0 || len(lines) != 4 {
+		t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	if !strings.HasSuffix(lines[0], " alice user  hello group") {
+		t.Errorf("person's line: %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[3], "6 ") || !strings.HasSuffix(lines[3], " alice @auditor  looks fine") {
+		t.Errorf("agent's line: %q", lines[3])
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--json")
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 4 {
+		t.Fatalf("--json: %v\n%s", err, r.stdout)
+	}
+	if rows[0]["handle"] != "" || rows[0]["depth"] != float64(0) {
+		t.Errorf("person's row = %v", rows[0])
+	}
+	if rows[3]["handle"] != "auditor" || rows[3]["depth"] != float64(1) {
+		t.Errorf("agent's row = %v", rows[3])
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--limit", "2")
+	if want := "alice: two\\nlines\nalice/@auditor: looks fine\n"; r.stdout != want {
+		t.Errorf("--lean = %q, want %q", r.stdout, want)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--json", "--limit", "2")
+	rows = nil
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 2 {
+		t.Fatalf("--lean --json: %v\n%s", err, r.stdout)
+	}
+	if len(rows[0]) != 2 || rows[1]["handle"] != "auditor" {
+		t.Errorf("--lean --json = %v", rows)
+	}
+}
+
+// send --sender posts as that agent, at depth 1 unless --depth says
+// otherwise; leaving it out is a person. Flags that cannot name an agent at
+// a depth are refused before serve is asked.
+func TestConversationSendSender(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	body := fakeConversationSend(t, dir)
+	posted := func() map[string]any {
+		t.Helper()
+		var m map[string]any
+		if err := json.Unmarshal([]byte(body.Load().(string)), &m); err != nil {
+			t.Fatal(err)
+		}
+		body.Store("")
+		return m
+	}
+	if r := run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "hi"); r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	if m := posted(); m["sender"] != "auditor" || m["depth"] != float64(1) {
+		t.Errorf("--sender posted %v", m)
+	}
+	run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "--depth", "2", "hi")
+	if m := posted(); m["sender"] != "auditor" || m["depth"] != float64(2) {
+		t.Errorf("--depth 2 posted %v", m)
+	}
+	run(t, nil, "", "--dir", dir, "conversation", "send", "hi")
+	if m := posted(); m["sender"] != nil || m["depth"] != nil {
+		t.Errorf("a person's send posted %v", m)
+	}
+
+	for _, args := range [][]string{
+		{"--depth", "1", "hi"},
+		{"--sender", "@auditor", "--depth", "0", "hi"},
+		{"--sender", "@user", "hi"},
+		{"--sender", "auditor", "hi"},
+		{"--sender", "@Bad!", "hi"},
+	} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "send"}, args...)...)
+		if r.code != 1 || body.Load() != "" {
+			t.Errorf("%v: exit %d, posted %q; stderr %q", args, r.code, body.Load(), r.stderr)
+		}
+	}
+}
+
+// The serve refusing a sender is the caller's error.
+func TestConversationSendBadSenderFromServeExitsUsage(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	fakeLocalServe(t, dir, "/v1/conversation/", 400, "bad-sender", "serve: @auditor is not included here")
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "hi")
+	if r.code != 1 || !strings.Contains(r.stderr, "not included") {
+		t.Errorf("exit %d; stderr %q", r.code, r.stderr)
+	}
+}
+
+// A --depth past uint32 is refused, not wrapped to a depth in range.
+func TestConversationSendDepthOverflowExitsUsage(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	body := fakeConversationSend(t, dir)
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--sender", "@auditor", "--depth", "4294967297", "hi")
+	if r.code != 1 || body.Load() != "" {
+		t.Errorf("exit %d, posted %q; stderr %q", r.code, body.Load(), r.stderr)
 	}
 }

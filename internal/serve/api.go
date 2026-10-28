@@ -223,6 +223,7 @@ var errorKinds = []struct {
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
 	{ErrNoReplica, "no-replica", http.StatusConflict},
 	{ErrNoConversation, "no-conversation", http.StatusUnprocessableEntity},
+	{ErrBadSender, "bad-sender", http.StatusBadRequest},
 	{network.ErrInvalid, "bad-network", http.StatusBadRequest},
 	{network.ErrExists, "network-exists", http.StatusConflict},
 	{network.ErrUnknown, "no-network", http.StatusNotFound},
