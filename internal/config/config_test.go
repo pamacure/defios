@@ -100,14 +100,21 @@ rpc_urls = ["$BTC_RPC"]
 api_key = "$DEFIOS_ANTHROPIC"
 base_url = "https://proxy.example"
 
-[agent]
+[agents.auditor]
+dir = "agents/auditor"
 model = "claude"
-token_window = 200000
+
+[agents.trader]
+model = "gpt"
+
+[agent]
+profiles = ["auditor"]
+max_depth = 2
 `
 
-// The Group config.toml holds this Node's tailnet presence and the three
-// Workspace sections, every secret as a reference.
-func TestGroupConfigReadsTheWorkspaceSections(t *testing.T) {
+// The Group config.toml holds this Node's tailnet presence, its Agent
+// Profiles and the three Workspace sections, every secret as a reference.
+func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
 	c, err := config.ReadFile(write(t, groupConfig))
 	if err != nil {
 		t.Fatal(err)
@@ -118,9 +125,13 @@ func TestGroupConfigReadsTheWorkspaceSections(t *testing.T) {
 			"btc": {RPCURLs: []string{"$BTC_RPC"}},
 		},
 		Providers: map[string]config.Provider{"anthropic": {APIKey: "$DEFIOS_ANTHROPIC", BaseURL: "https://proxy.example"}},
-		Agent:     config.Agent{Model: "claude", TokenWindow: 200000},
+		Agent:     config.Agent{Profiles: []string{"auditor"}, MaxDepth: 2},
 	}
 	if !reflect.DeepEqual(c.Workspace, want) || c.TailnetAuthKey != "$TS_AUTHKEY" {
+		t.Fatalf("read %+v", c)
+	}
+	wantAgents := map[string]config.Profile{"auditor": {Dir: "agents/auditor", Model: "claude"}, "trader": {Model: "gpt"}}
+	if !reflect.DeepEqual(c.Agents, wantAgents) {
 		t.Fatalf("read %+v", c)
 	}
 }
@@ -137,7 +148,6 @@ func TestConfigRefusesLiteralSecretsAndUnknownKeys(t *testing.T) {
 		"old auth_key":             `auth_key = "tskey-auth-abc"`,
 		"unknown provider":         "[providers.mistral]\napi_key = \"$KEY\"",
 		"bad base_url":             "[providers.openai]\nbase_url = \"ftp://x\"",
-		"negative token_window":    "[agent]\ntoken_window = -1",
 	} {
 		if _, err := config.ReadFile(write(t, body)); err == nil {
 			t.Errorf("%s: read without error", name)
@@ -150,7 +160,7 @@ func TestConfigRefusesLiteralSecretsAndUnknownKeys(t *testing.T) {
 // A Conversation's config.toml holds only the Workspace sections; a missing
 // one is an empty Workspace.
 func TestConversationConfigTakesOnlyTheWorkspaceSections(t *testing.T) {
-	if _, err := config.ReadWorkspace(write(t, "hostname = \"x\"\n[agent]\nmodel = \"claude\"")); err == nil {
+	if _, err := config.ReadWorkspace(write(t, "hostname = \"x\"\n[agent]\nprofiles = [\"auditor\"]")); err == nil {
 		t.Fatal("a top-level key in a Conversation config must be an error")
 	}
 	if _, err := config.ReadWorkspace(write(t, "[networks.eth]\nrpc_urls = [\"https://literal.example\"]")); err == nil {
@@ -180,7 +190,7 @@ base_url = "https://other-proxy.example"
 api_key = "$DEFIOS_OPENAI"
 
 [agent]
-model = "gpt"
+profiles = ["trader"]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +205,7 @@ model = "gpt"
 			"anthropic": {APIKey: "$DEFIOS_ANTHROPIC", BaseURL: "https://other-proxy.example"},
 			"openai":    {APIKey: "$DEFIOS_OPENAI"},
 		},
-		Agent: config.Agent{Model: "gpt", TokenWindow: 200000},
+		Agent: config.Agent{Profiles: []string{"trader"}, MaxDepth: 2},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("merged = %+v\nwant     %+v", got, want)
@@ -221,5 +231,108 @@ func TestPrunePolicyDefaultsOffAndIsGroupOnly(t *testing.T) {
 	}
 	if _, err := config.ReadWorkspace(write(t, "prune = true")); err == nil {
 		t.Fatal("prune in a Conversation config must be an error")
+	}
+}
+
+// An Agent Profile is defined only in the Group's config.toml, under a Handle
+// that follows the alias rule and is not "user", and names the Model it runs
+// on; [agent] includes only Handles the Group defines, at a depth of at
+// least 1.
+func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
+	for name, body := range map[string]string{
+		"bad handle":          "[agents.Auditor]\nmodel = \"claude\"",
+		"reserved handle":     "[agents.user]\nmodel = \"claude\"",
+		"missing model":       "[agents.auditor]\ndir = \"agents/auditor\"",
+		"bad model alias":     "[agents.auditor]\nmodel = \"Claude!\"",
+		"undefined handle":    "[agents.auditor]\nmodel = \"claude\"\n[agent]\nprofiles = [\"trader\"]",
+		"handle listed twice": "[agents.auditor]\nmodel = \"claude\"\n[agent]\nprofiles = [\"auditor\", \"auditor\"]",
+		"zero max_depth":      "[agent]\nmax_depth = 0",
+		"negative max_depth":  "[agent]\nmax_depth = -1",
+		"old [agent] model":   "[agent]\nmodel = \"claude\"",
+		"old [agent] window":  "[agent]\ntoken_window = 200000",
+		"unknown profile key": "[agents.auditor]\nmodel = \"claude\"\nsoul = \"SOUL.md\"",
+	} {
+		if _, err := config.ReadFile(write(t, body)); err == nil {
+			t.Errorf("%s: read without error", name)
+		}
+	}
+	for name, body := range map[string]string{
+		"profile in a Conversation": "[agents.auditor]\nmodel = \"claude\"",
+		"bad handle in profiles":    "[agent]\nprofiles = [\"Auditor\"]",
+		"zero max_depth":            "[agent]\nmax_depth = 0",
+	} {
+		if _, err := config.ReadWorkspace(write(t, body)); err == nil {
+			t.Errorf("Conversation %s: read without error", name)
+		}
+	}
+}
+
+// Included is what may answer in one place: the Group's included profiles, or
+// the Conversation's list in their place, each with its profile directory
+// resolved, and the depth a chain may reach.
+func TestIncludedResolvesTheProfiles(t *testing.T) {
+	c, err := config.ReadFile(write(t, `
+[agents.auditor]
+model = "claude"
+
+[agents.trader]
+dir = "/srv/agents/trader"
+model = "gpt"
+
+[agents.scout]
+dir = "~/agents/scout"
+model = "claude"
+
+[agents.quant]
+dir = "shared/quant"
+model = "gpt"
+
+[agent]
+profiles = ["auditor"]
+max_depth = 3
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const root, home = "/home/op/.config/defios", "/home/op"
+
+	got, err := c.Included(config.Workspace{}, root, home)
+	want := config.Included{
+		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: "/home/op/.config/defios/agents/auditor", Model: "claude"}},
+		MaxDepth: 3,
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Group-level = %+v, %v\nwant %+v", got, err, want)
+	}
+
+	got, err = c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"quant", "trader", "scout"}}}, root, home)
+	want = config.Included{
+		Profiles: []config.ResolvedProfile{
+			{Handle: "quant", Dir: "/home/op/.config/defios/shared/quant", Model: "gpt"},
+			{Handle: "trader", Dir: "/srv/agents/trader", Model: "gpt"},
+			{Handle: "scout", Dir: "/home/op/agents/scout", Model: "claude"},
+		},
+		MaxDepth: 3,
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Conversation = %+v, %v\nwant %+v", got, err, want)
+	}
+
+	cleared, err := config.ReadWorkspace(write(t, "[agent]\nprofiles = []\nmax_depth = 2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = c.Included(cleared, root, home)
+	if err != nil || len(got.Profiles) != 0 || got.MaxDepth != 2 {
+		t.Fatalf("Conversation with profiles = [] = %+v, %v; want none, depth 2", got, err)
+	}
+
+	if _, err := c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"ghost"}}}, root, home); err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("a Conversation including an undefined Handle = %v; want an error naming it", err)
+	}
+
+	none, err := config.Config{}.Included(config.Workspace{}, root, home)
+	if err != nil || len(none.Profiles) != 0 || none.MaxDepth != 1 {
+		t.Fatalf("no agents configured = %+v, %v; want none, depth 1", none, err)
 	}
 }

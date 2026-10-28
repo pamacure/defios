@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -32,7 +33,21 @@ type Config struct {
 	// destroys the payload of all talk a live Recap accounts for, again
 	// after every Recap and snapshot restore (ADR 0012). Off by default.
 	Prune bool `toml:"prune,omitempty"`
+	// Agents are this Node's Agent Profiles for the Group, by Handle (ADR
+	// 0015). Only the Group's config.toml may define them; a Workspace's
+	// [agent] profiles includes them by Handle.
+	Agents map[string]Profile `toml:"agents,omitempty"`
 	Workspace
+}
+
+// Profile is one Agent Profile: its profile directory and the Model alias it
+// runs on.
+type Profile struct {
+	// Dir is the profile directory, holding SYSTEM.md. "~" expands, a
+	// relative path is under the config directory, and empty is
+	// agents/<handle>.
+	Dir   string `toml:"dir,omitempty"`
+	Model string `toml:"model"`
 }
 
 // Workspace is the part of a config.toml a Conversation's may override.
@@ -57,10 +72,15 @@ type Provider struct {
 	BaseURL string `toml:"base_url,omitempty"`
 }
 
-// Agent is what an agent runs on. Nothing reads it yet.
+// Agent is which agents may answer in Group-level talk, or in that
+// Conversation, and how deep a chain of them may go.
 type Agent struct {
-	Model       string `toml:"model,omitempty"`
-	TokenWindow int    `toml:"token_window,omitempty"`
+	// Profiles are the Handles a mention may summon here. Set in a
+	// Conversation, even empty, it replaces the Group's list.
+	Profiles []string `toml:"profiles,omitempty"`
+	// MaxDepth is the depth a chain of agents may reach; 0 is unset, and
+	// unset everywhere is 1.
+	MaxDepth int `toml:"max_depth,omitzero"`
 }
 
 // WriteFile writes config.toml, mode 0600.
@@ -75,7 +95,8 @@ func WriteFile(path string, c Config) error {
 // ReadFile parses and validates a Group's config.toml.
 func ReadFile(path string) (Config, error) {
 	var c Config
-	if err := decode(path, &c); err != nil {
+	md, err := decode(path, &c)
+	if err != nil {
 		return Config{}, err
 	}
 	if c.TailnetAuthKey != "" {
@@ -83,7 +104,10 @@ func ReadFile(path string) (Config, error) {
 			return Config{}, fmt.Errorf("config: %s: tailnet_auth_key: %w", path, err)
 		}
 	}
-	if err := c.Workspace.validate(); err != nil {
+	if err := c.Workspace.validate(md); err != nil {
+		return Config{}, fmt.Errorf("config: %s: %w", path, err)
+	}
+	if err := c.validateAgents(); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return c, nil
@@ -93,12 +117,13 @@ func ReadFile(path string) (Config, error) {
 // hold only the Workspace sections. A missing file is an empty Workspace.
 func ReadWorkspace(path string) (Workspace, error) {
 	var w Workspace
-	if err := decode(path, &w); errors.Is(err, os.ErrNotExist) {
+	md, err := decode(path, &w)
+	if errors.Is(err, os.ErrNotExist) {
 		return Workspace{}, nil
 	} else if err != nil {
 		return Workspace{}, err
 	}
-	if err := w.validate(); err != nil {
+	if err := w.validate(md); err != nil {
 		return Workspace{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return w, nil
@@ -106,22 +131,23 @@ func ReadWorkspace(path string) (Workspace, error) {
 
 // decode refuses any key that into does not define, so a misplaced or misspelt
 // secret is an error rather than ignored.
-func decode(path string, into any) error {
+func decode(path string, into any) (toml.MetaData, error) {
 	md, err := toml.DecodeFile(path, into)
 	if err != nil {
-		return fmt.Errorf("config: %w", err)
+		return md, fmt.Errorf("config: %w", err)
 	}
 	if extra := md.Undecoded(); len(extra) > 0 {
 		keys := make([]string, len(extra))
 		for i, k := range extra {
 			keys[i] = k.String()
 		}
-		return fmt.Errorf("config: %s: unknown key %s", path, strings.Join(keys, ", "))
+		return md, fmt.Errorf("config: %s: unknown key %s", path, strings.Join(keys, ", "))
 	}
-	return nil
+	return md, nil
 }
 
-func (w Workspace) validate() error {
+// validate checks w; md tells an explicit max_depth = 0 from an unset one.
+func (w Workspace) validate(md toml.MetaData) error {
 	for alias, n := range w.Networks {
 		if err := group.ValidateAlias(alias); err != nil {
 			return fmt.Errorf("[networks.%s]: %w", alias, err)
@@ -149,20 +175,60 @@ func (w Workspace) validate() error {
 			}
 		}
 	}
-	if w.Agent.Model != "" {
-		if err := group.ValidateAlias(w.Agent.Model); err != nil {
-			return fmt.Errorf("[agent] model: %w", err)
+	listed := map[string]bool{}
+	for _, h := range w.Agent.Profiles {
+		if err := ValidateHandle(h); err != nil {
+			return fmt.Errorf("[agent] profiles: %w", err)
+		}
+		if listed[h] {
+			return fmt.Errorf("[agent] profiles: %q is listed twice", h)
+		}
+		listed[h] = true
+	}
+	if md.IsDefined("agent", "max_depth") && w.Agent.MaxDepth < 1 {
+		return fmt.Errorf("[agent] max_depth %d must be at least 1", w.Agent.MaxDepth)
+	}
+	return nil
+}
+
+// validateAgents checks the Group's Agent Profiles, and that its own [agent]
+// profiles includes only Handles it defines.
+func (c Config) validateAgents() error {
+	for h, p := range c.Agents {
+		if err := ValidateHandle(h); err != nil {
+			return fmt.Errorf("[agents.%s]: %w", h, err)
+		}
+		if p.Model == "" {
+			return fmt.Errorf("[agents.%s]: model is required: the alias of the Model it runs on", h)
+		}
+		if err := group.ValidateAlias(p.Model); err != nil {
+			return fmt.Errorf("[agents.%s] model: %w", h, err)
 		}
 	}
-	if w.Agent.TokenWindow < 0 {
-		return fmt.Errorf("[agent] token_window %d must not be negative", w.Agent.TokenWindow)
+	for _, h := range c.Agent.Profiles {
+		if _, ok := c.Agents[h]; !ok {
+			return fmt.Errorf("[agent] profiles: no [agents.%s] is defined", h)
+		}
+	}
+	return nil
+}
+
+// ValidateHandle checks a Handle: the alias rule, and not "user", which is
+// how a person's talk is shown (ADR 0015).
+func ValidateHandle(h string) error {
+	if h == "user" {
+		return errors.New(`"user" is reserved for a person and cannot be a Handle`)
+	}
+	if err := group.ValidateAlias(h); err != nil {
+		return fmt.Errorf("handle: %w", err)
 	}
 	return nil
 }
 
 // Merge is w with over laid on it table by table: a Network's rpc_urls, a
-// provider's api_key or base_url, or an agent field that over sets wins, and
-// everything over leaves unset comes from w. Neither input is changed.
+// provider's api_key or base_url, an [agent] profiles list (even an empty
+// one), or a max_depth that over sets wins, and everything over leaves unset
+// comes from w. Neither input is changed.
 func (w Workspace) Merge(over Workspace) Workspace {
 	out := Workspace{Agent: w.Agent}
 	if len(w.Networks)+len(over.Networks) > 0 {
@@ -190,11 +256,59 @@ func (w Workspace) Merge(over Workspace) Workspace {
 			out.Providers[name] = cur
 		}
 	}
-	if over.Agent.Model != "" {
-		out.Agent.Model = over.Agent.Model
+	if over.Agent.Profiles != nil {
+		out.Agent.Profiles = over.Agent.Profiles
 	}
-	if over.Agent.TokenWindow != 0 {
-		out.Agent.TokenWindow = over.Agent.TokenWindow
+	if over.Agent.MaxDepth != 0 {
+		out.Agent.MaxDepth = over.Agent.MaxDepth
 	}
 	return out
+}
+
+// Included is what may answer in one place, Group-level talk or one
+// Conversation: its profiles in the order [agent] profiles lists them, and
+// the depth a chain of them may reach.
+type Included struct {
+	Profiles []ResolvedProfile
+	MaxDepth int
+}
+
+// ResolvedProfile is an included Agent Profile with its directory resolved.
+type ResolvedProfile struct {
+	Handle string
+	Dir    string // absolute
+	Model  string // a Model alias
+}
+
+// Included resolves the profiles and depth for talk whose Workspace is conv,
+// over the Group's: pass an empty Workspace for Group-level talk. A relative
+// profile directory is under root, the config directory, and "~" is home.
+// Whether the directory exists is for whoever summons it to find out.
+func (c Config) Included(conv Workspace, root, home string) (Included, error) {
+	a := c.Workspace.Merge(conv).Agent
+	out := Included{MaxDepth: a.MaxDepth}
+	if out.MaxDepth == 0 {
+		out.MaxDepth = 1
+	}
+	for _, h := range a.Profiles {
+		p, ok := c.Agents[h]
+		if !ok {
+			return Included{}, fmt.Errorf("config: [agent] profiles: no [agents.%s] is defined in the Group config", h)
+		}
+		out.Profiles = append(out.Profiles, ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Model: p.Model})
+	}
+	return out, nil
+}
+
+func profileDir(dir, handle, root, home string) string {
+	switch {
+	case dir == "":
+		return filepath.Join(root, "agents", handle)
+	case dir == "~" || strings.HasPrefix(dir, "~/"):
+		return filepath.Join(home, dir[1:])
+	case filepath.IsAbs(dir):
+		return filepath.Clean(dir)
+	default:
+		return filepath.Join(root, dir)
+	}
 }
