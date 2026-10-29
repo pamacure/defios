@@ -147,6 +147,39 @@ func TestRunBoundsAreErrors(t *testing.T) {
 	}
 }
 
+// A profile's max_tokens and temperature reach each request, and its
+// max_turns bounds the run: reached without a say, it is agent.error and
+// nothing commits.
+func TestProfileOptionsShapeTheRun(t *testing.T) {
+	a, _, gid, provider := agentPair(t, "auditor")
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), "model = \"claude\"\n",
+		"model = \"claude\"\nmax_tokens = 4000\ntemperature = 0.2\nmax_turns = 2\n", 1))
+	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) { streamSay(w, "") })
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := untilEnd(t, s, v.Seq)
+	if last := events[len(events)-2]; last.Type != serve.EventAgentError || !strings.Contains(last.Error, "2 model calls") {
+		t.Fatalf("events = %s, error %q", summary(events), last.Error)
+	}
+	if n := len(provider.seen()); n != 2 {
+		t.Fatalf("%d calls, want 2", n)
+	}
+	req, _ := transcript(t, a, v.Seq)[0]["request"].(map[string]any)
+	if req["max_tokens"] != float64(4000) || req["temperature"] != 0.2 {
+		t.Fatalf("request = %v", req)
+	}
+	time.Sleep(200 * time.Millisecond)
+	for _, ff := range freeforms(t, a.groupLevelRows(t, gid, 1)) {
+		if ff.Handle != "" {
+			t.Fatalf("an agent committed %+v", ff)
+		}
+	}
+}
+
 // Each chain's Transcript holds one line per request, output block, usage
 // and outcome, each tagged with its step, Handle, depth and attempt, and
 // never the key.

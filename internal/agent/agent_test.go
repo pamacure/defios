@@ -337,6 +337,62 @@ func TestEightCallsWithoutSayIsAnError(t *testing.T) {
 	}
 }
 
+// A profile's options reach each call under its provider's field:
+// max_tokens to Anthropic, max_completion_tokens to OpenAI, temperature to
+// both. Unset, the bound is 8192 and temperature is absent.
+func TestProfileOptionsReachTheRequest(t *testing.T) {
+	temp := 0.2
+	for p, reply := range map[string][]string{model.Anthropic: anthropicText("ok"), model.OpenAI: openaiText("ok")} {
+		field := "max_tokens"
+		if p == model.OpenAI {
+			field = "max_completion_tokens"
+		}
+		s := newScript(t, reply)
+		_, err := agent.Client{}.Run(context.Background(), agent.Request{
+			Provider: p, URL: s.URL, Model: "m", Turns: talk, MaxTokens: 4000, Temperature: &temp,
+		}, agent.Events{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body := s.body(1); body[field] != float64(4000) || body["temperature"] != 0.2 {
+			t.Errorf("%s: body = %v", p, body)
+		}
+
+		s = newScript(t, reply)
+		if _, err := run(s, p, agent.Events{}); err != nil {
+			t.Fatal(err)
+		}
+		body := s.body(1)
+		if _, ok := body["temperature"]; ok || body[field] != float64(8192) {
+			t.Errorf("%s: unset options sent %v", p, body)
+		}
+	}
+}
+
+// MaxTurns bounds a run's calls in place of the default 8.
+func TestMaxTurnsBoundsTheRun(t *testing.T) {
+	s := newScript(t, anthropicSays("again", ""))
+	_, err := agent.Client{}.Run(context.Background(), agent.Request{
+		Provider: model.Anthropic, URL: s.URL, Model: "m", Turns: talk, MaxTurns: 3,
+	}, agent.Events{})
+	if err == nil || !strings.Contains(err.Error(), "3 model calls") || s.calls() != 3 {
+		t.Fatalf("err %v after %d calls", err, s.calls())
+	}
+}
+
+// A max_tokens over the model's cap, or a temperature the model refuses,
+// is a 400 from the provider: an error, not retried.
+func TestAProviderRefusingAnOptionIsNotRetried(t *testing.T) {
+	srv, calls := failing(t, func(_ int, w http.ResponseWriter) bool {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 99999 > 64000"}}`))
+		return true
+	})
+	if _, err := generate(srv, agent.Events{}); err == nil || *calls != 1 || !strings.Contains(err.Error(), "max_tokens: 99999") {
+		t.Fatalf("err %v after %d calls, want the 400 once", err, *calls)
+	}
+}
+
 // A run records each request body as sent, each output block and each
 // call's usage, and never the key.
 func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {

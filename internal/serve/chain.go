@@ -533,7 +533,8 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	}
 	local := ws.Providers[m.Provider]
 	base, withKey := model.Endpoint(m, local.BaseURL)
-	req := agent.Request{Provider: m.Provider, URL: model.CallURL(m, base), Model: m.ModelID}
+	req := agent.Request{Provider: m.Provider, URL: model.CallURL(m, base), Model: m.ModelID,
+		MaxTokens: p.MaxTokens, Temperature: p.Temperature, MaxTurns: p.MaxTurns}
 	if withKey && local.APIKey != "" {
 		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
 		if req.APIKey, err = r.Resolve(local.APIKey); err != nil {
