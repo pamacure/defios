@@ -180,7 +180,7 @@ func runCoslLog(g *globals, typeFlag string, limit int) error {
 		lines = append(lines, l)
 	}
 	if g.json {
-		return g.emitJSON(lines)
+		return emitJSONL(g, lines)
 	}
 	p := g.out()
 	for _, l := range lines {

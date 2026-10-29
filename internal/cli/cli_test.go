@@ -19,6 +19,19 @@ type result struct {
 	stderr string
 }
 
+// unmarshalLines decodes a log's --json output: one JSON object per line.
+func unmarshalLines[T any](s string, rows *[]T) error {
+	dec := json.NewDecoder(strings.NewReader(s))
+	for dec.More() {
+		var r T
+		if err := dec.Decode(&r); err != nil {
+			return err
+		}
+		*rows = append(*rows, r)
+	}
+	return nil
+}
+
 // run executes the CLI in-process against dir with the given env.
 func run(t *testing.T, env map[string]string, stdin string, args ...string) result {
 	t.Helper()

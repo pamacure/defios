@@ -138,7 +138,7 @@ func TestConversationLogLimitAndJSON(t *testing.T) {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
+	if err := unmarshalLines(r.stdout, &rows); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, r.stdout)
 	}
 	if len(rows) != 1 || rows[0]["seq"] != float64(5) || rows[0]["text"] != "two\nlines" {
@@ -302,7 +302,7 @@ func TestConversationLogFoldsToTheLiveRecap(t *testing.T) {
 
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--json")
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 3 {
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 3 {
 		t.Fatalf("--json: %v\n%s", err, r.stdout)
 	}
 	if rows[0]["msg_type"] != "app.recap" || rows[0]["base_seq"] != float64(4) || rows[0]["covers"] != float64(2) || rows[0]["text"] != "hello and hi" {
@@ -370,7 +370,7 @@ func TestConversationLogFull(t *testing.T) {
 
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--json")
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 5 {
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 5 {
 		t.Fatalf("--json: %v\n%s", err, r.stdout)
 	}
 	if rows[0]["pruned"] != true || rows[0]["text"] != "" || rows[0]["superseded"] != true || rows[0]["sender_display_name"] != "alice" {
@@ -406,7 +406,7 @@ func TestConversationLogLean(t *testing.T) {
 	}
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--json")
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 3 {
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 3 || strings.Count(r.stdout, "\n") != 3 {
 		t.Fatalf("--json: %v\n%s", err, r.stdout)
 	}
 	if len(rows[0]) != 2 || rows[0]["sender_display_name"] != "bob" || rows[0]["text"] != "hello and hi" {
@@ -722,7 +722,7 @@ func TestConversationLogShowsWhoWroteIt(t *testing.T) {
 
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--json")
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 4 {
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 4 {
 		t.Fatalf("--json: %v\n%s", err, r.stdout)
 	}
 	if rows[0]["handle"] != "" || rows[0]["depth"] != float64(0) {
@@ -738,7 +738,7 @@ func TestConversationLogShowsWhoWroteIt(t *testing.T) {
 	}
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--json", "--limit", "2")
 	rows = nil
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 2 {
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 2 {
 		t.Fatalf("--lean --json: %v\n%s", err, r.stdout)
 	}
 	if len(rows[0]) != 2 || rows[1]["handle"] != "auditor" {

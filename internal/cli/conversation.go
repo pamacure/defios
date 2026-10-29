@@ -537,7 +537,7 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 		return emitLean(g, lines)
 	}
 	if g.json {
-		return g.emitJSON(lines)
+		return emitJSONL(g, lines)
 	}
 	p := g.out()
 	for _, l := range lines {
@@ -636,7 +636,7 @@ func emitLean(g *globals, lines []messageLine) error {
 		}
 	}
 	if g.json {
-		return g.emitJSON(lean)
+		return emitJSONL(g, lean)
 	}
 	p := g.out()
 	for _, l := range lean {

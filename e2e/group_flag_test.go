@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"defios.com/internal/group"
@@ -61,7 +60,7 @@ func TestGroupFlagReadsNonCurrentGroupWhileServing(t *testing.T) {
 		t.Fatalf("cosl log --group backup: exit %d: %s", r.code, r.stderr)
 	}
 	var rows []coslLine
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
+	if err := unmarshalLines(r.stdout, &rows); err != nil {
 		t.Fatalf("cosl log --group backup: %v\n%s", err, r.stdout)
 	}
 	if countType(rows, "membership.join") < 2 || !hasStart(rows, sessionID) {

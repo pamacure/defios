@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -113,7 +112,7 @@ func (n *node) waitCoslGroup(t *testing.T, alias string, want int) {
 		r := n.run(context.Background(), "cosl", "log", "--group", alias, "--json")
 		if r.code == 0 {
 			var rows []coslLine
-			if err := json.Unmarshal([]byte(r.stdout), &rows); err == nil {
+			if err := unmarshalLines(r.stdout, &rows); err == nil {
 				if last = len(rows); last >= want {
 					return
 				}

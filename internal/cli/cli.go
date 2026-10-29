@@ -46,6 +46,18 @@ func (g *globals) emitJSON(v any) error {
 	return enc.Encode(v)
 }
 
+// emitJSONL writes each row as one compact JSON line: a log's rows under
+// --json (ADR 0017).
+func emitJSONL[T any](g *globals, rows []T) error {
+	enc := json.NewEncoder(g.app.Stdout)
+	for _, r := range rows {
+		if err := enc.Encode(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Run executes args and returns the process exit code.
 func (a App) Run(ctx context.Context, args []string) int {
 	g := &globals{app: a}

@@ -137,7 +137,7 @@ func TestCoslGroupFlagReadsNamedReplica(t *testing.T) {
 		t.Fatalf("cosl log --group custody: exit %d, stderr %q", r.code, r.stderr)
 	}
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil || len(rows) != 3 {
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 3 {
 		t.Fatalf("rows: %v\n%s", err, r.stdout)
 	}
 	if rows[0]["msg_id"] != custodyIDs[0] {
@@ -163,7 +163,7 @@ func TestCoslLogTypeFilterLimitAndJSON(t *testing.T) {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
+	if err := unmarshalLines(r.stdout, &rows); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, r.stdout)
 	}
 	if len(rows) != 1 || rows[0]["seq"] != float64(3) || rows[0]["msg_id"] != ids[2] {
@@ -176,6 +176,16 @@ func TestCoslLogTypeFilterLimitAndJSON(t *testing.T) {
 	}
 	if rows[0]["type_name"] != "app.freeform" || rows[0]["msg_type"] != float64(6) {
 		t.Errorf("type fields: %v", rows[0])
+	}
+
+	// JSONL: one compact row per line, and an empty log prints nothing.
+	r = run(t, nil, "", "--dir", dir, "cosl", "log", "--json")
+	rows = nil
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 3 || strings.Count(r.stdout, "\n") != 3 {
+		t.Errorf("not one row per line: %v\n%s", err, r.stdout)
+	}
+	if r := run(t, nil, "", "--dir", dir, "cosl", "log", "--type", "model.create", "--json"); r.code != 0 || r.stdout != "" {
+		t.Errorf("empty log: exit %d, stdout %q", r.code, r.stdout)
 	}
 
 	if r := run(t, nil, "", "--dir", dir, "cosl", "log", "--type", "6"); r.code != 0 || strings.Count(r.stdout, "\n") != 2 {

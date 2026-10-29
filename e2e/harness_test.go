@@ -212,6 +212,19 @@ func mustJSON(t *testing.T, s string, v any) {
 	}
 }
 
+// unmarshalLines decodes a log's --json output: one JSON object per line.
+func unmarshalLines[T any](s string, rows *[]T) error {
+	dec := json.NewDecoder(strings.NewReader(s))
+	for dec.More() {
+		var r T
+		if err := dec.Decode(&r); err != nil {
+			return err
+		}
+		*rows = append(*rows, r)
+	}
+	return nil
+}
+
 func freePort(t *testing.T, network string) int {
 	t.Helper()
 	switch network {
@@ -441,7 +454,7 @@ func (n *node) coslLog(t *testing.T, until func([]coslLine) bool) ([]coslLine, s
 		r := n.run(context.Background(), "cosl", "log", "--json")
 		if r.code == 0 {
 			last = nil
-			if err := json.Unmarshal([]byte(r.stdout), &last); err == nil && until(last) {
+			if err := unmarshalLines(r.stdout, &last); err == nil && until(last) {
 				return last, r.stdout
 			}
 		}
@@ -469,7 +482,7 @@ func (n *node) conversationLog(t *testing.T, until func([]messageLine) bool) ([]
 		r := n.run(context.Background(), "conversation", "log", "--json")
 		if r.code == 0 {
 			last = nil
-			if err := json.Unmarshal([]byte(r.stdout), &last); err == nil && until(last) {
+			if err := unmarshalLines(r.stdout, &last); err == nil && until(last) {
 				return last, r.stdout
 			}
 		}

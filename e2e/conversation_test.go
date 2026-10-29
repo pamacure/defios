@@ -105,7 +105,7 @@ func waitConversation(t *testing.T, n *node, args, want []string) string {
 			var rows []struct {
 				Text string `json:"text"`
 			}
-			if err := json.Unmarshal([]byte(last.stdout), &rows); err == nil && len(rows) == len(want) {
+			if err := unmarshalLines(last.stdout, &rows); err == nil && len(rows) == len(want) {
 				ok := true
 				for i := range want {
 					if rows[i].Text != want[i] {

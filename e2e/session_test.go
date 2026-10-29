@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +124,7 @@ func (n *node) coslNow(t *testing.T) []coslLine {
 		t.Fatalf("%s cosl log: exit %d: %s", n.name, r.code, r.stderr)
 	}
 	var rows []coslLine
-	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
+	if err := unmarshalLines(r.stdout, &rows); err != nil {
 		t.Fatalf("%s cosl log: %v\n%s", n.name, err, r.stdout)
 	}
 	return rows
