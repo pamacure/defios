@@ -26,10 +26,13 @@ type chainServe struct {
 	hold            bool
 	playAtOnce      bool // play the events on connect, not after a send
 	cancelFindsNone bool
+	retryKind       string // a retry answers with this error kind, if set
+
 
 	mu       sync.Mutex
 	paths    []string // requests in order
 	cancels  []string // cancel bodies
+	retries  []string // retry bodies
 	sent     chan struct{}
 	sentOnce sync.Once
 }
@@ -79,6 +82,20 @@ func newChainServe(t *testing.T, dir string, cs *chainServe) *chainServe {
 		cs.cancels = append(cs.cancels, string(b))
 		cs.mu.Unlock()
 		fmt.Fprintf(w, `{"cancelled":%t}`, !cs.cancelFindsNone)
+	})
+	mux.HandleFunc("POST /v1/conversation/retry", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		b, _ := io.ReadAll(r.Body)
+		cs.mu.Lock()
+		cs.retries = append(cs.retries, string(b))
+		cs.mu.Unlock()
+		if cs.retryKind != "" {
+			w.Header().Set("X-DeFiOS-Error", cs.retryKind)
+			http.Error(w, "serve: "+strings.ReplaceAll(cs.retryKind, "-", " "), http.StatusConflict)
+			return
+		}
+		w.Write([]byte(`{"chain":9}`))
+		cs.sentOnce.Do(func() { close(cs.sent) })
 	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
@@ -335,6 +352,75 @@ func TestConversationSendReportsACancelFromElsewhere(t *testing.T) {
 	}})
 	r := run(t, nil, "", "--dir", dir, "conversation", "send", "@auditor")
 	if r.code != 2 || !strings.Contains(r.stderr, "cancelled") || !strings.Contains(r.stdout, "@auditor: thinking\n") {
+		t.Fatalf("exit %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
+	}
+}
+
+// retry watches before asking, then prints the retried chain like an
+// attached send; --chain names the chain.
+func TestConversationRetryStreamsTheChain(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	cs := newChainServe(t, dir, &chainServe{events: replyEvents})
+	r := run(t, nil, "", "--dir", dir, "conversation", "retry", "--chain", "9")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	if got := cs.requests(); len(got) != 2 || got[0] != "GET /v1/conversation/stream" || got[1] != "POST /v1/conversation/retry" {
+		t.Fatalf("requests = %v", got)
+	}
+	if len(cs.retries) != 1 || !strings.Contains(cs.retries[0], `"chain":9`) {
+		t.Fatalf("retries = %v", cs.retries)
+	}
+	for _, want := range []string{"retrying the chain of seq 9", "@auditor: all good\n", "@scribe skipped"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
+		}
+	}
+}
+
+// Ctrl-C while an attached retry streams cancels its chain.
+func TestConversationRetryCtrlCCancelsTheChain(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	cs := newChainServe(t, dir, &chainServe{hold: true, events: []serve.ChainEvent{
+		{Type: serve.EventChainStart, Chain: 9},
+		{Type: serve.EventAgentStart, Chain: 9, Handle: "auditor", Depth: 1},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-cs.sent
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+	r := runCtx(t, ctx, "--dir", dir, "conversation", "retry")
+	if r.code == 0 || !strings.Contains(r.stderr, "cancel") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if len(cs.retries) != 1 || strings.Contains(cs.retries[0], "chain") {
+		t.Fatalf("retries = %v, want one for the latest unfinished", cs.retries)
+	}
+	if len(cs.cancels) != 1 || !strings.Contains(cs.cancels[0], `"chain":9`) {
+		t.Fatalf("cancels = %v", cs.cancels)
+	}
+}
+
+// Nothing to retry says so and succeeds; a busy chain is refused.
+func TestConversationRetryNothingAndBusy(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{retryKind: "nothing-to-retry"})
+	r := run(t, nil, "", "--dir", dir, "conversation", "retry", "--detach")
+	if r.code != 0 || !strings.Contains(r.stdout, "nothing to retry") {
+		t.Fatalf("exit %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
+	}
+	dir = t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{retryKind: "chain-busy"})
+	r = run(t, nil, "", "--dir", dir, "conversation", "retry", "--chain", "9")
+	if r.code != 1 || !strings.Contains(r.stderr, "chain busy") {
 		t.Fatalf("exit %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
 	}
 }

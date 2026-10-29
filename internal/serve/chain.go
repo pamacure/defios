@@ -131,6 +131,9 @@ type chain struct {
 	// Only the chain's worker touches them.
 	step int
 	tr   *transcript
+	// prior is each step's latest attempt on a retry, from the Transcript;
+	// nil on a first run (ADR 0018).
+	prior map[int]priorRun
 }
 
 // transcriptName is conv's directory under transcripts/: its hex
@@ -165,16 +168,20 @@ func (h *chainHub) release(key string, cc *conversationChains) {
 }
 
 // enqueue queues c behind its Conversation's chains, under ctx, and starts
-// the Conversation's worker in wg if none runs.
-func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, run func(*chain)) {
+// the Conversation's worker in wg if none runs. It refuses, reporting
+// false, while a chain of the same seq is running or queued there.
+func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, run func(*chain)) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	c.ctx, c.cancel = context.WithCancel(ctx)
 	key := conversationKey(c.conv)
+	if h.busyLocked(key, c.seq) {
+		return false
+	}
+	c.ctx, c.cancel = context.WithCancel(ctx)
 	cc := h.conversation(key, true)
 	cc.queue = append(cc.queue, c)
 	if cc.running {
-		return
+		return true
 	}
 	cc.running = true
 	wg.Go(func() {
@@ -194,6 +201,23 @@ func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, ru
 			h.mu.Unlock()
 		}
 	})
+	return true
+}
+
+// busy reports whether the chain started by seq in the Conversation is
+// running or queued.
+func (h *chainHub) busy(conv []byte, seq uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.busyLocked(conversationKey(conv), seq)
+}
+
+func (h *chainHub) busyLocked(key string, seq uint64) bool {
+	cc := h.conversation(key, false)
+	if cc == nil {
+		return false
+	}
+	return slices.ContainsFunc(cc.queue, func(c *chain) bool { return c.seq == seq && c.ctx.Err() == nil })
 }
 
 // cancel cancels the chain started by seq in the Conversation, running or
@@ -281,10 +305,13 @@ func (h *chainHub) publishLocked(conv []byte, ev ChainEvent) {
 // that mentions agents, as it commits, until ctx ends; then it waits for
 // the chains it started. follow has already acted on the replica as it was
 // when the serve started: a chain cut off by a restart is lost, never
-// replayed (ADR 0015), and so is a mention in history a restore brings.
+// replayed (ADR 0015), and so is a mention in history a restore brings;
+// `conversation retry` recovers it (ADR 0018), and its chains are queued
+// here too.
 func (s *server) followMentions(ctx context.Context, store *cosl.Store, follow *cosl.Follower) {
 	var chains sync.WaitGroup
 	defer chains.Wait()
+	chains.Go(func() { s.takeRetries(ctx, &chains, store) })
 	errs := errlog.New(s.opts.Logf, "serve: agent mentions")
 	for follow.Wait(ctx) {
 		errs.Report(follow.Act(func(wk cosl.Wake) error {
@@ -349,6 +376,12 @@ func (s *server) runChain(c *chain) {
 // chain goes on.
 func (s *server) runAgents(c *chain, handles []string, depth uint32, publish func(ChainEvent)) bool {
 	for _, h := range handles {
+		if p, ok := c.prior[c.step+1]; ok && p.handle == h && p.finished() {
+			if !s.reuse(c, h, depth, p, publish) {
+				return false
+			}
+			continue
+		}
 		res, inc, err := s.runAgent(c, h, depth, publish)
 		if c.ctx.Err() != nil {
 			return false
@@ -418,8 +451,12 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 		return res, inc, err
 	}
 	c.step++
+	attempt := 1
+	if p, ok := c.prior[c.step]; ok && p.handle == handle {
+		attempt = p.attempt + 1 // a retry of this step
+	}
 	line := func(l TranscriptLine) {
-		l.Step, l.Handle, l.Depth, l.Attempt = c.step, handle, depth, 1
+		l.Step, l.Handle, l.Depth, l.Attempt = c.step, handle, depth, attempt
 		c.tr.write(l)
 	}
 	var said uint64
@@ -721,6 +758,7 @@ func (s *server) chainRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, CancelView{Cancelled: s.chains.cancel(conv, req.Chain)})
 	})
+	s.retryRoutes(mux)
 }
 
 // ChainStream reads chain events from the serve until closed.

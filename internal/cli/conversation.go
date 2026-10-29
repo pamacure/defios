@@ -62,6 +62,20 @@ func conversationCommand(g *globals) *cobra.Command {
 	}
 	cancel.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	root.AddCommand(cancel)
+	var retryChain uint64
+	var retryDetach bool
+	retry := &cobra.Command{
+		Use:   "retry",
+		Short: "Rerun the agents of a chain that failed, was cancelled or was cut off by a stop, reusing those that said or stayed silent (requires serve); without --chain, the latest such chain. --key scopes it to that Key",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runConversationRetry(cmd, g, keyQuery, retryChain, retryDetach)
+		},
+	}
+	retry.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	retry.Flags().Uint64Var(&retryChain, "chain", 0, "the seq of the person's message that started the chain")
+	retry.Flags().BoolVar(&retryDetach, "detach", false, "return once the chain is queued, without streaming it")
+	root.AddCommand(retry)
 	var opts logOptions
 	log := &cobra.Command{
 		Use:   "log",
@@ -289,6 +303,59 @@ func runConversationCancel(cmd *cobra.Command, g *globals, keyQuery string) erro
 		fmt.Fprintln(g.app.Stdout, "no chain was running")
 	}
 	return nil
+}
+
+// runConversationRetry queues a chain again and, unless detached, prints
+// it as an attached send does; Ctrl-C cancels it.
+func runConversationRetry(cmd *cobra.Command, g *globals, keyQuery string, chain uint64, detach bool) error {
+	conv, err := queriedConversation(g, keyQuery)
+	if err != nil {
+		return err
+	}
+	client := serve.Client{Socket: g.paths().Socket}
+	ctx := cmd.Context()
+	var stream *serve.ChainStream
+	if !detach {
+		if stream, err = client.ConversationStream(ctx, conv); err != nil {
+			return serveError(err)
+		}
+		defer stream.Close()
+	}
+	v, err := client.ConversationRetry(ctx, conv, chain)
+	switch {
+	case errors.Is(err, serve.ErrNothingToRetry):
+		if g.json {
+			return g.emitJSON(v)
+		}
+		fmt.Fprintln(g.app.Stdout, err)
+		return nil
+	case errors.Is(err, serve.ErrChainBusy), errors.Is(err, serve.ErrNotAChain):
+		return exitUsagef("%w", err)
+	case err != nil:
+		return serveError(err)
+	}
+	if g.json && stream != nil {
+		if err := json.NewEncoder(g.app.Stdout).Encode(v); err != nil {
+			return err
+		}
+	} else if g.json {
+		return g.emitJSON(v)
+	} else {
+		fmt.Fprintf(g.app.Stdout, "retrying the chain of seq %d\n", v.Chain)
+	}
+	if stream == nil {
+		return nil
+	}
+	err = followChain(g, stream, v.Chain)
+	if ctx.Err() != nil {
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, cerr := client.ConversationCancel(cctx, conv, v.Chain); cerr != nil {
+			return exitOperationalf("interrupted, but cancelling the agents failed: %w", cerr)
+		}
+		return exitOperationalf("cancelled: nothing is committed for the agent that was answering, and the rest of the chain is dropped")
+	}
+	return err
 }
 
 // queriedConversation is the Conversation --key names, or nil for

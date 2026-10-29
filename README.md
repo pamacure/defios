@@ -229,7 +229,16 @@ defios conversation follow --key ecdsa:<hex>
 defios conversation cancel --key ecdsa:<hex>
 ```
 
-Other clients use the same endpoints on the socket: `GET /v1/conversation/stream` (newline-delimited JSON events) and `POST /v1/conversation/cancel`, as [ADR 0015](docs/adr/0015-agent-profiles-handles-and-agent-chains.md) describes, with `agent.commit` carrying the said `text` and `agent.silent {handle}` for a silent agent ([ADR 0018](docs/adr/0018-an-agent-says-one-message.md)).
+`conversation retry` reruns a chain that failed, was cancelled or was cut off by a stop. Without `--chain` it takes the latest such chain in that Conversation, as its Transcripts show; `--chain <seq>` names one by your message's seq. It walks the chain as it first ran: an agent that said something or stayed silent is not run again (shown as skipped), and the agents its message summoned are walked as before, so nothing is posted twice. Every other agent runs again against the talk as it is now, recorded as a new `attempt` in the same Transcript. Retrying a chain that is running or queued is refused (exit 1), and a chain where every agent said or stayed silent has nothing to retry, which it says. Retry posts nothing itself; it queues and streams like `send`, Ctrl-C cancels it, and `--detach` returns once it is queued.
+
+A chain running or queued when `serve` stops (switching the Current Group and a restore count as a stop) is lost and never resumes on its own; a detached sender learns of it only from the missing reply. Recover it after `serve` is back with `conversation retry`, or with `--chain <seq>` for one that was still queued and so has no Transcript, which runs it from the start:
+
+```bash
+defios conversation retry --key ecdsa:<hex>
+defios conversation retry --chain 42
+```
+
+Other clients use the same endpoints on the socket: `GET /v1/conversation/stream` (newline-delimited JSON events), `POST /v1/conversation/cancel` and `POST /v1/conversation/retry` (`{"conversation_id", "chain"}`, answering `{"chain"}` once it is queued), as [ADR 0015](docs/adr/0015-agent-profiles-handles-and-agent-chains.md) describes, with `agent.commit` carrying the said `text` and `agent.silent {handle}` for a silent agent ([ADR 0018](docs/adr/0018-an-agent-says-one-message.md)).
 
 An unknown Key exits 1:
 
