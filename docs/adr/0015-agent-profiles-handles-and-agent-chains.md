@@ -13,6 +13,11 @@ sets. This amends [ADR 0013](0013-group-config-workspaces-and-named-secrets.md):
 Agent Profile, not in a Workspace. Neither change had shipped behaviour,
 because nothing read them, so nothing is migrated.
 
+*Amended by [ADR 0018](0018-an-agent-says-one-message.md): an agent commits
+only what it passes to its one tool, `say`, and everything else it generates
+stays in a Node-local Transcript. The bullets on what an agent sees, the
+stream, the CLI, retry and text only are amended there.*
+
 ## Considered options
 
 - **Profiles defined per Group, with their markdown inside the Group
@@ -100,11 +105,16 @@ because nothing read them, so nothing is migrated.
   that commits during a chain waits behind it in order. Chains in different
   Conversations run concurrently. A chain cut off by a serve restart is lost,
   never resumed or replayed.
+  *Amended by [ADR 0018](0018-an-agent-says-one-message.md): `conversation retry --chain <seq>` reruns
+  it on request.*
 - **What an agent sees.** The system prompt is `SYSTEM.md` followed by a
   preamble from the serve: its Handle, the Conversation's Key, its depth, and either the
   Handles it may summon or that it may summon none at its depth. Then come the
   live Recap and the talk after it, in the `--lean` format. Nothing trims the
   context to a window yet.
+  *Amended by [ADR 0018](0018-an-agent-says-one-message.md): the talk is sent as turns, the
+  agent's own messages from any Node as `assistant` turns, and within a
+  summon each call carries the whole output so far.*
 - **Stream.** The serve's local socket gains `GET /v1/conversation/stream`,
   newline-delimited JSON events: `chain.start`, `agent.start {handle,
   depth}`, `agent.delta {text}`, `agent.reset` (a retry starts the reply
@@ -112,6 +122,8 @@ because nothing read them, so nothing is migrated.
   `agent.error`, `chain.end`. It also gains `POST /v1/conversation/cancel`.
   These are the contract for any later TUI or GUI client, as they are for the
   CLI.
+  *Amended by [ADR 0018](0018-an-agent-says-one-message.md): `agent.delta` gains a `kind`, `agent.commit`
+  carries the message, and `agent.silent` is new.*
 - **CLI.** `conversation send` stays attached after the person's message
   commits and streams the chain until it ends. Ctrl-C cancels the chain, and
   `--detach` returns once the message commits. `conversation follow` watches
@@ -119,6 +131,8 @@ because nothing read them, so nothing is migrated.
   `conversation cancel` cancels the running chain. `send --handle @handle
   [--depth n]` lets an external runner post as an agent. The Handle must be
   defined and included, and `--depth` defaults to 1.
+  *Amended by [ADR 0018](0018-an-agent-says-one-message.md): attached `send` prints each message as it
+  commits, and `follow` streams the whole output.*
 - **Cancel.** Cancel ends the provider request, commits nothing for the
   running agent, and drops the rest of the chain. The person's message stays
   committed.
@@ -129,6 +143,10 @@ because nothing read them, so nothing is migrated.
   chain stops and commits nothing for that agent. The error goes to watchers
   and the serve log. There is no retry verb: the person mentions the agent
   again.
+  *Amended by [ADR 0018](0018-an-agent-says-one-message.md): `conversation retry` reruns the agents of
+  a chain that did not say or stay silent.*
 - **Text only.** An agent replies with text. It has no tools: it cannot
   propose a Sign Request or read chain state. Giving it any is a later
   decision with its own ADR.
+  *Amended by [ADR 0018](0018-an-agent-says-one-message.md): an agent has one tool, `say`, which
+  commits its message and has no external effect.*

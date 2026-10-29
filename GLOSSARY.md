@@ -61,8 +61,12 @@ One agent persona a Node can summon into talk: a profile directory holding its s
 _Avoid_: agent (that is the running thing, not its definition), persona, bot, workspace
 
 **Handle**:
-The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`.
+The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes every message under its Handle, from any Node, as its own words.
 _Avoid_: agent name, username, alias (that is a Group's, Network's or Model's local label)
+
+**Transcript**:
+Everything the agents of one chain generated — thinking, text, tool calls and their results — kept on the Node that ran the chain and never replicated. Only what its agents say reaches the COSL; the Transcript is the rest, and other parties never see it.
+_Avoid_: work log, trace, output log, reply (that is the message it says)
 
 **Mention**:
 `@` and a Handle in talk, which summons that agent where the message is sent. Found from the text alone, case-insensitively and at a word boundary, never by matching against the Handles that exist; `\@` writes one without summoning. A person's mention that names no included Handle is refused; an agent's is skipped.
