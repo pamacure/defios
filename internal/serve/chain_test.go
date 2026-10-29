@@ -665,3 +665,144 @@ func TestWatchersLeavingDoNotStopTheChain(t *testing.T) {
 		t.Fatalf("%d rows, want the person's and auditor's", len(rows))
 	}
 }
+
+// replyAs makes provider answer as each agent its system prompt names,
+// "You are <handle>.", with replies[handle], or "reply <n>".
+func replyAs(provider *fakeProvider, replies map[string]string) {
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		sys := provider.seen()[n-1].System
+		for h, text := range replies {
+			if strings.HasPrefix(sys, "You are "+h+".") {
+				streamText(w, text)
+				return
+			}
+		}
+		streamText(w, fmt.Sprint("reply ", n))
+	})
+}
+
+// With max_depth 1 an agent's mention summons nobody: it is skipped with a
+// reason, and the reply that carries it commits.
+func TestAnAgentsMentionAtMaxDepthIsSkipped(t *testing.T) {
+	a, b, gid, provider := agentPair(t, "auditor", "scribe")
+	replyAs(provider, map[string]string{"auditor": "ask @scribe"})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := untilEnd(t, s, v.Seq)
+	if got := summary(events); got != "chain.start start:@auditor/1 delta:ask @scribe commit skipped:@scribe end" {
+		t.Fatalf("events = %s", got)
+	}
+	if reason := events[4].Reason; !strings.Contains(reason, "max_depth 1") {
+		t.Fatalf("reason = %q", reason)
+	}
+	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "ask @scribe" || ffs[1].Handle != "auditor" {
+		t.Fatalf("rows = %+v", ffs)
+	}
+	if n := len(provider.seen()); n != 1 {
+		t.Fatalf("provider called %d times, want 1", n)
+	}
+}
+
+// With max_depth 2 an agent's mention runs depth-first at the next depth:
+// @auditor @scribe, where auditor mentions quant, runs auditor, quant,
+// scribe at depths 1, 2, 1. quant's mention, at max_depth, is skipped, and
+// auditor's mention of itself is ignored. Each agent's preamble gives its
+// depth and the Handles it may summon, or none.
+func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "scribe", "quant")
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
+	replyAs(provider, map[string]string{"auditor": "@quant, and me, @auditor", "quant": "ask @scribe"})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "chain.start start:@auditor/1 delta:@quant, and me, @auditor commit " +
+		"start:@quant/2 delta:ask @scribe commit skipped:@scribe " +
+		"start:@scribe/1 delta:reply 3 commit end"
+	if got := summary(untilEnd(t, s, v.Seq)); got != want {
+		t.Fatalf("events = %s\nwant     %s", got, want)
+	}
+	calls := provider.seen()
+	if len(calls) != 3 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	for i, want := range []string{
+		"You are at depth 1 of at most 2. Agents you may summon by mentioning them: @scribe, @quant.",
+		"You are at depth 2 of at most 2. Agents you may summon by mentioning them: none.",
+		"You are at depth 1 of at most 2. Agents you may summon by mentioning them: @auditor, @quant.",
+	} {
+		if !strings.Contains(calls[i].System, want) {
+			t.Errorf("call %d system prompt lacks %q:\n%s", i+1, want, calls[i].System)
+		}
+	}
+	if want := "alice: @auditor @scribe\nalice/@auditor: @quant, and me, @auditor\nalice/@quant: ask @scribe"; calls[2].Prompt != want {
+		t.Fatalf("scribe's prompt = %q, want %q", calls[2].Prompt, want)
+	}
+}
+
+// A nested agent's failure drops the rest of the chain, the agents after
+// the one that summoned it included.
+func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "scribe", "quant")
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			streamText(w, "@quant")
+			return
+		}
+		w.WriteHeader(400)
+		io.WriteString(w, `{"error":"no such model"}`)
+	})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 delta:@quant commit start:@quant/2 error:@quant end" {
+		t.Fatalf("events = %s", got)
+	}
+	if n := len(provider.seen()); n != 2 {
+		t.Fatalf("provider called %d times, want 2", n)
+	}
+}
+
+// A cancel while a nested agent answers drops the rest of the chain, the
+// agents after the one that summoned it included.
+func TestCancelDropsNestedAgents(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "scribe", "quant")
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
+	started := make(chan int, 1)
+	provider.set(func(n int, w http.ResponseWriter, r *http.Request) {
+		if n == 1 {
+			streamText(w, "@quant")
+			return
+		}
+		streamParts(w, "start")
+		started <- n
+		<-r.Context().Done()
+	})
+	s := watch(t, a)
+	ctx := context.Background()
+	v, err := a.client().ConversationSend(ctx, "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
+		t.Fatalf("cancel = %+v, %v", c, err)
+	}
+	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 delta:@quant commit start:@quant/2 delta:start end:cancelled" {
+		t.Fatalf("events = %s", got)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := len(provider.seen()); n != 2 {
+		t.Fatalf("provider called %d times, want 2", n)
+	}
+}

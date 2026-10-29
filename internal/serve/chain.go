@@ -303,7 +303,7 @@ func (s *server) startChains(ctx context.Context, wg *sync.WaitGroup, store *cos
 		}
 		ff := msg.(*coslv1.AppFreeform)
 		if ff.Handle != "" {
-			continue // an agent's mentions do not summon yet (#66)
+			continue // an agent's reply summons within its own chain
 		}
 		if handles := mention.Handles(ff.Text); len(handles) > 0 {
 			s.chains.enqueue(ctx, wg, &chain{seq: r.Seq, conv: r.ConversationID, handles: handles}, s.runChain)
@@ -313,8 +313,9 @@ func (s *server) startChains(ctx context.Context, wg *sync.WaitGroup, store *cos
 }
 
 // runChain runs each agent c summons in turn, each reply committed before
-// the next starts. It stops at the first error or a cancel, and commits
-// nothing for the agent it stopped at.
+// the next starts, and depth-first the agents each reply summons. It stops
+// at the first error or a cancel, and commits nothing for the agent it
+// stopped at.
 func (s *server) runChain(c *chain) {
 	publish := func(ev ChainEvent) {
 		ev.Chain = c.seq
@@ -322,37 +323,79 @@ func (s *server) runChain(c *chain) {
 	}
 	if c.ctx.Err() == nil {
 		publish(ChainEvent{Type: EventChainStart})
-		for _, h := range c.handles {
-			err := s.runAgent(c.ctx, c.conv, h, 1, publish)
-			if c.ctx.Err() != nil {
-				break
-			}
-			if err != nil {
-				s.opts.Logf("serve: @%s answering seq %d: %v", h, c.seq, err)
-				publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
-				break
-			}
-		}
+		s.runAgents(c, c.handles, 1, publish)
 	}
 	s.chains.end(c)
 }
 
-// errSkipped is an agent the chain passes over: it is no longer included.
+// runAgents runs handles at depth, each followed by the agents its reply
+// summons at depth+1. It reports whether the chain goes on.
+func (s *server) runAgents(c *chain, handles []string, depth uint32, publish func(ChainEvent)) bool {
+	for _, h := range handles {
+		text, inc, err := s.runAgent(c.ctx, c.conv, h, depth, publish)
+		if c.ctx.Err() != nil {
+			return false
+		}
+		if errors.Is(err, errSkipped) {
+			continue
+		}
+		if err != nil {
+			s.opts.Logf("serve: @%s answering seq %d: %v", h, c.seq, err)
+			publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
+			return false
+		}
+		if !s.runAgents(c, s.summoned(c, h, depth, text, inc, publish), depth+1, publish) {
+			return false
+		}
+	}
+	return true
+}
+
+// summoned is the Handles that handle's reply at depth summons under inc,
+// in mention order. A mention that cannot summon is skipped, logged and
+// published; handle's mention of itself is ignored (ADR 0015).
+func (s *server) summoned(c *chain, handle string, depth uint32, reply string, inc config.Included, publish func(ChainEvent)) []string {
+	var out []string
+	for _, h := range mention.Handles(reply) {
+		var reason string
+		switch {
+		case h == handle:
+			continue
+		case !includes(inc, h):
+			reason = fmt.Sprintf("@%s is not in [agent] profiles here", h)
+		case !canSummon(depth, inc):
+			reason = fmt.Sprintf("@%s replied at depth %d, which is max_depth %d", handle, depth, inc.MaxDepth)
+		default:
+			out = append(out, h)
+			continue
+		}
+		s.opts.Logf("serve: seq %d skips @%s: %s", c.seq, h, reason)
+		publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: reason})
+	}
+	return out
+}
+
+// canSummon reports whether a message at depth summons agents under inc.
+func canSummon(depth uint32, inc config.Included) bool { return int(depth) < inc.MaxDepth }
+
+// errSkipped is an agent the chain passes over because it is no longer
+// included; runAgent has already published the skip.
 var errSkipped = errors.New("skipped")
 
-// runAgent generates the agent's reply to the talk so far and commits it.
-func (s *server) runAgent(ctx context.Context, conv []byte, handle string, depth uint32, publish func(ChainEvent)) error {
+// runAgent generates the agent's reply to the talk so far, commits it and
+// returns it, with what was included where it answered.
+func (s *server) runAgent(ctx context.Context, conv []byte, handle string, depth uint32, publish func(ChainEvent)) (string, config.Included, error) {
 	_, store, ok := s.current()
 	if !ok {
-		return ErrNoReplica
+		return "", config.Included{}, ErrNoReplica
 	}
-	req, err := s.agentRequest(store, conv, handle, depth)
+	req, inc, err := s.agentRequest(store, conv, handle, depth)
 	if errors.Is(err, errSkipped) {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
-		return nil
+		return "", inc, err
 	}
 	if err != nil {
-		return err
+		return "", inc, err
 	}
 	publish(ChainEvent{Type: EventAgentStart, Handle: handle, Depth: depth})
 	client := agent.Client{Backoff: s.opts.AgentBackoff}
@@ -361,23 +404,23 @@ func (s *server) runAgent(ctx context.Context, conv []byte, handle string, depth
 		Reset: func() { publish(ChainEvent{Type: EventAgentReset}) },
 	})
 	if err != nil {
-		return err
+		return "", inc, err
 	}
 	// Once the reply is whole, a cancel no longer cuts it: an append in
 	// flight could land anyway, and agent.commit must report it if it does.
 	commit := context.WithoutCancel(ctx)
 	v, err := s.conversationSend(commit, text, handle, depth, conv)
 	if err != nil {
-		return err
+		return "", inc, err
 	}
 	// The next agent reads this reply from the replica.
 	wait, cancel := context.WithTimeout(commit, raftx.ApplyTimeout)
 	defer cancel()
 	if err := waitApplied(wait, store, v.Seq); err != nil {
-		return err
+		return "", inc, err
 	}
 	publish(ChainEvent{Type: EventAgentCommit, Seq: v.Seq})
-	return nil
+	return text, inc, nil
 }
 
 // waitApplied returns once the replica has applied seq.
@@ -402,31 +445,31 @@ func waitApplied(ctx context.Context, store *cosl.Store, seq uint64) error {
 // agentRequest is the call to the Model that answers as handle: its
 // SYSTEM.md and the serve's preamble, then the talk so far in the lean
 // format, sent where this Node's config says with its key (ADR 0013).
-func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, error) {
+func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
 	_, ws, inc, err := s.included(store, conv)
 	if err != nil {
-		return agent.Request{}, err
+		return agent.Request{}, inc, err
 	}
 	i := slices.IndexFunc(inc.Profiles, func(p config.ResolvedProfile) bool { return p.Handle == handle })
 	if i < 0 {
-		return agent.Request{}, errSkipped
+		return agent.Request{}, inc, errSkipped
 	}
 	p := inc.Profiles[i]
 	system, err := os.ReadFile(filepath.Join(p.Dir, "SYSTEM.md"))
 	if err != nil {
-		return agent.Request{}, fmt.Errorf("@%s's profile: %w", handle, err)
+		return agent.Request{}, inc, fmt.Errorf("@%s's profile: %w", handle, err)
 	}
 	rows, err := store.Log(cosl.Query{MsgTypes: model.MsgTypes})
 	if err != nil {
-		return agent.Request{}, err
+		return agent.Request{}, inc, err
 	}
 	models, err := model.Fold(rows)
 	if err != nil {
-		return agent.Request{}, err
+		return agent.Request{}, inc, err
 	}
 	m, err := model.Get(models, p.Model)
 	if err != nil {
-		return agent.Request{}, fmt.Errorf("@%s runs on %w", handle, err)
+		return agent.Request{}, inc, fmt.Errorf("@%s runs on %w", handle, err)
 	}
 	local := ws.Providers[m.Provider]
 	base, withKey := model.Endpoint(m, local.BaseURL)
@@ -434,18 +477,18 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	if withKey && local.APIKey != "" {
 		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
 		if req.APIKey, err = r.Resolve(local.APIKey); err != nil {
-			return agent.Request{}, fmt.Errorf("[providers.%s] api_key: %w", m.Provider, err)
+			return agent.Request{}, inc, fmt.Errorf("[providers.%s] api_key: %w", m.Provider, err)
 		}
 	}
 	where, err := s.whereSaid(store, conv)
 	if err != nil {
-		return agent.Request{}, err
+		return agent.Request{}, inc, err
 	}
 	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + preamble(handle, depth, inc, where)
 	if req.Prompt, err = s.talkSoFar(store, conv); err != nil {
-		return agent.Request{}, err
+		return agent.Request{}, inc, err
 	}
-	return req, nil
+	return req, inc, nil
 }
 
 // whereSaid names where conv's talk is: a Key's Conversation by its curve
@@ -476,15 +519,16 @@ func preamble(handle string, depth uint32, inc config.Included, where string) st
 	b.WriteString("The talk so far follows, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for an agent's.\n")
 	fmt.Fprintf(&b, "Your reply is committed as one message from @%s.\n", handle)
 	var others []config.ResolvedProfile
-	for _, p := range inc.Profiles {
-		if p.Handle != handle {
-			others = append(others, p)
+	if canSummon(depth, inc) {
+		for _, p := range inc.Profiles {
+			if p.Handle != handle {
+				others = append(others, p)
+			}
 		}
 	}
-	if int(depth) >= inc.MaxDepth || len(others) == 0 {
-		b.WriteString("You may summon no agent at your depth: an @handle in your reply summons nobody.\n")
-	} else {
-		fmt.Fprintf(&b, "You may summon another agent by mentioning it: %s.\n", listHandles(others))
+	fmt.Fprintf(&b, "You are at depth %d of at most %d. Agents you may summon by mentioning them: %s.\n", depth, inc.MaxDepth, listHandles(others))
+	if len(others) == 0 {
+		b.WriteString("An @handle in your reply summons nobody.\n")
 	}
 	return b.String()
 }

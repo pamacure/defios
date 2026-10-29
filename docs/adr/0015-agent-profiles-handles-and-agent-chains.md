@@ -101,7 +101,7 @@ because nothing read them, so nothing is migrated.
   Conversations run concurrently. A chain cut off by a serve restart is lost,
   never resumed or replayed.
 - **What an agent sees.** The system prompt is `SYSTEM.md` followed by a
-  preamble from the serve: its Handle, the Conversation's Key, and either the
+  preamble from the serve: its Handle, the Conversation's Key, its depth, and either the
   Handles it may summon or that it may summon none at its depth. Then come the
   live Recap and the talk after it, in the `--lean` format. Nothing trims the
   context to a window yet.
