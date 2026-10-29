@@ -117,17 +117,29 @@ func openaiText(parts ...string) []string {
 	return append(out, openaiChunk(`{}`, "stop"), openaiUsage, `data: [DONE]`)
 }
 
-// recorder collects what Run reports as it goes.
+// recorder collects what Run reports as it goes, consecutive deltas of a
+// kind as one "kind:text" entry.
 type recorder struct {
 	mu      sync.Mutex
 	log     []string
+	kind    string // of the last entry, while it is a delta
 	records []agent.Record
+}
+
+func (r *recorder) delta(kind, s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.kind == kind {
+		r.log[len(r.log)-1] += s
+		return
+	}
+	r.log, r.kind = append(r.log, kind+":"+s), kind
 }
 
 func (r *recorder) events() agent.Events {
 	return agent.Events{
-		Delta: func(s string) { r.mu.Lock(); r.log = append(r.log, "delta:"+s); r.mu.Unlock() },
-		Reset: func() { r.mu.Lock(); r.log = append(r.log, "reset"); r.mu.Unlock() },
+		Delta: r.delta,
+		Reset: func() { r.mu.Lock(); r.log, r.kind = append(r.log, "reset"), ""; r.mu.Unlock() },
 		Record: func(rec agent.Record) {
 			r.mu.Lock()
 			r.records = append(r.records, rec)
@@ -217,7 +229,7 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 	if res.Silent || res.Said != "all good" {
 		t.Fatalf("result = %+v", res)
 	}
-	if rec.String() != "delta:let me think" {
+	if rec.String() != `text:let me think tool:say {"text":"all good"}` {
 		t.Fatalf("events %s", &rec)
 	}
 	h := s.headers[0]
@@ -240,6 +252,34 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 	}
 }
 
+// Every block streams with its kind as it is generated: thinking, text,
+// and each tool call (a say like any other) as its name and its input.
+// Consecutive tool calls start on a new line; redacted thinking streams
+// nothing.
+func TestAnthropicStreamsEveryBlockWithItsKind(t *testing.T) {
+	reply := []string{anthropicStart(),
+		anthropicEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`),
+		anthropicEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm, "}}`),
+		anthropicEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"ok"}}`),
+		anthropicEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}`),
+		anthropicEvent("content_block_stop", `{"type":"content_block_stop","index":0}`),
+		anthropicEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"xyz"}}`),
+		anthropicEvent("content_block_stop", `{"type":"content_block_stop","index":1}`),
+	}
+	reply = append(reply, anthropicTextBlock(2, "so")...)
+	reply = append(reply, anthropicToolBlock(3, "toolu_1", "say", "{}")...)
+	reply = append(reply, anthropicToolBlock(4, "toolu_2", "say", sayInput("done"))...)
+	reply = append(reply, anthropicEnd("tool_use")...)
+	s := newScript(t, reply)
+	var rec recorder
+	if res, err := run(s, model.Anthropic, rec.events()); err != nil || res.Said != "done" {
+		t.Fatalf("result %+v err %v", res, err)
+	}
+	if want := `thinking:hmm, ok text:so tool:say {}` + "\n" + `say {"text":"done"}`; rec.String() != want {
+		t.Fatalf("events %s\nwant   %s", &rec, want)
+	}
+}
+
 // An OpenAI run does the same over Chat Completions: the system prompt as
 // the first message before the turns, the key as a bearer token, say as a function tool and
 // max_completion_tokens 8192.
@@ -250,7 +290,7 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Silent || res.Said != "all good" || rec.String() != "delta:hmm" {
+	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:say {"text":"all good"}` {
 		t.Fatalf("result = %+v, events %s", res, &rec)
 	}
 	if s.headers[0].Get("Authorization") != "Bearer sk-secret" {
@@ -419,7 +459,7 @@ func TestRetryableFailuresRetry(t *testing.T) {
 		})
 		var rec recorder
 		res, err := generate(srv, rec.events())
-		if err != nil || res.Said != "fine" || *calls != 4 || rec.String() != "delta:ok" {
+		if err != nil || res.Said != "fine" || *calls != 4 || rec.String() != `text:ok tool:say {"text":"fine"}` {
 			t.Errorf("%s: result %+v err %v after %d calls, events %s", name, res, err, *calls, &rec)
 		}
 	}
@@ -437,7 +477,7 @@ func TestRetryableFailuresRetry(t *testing.T) {
 	if err != nil || res.Said != "fine" || *calls != 3 {
 		t.Fatalf("dropped: result %+v err %v after %d calls", res, err, *calls)
 	}
-	if rec.String() != "delta:partial reset delta:partial reset delta:ok" {
+	if rec.String() != `text:partial reset text:partial reset text:ok tool:say {"text":"fine"}` {
 		t.Fatalf("dropped: events %s", &rec)
 	}
 }

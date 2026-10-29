@@ -58,7 +58,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 commit end" {
+	if got := summary(untilEnd(t, s, v.Seq)); got != `chain.start start:@auditor/1 tool:say {"text":"`+strings.Repeat("x", 4097)+`"}`+"\n"+`say {"text":"shorter"} commit:shorter end` {
 		t.Fatalf("events = %s", got)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "shorter" {
@@ -87,7 +87,7 @@ func TestASilentAgentCommitsNothingAndTheChainGoesOn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "chain.start start:@auditor/1 delta:nothing for @quant silent:@auditor start:@scribe/1 commit end"
+	want := `chain.start start:@auditor/1 text:nothing for @quant silent:@auditor start:@scribe/1 tool:say {"text":"noted"} commit:noted end`
 	if got := summary(untilEnd(t, s, v.Seq)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
@@ -175,8 +175,14 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	if got := lineWords(lines); got != want {
 		t.Fatalf("transcript = %s\nwant         %s", got, want)
 	}
-	if said := lines[8]["seq"]; said != float64(events[2].Seq) {
-		t.Fatalf("said seq %v, agent.commit %d", said, events[2].Seq)
+	var commit serve.ChainEvent
+	for _, ev := range events {
+		if ev.Type == serve.EventAgentCommit {
+			commit = ev
+		}
+	}
+	if said := lines[8]["seq"]; commit.Text != "ok" || said != float64(commit.Seq) {
+		t.Fatalf("said seq %v, agent.commit %+v", said, commit)
 	}
 	req, _ := lines[4]["request"].(map[string]any)
 	if req["model"] != "claude-test" || len(req["messages"].([]any)) != 3 {

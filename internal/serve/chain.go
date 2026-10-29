@@ -35,8 +35,8 @@ import (
 const (
 	EventChainStart   = "chain.start"
 	EventAgentStart   = "agent.start"   // handle, depth
-	EventAgentDelta   = "agent.delta"   // text the agent generates
-	EventAgentReset   = "agent.reset"   // a retry starts the model call over
+	EventAgentDelta   = "agent.delta"   // kind, text: output as the agent generates it
+	EventAgentReset   = "agent.reset"   // a retry starts the model call over: its deltas are void
 	EventAgentSkipped = "agent.skipped" // handle, reason
 	EventAgentCommit  = "agent.commit"  // seq, text: an accepted say committed
 	EventAgentSilent  = "agent.silent"  // handle: it ended without say
@@ -50,6 +50,7 @@ type ChainEvent struct {
 	Chain  uint64 `json:"chain"` // the seq of the message that started it
 	Handle string `json:"handle,omitempty"`
 	Depth  uint32 `json:"depth,omitempty"`
+	Kind   string `json:"kind,omitempty"` // agent.delta: thinking, text or tool
 	Text   string `json:"text,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
@@ -80,9 +81,12 @@ type conversationChains struct {
 }
 
 // shown is a running chain from the agent now answering: its chain.start,
-// that agent's agent.start, and its reply so far as one agent.delta.
+// that agent's agent.start, and its output so far, consecutive deltas of a
+// kind as one agent.delta.
 type shown struct {
-	start, agent, reply *ChainEvent
+	start, agent *ChainEvent
+	output       []ChainEvent
+	attempt      int // output[attempt:] is the current attempt's, which a reset voids
 }
 
 // fold takes ev into what a watcher joining after it is shown.
@@ -91,17 +95,17 @@ func (sh *shown) fold(ev ChainEvent) {
 	case EventChainStart:
 		*sh = shown{start: &ev}
 	case EventAgentStart:
-		sh.agent, sh.reply = &ev, nil
+		sh.agent, sh.output, sh.attempt = &ev, nil, 0
 	case EventAgentDelta:
-		if sh.reply == nil {
-			sh.reply = &ev
+		if n := len(sh.output); n > sh.attempt && sh.output[n-1].Kind == ev.Kind {
+			sh.output[n-1].Text += ev.Text
 		} else {
-			sh.reply.Text += ev.Text
+			sh.output = append(sh.output, ev)
 		}
 	case EventAgentReset:
-		sh.reply = nil
+		sh.output = sh.output[:sh.attempt]
 	case EventAgentCommit, EventAgentSilent, EventAgentSkipped, EventAgentError:
-		sh.agent, sh.reply = nil, nil
+		sh.agent, sh.output, sh.attempt = nil, nil, 0
 	case EventChainEnd:
 		*sh = shown{}
 	}
@@ -110,12 +114,12 @@ func (sh *shown) fold(ev ChainEvent) {
 // events are what a watcher joining now is shown, in order.
 func (sh *shown) events() []ChainEvent {
 	var out []ChainEvent
-	for _, ev := range []*ChainEvent{sh.start, sh.agent, sh.reply} {
+	for _, ev := range []*ChainEvent{sh.start, sh.agent} {
 		if ev != nil {
 			out = append(out, *ev)
 		}
 	}
-	return out
+	return append(out, sh.output...)
 }
 
 // chain is the agents one person's message summons, in mention order.
@@ -220,7 +224,7 @@ func (h *chainHub) cancel(conv []byte, seq uint64) bool {
 
 // subscribe adds a watcher of the Conversation's chains; stop removes it.
 // A chain already running is shown from the agent now answering, with its
-// reply so far. The channel closes if the watcher falls too far behind.
+// output so far. The channel closes if the watcher falls too far behind.
 func (h *chainHub) subscribe(conv []byte) (events <-chan ChainEvent, stop func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -229,7 +233,10 @@ func (h *chainHub) subscribe(conv []byte) (events <-chan ChainEvent, stop func()
 	cc := h.conversation(key, true)
 	cc.watchers[ch] = struct{}{}
 	for _, ev := range cc.shown.events() {
-		ch <- ev // at most three, into an empty buffer
+		select {
+		case ch <- ev: // a run's blocks are far fewer than the buffer holds
+		default:
+		}
 	}
 	return ch, func() {
 		h.mu.Lock()
@@ -239,6 +246,16 @@ func (h *chainHub) subscribe(conv []byte) (events <-chan ChainEvent, stop func()
 			close(ch)
 		}
 		h.release(key, cc)
+	}
+}
+
+// attempt marks where an attempt at a model call begins in the output of
+// the agent answering in conv: a reset voids only what follows.
+func (h *chainHub) attempt(conv []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if cc := h.conversation(conversationKey(conv), false); cc != nil {
+		cc.shown.attempt = len(cc.shown.output)
 	}
 }
 
@@ -443,12 +460,13 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 	publish(ChainEvent{Type: EventAgentStart, Handle: handle, Depth: depth})
 	client := agent.Client{Backoff: s.opts.AgentBackoff}
 	res, err = client.Run(c.ctx, req, agent.Events{
-		Delta: func(t string) { publish(ChainEvent{Type: EventAgentDelta, Text: t}) },
+		Delta: func(kind, t string) { publish(ChainEvent{Type: EventAgentDelta, Kind: kind, Text: t}) },
 		Reset: func() { publish(ChainEvent{Type: EventAgentReset}) },
 		Record: func(r agent.Record) {
 			l := TranscriptLine{Kind: r.Kind}
 			switch r.Kind {
 			case "request":
+				s.chains.attempt(c.conv) // each attempt is recorded as it starts
 				l.Request = r.Data
 			case "block":
 				l.Block = r.Data

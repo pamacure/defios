@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/agent"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
@@ -34,7 +35,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	var as sendAs
 	send := &cobra.Command{
 		Use:   "send <text>",
-		Short: "Append a message (requires serve) and stream the replies of the agents it mentions; Ctrl-C cancels them. --key scopes it to that Key; --handle posts it as an agent",
+		Short: "Append a message (requires serve) and print the messages of the agents it mentions as they commit; Ctrl-C cancels them. --key scopes it to that Key; --handle posts it as an agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			as.depthSet = cmd.Flags().Changed("depth")
@@ -48,7 +49,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	root.AddCommand(send)
 	follow := &cobra.Command{
 		Use:   "follow",
-		Short: "Stream the replies of agents in a Conversation on this Node, chain after chain (requires serve); Ctrl-C detaches and cancels nothing. --key scopes it to that Key",
+		Short: "Stream the whole output of agents in a Conversation, then their messages, on this Node, chain after chain (requires serve); Ctrl-C detaches and cancels nothing. --key scopes it to that Key",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runConversationFollow(cmd, g, keyQuery) },
 	}
@@ -192,11 +193,11 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 }
 
 // followChain prints the chain the message at seq started, until it ends:
-// each agent's text as it streams and its message as it commits, labelled
-// @handle:, or under --json each event as a line. Other chains in the
-// Conversation are not this send's.
+// each agent's message as it commits, labelled @handle:, with skips and
+// silences, but not its output; or under --json each event as a line.
+// Other chains in the Conversation are not this send's.
 func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
-	cp := newChainPrinter(g)
+	cp := newChainPrinter(g, false)
 	var failed error
 	for {
 		ev, err := stream.Next()
@@ -238,7 +239,7 @@ func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) erro
 		return serveError(err)
 	}
 	defer stream.Close()
-	cp := newChainPrinter(g)
+	cp := newChainPrinter(g, true)
 	p := g.out()
 	for {
 		ev, err := stream.Next()
@@ -300,18 +301,20 @@ func queriedConversation(g *globals, keyQuery string) ([]byte, error) {
 	return resolveConversation(g, keyQuery)
 }
 
-// chainPrinter prints chain events as they stream: each agent's text
-// labelled @handle: as it streams, then what it says when that commits, or
-// under --json each event as a line.
+// chainPrinter prints chain events as they stream: with output set, each
+// agent's output as it is generated, a line per kind labelled
+// @handle (kind):, thinking and tool calls dimmed; then what it says when
+// that commits, labelled @handle:. Under --json each event is a line.
 type chainPrinter struct {
 	g      *globals
 	enc    *json.Encoder
+	output bool   // print the agents' output, not only their messages
 	handle string // the agent answering, once one starts
-	open   bool   // a line of its streamed text is open
+	kind   string // of the line of output open, if one is
 }
 
-func newChainPrinter(g *globals) *chainPrinter {
-	return &chainPrinter{g: g, enc: json.NewEncoder(g.app.Stdout)}
+func newChainPrinter(g *globals, output bool) *chainPrinter {
+	return &chainPrinter{g: g, enc: json.NewEncoder(g.app.Stdout), output: output}
 }
 
 func (c *chainPrinter) print(ev serve.ChainEvent) error {
@@ -322,23 +325,33 @@ func (c *chainPrinter) print(ev serve.ChainEvent) error {
 	out := c.g.app.Stdout
 	label := func() string { return p.primary("@"+c.handle+":") + " " }
 	endLine := func() {
-		if c.open {
+		if c.kind != "" {
 			fmt.Fprintln(out)
 		}
-		c.open = false
+		c.kind = ""
 	}
 	switch ev.Type {
 	case serve.EventAgentStart:
-		c.handle, c.open = ev.Handle, false
+		c.handle, c.kind = ev.Handle, ""
 	case serve.EventAgentDelta:
-		if !c.open {
-			fmt.Fprint(out, label())
-			c.open = true
+		if !c.output {
+			break
 		}
-		fmt.Fprint(out, ev.Text)
+		show := func(s string) string { return s }
+		if ev.Kind != agent.KindText {
+			show = p.dim
+		}
+		if ev.Kind != c.kind {
+			endLine()
+			fmt.Fprint(out, show("@"+c.handle+" ("+ev.Kind+"):")+" ")
+			c.kind = ev.Kind
+		}
+		fmt.Fprint(out, show(ev.Text))
 	case serve.EventAgentReset:
-		endLine()
-		fmt.Fprintln(out, p.dim("[retrying; the reply starts over]"))
+		if c.output {
+			endLine()
+			fmt.Fprintln(out, p.dim("[retrying; the model call starts over]"))
+		}
 	case serve.EventAgentCommit:
 		endLine()
 		if ev.Text != "" {

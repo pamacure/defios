@@ -287,17 +287,24 @@ func untilStreaming(t *testing.T, s *serve.ChainStream, seq uint64, handle strin
 	return out
 }
 
-// summary is events as "type:detail" words, deltas joined to their text.
+// summary is events as "type:detail" words; consecutive deltas of a kind
+// are one "<kind>:<text>" word.
 func summary(events []serve.ChainEvent) string {
 	var out []string
+	kind := "" // of the last word, while it is a delta
 	for _, ev := range events {
+		if ev.Type == serve.EventAgentDelta && ev.Kind == kind {
+			out[len(out)-1] += ev.Text
+			continue
+		}
+		kind = ""
 		switch ev.Type {
 		case serve.EventAgentStart:
 			out = append(out, fmt.Sprintf("start:@%s/%d", ev.Handle, ev.Depth))
 		case serve.EventAgentDelta:
-			out = append(out, "delta:"+ev.Text)
+			out, kind = append(out, ev.Kind+":"+ev.Text), ev.Kind
 		case serve.EventAgentCommit:
-			out = append(out, "commit")
+			out = append(out, "commit:"+ev.Text)
 		case serve.EventAgentSilent:
 			out = append(out, "silent:@"+ev.Handle)
 		case serve.EventAgentSkipped:
@@ -348,7 +355,7 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.Seq)
-	if got := summary(events); got != "chain.start start:@auditor/1 delta:thinking commit end" {
+	if got := summary(events); got != `chain.start start:@auditor/1 text:thinking tool:say {"text":"reply 1"} commit:reply 1 end` {
 		t.Fatalf("events = %s", got)
 	}
 	rows := b.groupLevelRows(t, gid, 2)
@@ -378,7 +385,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.Seq)
-	want := "chain.start start:@scribe/1 delta:thinking commit start:@auditor/1 delta:thinking commit end"
+	want := `chain.start start:@scribe/1 text:thinking tool:say {"text":"reply 1"} commit:reply 1 start:@auditor/1 text:thinking tool:say {"text":"reply 2"} commit:reply 2 end`
 	if got := summary(events); got != want {
 		t.Fatalf("events = %s", got)
 	}
@@ -438,7 +445,7 @@ func TestOnlyTheMentioningNodeRunsTheAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, sb, v.Seq)); !strings.HasSuffix(got, "commit end") {
+	if got := summary(untilEnd(t, sb, v.Seq)); !strings.HasSuffix(got, "commit:reply 1 end") {
 		t.Fatalf("events = %s", got)
 	}
 	a.groupLevelRows(t, gid, 2)
@@ -471,7 +478,7 @@ func TestRetryResetsAndCommitsTheFinalReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 delta:half agent.reset delta:whole commit end" {
+	if got := summary(untilEnd(t, s, v.Seq)); got != `chain.start start:@auditor/1 text:half agent.reset text:whole tool:say {"text":"whole"} commit:whole end` {
 		t.Fatalf("events = %s", got)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "whole" {
@@ -540,7 +547,7 @@ func TestCancelCommitsNothing(t *testing.T) {
 	if c, err := a.client().ConversationCancel(ctx, nil, v.Seq); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != "chain.start start:@auditor/1 delta:start end:cancelled" {
+	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != "chain.start start:@auditor/1 text:start end:cancelled" {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -713,7 +720,7 @@ func TestMentionInAKeysConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit end") {
+	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit:reply 1 end") {
 		t.Fatalf("events = %s", got)
 	}
 	call := provider.seen()[0]
@@ -763,8 +770,46 @@ func TestALateWatcherSeesTheCurrentAgent(t *testing.T) {
 	close(release)
 	untilEnd(t, early, v.Seq)
 	got := summary(untilEnd(t, late, v.Seq))
-	if want := "chain.start start:@scribe/1 delta:so far delta: done commit end"; got != want {
+	if want := `chain.start start:@scribe/1 text:so far done tool:say {"text":"so far done"} commit:so far done end`; got != want {
 		t.Fatalf("late watcher saw %s, want %s", got, want)
+	}
+}
+
+// A watcher joining mid-run is shown the run's output so far: the calls
+// already made, and of a call a retry started over, only the new attempt.
+func TestALateWatcherSeesTheRunSoFar(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor")
+	started, release := make(chan struct{}), make(chan struct{})
+	provider.set(func(n int, w http.ResponseWriter, r *http.Request) {
+		switch n {
+		case 1:
+			streamParts(w, "plan")
+			endSay(w, "") // refused: a second call follows
+			return
+		case 2:
+			streamParts(w, "half") // cut off: the retry starts the call over
+			return
+		}
+		streamParts(w, "so far")
+		close(started)
+		select {
+		case <-release:
+			endSay(w, "done")
+		case <-r.Context().Done():
+		}
+	})
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	time.Sleep(100 * time.Millisecond) // let the serve publish the deltas
+	late := watch(t, a)
+	close(release)
+	got := summary(untilEnd(t, late, v.Seq))
+	want := `chain.start start:@auditor/1 text:plan tool:say {"text":""} text:so far tool:say {"text":"done"} commit:done end`
+	if got != want {
+		t.Fatalf("late watcher saw %s\nwant              %s", got, want)
 	}
 }
 
@@ -792,7 +837,7 @@ func TestWatchersLeavingDoNotStopTheChain(t *testing.T) {
 	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); !strings.HasSuffix(got, "commit start:@scribe/1 delta:start end:cancelled") {
+	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); !strings.HasSuffix(got, "commit:start done start:@scribe/1 text:start end:cancelled") {
 		t.Fatalf("events = %s", got)
 	}
 	if rows := a.groupLevelRows(t, gid, 2); len(rows) != 2 {
@@ -826,10 +871,10 @@ func TestAnAgentsMentionAtMaxDepthIsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.Seq)
-	if got := summary(events); got != "chain.start start:@auditor/1 commit skipped:@scribe end" {
+	if got := summary(events); got != `chain.start start:@auditor/1 tool:say {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe end` {
 		t.Fatalf("events = %s", got)
 	}
-	if reason := events[3].Reason; !strings.Contains(reason, "max_depth 1") {
+	if reason := events[len(events)-2].Reason; !strings.Contains(reason, "max_depth 1") {
 		t.Fatalf("reason = %q", reason)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "ask @scribe" || ffs[1].Handle != "auditor" {
@@ -855,9 +900,9 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "chain.start start:@auditor/1 commit " +
-		"start:@quant/2 commit skipped:@scribe " +
-		"start:@scribe/1 commit end"
+	want := `chain.start start:@auditor/1 tool:say {"text":"@quant, and me, @auditor"} commit:@quant, and me, @auditor ` +
+		`start:@quant/2 tool:say {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe ` +
+		`start:@scribe/1 tool:say {"text":"reply 3"} commit:reply 3 end`
 	if got := summary(untilEnd(t, s, v.Seq)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
@@ -898,7 +943,7 @@ func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 commit start:@quant/2 error:@quant end" {
+	if got := summary(untilEnd(t, s, v.Seq)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 error:@quant end` {
 		t.Fatalf("events = %s", got)
 	}
 	if n := len(provider.seen()); n != 2 {
@@ -933,7 +978,7 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != "chain.start start:@auditor/1 commit start:@quant/2 delta:start end:cancelled" {
+	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 text:start end:cancelled` {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)

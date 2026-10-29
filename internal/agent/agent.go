@@ -86,10 +86,19 @@ type Record struct {
 	Data json.RawMessage
 }
 
+// Kinds of output an agent generates, as it streams (ADR 0018).
+const (
+	KindThinking = "thinking"
+	KindText     = "text"
+	KindTool     = "tool" // a tool call, say like any other, as its name and input
+)
+
 // Events receive a run as it goes. Any may be nil.
 type Events struct {
-	// Delta is generated text as it streams.
-	Delta func(text string)
+	// Delta is output of kind as it is generated: every block of every
+	// model call of the run. Redacted thinking has no text and streams
+	// nothing.
+	Delta func(kind, text string)
 	// Reset means a retry starts the current call over: forget its deltas.
 	Reset func()
 	// Record receives each request as sent and each call's output and usage.
@@ -108,6 +117,33 @@ func (ev Events) record(kind string, v any) {
 		}
 	}
 	ev.Record(Record{Kind: kind, Data: data})
+}
+
+// stream hands a run's output to Events.Delta as it is generated. A block
+// of the kind the last one was, other than text, starts on a new line.
+type stream struct {
+	delta   func(kind, text string)
+	last    string // the kind streamed last
+	started bool   // the current attempt has streamed
+}
+
+// block starts a block of kind with text.
+func (s *stream) block(kind, text string) {
+	if kind == s.last && kind != KindText {
+		text = "\n" + text
+	}
+	s.more(kind, text)
+}
+
+// more is text of the block of kind streaming now.
+func (s *stream) more(kind, text string) {
+	if text == "" {
+		return
+	}
+	s.last, s.started = kind, true
+	if s.delta != nil {
+		s.delta(kind, text)
+	}
 }
 
 // Retries is how many times a retryable failure is tried again (ADR 0015).
@@ -155,8 +191,9 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
+	st := &stream{delta: ev.Delta}
 	for range MaxCalls {
-		out, err := c.call(ctx, req, conv.body(), ev)
+		out, err := c.call(ctx, req, conv.body(), ev, st)
 		if err != nil {
 			return Result{}, err
 		}
@@ -316,20 +353,16 @@ func (c *conversation) body() []byte {
 
 // call makes one model call with body, retrying what is worth retrying; a
 // retry after the call began streaming resets it.
-func (c Client) call(ctx context.Context, req Request, body []byte, ev Events) (call, error) {
+func (c Client) call(ctx context.Context, req Request, body []byte, ev Events, st *stream) (call, error) {
 	wait := c.Backoff
 	if wait == 0 {
 		wait = time.Second
 	}
 	for n := 0; ; n++ {
-		started := false
+		last := st.last
+		st.started = false
 		ev.record("request", json.RawMessage(body))
-		out, err := c.attempt(ctx, req, body, func(s string) {
-			started = true
-			if ev.Delta != nil {
-				ev.Delta(s)
-			}
-		})
+		out, err := c.attempt(ctx, req, body, st)
 		if err == nil {
 			return out, nil
 		}
@@ -340,8 +373,11 @@ func (c Client) call(ctx context.Context, req Request, body []byte, ev Events) (
 			}
 			return call{}, err
 		}
-		if started && ev.Reset != nil {
-			ev.Reset()
+		if st.started {
+			st.last = last
+			if ev.Reset != nil {
+				ev.Reset()
+			}
 		}
 		pause := wait
 		if retry.after >= 0 {
@@ -384,7 +420,7 @@ func retryAfter(h http.Header) time.Duration {
 // retryEvents are the Anthropic stream error types worth retrying.
 var retryEvents = map[string]bool{"overloaded_error": true, "rate_limit_error": true, "api_error": true}
 
-func (c Client) attempt(ctx context.Context, req Request, body []byte, delta func(string)) (call, error) {
+func (c Client) attempt(ctx context.Context, req Request, body []byte, st *stream) (call, error) {
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, req.URL, bytes.NewReader(body))
 	if err != nil {
 		return call{}, fmt.Errorf("agent: %w", err)
@@ -421,9 +457,9 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, delta fun
 	}
 	var p parser
 	if req.Provider == model.Anthropic {
-		p = &anthropicParser{delta: delta}
+		p = &anthropicParser{st: st}
 	} else {
-		p = &openaiParser{delta: delta}
+		p = &openaiParser{st: st}
 	}
 	if err := readEvents(resp.Body, p.event); err != nil {
 		return call{}, err
@@ -468,7 +504,7 @@ type parser interface {
 
 // anthropicParser reads a Messages stream.
 type anthropicParser struct {
-	delta  func(string)
+	st     *stream
 	blocks []Block
 	inputs []strings.Builder // tool_use input JSON as it streams, by index
 	out    call
@@ -516,8 +552,13 @@ func (p *anthropicParser) event(data string) (bool, error) {
 		b := ev.ContentBlock
 		b.Input = nil // it streams as input_json_delta
 		p.blocks[ev.Index] = b
-		if b.Text != "" && p.delta != nil {
-			p.delta(b.Text)
+		switch b.Type {
+		case "text":
+			p.st.block(KindText, b.Text)
+		case "thinking":
+			p.st.block(KindThinking, b.Thinking)
+		case "tool_use":
+			p.st.block(KindTool, b.Name+" ")
 		}
 	case "content_block_delta":
 		if ev.Index < 0 || ev.Index >= len(p.blocks) {
@@ -527,15 +568,15 @@ func (p *anthropicParser) event(data string) (bool, error) {
 		switch ev.Delta.Type {
 		case "text_delta":
 			b.Text += ev.Delta.Text
-			if p.delta != nil && ev.Delta.Text != "" {
-				p.delta(ev.Delta.Text)
-			}
+			p.st.more(KindText, ev.Delta.Text)
 		case "thinking_delta":
 			b.Thinking += ev.Delta.Thinking
+			p.st.more(KindThinking, ev.Delta.Thinking)
 		case "signature_delta":
 			b.Signature += ev.Delta.Signature
 		case "input_json_delta":
 			p.inputs[ev.Index].WriteString(ev.Delta.PartialJSON)
+			p.st.more(KindTool, ev.Delta.PartialJSON)
 		}
 	case "message_delta":
 		p.out.stop = ev.Delta.StopReason
@@ -589,7 +630,7 @@ func toolInput(s string) json.RawMessage {
 
 // openaiParser reads a Chat Completions stream.
 type openaiParser struct {
-	delta func(string)
+	st    *stream
 	text  strings.Builder
 	calls []Block
 	args  []strings.Builder
@@ -625,10 +666,12 @@ func (p *openaiParser) event(data string) (bool, error) {
 	}
 	for _, c := range ev.Choices {
 		if c.Delta.Content != "" {
-			p.text.WriteString(c.Delta.Content)
-			if p.delta != nil {
-				p.delta(c.Delta.Content)
+			if p.text.Len() == 0 {
+				p.st.block(KindText, c.Delta.Content)
+			} else {
+				p.st.more(KindText, c.Delta.Content)
 			}
+			p.text.WriteString(c.Delta.Content)
 		}
 		for _, tc := range c.Delta.ToolCalls {
 			if tc.Index < 0 || tc.Index > 1024 {
@@ -640,8 +683,12 @@ func (p *openaiParser) event(data string) (bool, error) {
 			}
 			b := &p.calls[tc.Index]
 			b.ID += tc.ID
+			if b.Name == "" && tc.Function.Name != "" {
+				p.st.block(KindTool, tc.Function.Name+" ")
+			}
 			b.Name += tc.Function.Name
 			p.args[tc.Index].WriteString(tc.Function.Arguments)
+			p.st.more(KindTool, tc.Function.Arguments)
 		}
 		if c.FinishReason != "" {
 			p.out.stop = c.FinishReason

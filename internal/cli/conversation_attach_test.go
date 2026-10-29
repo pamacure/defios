@@ -107,25 +107,29 @@ func runCtx(t *testing.T, ctx context.Context, args ...string) result {
 	return result{code: code, stdout: out.String(), stderr: errb.String()}
 }
 
-// replyEvents is a chain started by seq 9 in which @auditor answers "all
-// good" over a retry, and @scribe is skipped.
+// replyEvents is a chain started by seq 9 in which @auditor thinks, writes
+// text over a retry, says "all good", and @scribe is skipped.
 var replyEvents = []serve.ChainEvent{
 	{Type: serve.EventChainStart, Chain: 3}, // another chain's, not this send's
 	{Type: serve.EventChainEnd, Chain: 3},
 	{Type: serve.EventChainStart, Chain: 9},
 	{Type: serve.EventAgentStart, Chain: 9, Handle: "auditor", Depth: 1},
-	{Type: serve.EventAgentDelta, Chain: 9, Text: "all"},
+	{Type: serve.EventAgentDelta, Chain: 9, Kind: "thinking", Text: "hmm"},
+	{Type: serve.EventAgentDelta, Chain: 9, Kind: "text", Text: "draft"},
 	{Type: serve.EventAgentReset, Chain: 9},
-	{Type: serve.EventAgentDelta, Chain: 9, Text: "all"},
-	{Type: serve.EventAgentDelta, Chain: 9, Text: " good"},
-	{Type: serve.EventAgentCommit, Chain: 9, Seq: 10},
+	{Type: serve.EventAgentDelta, Chain: 9, Kind: "text", Text: "let me"},
+	{Type: serve.EventAgentDelta, Chain: 9, Kind: "text", Text: " check"},
+	{Type: serve.EventAgentDelta, Chain: 9, Kind: "tool", Text: "say "},
+	{Type: serve.EventAgentDelta, Chain: 9, Kind: "tool", Text: `{"text":"all good"}`},
+	{Type: serve.EventAgentCommit, Chain: 9, Seq: 10, Text: "all good"},
 	{Type: serve.EventAgentSkipped, Chain: 9, Handle: "scribe", Reason: "@scribe is no longer in [agent] profiles here"},
 	{Type: serve.EventChainEnd, Chain: 9},
 }
 
 // A message that mentions agents stays attached after it commits: it
 // watches before sending, so it misses nothing, and prints its own chain's
-// replies labelled by Handle until the chain ends.
+// messages labelled by Handle as they commit, and skips, until the chain
+// ends. It prints none of the output.
 func TestConversationSendStreamsTheChain(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
@@ -137,17 +141,13 @@ func TestConversationSendStreamsTheChain(t *testing.T) {
 	if got := cs.requests(); len(got) != 2 || got[0] != "GET /v1/conversation/stream" || got[1] != "POST /v1/conversation/send" {
 		t.Fatalf("requests = %v", got)
 	}
-	for _, want := range []string{"sent as seq 9", "@auditor: all\n", "@auditor: all good\n", "@scribe skipped: @scribe is no longer"} {
-		if !strings.Contains(r.stdout, want) {
-			t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
-		}
-	}
-	if strings.Count(r.stdout, "@auditor:") != 2 {
-		t.Errorf("a reset should start the reply over on a new line:\n%s", r.stdout)
+	want := "sent as seq 9 (msg_id " + strings.Repeat("ab", 32) + ")\n@auditor: all good\n@scribe skipped: @scribe is no longer in [agent] profiles here\n"
+	if r.stdout != want {
+		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
 	}
 }
 
-// What an agent says prints when it commits, under its Handle, after any
+// What an agent says prints when it commits, under its Handle, and not the
 // text it streamed; a silent agent is shown as silent.
 func TestConversationSendPrintsSaidTextAndSilence(t *testing.T) {
 	dir := t.TempDir()
@@ -155,7 +155,7 @@ func TestConversationSendPrintsSaidTextAndSilence(t *testing.T) {
 	newChainServe(t, dir, &chainServe{events: []serve.ChainEvent{
 		{Type: serve.EventChainStart, Chain: 9},
 		{Type: serve.EventAgentStart, Chain: 9, Handle: "auditor", Depth: 1},
-		{Type: serve.EventAgentDelta, Chain: 9, Text: "checking"},
+		{Type: serve.EventAgentDelta, Chain: 9, Kind: "text", Text: "checking"},
 		{Type: serve.EventAgentCommit, Chain: 9, Seq: 10, Text: "all good"},
 		{Type: serve.EventAgentStart, Chain: 9, Handle: "scribe", Depth: 1},
 		{Type: serve.EventAgentSilent, Chain: 9, Handle: "scribe"},
@@ -165,10 +165,8 @@ func TestConversationSendPrintsSaidTextAndSilence(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
-	for _, want := range []string{"@auditor: checking\n", "@auditor: all good\n", "@scribe stayed silent\n"} {
-		if !strings.Contains(r.stdout, want) {
-			t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
-		}
+	if want := "sent as seq 9 (msg_id " + strings.Repeat("ab", 32) + ")\n@auditor: all good\n@scribe stayed silent\n"; r.stdout != want {
+		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
 	}
 }
 
@@ -212,7 +210,7 @@ func TestConversationSendCtrlCCancelsTheChain(t *testing.T) {
 	cs := newChainServe(t, dir, &chainServe{hold: true, events: []serve.ChainEvent{
 		{Type: serve.EventChainStart, Chain: 9},
 		{Type: serve.EventAgentStart, Chain: 9, Handle: "auditor", Depth: 1},
-		{Type: serve.EventAgentDelta, Chain: 9, Text: "thinking"},
+		{Type: serve.EventAgentDelta, Chain: 9, Kind: "text", Text: "thinking"},
 	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -245,20 +243,20 @@ func TestConversationSendReportsALostChain(t *testing.T) {
 	}
 }
 
-// follow prints every chain in the Conversation as it streams, the way an
-// attached send does, and keeps following after each ends. Ctrl-C only
-// detaches: it cancels nothing.
+// follow prints every chain in the Conversation as it streams, the whole
+// output a line per kind, then the message as it commits, and keeps
+// following after each ends. Ctrl-C only detaches: it cancels nothing.
 func TestConversationFollowPrintsChainsUntilCtrlC(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	cs := newChainServe(t, dir, &chainServe{playAtOnce: true, hold: true, events: append(append([]serve.ChainEvent(nil), replyEvents...),
 		serve.ChainEvent{Type: serve.EventChainStart, Chain: 12},
 		serve.ChainEvent{Type: serve.EventAgentStart, Chain: 12, Handle: "scribe", Depth: 1},
-		serve.ChainEvent{Type: serve.EventAgentDelta, Chain: 12, Text: "noted"},
+		serve.ChainEvent{Type: serve.EventAgentDelta, Chain: 12, Kind: "text", Text: "noted"},
 		serve.ChainEvent{Type: serve.EventChainEnd, Chain: 12, Cancelled: true},
 		serve.ChainEvent{Type: serve.EventChainStart, Chain: 14},
 		serve.ChainEvent{Type: serve.EventAgentStart, Chain: 14, Handle: "auditor", Depth: 1},
-		serve.ChainEvent{Type: serve.EventAgentDelta, Chain: 14, Text: "still going"},
+		serve.ChainEvent{Type: serve.EventAgentDelta, Chain: 14, Kind: "text", Text: "still going"},
 	)})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -269,10 +267,22 @@ func TestConversationFollowPrintsChainsUntilCtrlC(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
-	for _, want := range []string{"@auditor: all good\n", "@scribe skipped", "@scribe: noted\n", "cancelled", "@auditor: still going"} {
-		if !strings.Contains(r.stdout, want) {
-			t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
-		}
+	want := `[agents answering seq 3]
+[agents answering seq 9]
+@auditor (thinking): hmm
+@auditor (text): draft
+[retrying; the model call starts over]
+@auditor (text): let me check
+@auditor (tool): say {"text":"all good"}
+@auditor: all good
+@scribe skipped: @scribe is no longer in [agent] profiles here
+[agents answering seq 12]
+@scribe (text): noted
+[cancelled; nothing is committed for the agent that was answering]
+[agents answering seq 14]
+@auditor (text): still going`
+	if r.stdout != want {
+		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
 	}
 	if got := cs.requests(); len(got) != 1 || got[0] != "GET /v1/conversation/stream" {
 		t.Fatalf("requests = %v, want the stream alone", got)
@@ -323,18 +333,18 @@ func TestConversationCancel(t *testing.T) {
 }
 
 // A chain cancelled from another terminal ends an attached send with the
-// cancel, the cut-off reply ended on its line.
+// cancel; the output cut off is not printed.
 func TestConversationSendReportsACancelFromElsewhere(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	newChainServe(t, dir, &chainServe{events: []serve.ChainEvent{
 		{Type: serve.EventChainStart, Chain: 9},
 		{Type: serve.EventAgentStart, Chain: 9, Handle: "auditor", Depth: 1},
-		{Type: serve.EventAgentDelta, Chain: 9, Text: "thinking"},
+		{Type: serve.EventAgentDelta, Chain: 9, Kind: "text", Text: "thinking"},
 		{Type: serve.EventChainEnd, Chain: 9, Cancelled: true},
 	}})
 	r := run(t, nil, "", "--dir", dir, "conversation", "send", "@auditor")
-	if r.code != 2 || !strings.Contains(r.stderr, "cancelled") || !strings.Contains(r.stdout, "@auditor: thinking\n") {
+	if r.code != 2 || !strings.Contains(r.stderr, "cancelled") || strings.Contains(r.stdout, "thinking") {
 		t.Fatalf("exit %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
 	}
 }
