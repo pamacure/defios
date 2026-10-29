@@ -366,18 +366,11 @@ func (n *node) stopServe(t *testing.T) {
 // subtree is keyed by its local alias (ADR 0007).
 func (n *node) wipeReplica(t *testing.T, alias string) {
 	t.Helper()
+	// Under --dir the Group's config.toml and Conversation Workspaces share
+	// this directory, so wipe by name rather than keep by name.
 	dir := filepath.Join(n.dir, "group", alias)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		// Keep roster.json (the Node still knows its Group) and tsnet/ (its
-		// tailnet identity on this Group), which now live in the alias subtree.
-		if e.Name() == "roster.json" || e.Name() == "tsnet" {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+	for _, name := range []string{"cosl.sqlite", "cosl.sqlite-wal", "cosl.sqlite-shm", "raft.db", "raft-snap"} {
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
