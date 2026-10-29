@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"defios.com/internal/agent"
 )
 
 // Transcript outcomes: how a run ended (ADR 0018). A run cut off by a serve
@@ -16,6 +18,36 @@ const (
 	OutcomeCancelled = "cancelled" // a cancel stopped it
 )
 
+// Transcript line kinds: which of a TranscriptLine's fields it holds.
+const (
+	KindRequest = agent.RecordRequest // request: a request body as sent, never its headers
+	KindBlock   = agent.RecordBlock   // block: one output block
+	KindUsage   = agent.RecordUsage   // usage: a model call's usage
+	KindOutcome = "outcome"           // outcome, and seq or error with it
+)
+
+// runOutcome is the closing line of a run that committed seq said (0 if
+// nothing) and ended with err; a run that commits nothing and ends without
+// an error is silent. Once a say has committed it is `said`, whatever
+// failed after, so a retry never posts it again. A run cut off by the serve
+// stopping before that has none: ok is false.
+func runOutcome(said uint64, err error, cancelled, stopped bool) (l TranscriptLine, ok bool) {
+	l.Kind = KindOutcome
+	switch {
+	case said != 0:
+		l.Outcome, l.Seq = OutcomeSaid, said
+	case err == nil:
+		l.Outcome = OutcomeSilent
+	case cancelled:
+		l.Outcome = OutcomeCancelled
+	case stopped:
+		return l, false
+	default:
+		l.Outcome, l.Error = OutcomeError, err.Error()
+	}
+	return l, true
+}
+
 // TranscriptLine is one line of a chain's Transcript. Every line names the
 // run it belongs to: its step in the chain's depth-first order (from 1), its
 // Handle, depth and attempt (from 1). Kind says which of the rest it holds.
@@ -24,9 +56,7 @@ type TranscriptLine struct {
 	Handle  string `json:"handle"`
 	Depth   uint32 `json:"depth"`
 	Attempt int    `json:"attempt"`
-	// Kind is "request" (a request body as sent, never its headers),
-	// "block" (one output block), "usage" (a model call's usage) or
-	// "outcome".
+	// Kind is KindRequest, KindBlock, KindUsage or KindOutcome.
 	Kind    string          `json:"kind"`
 	Request json.RawMessage `json:"request,omitempty"`
 	Block   json.RawMessage `json:"block,omitempty"`

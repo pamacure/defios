@@ -163,6 +163,31 @@ func TestConversationSendStreamsTheChain(t *testing.T) {
 	}
 }
 
+// send --json prints the send's view, then its chain's events as lines,
+// all but the agents' output as it streams: starts, deltas and resets are
+// follow's.
+func TestConversationSendJSONPrintsWhatTheChainSays(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{events: replyEvents})
+	r := run(t, nil, "", "--dir", dir, "--json", "conversation", "send", "@auditor @scribe, look")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	var types []string
+	for _, l := range lines[1:] {
+		var ev serve.ChainEvent
+		if err := json.Unmarshal([]byte(l), &ev); err != nil {
+			t.Fatalf("%q: %v", l, err)
+		}
+		types = append(types, ev.Type)
+	}
+	if got := strings.Join(types, " "); got != "chain.start agent.commit agent.skipped chain.end" {
+		t.Fatalf("events = %s\nstdout:\n%s", got, r.stdout)
+	}
+}
+
 // What an agent says prints when it commits, under its Handle, and not the
 // text it streamed; a silent agent is shown as silent.
 func TestConversationSendPrintsSaidTextAndSilence(t *testing.T) {

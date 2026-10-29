@@ -52,12 +52,12 @@ type Profile struct {
 	Dir   string `toml:"dir,omitempty"`
 	Model string `toml:"model"`
 	// MaxTokens bounds each model call; 0 is unset, which is
-	// agent.MaxTokens.
+	// agent.DefaultMaxTokens.
 	MaxTokens int `toml:"max_tokens,omitzero"`
 	// Temperature is left out of the request when nil.
 	Temperature *float64 `toml:"temperature,omitempty"`
 	// MaxTurns is how many model calls a summon may make; 0 is unset,
-	// which is agent.MaxCalls.
+	// which is agent.DefaultMaxTurns.
 	MaxTurns int `toml:"max_turns,omitzero"`
 }
 
@@ -324,10 +324,10 @@ func (c Config) Included(conv Workspace, root, home string) (Included, error) {
 		r := ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Model: p.Model,
 			MaxTokens: p.MaxTokens, Temperature: p.Temperature, MaxTurns: p.MaxTurns}
 		if r.MaxTokens == 0 {
-			r.MaxTokens = agent.MaxTokens
+			r.MaxTokens = agent.DefaultMaxTokens
 		}
 		if r.MaxTurns == 0 {
-			r.MaxTurns = agent.MaxCalls
+			r.MaxTurns = agent.DefaultMaxTurns
 		}
 		out.Profiles = append(out.Profiles, r)
 	}

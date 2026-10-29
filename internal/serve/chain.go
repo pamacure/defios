@@ -138,6 +138,9 @@ type chain struct {
 	// prior is each step's latest attempt on a retry, from the Transcript;
 	// nil on a first run (ADR 0018).
 	prior map[int]priorRun
+	// dry walks the chain as a retry would without running or reusing
+	// anything for real: see runAgents.
+	dry bool
 }
 
 // transcriptName is conv's directory under transcripts/: its hex
@@ -383,64 +386,153 @@ func (s *server) runChain(c *chain) {
 		c.tr = &transcript{path: s.opts.Paths.TranscriptFile(s.opts.Alias, transcriptName(c.conv), c.seq), logf: s.opts.Logf}
 		defer c.tr.close()
 		publish(ChainEvent{Type: EventChainStart})
-		s.runAgents(c, c.handles, 1, publish)
+		s.runAgents(c, mentioned(c.handles), 1, publish)
 	}
 	s.chains.end(c)
 }
 
-// runAgents runs handles at depth, each followed by the agents its message
+// summons is a Handle a message reaches, with why it cannot run, if it
+// cannot.
+type summons struct {
+	handle string
+	skip   string
+}
+
+// mentioned is the chain's own summons: the Handles the person's message
+// mentions. Whether each is included is known only once it is reached.
+func mentioned(handles []string) []summons {
+	out := make([]summons, len(handles))
+	for i, h := range handles {
+		out[i] = summons{handle: h}
+	}
+	return out
+}
+
+// runAgents runs sums at depth, each followed by the agents its message
 // summons at depth+1; a silent agent summons nobody. It reports whether the
 // chain goes on.
-func (s *server) runAgents(c *chain, handles []string, depth uint32, publish func(ChainEvent)) bool {
-	for _, h := range handles {
-		if p, ok := c.prior[c.step+1]; ok && p.handle == h && p.finished() {
-			if !s.reuse(c, h, depth, p, publish) {
+//
+// Every Handle reached takes the next step, whether it runs, is reused or
+// is skipped. The steps follow from the person's message and the said texts
+// alone, so a retry numbers them as the first run did even when what is
+// included has changed since (ADR 0018). A step whose latest attempt said
+// or stayed silent is reused, included or not, and never runs again.
+//
+// A dry chain only walks: it stops, reporting false, at the first step a
+// retry would run.
+func (s *server) runAgents(c *chain, sums []summons, depth uint32, publish func(ChainEvent)) bool {
+	for _, sm := range sums {
+		h := sm.handle
+		c.step++
+		var said string
+		var inc config.Included
+		switch p, ok := c.prior[c.step]; {
+		case ok && p.handle == h && p.finished():
+			text, in, goOn := s.reuse(c, h, p, publish)
+			if !goOn {
+				return false
+			}
+			said, inc = text, in
+		case sm.skip != "":
+			if !c.dry {
+				s.opts.Logf("serve: seq %d skips @%s: %s", c.seq, h, sm.skip)
+			}
+			publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: sm.skip})
+			continue
+		case c.dry:
+			if s.wouldRun(c.conv, h) {
 				return false
 			}
 			continue
+		default:
+			res, in, err := s.runAgent(c, h, depth, publish)
+			if c.ctx.Err() != nil {
+				return false
+			}
+			if errors.Is(err, errSkipped) {
+				continue
+			}
+			if err != nil {
+				s.opts.Logf("serve: @%s answering seq %d: %v", h, c.seq, err)
+				publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
+				return false
+			}
+			if !res.Silent {
+				said, inc = res.Said, in
+			}
 		}
-		res, inc, err := s.runAgent(c, h, depth, publish)
-		if c.ctx.Err() != nil {
-			return false
-		}
-		if errors.Is(err, errSkipped) {
+		if said == "" {
 			continue
 		}
-		if err != nil {
-			s.opts.Logf("serve: @%s answering seq %d: %v", h, c.seq, err)
-			publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
-			return false
-		}
-		if res.Silent {
-			continue
-		}
-		if !s.runAgents(c, s.summoned(c, h, depth, res.Said, inc, publish), depth+1, publish) {
+		if !s.runAgents(c, summoned(h, depth, said, inc), depth+1, publish) {
 			return false
 		}
 	}
 	return true
 }
 
-// summoned is the Handles that handle's message at depth summons under inc,
-// in mention order. A mention that cannot summon is skipped, logged and
-// published; handle's mention of itself is ignored (ADR 0015).
-func (s *server) summoned(c *chain, handle string, depth uint32, reply string, inc config.Included, publish func(ChainEvent)) []string {
-	var out []string
+// wouldRun reports whether handle is included in conv now, so a step of it
+// would run rather than be skipped.
+func (s *server) wouldRun(conv []byte, handle string) bool {
+	_, store, ok := s.current()
+	if !ok {
+		return true // the retry itself finds out
+	}
+	_, _, inc, err := s.included(store, conv)
+	return err != nil || includes(inc, handle)
+}
+
+// reuse stands in for step c.step, handle's, whose latest attempt p said or
+// stayed silent: it is not run again. It returns what it said, "" if it was
+// silent or its message is gone, so the summons in it run as on its first
+// run, with what is included now; and it reports whether the chain goes on.
+func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEvent)) (said string, inc config.Included, goOn bool) {
+	if p.outcome == OutcomeSilent {
+		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", handle, c.step)})
+		return "", inc, true
+	}
+	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said seq %d at step %d; not run again", handle, p.seq, c.step)})
+	fail := func(err error) (string, config.Included, bool) {
+		s.opts.Logf("serve: retrying seq %d after @%s: %v", c.seq, handle, err)
+		publish(ChainEvent{Type: EventAgentError, Handle: handle, Error: err.Error()})
+		return "", inc, false
+	}
+	_, store, ok := s.current()
+	if !ok {
+		return fail(ErrNoReplica)
+	}
+	_, ff, err := freeformAt(store, c.conv, p.seq)
+	if err != nil {
+		return fail(err)
+	}
+	if ff == nil {
+		if !c.dry {
+			s.opts.Logf("serve: retrying seq %d: @%s's seq %d is pruned or gone; it summons nobody", c.seq, handle, p.seq)
+		}
+		return "", inc, true
+	}
+	if _, _, inc, err = s.included(store, c.conv); err != nil {
+		return fail(err)
+	}
+	return ff.Text, inc, true
+}
+
+// summoned is what handle's message at depth summons under inc, in mention
+// order, each with why it cannot run if it cannot; handle's mention of
+// itself is ignored (ADR 0015).
+func summoned(handle string, depth uint32, reply string, inc config.Included) []summons {
+	var out []summons
 	for _, h := range mention.Handles(reply) {
-		var reason string
+		sm := summons{handle: h}
 		switch {
 		case h == handle:
 			continue
 		case !includes(inc, h):
-			reason = fmt.Sprintf("@%s is not in [agent] profiles here", h)
+			sm.skip = fmt.Sprintf("@%s is not in [agent] profiles here", h)
 		case !canSummon(depth, inc):
-			reason = fmt.Sprintf("@%s replied at depth %d, which is max_depth %d", handle, depth, inc.MaxDepth)
-		default:
-			out = append(out, h)
-			continue
+			sm.skip = fmt.Sprintf("@%s replied at depth %d, which is max_depth %d", handle, depth, inc.MaxDepth)
 		}
-		s.opts.Logf("serve: seq %d skips @%s: %s", c.seq, h, reason)
-		publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: reason})
+		out = append(out, sm)
 	}
 	return out
 }
@@ -452,7 +544,7 @@ func canSummon(depth uint32, inc config.Included) bool { return int(depth) < inc
 // included; runAgent has already published the skip.
 var errSkipped = errors.New("skipped")
 
-// runAgent runs the agent on the talk so far, as step c.step+1 of c:
+// runAgent runs the agent on the talk so far, as step c.step of c:
 // commits what it says, or reports it silent, and returns how it ended,
 // with what was included where it answered. Everything the run generates,
 // and how it ended, goes to c's Transcript (ADR 0018); a run cut off by the
@@ -467,9 +559,8 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
 		return res, inc, err
 	}
-	c.step++
 	attempt := 1
-	if p, ok := c.prior[c.step]; ok && p.handle == handle {
+	if p, ok := c.prior[c.step]; ok {
 		attempt = p.attempt + 1 // a retry of this step
 	}
 	line := func(l TranscriptLine) {
@@ -478,17 +569,8 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 	}
 	var said uint64
 	defer func() {
-		switch {
-		case err == nil && res.Silent:
-			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeSilent})
-		case err == nil:
-			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeSaid, Seq: said})
-		case c.cancelled.Load():
-			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeCancelled})
-		case c.ctx.Err() != nil:
-			// The serve stopped: no outcome, so a retry knows it was cut off.
-		default:
-			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeError, Error: err.Error()})
+		if l, ok := runOutcome(said, err, c.cancelled.Load(), c.ctx.Err() != nil); ok {
+			line(l)
 		}
 	}()
 	if err != nil {
@@ -502,12 +584,12 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 		Record: func(r agent.Record) {
 			l := TranscriptLine{Kind: r.Kind}
 			switch r.Kind {
-			case "request":
+			case KindRequest:
 				s.chains.attempt(c.conv) // each attempt is recorded as it starts
 				l.Request = r.Data
-			case "block":
+			case KindBlock:
 				l.Block = r.Data
-			case "usage":
+			case KindUsage:
 				l.Usage = r.Data
 			}
 			line(l)
@@ -527,15 +609,14 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 	if err != nil {
 		return res, inc, err
 	}
+	// It is posted: whatever fails from here, the Transcript says so, and a
+	// retry does not post it again.
+	said = v.Seq
+	publish(ChainEvent{Type: EventAgentCommit, Seq: v.Seq, Text: res.Said})
 	// The next agent reads this message from the replica.
 	wait, cancel := context.WithTimeout(commit, raftx.ApplyTimeout)
 	defer cancel()
-	if err := waitApplied(wait, store, v.Seq); err != nil {
-		return res, inc, err
-	}
-	said = v.Seq
-	publish(ChainEvent{Type: EventAgentCommit, Seq: v.Seq, Text: res.Said})
-	return res, inc, nil
+	return res, inc, waitApplied(wait, store, v.Seq)
 }
 
 // waitApplied returns once the replica has applied seq.

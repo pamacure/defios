@@ -2,9 +2,11 @@ package serve_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -212,5 +214,94 @@ func TestRetryQueuedRunningAndUntranscribedChains(t *testing.T) {
 	reply := firstEvents[len(firstEvents)-2].Seq // agent.commit
 	if _, err := a.client().ConversationRetry(ctx, nil, reply); !errors.Is(err, serve.ErrNotAChain) {
 		t.Fatalf("retry of an agent's message = %v, want ErrNotAChain", err)
+	}
+}
+
+// dropProfile takes handle out of a's [agent] profiles.
+func dropProfile(t *testing.T, a *node, handle string) {
+	t.Helper()
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	body := readFile(t, path)
+	edited := strings.Replace(strings.Replace(body, `"`+handle+`", `, "", 1), `, "`+handle+`"`, "", 1)
+	if edited == body {
+		t.Fatalf("@%s is not in %s", handle, path)
+	}
+	writeConfig(t, path, edited)
+}
+
+// @auditor @quant @critic, where auditor summons scribe and critic fails:
+// with scribe since dropped from the profiles, a retry still numbers quant
+// step 3, so quant, which said, is not run again and posts once.
+func TestRetryKeepsStepsWhenAHandleThatRanIsNowSkipped(t *testing.T) {
+	a, b, gid, provider := agentPair(t, "auditor", "scribe", "quant", "critic")
+	maxDepth2(t, a)
+	var fail atomic.Bool
+	fail.Store(true)
+	answerAs(provider, map[string]string{"auditor": "ask @scribe", "scribe": "ok", "quant": "noted", "critic": "fine"}, map[string]*atomic.Bool{"critic": &fail})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor @quant @critic", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit:noted start:@critic/1 error:@critic end") {
+		t.Fatalf("first run = %s", got)
+	}
+	dropProfile(t, a, "scribe")
+	fail.Store(false)
+	if got := summary(retry(t, a, s, 0)); got != "chain.start skipped:@auditor skipped:@scribe skipped:@quant start:@critic/1 tool:say {\"text\":\"fine\"} commit:fine end" {
+		t.Fatalf("retry = %s", got)
+	}
+	var texts []string
+	for _, ff := range freeforms(t, b.groupLevelRows(t, gid, 5)) {
+		texts = append(texts, ff.Text)
+	}
+	if got := strings.Join(texts, "|"); got != "@auditor @quant @critic|ask @scribe|ok|noted|fine" {
+		t.Fatalf("talk = %s", got)
+	}
+	if words := lineWords(transcript(t, a, v.Seq)); !strings.HasSuffix(words, "4/critic/1/1:outcome=error 4/critic/1/2:request 4/critic/1/2:block 4/critic/1/2:block 4/critic/1/2:usage 4/critic/1/2:outcome=said") {
+		t.Fatalf("transcript = %s", words)
+	}
+}
+
+// cutAfterStep rewrites the Transcript of a's Group-level chain seq to its
+// lines up to step: as if a stop came between that step and the next.
+func cutAfterStep(t *testing.T, a *node, seq uint64, step int) {
+	t.Helper()
+	path := a.paths.TranscriptFile(group.ImplicitAlias, "group", seq)
+	var kept []string
+	for _, line := range strings.Split(strings.TrimSpace(readFile(t, path)), "\n") {
+		var l serve.TranscriptLine
+		if err := json.Unmarshal([]byte(line), &l); err != nil {
+			t.Fatal(err)
+		}
+		if l.Step <= step {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A chain cut off after a step said, before the next wrote anything, has
+// every recorded step finished; a retry, with or without --chain, still
+// finds the step it never reached and runs it.
+func TestRetryRunsAStepAStopCameBefore(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "scribe")
+	answerAs(provider, map[string]string{"auditor": "checked", "scribe": "written"}, nil)
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, v.Seq)
+	for _, seq := range []uint64{0, v.Seq} {
+		cutAfterStep(t, a, v.Seq, 1)
+		if got := summary(retry(t, a, s, seq)); got != "chain.start skipped:@auditor start:@scribe/1 tool:say {\"text\":\"written\"} commit:written end" {
+			t.Fatalf("retry %d = %s", seq, got)
+		}
+	}
+	if _, err := a.client().ConversationRetry(context.Background(), nil, 0); !errors.Is(err, serve.ErrNothingToRetry) {
+		t.Fatalf("retry after it = %v, want ErrNothingToRetry", err)
 	}
 }

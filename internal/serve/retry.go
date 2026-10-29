@@ -24,7 +24,8 @@ import (
 
 var (
 	// ErrNothingToRetry means no chain needs a retry: every step of the one
-	// named, or of every chain the Transcripts show, said or stayed silent.
+	// named, or of every chain the Transcripts show, said, stayed silent or
+	// is skipped.
 	ErrNothingToRetry = errors.New("serve: nothing to retry")
 	// ErrChainBusy means the chain to retry is running or queued.
 	ErrChainBusy = errors.New("serve: that chain is running or queued; wait for it or cancel it first")
@@ -68,7 +69,7 @@ func readTranscript(path string) (map[int]priorRun, error) {
 		if l.Attempt > p.attempt {
 			p = priorRun{handle: l.Handle, attempt: l.Attempt}
 		}
-		if l.Attempt == p.attempt && l.Kind == "outcome" {
+		if l.Attempt == p.attempt && l.Kind == KindOutcome {
 			p.outcome, p.seq = l.Outcome, l.Seq
 		}
 		runs[l.Step] = p
@@ -79,20 +80,19 @@ func readTranscript(path string) (map[int]priorRun, error) {
 	return runs, nil
 }
 
-// unfinished reports whether any step's latest attempt did not say or stay
-// silent.
-func unfinished(runs map[int]priorRun) bool {
-	for _, p := range runs {
-		if !p.finished() {
-			return true
-		}
-	}
-	return false
+// unfinished reports whether a retry of the chain seq in conv, which first
+// summoned handles, would run anything. It walks the chain as the retry
+// would, reusing the summons of the steps runs shows said, and looks for a
+// step it reaches that has no finished latest attempt and is not skipped:
+// one that failed, was cancelled or cut off, or that a stop came before.
+func (s *server) unfinished(conv []byte, seq uint64, handles []string, runs map[int]priorRun) bool {
+	c := &chain{seq: seq, conv: conv, handles: handles, ctx: context.Background(), prior: runs, dry: true}
+	return !s.runAgents(c, mentioned(handles), 1, func(ChainEvent) {})
 }
 
 // latestUnfinished is the seq of the latest chain in conv whose Transcript
-// shows an unfinished step, or 0.
-func (s *server) latestUnfinished(conv []byte) (uint64, error) {
+// shows it unfinished, or 0.
+func (s *server) latestUnfinished(store *cosl.Store, conv []byte) (uint64, error) {
 	dir := filepath.Join(s.opts.Paths.TranscriptsDir(s.opts.Alias), transcriptName(conv))
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -113,7 +113,14 @@ func (s *server) latestUnfinished(conv []byte) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if unfinished(runs) {
+		if runs == nil {
+			continue
+		}
+		handles, err := s.chainHandles(store, conv, seq)
+		if err != nil {
+			continue // its message is pruned: nothing to walk from
+		}
+		if s.unfinished(conv, seq, handles, runs) {
 			return seq, nil
 		}
 	}
@@ -164,7 +171,7 @@ func (s *server) chainHandles(store *cosl.Store, conv []byte, seq uint64) ([]str
 func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, store *cosl.Store, conv []byte, seq uint64) (uint64, error) {
 	if seq == 0 {
 		var err error
-		if seq, err = s.latestUnfinished(conv); err != nil {
+		if seq, err = s.latestUnfinished(store, conv); err != nil {
 			return 0, err
 		}
 		if seq == 0 {
@@ -182,8 +189,8 @@ func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, store *cosl.Stor
 	if err != nil {
 		return 0, err
 	}
-	if runs != nil && !unfinished(runs) {
-		return 0, fmt.Errorf("%w: every agent of chain %d said or stayed silent", ErrNothingToRetry, seq)
+	if !s.unfinished(conv, seq, handles, runs) {
+		return 0, fmt.Errorf("%w: every step of chain %d said, stayed silent or is skipped", ErrNothingToRetry, seq)
 	}
 	if !s.chains.enqueue(ctx, wg, &chain{seq: seq, conv: conv, handles: handles, prior: runs}, s.runChain) {
 		return 0, ErrChainBusy
@@ -215,40 +222,6 @@ func (s *server) takeRetries(ctx context.Context, wg *sync.WaitGroup, store *cos
 			call.reply <- retryReply{chain: seq, err: err}
 		}
 	}
-}
-
-// reuse stands in for step c.step+1, handle's at depth, whose latest
-// attempt p said or stayed silent: it is not run again, and the summons in
-// what it said run as on its first run. It reports whether the chain goes on.
-func (s *server) reuse(c *chain, handle string, depth uint32, p priorRun, publish func(ChainEvent)) bool {
-	c.step++
-	if p.outcome == OutcomeSilent {
-		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", handle, c.step)})
-		return true
-	}
-	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said seq %d at step %d; not run again", handle, p.seq, c.step)})
-	fail := func(err error) bool {
-		s.opts.Logf("serve: retrying seq %d after @%s: %v", c.seq, handle, err)
-		publish(ChainEvent{Type: EventAgentError, Handle: handle, Error: err.Error()})
-		return false
-	}
-	_, store, ok := s.current()
-	if !ok {
-		return fail(ErrNoReplica)
-	}
-	_, ff, err := freeformAt(store, c.conv, p.seq)
-	if err != nil {
-		return fail(err)
-	}
-	if ff == nil {
-		s.opts.Logf("serve: retrying seq %d: @%s's seq %d is pruned or gone; it summons nobody", c.seq, handle, p.seq)
-		return true
-	}
-	_, _, inc, err := s.included(store, c.conv)
-	if err != nil {
-		return fail(err)
-	}
-	return s.runAgents(c, s.summoned(c, handle, depth, ff.Text, inc, publish), depth+1, publish)
 }
 
 type retryRequest struct {

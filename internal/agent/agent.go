@@ -25,14 +25,16 @@ import (
 // anthropicVersion is the Messages API version this package speaks.
 const anthropicVersion = "2023-06-01"
 
-// MaxTokens bounds each model call when a Request sets no bound:
-// max_tokens for Anthropic, max_completion_tokens for OpenAI. A call that
-// stops at its bound is an error.
-const MaxTokens = 8192
+// DefaultMaxTokens is max_tokens when a Request sets none: the bound on
+// each model call, sent as max_tokens to Anthropic and
+// max_completion_tokens to OpenAI. A call that stops at its bound is an
+// error.
+const DefaultMaxTokens = 8192
 
-// MaxCalls is how many model calls a run may make, when a Request sets no
-// MaxTurns, before it must have said something or stayed silent.
-const MaxCalls = 8
+// DefaultMaxTurns is max_turns when a Request sets none: how many model
+// calls a run may make before it must have said something or stayed
+// silent.
+const DefaultMaxTurns = 8
 
 // MaxSay is the most bytes a say may carry; a longer one is refused.
 const MaxSay = 4096
@@ -64,7 +66,8 @@ type Request struct {
 	Turns       []Turn // the talk so far, alternating and ending with User
 
 	// The Agent Profile's options (ADR 0018). MaxTokens bounds each call
-	// (0 is MaxTokens), MaxTurns the calls in the run (0 is MaxCalls), and a
+	// (0 is DefaultMaxTokens), MaxTurns the calls in the run (0 is
+	// DefaultMaxTurns), and a
 	// nil Temperature is left out of the request.
 	MaxTokens   int
 	Temperature *float64
@@ -76,7 +79,7 @@ func (req Request) maxTokens() int {
 	if req.MaxTokens > 0 {
 		return req.MaxTokens
 	}
-	return MaxTokens
+	return DefaultMaxTokens
 }
 
 // maxTurns is how many calls req's run may make.
@@ -84,7 +87,7 @@ func (req Request) maxTurns() int {
 	if req.MaxTurns > 0 {
 		return req.MaxTurns
 	}
-	return MaxCalls
+	return DefaultMaxTurns
 }
 
 // Turn is one message of the talk as the Model sees it (ADR 0018): the
@@ -109,11 +112,16 @@ type Result struct {
 
 // Record is something a run generated or sent, for the Transcript.
 type Record struct {
-	// Kind is "request" (a request body as sent, never its headers),
-	// "block" (one output block of a call) or "usage" (a call's usage).
-	Kind string
+	Kind string // RecordRequest, RecordBlock or RecordUsage
 	Data json.RawMessage
 }
+
+// The kinds of Record.
+const (
+	RecordRequest = "request" // a request body as sent, never its headers
+	RecordBlock   = "block"   // one output block of a call
+	RecordUsage   = "usage"   // a call's usage
+)
 
 // Kinds of output an agent generates, as it streams (ADR 0018).
 const (
@@ -227,10 +235,10 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 			return Result{}, err
 		}
 		for _, b := range out.blocks {
-			ev.record("block", b)
+			ev.record(RecordBlock, b)
 		}
 		if out.usage != nil {
-			ev.record("usage", out.usage)
+			ev.record(RecordUsage, out.usage)
 		}
 		if out.stop == "max_tokens" || out.stop == "length" {
 			return Result{}, fmt.Errorf("agent: the model stopped at max_tokens %d before it finished", req.maxTokens())
@@ -278,9 +286,11 @@ func checkSay(b Block) (text, refusal string) {
 // accepted say ends the run.
 type toolResult struct{ id, text string }
 
-// conversation is a run's request so far, in its provider's shape. Each call
-// sends the one before it as an unchanged prefix, so a provider can read it
-// from cache (ADR 0018).
+// conversation is a run's request so far, in its provider's shape. Each
+// call's content begins with the content of the one before it, unchanged,
+// so a provider can read that prefix from cache (ADR 0018). The bodies are
+// not byte-for-byte prefixes: from the third call on, the earlier tool
+// result's Anthropic cache breakpoint moves to the newest one.
 type conversation struct {
 	req    Request
 	system []any // Anthropic's system blocks
@@ -416,7 +426,7 @@ func (c Client) call(ctx context.Context, req Request, body []byte, ev Events, s
 	for n := 0; ; n++ {
 		last := st.last
 		st.started = false
-		ev.record("request", json.RawMessage(body))
+		ev.record(RecordRequest, json.RawMessage(body))
 		out, err := c.attempt(ctx, req, body, st)
 		if err == nil {
 			return out, nil

@@ -97,7 +97,10 @@ whole output, and there is a retry verb.
   the chain as it first ran, depth-first in mention order, and for each step
   whose latest attempt ended `said` or `silent` it reuses that outcome (and
   the summons in the said text) instead of running it again. Reusing the
-  earlier outcomes keeps every step's number the same on a retry. Every
+  earlier outcomes keeps every step's number the same on a retry; every
+  Handle the walk reaches takes a step, even one skipped, so a change to
+  what is included renumbers nothing. A run whose message committed records
+  `said` even if what follows fails, so it is never posted twice. Every
   other step runs again as a new attempt, against the talk as it is now. A
   chain with no Transcript, such as one still queued when the serve stopped,
   runs from the start. Retrying a chain that is running or queued is refused. Retry appends
