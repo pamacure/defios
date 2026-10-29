@@ -188,15 +188,25 @@ func (s *script) body(n int) map[string]any {
 
 func run(s *script, provider string, ev agent.Events) (agent.Result, error) {
 	return agent.Client{Backoff: time.Millisecond}.Run(context.Background(), agent.Request{
-		Provider: provider, URL: s.URL, APIKey: "sk-secret", Model: "m", System: "be brief", Prompt: "alice: hi",
+		Provider: provider, URL: s.URL, APIKey: "sk-secret", Model: "m", System: "be brief", Turns: talk,
 	}, ev)
 }
 
 func messages(body map[string]any) []any { m, _ := body["messages"].([]any); return m }
 
-// An Anthropic run streams its text, offers say as its only tool with
-// max_tokens 8192, and a say commits exactly its text: the text outside it
-// is never the result.
+// talk is a Request's turns as the serve builds them (ADR 0018), and
+// wantTalk how they read as sent.
+var talk = []agent.Turn{
+	{Role: agent.User, Text: "alice: @auditor hi"},
+	{Role: agent.Assistant, Text: "hello"},
+	{Role: agent.User, Text: "alice: and?"},
+}
+
+const wantTalk = "[map[content:alice: @auditor hi role:user] map[content:hello role:assistant] map[content:alice: and? role:user]]"
+
+// An Anthropic run streams its text, sends the turns in order, offers say
+// as its only tool with max_tokens 8192, and a say commits exactly its
+// text: the text outside it is never the result.
 func TestAnthropicSayIsTheResult(t *testing.T) {
 	s := newScript(t, anthropicSays("let me think", "all good"))
 	var rec recorder
@@ -222,8 +232,7 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "say" {
 		t.Fatalf("tools = %v", body["tools"])
 	}
-	msgs := messages(body)
-	if len(msgs) != 1 || msgs[0].(map[string]any)["role"] != "user" || msgs[0].(map[string]any)["content"] != "alice: hi" {
+	if msgs := messages(body); fmt.Sprint(msgs) != wantTalk {
 		t.Fatalf("messages = %v", msgs)
 	}
 	if s.calls() != 1 {
@@ -232,7 +241,7 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 }
 
 // An OpenAI run does the same over Chat Completions: the system prompt as
-// the first message, the key as a bearer token, say as a function tool and
+// the first message before the turns, the key as a bearer token, say as a function tool and
 // max_completion_tokens 8192.
 func TestOpenAISayIsTheResult(t *testing.T) {
 	s := newScript(t, openaiSays("hmm", "all good"))
@@ -256,7 +265,7 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 		t.Fatalf("tools = %v", body["tools"])
 	}
 	msgs := messages(body)
-	if len(msgs) != 2 || msgs[0].(map[string]any)["role"] != "system" || msgs[1].(map[string]any)["content"] != "alice: hi" {
+	if len(msgs) != 4 || fmt.Sprint(msgs[0]) != "map[content:be brief role:system]" || fmt.Sprint(msgs[1:]) != wantTalk {
 		t.Fatalf("messages = %v", msgs)
 	}
 }
@@ -360,7 +369,7 @@ func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {
 func TestNoKeySendsNoCredential(t *testing.T) {
 	for p, reply := range map[string][]string{model.Anthropic: anthropicText("ok"), model.OpenAI: openaiText("ok")} {
 		s := newScript(t, reply)
-		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Provider: p, URL: s.URL, Model: "m", Prompt: "p"}, agent.Events{}); err != nil {
+		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Provider: p, URL: s.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{}); err != nil {
 			t.Fatal(err)
 		}
 		if h := s.headers[0]; h.Get("x-api-key")+h.Get("Authorization") != "" {
@@ -387,7 +396,7 @@ func failing(t *testing.T, fail func(n int, w http.ResponseWriter) bool) (*httpt
 
 func generate(srv *httptest.Server, ev agent.Events) (agent.Result, error) {
 	c := agent.Client{Backoff: time.Millisecond}
-	return c.Run(context.Background(), agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Prompt: "p"}, ev)
+	return c.Run(context.Background(), agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, ev)
 }
 
 // Rate limits, overload, 5xx and dropped connections are retried; a retry
@@ -480,7 +489,7 @@ func TestCancelEndsTheRequest(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	_, err := agent.Client{Backoff: time.Millisecond}.Run(ctx, agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Prompt: "p"}, agent.Events{})
+	_, err := agent.Client{Backoff: time.Millisecond}.Run(ctx, agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{})
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("err %v after %d calls, want context.Canceled once", err, calls)
 	}

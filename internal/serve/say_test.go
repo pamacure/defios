@@ -64,7 +64,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "shorter" {
 		t.Fatalf("committed %q", ffs[1].Text)
 	}
-	if calls := provider.seen(); len(calls) != 2 || calls[1].Turns != 3 {
+	if calls := provider.seen(); len(calls) != 2 || calls[1].Messages != 3 {
 		t.Fatalf("calls = %+v", calls)
 	}
 }

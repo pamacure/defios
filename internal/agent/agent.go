@@ -55,8 +55,21 @@ type Request struct {
 	APIKey   string // empty sends none
 	Model    string // the provider's model id
 	System   string
-	Prompt   string // the one user message: the talk so far
+	Turns    []Turn // the talk so far, alternating and ending with User
 }
+
+// Turn is one message of the talk as the Model sees it (ADR 0018): the
+// agent's own message is an Assistant turn, everything else User content.
+type Turn struct {
+	Role string // User or Assistant
+	Text string
+}
+
+// The roles a Turn takes; both providers name them alike.
+const (
+	User      = "user"
+	Assistant = "assistant"
+)
 
 // Result is how a run ended: with Said, what its accepted say carried, or
 // Silent when the model ended its turn without one.
@@ -216,7 +229,9 @@ func newConversation(req Request) (*conversation, error) {
 	default:
 		return nil, fmt.Errorf("agent: provider %q must be anthropic or openai", req.Provider)
 	}
-	c.msgs = append(c.msgs, map[string]any{"role": "user", "content": req.Prompt})
+	for _, t := range req.Turns {
+		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": t.Text})
+	}
 	return c, nil
 }
 

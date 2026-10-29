@@ -503,8 +503,8 @@ func waitApplied(ctx context.Context, store *cosl.Store, seq uint64) error {
 }
 
 // agentRequest is the call to the Model that answers as handle: its
-// SYSTEM.md and the serve's preamble, then the talk so far in the lean
-// format, sent where this Node's config says with its key (ADR 0013).
+// SYSTEM.md and the serve's preamble, then the talk so far as turns by
+// Handle (ADR 0018), sent where this Node's config says with its key (ADR 0013).
 func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
 	_, ws, inc, err := s.included(store, conv)
 	if err != nil {
@@ -545,7 +545,7 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 		return agent.Request{}, inc, err
 	}
 	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + preamble(handle, depth, inc, where)
-	if req.Prompt, err = s.talkSoFar(store, conv); err != nil {
+	if req.Turns, err = s.talkSoFar(store, conv, handle); err != nil {
 		return agent.Request{}, inc, err
 	}
 	return req, inc, nil
@@ -577,7 +577,8 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 func preamble(handle string, depth uint32, inc config.Included, where string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
-	b.WriteString("The talk so far follows, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for an agent's.\n")
+	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone, whichever Node wrote them as @%s. "+
+		"Everything else is in the other turns, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for another agent's.\n", handle)
 	fmt.Fprintf(&b, "This is a group chat. Only what you pass to the say tool is posted to it, as one message from @%s, and calling say ends your turn. "+
 		"Everything else you write stays private. Keep your message to a paragraph or two of plain text, like a longer group-chat message, at most %d bytes. "+
 		"If you have nothing worth saying, end your turn without calling say and you stay silent.\n", handle, agent.MaxSay)
@@ -596,27 +597,62 @@ func preamble(handle string, depth uint32, inc config.Included, where string) st
 	return b.String()
 }
 
-// talkSoFar is conv's talk as `conversation log --lean` prints it.
-func (s *server) talkSoFar(store *cosl.Store, conv []byte) (string, error) {
+// talkSoFar is conv's talk as handle sees it: the lean view as turns.
+func (s *server) talkSoFar(store *cosl.Store, conv []byte, handle string) ([]agent.Turn, error) {
 	q := cosl.Query{GroupLevel: conv == nil, ConversationID: conv}
 	rows, err := store.Log(q)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	v, err := recap.Fold(rows)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	said, err := v.Lean()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	rec, _ := s.slot.Current()
-	lines := make([]string, len(said))
-	for i, l := range said {
-		lines[i] = recap.LeanLine(displayName(rec, l.Row), l.Handle, l.Text)
+	return talkTurns(said, func(r cosl.Row) string { return displayName(rec, r) }, handle), nil
+}
+
+// The fixed user turns that keep the talk alternating when it opens or ends
+// with the agent's own message.
+const (
+	talkOpensWithYou = "(The talk opens with your own message.)"
+	talkEndsWithYou  = "(You have been summoned again. Reply now.)"
+)
+
+// talkTurns is said as the agent handle sees it (ADR 0018, "Turns by
+// Handle"): every message whose Handle is handle, from any Node, is an
+// assistant turn holding its text alone; everything else is a lean line,
+// consecutive lines merged into one user turn. Consecutive messages of its
+// own merge a blank line apart. A fixed user turn goes before talk that
+// opens with its own message and after talk that ends with one, so the
+// turns alternate and start and end with user.
+func talkTurns(said []recap.Said, name func(cosl.Row) string, handle string) []agent.Turn {
+	var turns []agent.Turn
+	add := func(role, text, sep string) {
+		if n := len(turns); n > 0 && turns[n-1].Role == role {
+			turns[n-1].Text += sep + text
+			return
+		}
+		turns = append(turns, agent.Turn{Role: role, Text: text})
 	}
-	return strings.Join(lines, "\n"), nil
+	for _, l := range said {
+		if l.Handle == handle {
+			if len(turns) == 0 {
+				add(agent.User, talkOpensWithYou, "")
+			}
+			add(agent.Assistant, l.Text, "\n\n")
+			continue
+		}
+		add(agent.User, recap.LeanLine(name(l.Row), l.Handle, l.Text), "\n")
+	}
+	if len(turns) == 0 || turns[len(turns)-1].Role != agent.User {
+		add(agent.User, talkEndsWithYou, "")
+	}
+	return turns
 }
 
 // displayName is the name the Roster pins for r's sender.
