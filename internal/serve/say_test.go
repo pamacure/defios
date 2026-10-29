@@ -187,6 +187,34 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	}
 }
 
+// A call's cache usage is recorded with its usage in the Transcript.
+func TestTheTranscriptRecordsCacheUsage(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor")
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		event(w, "message_start", `{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_creation_input_tokens":40,"cache_read_input_tokens":900,"output_tokens":1}}}`)
+		event(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		endSay(w, "ok")
+	})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, v.Seq)
+	for _, l := range transcript(t, a, v.Seq) {
+		if l["kind"] != "usage" {
+			continue
+		}
+		u, _ := l["usage"].(map[string]any)
+		if u["cache_creation_input_tokens"] != float64(40) || u["cache_read_input_tokens"] != float64(900) || u["output_tokens"] != float64(3) {
+			t.Fatalf("usage = %v", u)
+		}
+		return
+	}
+	t.Fatal("the Transcript has no usage")
+}
+
 // A cancel mid-run ends the run's Transcript with outcome cancelled.
 func TestCancelWritesOutcomeCancelled(t *testing.T) {
 	a, _, gid, provider := agentPair(t, "auditor")

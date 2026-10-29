@@ -54,8 +54,13 @@ type Request struct {
 	URL      string // the whole endpoint: base URL and API path
 	APIKey   string // empty sends none
 	Model    string // the provider's model id
-	System   string
-	Turns    []Turn // the talk so far, alternating and ending with User
+	// System is the stable part of the system prompt, the same for an agent
+	// at every depth; SystemDepth, what differs by depth, follows it directly
+	// as one prompt. Anthropic gets them as two blocks with a cache
+	// breakpoint between; OpenAI caches the shared prefix itself (ADR 0018).
+	System      string
+	SystemDepth string
+	Turns       []Turn // the talk so far, alternating and ending with User
 }
 
 // Turn is one message of the talk as the Model sees it (ADR 0018): the
@@ -212,25 +217,44 @@ func checkSay(b Block) (text, refusal string) {
 // accepted say ends the run.
 type toolResult struct{ id, text string }
 
-// conversation is a run's request so far, in its provider's shape.
+// conversation is a run's request so far, in its provider's shape. Each call
+// sends the one before it as an unchanged prefix, so a provider can read it
+// from cache (ADR 0018).
 type conversation struct {
-	req  Request
-	msgs []any
+	req    Request
+	system []any // Anthropic's system blocks
+	msgs   []any
+	// latest is the Anthropic tool result holding the moving cache
+	// breakpoint; the next one takes it, keeping within the four allowed.
+	latest map[string]any
 }
+
+// ephemeral is an Anthropic cache breakpoint.
+var ephemeral = map[string]any{"type": "ephemeral"}
 
 func newConversation(req Request) (*conversation, error) {
 	c := &conversation{req: req}
 	switch req.Provider {
 	case model.Anthropic:
-	case model.OpenAI:
 		if req.System != "" {
-			c.msgs = append(c.msgs, map[string]any{"role": "system", "content": req.System})
+			c.system = append(c.system, map[string]any{"type": "text", "text": req.System, "cache_control": ephemeral})
+		}
+		if req.SystemDepth != "" {
+			c.system = append(c.system, map[string]any{"type": "text", "text": req.SystemDepth})
+		}
+	case model.OpenAI:
+		if system := req.System + req.SystemDepth; system != "" {
+			c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
 		}
 	default:
 		return nil, fmt.Errorf("agent: provider %q must be anthropic or openai", req.Provider)
 	}
-	for _, t := range req.Turns {
-		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": t.Text})
+	for i, t := range req.Turns {
+		var content any = t.Text
+		if req.Provider == model.Anthropic && i == len(req.Turns)-1 {
+			content = []any{map[string]any{"type": "text", "text": t.Text, "cache_control": ephemeral}}
+		}
+		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": content})
 	}
 	return c, nil
 }
@@ -255,6 +279,11 @@ func (c *conversation) add(blocks []Block, results []toolResult) {
 		for i, r := range results {
 			answers[i] = map[string]any{"type": "tool_result", "tool_use_id": r.id, "content": r.text, "is_error": true}
 		}
+		if c.latest != nil {
+			delete(c.latest, "cache_control")
+		}
+		c.latest = answers[len(answers)-1].(map[string]any)
+		c.latest["cache_control"] = ephemeral
 		c.msgs = append(c.msgs,
 			map[string]any{"role": "assistant", "content": content},
 			map[string]any{"role": "user", "content": answers})
@@ -292,11 +321,11 @@ func (c *conversation) body() []byte {
 		v = struct {
 			Model     string `json:"model"`
 			MaxTokens int    `json:"max_tokens"`
-			System    string `json:"system,omitempty"`
+			System    []any  `json:"system,omitempty"`
 			Messages  []any  `json:"messages"`
 			Tools     []any  `json:"tools"`
 			Stream    bool   `json:"stream"`
-		}{c.req.Model, MaxTokens, c.req.System, c.msgs,
+		}{c.req.Model, MaxTokens, c.system, c.msgs,
 			[]any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}, true}
 	} else {
 		v = struct {

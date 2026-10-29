@@ -188,7 +188,7 @@ func (s *script) body(n int) map[string]any {
 
 func run(s *script, provider string, ev agent.Events) (agent.Result, error) {
 	return agent.Client{Backoff: time.Millisecond}.Run(context.Background(), agent.Request{
-		Provider: provider, URL: s.URL, APIKey: "sk-secret", Model: "m", System: "be brief", Turns: talk,
+		Provider: provider, URL: s.URL, APIKey: "sk-secret", Model: "m", System: "be brief\n", SystemDepth: "at depth 1\n", Turns: talk,
 	}, ev)
 }
 
@@ -203,6 +203,11 @@ var talk = []agent.Turn{
 }
 
 const wantTalk = "[map[content:alice: @auditor hi role:user] map[content:hello role:assistant] map[content:alice: and? role:user]]"
+
+// wantAnthropicTalk is talk as an Anthropic request sends it: the latest
+// turn as a block carrying a cache breakpoint.
+const wantAnthropicTalk = "[map[content:alice: @auditor hi role:user] map[content:hello role:assistant] " +
+	"map[content:[map[cache_control:map[type:ephemeral] text:alice: and? type:text]] role:user]]"
 
 // An Anthropic run streams its text, sends the turns in order, offers say
 // as its only tool with max_tokens 8192, and a say commits exactly its
@@ -225,14 +230,14 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 		t.Fatalf("headers %v", h)
 	}
 	body := s.body(1)
-	if body["model"] != "m" || body["system"] != "be brief" || body["stream"] != true || body["max_tokens"] != float64(8192) {
+	if body["model"] != "m" || body["stream"] != true || body["max_tokens"] != float64(8192) {
 		t.Fatalf("body = %v", body)
 	}
 	tools, _ := body["tools"].([]any)
 	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "say" {
 		t.Fatalf("tools = %v", body["tools"])
 	}
-	if msgs := messages(body); fmt.Sprint(msgs) != wantTalk {
+	if msgs := messages(body); fmt.Sprint(msgs) != wantAnthropicTalk {
 		t.Fatalf("messages = %v", msgs)
 	}
 	if s.calls() != 1 {
@@ -265,7 +270,7 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 		t.Fatalf("tools = %v", body["tools"])
 	}
 	msgs := messages(body)
-	if len(msgs) != 4 || fmt.Sprint(msgs[0]) != "map[content:be brief role:system]" || fmt.Sprint(msgs[1:]) != wantTalk {
+	if len(msgs) != 4 || fmt.Sprint(msgs[0]) != "map[content:be brief\nat depth 1\n role:system]" || fmt.Sprint(msgs[1:]) != wantTalk {
 		t.Fatalf("messages = %v", msgs)
 	}
 }
@@ -300,6 +305,67 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 		third, _ := json.Marshal(messages(s.body(3)))
 		if !strings.Contains(string(third), "first") || !strings.Contains(string(third), "empty") {
 			t.Errorf("%s: third call lacks the run so far: %s", p, third)
+		}
+	}
+}
+
+// An Anthropic run sends the system prompt as blocks, the stable part first
+// with a cache breakpoint after it and the depth part last, and a breakpoint
+// on the latest turn: the talk's last turn, then the latest tool result,
+// which takes the breakpoint from the one before it (ADR 0018).
+func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
+	s := newScript(t, anthropicSays("first", ""), anthropicSays("second", ""), anthropicSays("third", "done"))
+	if _, err := run(s, model.Anthropic, agent.Events{}); err != nil {
+		t.Fatal(err)
+	}
+	const wantSystem = "[map[cache_control:map[type:ephemeral] text:be brief\n type:text] map[text:at depth 1\n type:text]]"
+	for n := 1; n <= 3; n++ {
+		if got := fmt.Sprint(s.body(n)["system"]); got != wantSystem {
+			t.Fatalf("call %d system = %s", n, got)
+		}
+	}
+	marked := func(n int) []int {
+		var at []int
+		for i, m := range messages(s.body(n)) {
+			raw, _ := json.Marshal(m)
+			if strings.Contains(string(raw), "cache_control") {
+				at = append(at, i)
+			}
+		}
+		return at
+	}
+	for n, want := range map[int]string{1: "[2]", 2: "[2 4]", 3: "[2 6]"} {
+		if got := fmt.Sprint(marked(n)); got != want {
+			t.Errorf("call %d marks messages %s, want %s", n, got, want)
+		}
+	}
+	last, _ := json.Marshal(messages(s.body(3))[6])
+	if !strings.Contains(string(last), `"type":"tool_result"`) {
+		t.Fatalf("latest turn = %s", last)
+	}
+}
+
+// Each call of a run sends the call before it as an unchanged prefix: the
+// same system prompt and tools, and its messages first. Both providers.
+func TestASecondCallExtendsTheFirst(t *testing.T) {
+	for _, p := range []string{model.Anthropic, model.OpenAI} {
+		says := anthropicSays
+		if p == model.OpenAI {
+			says = openaiSays
+		}
+		s := newScript(t, says("first", ""), says("second", "done"))
+		if _, err := run(s, p, agent.Events{}); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		first, second := s.body(1), s.body(2)
+		m1, m2 := messages(first), messages(second)
+		if len(m2) <= len(m1) || fmt.Sprint(m2[:len(m1)]) != fmt.Sprint(m1) {
+			t.Errorf("%s: second call's messages do not begin with the first's:\n%v\n%v", p, m1, m2)
+		}
+		for k, v := range first {
+			if k != "messages" && fmt.Sprint(second[k]) != fmt.Sprint(v) {
+				t.Errorf("%s: %s changed: %v, then %v", p, k, v, second[k])
+			}
 		}
 	}
 }
