@@ -24,11 +24,14 @@ import (
 
 // providerCall is one request the fake provider saw.
 type providerCall struct {
-	Key      string
-	System   string
-	Prompt   string // the first message's text
-	Turns    string // every message, "[role] content" a line each
-	Messages int    // how many messages the call carried
+	Key    string
+	System string // the system blocks' text, joined
+	// Stable is the system text up to its cache breakpoint, and Depth the
+	// text after it.
+	Stable, Depth string
+	Prompt        string // the first message's text
+	Turns         string // every message, "[role] content" a line each
+	Messages      int    // how many messages the call carried
 }
 
 // fakeProvider is an Anthropic Messages endpoint. reply answers each call,
@@ -50,21 +53,32 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 	}
 	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			System   string `json:"system"`
+			System []struct {
+				Text         string          `json:"text"`
+				CacheControl json.RawMessage `json:"cache_control"`
+			} `json:"system"`
 			Messages []struct {
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
 			} `json:"messages"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		call := providerCall{Key: r.Header.Get("x-api-key"), System: body.System, Messages: len(body.Messages)}
+		call := providerCall{Key: r.Header.Get("x-api-key"), Messages: len(body.Messages)}
+		cached := false
+		for _, b := range body.System {
+			call.System += b.Text
+			if cached {
+				call.Depth += b.Text
+			} else {
+				call.Stable += b.Text
+			}
+			cached = cached || b.CacheControl != nil
+		}
 		if len(body.Messages) > 0 {
-			json.Unmarshal(body.Messages[0].Content, &call.Prompt)
+			call.Prompt = contentText(body.Messages[0].Content)
 		}
 		for _, m := range body.Messages {
-			content := string(m.Content) // blocks, as JSON
-			json.Unmarshal(m.Content, &content)
-			call.Turns += "[" + m.Role + "] " + content + "\n"
+			call.Turns += "[" + m.Role + "] " + contentText(m.Content) + "\n"
 		}
 		p.mu.Lock()
 		p.calls = append(p.calls, call)
@@ -74,6 +88,29 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 	}))
 	t.Cleanup(p.Close)
 	return p
+}
+
+// contentText is a message's content as text: a string, or text blocks
+// joined; any other blocks as JSON.
+func contentText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return string(raw)
+	}
+	for _, b := range blocks {
+		if b.Type != "text" {
+			return string(raw)
+		}
+		s += b.Text
+	}
+	return s
 }
 
 func (p *fakeProvider) seen() []providerCall {
@@ -921,6 +958,42 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	}
 	if want := "alice: @auditor @scribe\nalice/@auditor: @quant, and me, @auditor\nalice/@quant: ask @scribe"; calls[2].Prompt != want {
 		t.Fatalf("scribe's prompt = %q, want %q", calls[2].Prompt, want)
+	}
+}
+
+// An agent sends the same stable system blocks, its SYSTEM.md and the stable
+// preamble, at every depth, with the cache breakpoint after them; only the
+// block after it names the depth and whom it may summon (ADR 0018).
+func TestAnAgentsStableSystemIsTheSameAtEveryDepth(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "scribe")
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
+	replyAs(provider, map[string]string{"scribe": "ask @auditor"})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `chain.start start:@auditor/1 tool:say {"text":"reply 1"} commit:reply 1 start:@scribe/1 tool:say {"text":"ask @auditor"} commit:ask @auditor start:@auditor/2 tool:say {"text":"reply 3"} commit:reply 3 end`
+	if got := summary(untilEnd(t, s, v.Seq)); got != want {
+		t.Fatalf("events = %s\nwant     %s", got, want)
+	}
+	calls := provider.seen()
+	if len(calls) != 3 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	first, second := calls[0], calls[2]
+	if !strings.HasPrefix(first.Stable, "You are auditor.") || !strings.Contains(first.Stable, "say tool") {
+		t.Fatalf("stable system = %q", first.Stable)
+	}
+	if second.Stable != first.Stable {
+		t.Fatalf("stable system differs by depth:\n%q\n%q", first.Stable, second.Stable)
+	}
+	if strings.Contains(first.Stable, "depth") {
+		t.Fatalf("stable system names a depth: %q", first.Stable)
+	}
+	if !strings.Contains(first.Depth, "depth 1") || !strings.Contains(second.Depth, "depth 2") {
+		t.Fatalf("depth blocks %q and %q", first.Depth, second.Depth)
 	}
 }
 
