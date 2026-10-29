@@ -75,6 +75,46 @@ type conversationChains struct {
 	queue    []*chain // queue[0] is running while running is set
 	running  bool
 	watchers map[chan ChainEvent]struct{}
+	shown    shown // the running chain, as a watcher joining now is shown it
+}
+
+// shown is a running chain from the agent now answering: its chain.start,
+// that agent's agent.start, and its reply so far as one agent.delta.
+type shown struct {
+	start, agent, reply *ChainEvent
+}
+
+// fold takes ev into what a watcher joining after it is shown.
+func (sh *shown) fold(ev ChainEvent) {
+	switch ev.Type {
+	case EventChainStart:
+		*sh = shown{start: &ev}
+	case EventAgentStart:
+		sh.agent, sh.reply = &ev, nil
+	case EventAgentDelta:
+		if sh.reply == nil {
+			sh.reply = &ev
+		} else {
+			sh.reply.Text += ev.Text
+		}
+	case EventAgentReset:
+		sh.reply = nil
+	case EventAgentCommit, EventAgentSkipped, EventAgentError:
+		sh.agent, sh.reply = nil, nil
+	case EventChainEnd:
+		*sh = shown{}
+	}
+}
+
+// events are what a watcher joining now is shown, in order.
+func (sh *shown) events() []ChainEvent {
+	var out []ChainEvent
+	for _, ev := range []*ChainEvent{sh.start, sh.agent, sh.reply} {
+		if ev != nil {
+			out = append(out, *ev)
+		}
+	}
+	return out
 }
 
 // chain is the agents one person's message summons, in mention order.
@@ -135,7 +175,6 @@ func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, ru
 			next := cc.queue[0]
 			h.mu.Unlock()
 			run(next)
-			next.cancel()
 			h.mu.Lock()
 			cc.queue = cc.queue[1:]
 			h.mu.Unlock()
@@ -153,6 +192,9 @@ func (h *chainHub) cancel(conv []byte, seq uint64) bool {
 		return false
 	}
 	for i, c := range cc.queue {
+		if c.ctx.Err() != nil {
+			continue // ended, or already cancelled
+		}
 		if c.seq == seq || (seq == 0 && i == 0 && cc.running) {
 			c.cancelled.Store(true)
 			c.cancel()
@@ -163,7 +205,8 @@ func (h *chainHub) cancel(conv []byte, seq uint64) bool {
 }
 
 // subscribe adds a watcher of the Conversation's chains; stop removes it.
-// The channel closes if the watcher falls too far behind.
+// A chain already running is shown from the agent now answering, with its
+// reply so far. The channel closes if the watcher falls too far behind.
 func (h *chainHub) subscribe(conv []byte) (events <-chan ChainEvent, stop func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -171,6 +214,9 @@ func (h *chainHub) subscribe(conv []byte) (events <-chan ChainEvent, stop func()
 	key := conversationKey(conv)
 	cc := h.conversation(key, true)
 	cc.watchers[ch] = struct{}{}
+	for _, ev := range cc.shown.events() {
+		ch <- ev // at most three, into an empty buffer
+	}
 	return ch, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -185,10 +231,28 @@ func (h *chainHub) subscribe(conv []byte) (events <-chan ChainEvent, stop func()
 func (h *chainHub) publish(conv []byte, ev ChainEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.publishLocked(conv, ev)
+}
+
+// end publishes c's chain.end and ends its ctx, at once: a cancel after it
+// finds no chain, and a cancel before it is reported in it.
+func (h *chainHub) end(c *chain) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ev := ChainEvent{Type: EventChainEnd, Chain: c.seq, Cancelled: c.cancelled.Load()}
+	if c.ctx.Err() != nil && !ev.Cancelled {
+		ev.Error = "the serve stopped; this chain is lost and will not resume"
+	}
+	c.cancel()
+	h.publishLocked(c.conv, ev)
+}
+
+func (h *chainHub) publishLocked(conv []byte, ev ChainEvent) {
 	cc := h.conversation(conversationKey(conv), false)
 	if cc == nil {
 		return
 	}
+	cc.shown.fold(ev)
 	for ch := range cc.watchers {
 		select {
 		case ch <- ev:
@@ -270,11 +334,7 @@ func (s *server) runChain(c *chain) {
 			}
 		}
 	}
-	end := ChainEvent{Type: EventChainEnd, Cancelled: c.cancelled.Load()}
-	if c.ctx.Err() != nil && !end.Cancelled {
-		end.Error = "the serve stopped; this chain is lost and will not resume"
-	}
-	publish(end)
+	s.chains.end(c)
 }
 
 // errSkipped is an agent the chain passes over: it is no longer included.

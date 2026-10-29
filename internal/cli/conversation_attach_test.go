@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,8 +22,10 @@ import (
 // events on every open chain stream. With hold set it then keeps the stream
 // open until the client leaves.
 type chainServe struct {
-	events []serve.ChainEvent
-	hold   bool
+	events          []serve.ChainEvent
+	hold            bool
+	playAtOnce      bool // play the events on connect, not after a send
+	cancelFindsNone bool
 
 	mu       sync.Mutex
 	paths    []string // requests in order
@@ -48,10 +51,12 @@ func newChainServe(t *testing.T, dir string, cs *chainServe) *chainServe {
 		record(r)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
-		select {
-		case <-cs.sent:
-		case <-r.Context().Done():
-			return
+		if !cs.playAtOnce {
+			select {
+			case <-cs.sent:
+			case <-r.Context().Done():
+				return
+			}
 		}
 		enc := json.NewEncoder(w)
 		for _, ev := range cs.events {
@@ -73,7 +78,7 @@ func newChainServe(t *testing.T, dir string, cs *chainServe) *chainServe {
 		cs.mu.Lock()
 		cs.cancels = append(cs.cancels, string(b))
 		cs.mu.Unlock()
-		w.Write([]byte(`{"cancelled":true}`))
+		fmt.Fprintf(w, `{"cancelled":%t}`, !cs.cancelFindsNone)
 	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
@@ -212,5 +217,99 @@ func TestConversationSendReportsALostChain(t *testing.T) {
 	r := run(t, nil, "", "--dir", dir, "conversation", "send", "@auditor")
 	if r.code != 2 || !strings.Contains(r.stderr, "serve stopped") || strings.Contains(r.stderr, "cancel") {
 		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+}
+
+// follow prints every chain in the Conversation as it streams, the way an
+// attached send does, and keeps following after each ends. Ctrl-C only
+// detaches: it cancels nothing.
+func TestConversationFollowPrintsChainsUntilCtrlC(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	cs := newChainServe(t, dir, &chainServe{playAtOnce: true, hold: true, events: append(append([]serve.ChainEvent(nil), replyEvents...),
+		serve.ChainEvent{Type: serve.EventChainStart, Chain: 12},
+		serve.ChainEvent{Type: serve.EventAgentStart, Chain: 12, Handle: "scribe", Depth: 1},
+		serve.ChainEvent{Type: serve.EventAgentDelta, Chain: 12, Text: "noted"},
+		serve.ChainEvent{Type: serve.EventChainEnd, Chain: 12, Cancelled: true},
+		serve.ChainEvent{Type: serve.EventChainStart, Chain: 14},
+		serve.ChainEvent{Type: serve.EventAgentStart, Chain: 14, Handle: "auditor", Depth: 1},
+		serve.ChainEvent{Type: serve.EventAgentDelta, Chain: 14, Text: "still going"},
+	)})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+	r := runCtx(t, ctx, "--dir", dir, "conversation", "follow")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	for _, want := range []string{"@auditor: all good\n", "@scribe skipped", "@scribe: noted\n", "cancelled", "@auditor: still going"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	if got := cs.requests(); len(got) != 1 || got[0] != "GET /v1/conversation/stream" {
+		t.Fatalf("requests = %v, want the stream alone", got)
+	}
+}
+
+// follow --json prints the raw events, one per line.
+func TestConversationFollowJSON(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{playAtOnce: true, events: replyEvents})
+	r := run(t, nil, "", "--dir", dir, "--json", "conversation", "follow")
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(lines) != len(replyEvents) {
+		t.Fatalf("%d lines, want %d:\n%s", len(lines), len(replyEvents), r.stdout)
+	}
+	var ev serve.ChainEvent
+	if err := json.Unmarshal([]byte(lines[3]), &ev); err != nil || ev.Type != serve.EventAgentStart || ev.Handle != "auditor" {
+		t.Fatalf("line 4 = %s (%v)", lines[3], err)
+	}
+	// The serve went away: that ends a follow operationally.
+	if r.code != 2 || !strings.Contains(r.stderr, "serve") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+}
+
+// cancel asks for whichever chain is running and says whether there was one.
+func TestConversationCancel(t *testing.T) {
+	for _, none := range []bool{false, true} {
+		dir := t.TempDir()
+		mustInit(t, dir)
+		cs := newChainServe(t, dir, &chainServe{cancelFindsNone: none})
+		r := run(t, nil, "", "--dir", dir, "conversation", "cancel")
+		if r.code != 0 {
+			t.Fatalf("none=%v: exit %d: %s", none, r.code, r.stderr)
+		}
+		want := "cancelled the running chain"
+		if none {
+			want = "no chain was running"
+		}
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("none=%v: stdout %q, want %q", none, r.stdout, want)
+		}
+		if len(cs.cancels) != 1 || strings.Contains(cs.cancels[0], "chain") {
+			t.Errorf("none=%v: cancels = %v, want one for whichever is running", none, cs.cancels)
+		}
+	}
+}
+
+// A chain cancelled from another terminal ends an attached send with the
+// cancel, the cut-off reply ended on its line.
+func TestConversationSendReportsACancelFromElsewhere(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{events: []serve.ChainEvent{
+		{Type: serve.EventChainStart, Chain: 9},
+		{Type: serve.EventAgentStart, Chain: 9, Handle: "auditor", Depth: 1},
+		{Type: serve.EventAgentDelta, Chain: 9, Text: "thinking"},
+		{Type: serve.EventChainEnd, Chain: 9, Cancelled: true},
+	}})
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "@auditor")
+	if r.code != 2 || !strings.Contains(r.stderr, "cancelled") || !strings.Contains(r.stdout, "@auditor: thinking\n") {
+		t.Fatalf("exit %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
 	}
 }

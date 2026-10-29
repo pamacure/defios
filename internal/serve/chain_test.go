@@ -598,3 +598,70 @@ func TestMentionInAKeysConversation(t *testing.T) {
 		t.Fatalf("reply = %+v", ff)
 	}
 }
+
+// A watcher that joins mid-chain is shown the chain from the agent now
+// answering: its start and its reply so far, then the rest live.
+func TestALateWatcherSeesTheCurrentAgent(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "scribe")
+	started, release := holdProvider(provider)
+	provider.set(func(n int, w http.ResponseWriter, r *http.Request) {
+		if n == 1 {
+			streamText(w, "reply 1")
+			return
+		}
+		streamParts(w, "so", " far")
+		started <- n
+		select {
+		case <-release:
+			streamText(w, " done")
+		case <-r.Context().Done():
+		}
+	})
+	early := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	// The serve may not have published scribe's deltas yet; either way the
+	// late watcher sees them once.
+	time.Sleep(100 * time.Millisecond)
+	late := watch(t, a)
+	close(release)
+	untilEnd(t, early, v.Seq)
+	got := summary(untilEnd(t, late, v.Seq))
+	if want := "chain.start start:@scribe/1 delta:so far delta: done commit end"; got != want {
+		t.Fatalf("late watcher saw %s, want %s", got, want)
+	}
+}
+
+// A watcher leaving mid-chain, as follow does on Ctrl-C, leaves the chain
+// running; a cancel with no chain named stops whichever runs.
+func TestWatchersLeavingDoNotStopTheChain(t *testing.T) {
+	a, _, gid, provider := agentPair(t, "auditor", "scribe")
+	started, release := holdProvider(provider)
+	leaving, err := a.client().ConversationStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	v, err := a.client().ConversationSend(ctx, "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	leaving.Close()
+	time.Sleep(100 * time.Millisecond)
+	s := watch(t, a)
+	release <- struct{}{}
+	<-started // auditor's reply committed; scribe is answering
+	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
+		t.Fatalf("cancel = %+v, %v", c, err)
+	}
+	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit start:@scribe/1 delta:start end:cancelled") {
+		t.Fatalf("events = %s", got)
+	}
+	if rows := a.groupLevelRows(t, gid, 2); len(rows) != 2 {
+		t.Fatalf("%d rows, want the person's and auditor's", len(rows))
+	}
+}

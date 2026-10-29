@@ -46,6 +46,22 @@ func conversationCommand(g *globals) *cobra.Command {
 	send.Flags().Uint32Var(&as.depth, "depth", 1, "with --handle, the reply's depth in its chain: 1 to max_depth")
 	send.Flags().BoolVar(&as.detach, "detach", false, "return once the message commits, without streaming the agents it mentions")
 	root.AddCommand(send)
+	follow := &cobra.Command{
+		Use:   "follow",
+		Short: "Stream the replies of agents in a Conversation on this Node, chain after chain (requires serve); Ctrl-C detaches and cancels nothing. --key scopes it to that Key",
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runConversationFollow(cmd, g, keyQuery) },
+	}
+	follow.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	root.AddCommand(follow)
+	cancel := &cobra.Command{
+		Use:   "cancel",
+		Short: "Cancel the chain of agents running in a Conversation on this Node (requires serve). --key scopes it to that Key",
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runConversationCancel(cmd, g, keyQuery) },
+	}
+	cancel.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	root.AddCommand(cancel)
 	var opts logOptions
 	log := &cobra.Command{
 		Use:   "log",
@@ -126,13 +142,9 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 	if err != nil {
 		return err
 	}
-	var conv []byte
-	if keyQuery != "" {
-		id, err := resolveConversation(g, keyQuery)
-		if err != nil {
-			return err
-		}
-		conv = id
+	conv, err := queriedConversation(g, keyQuery)
+	if err != nil {
+		return err
 	}
 	client := serve.Client{Socket: g.paths().Socket}
 	ctx := cmd.Context()
@@ -183,10 +195,7 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 // each agent's reply as it streams, labelled @handle:, or under --json each
 // event as a line. Other chains in the Conversation are not this send's.
 func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
-	p := g.out()
-	out := g.app.Stdout
-	enc := json.NewEncoder(out)
-	var handle string
+	cp := newChainPrinter(g)
 	var failed error
 	for {
 		ev, err := stream.Next()
@@ -196,38 +205,11 @@ func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
 		if ev.Chain != seq {
 			continue
 		}
-		if g.json {
-			if err := enc.Encode(ev); err != nil {
-				return err
-			}
+		if err := cp.print(ev); err != nil {
+			return err
 		}
 		switch ev.Type {
-		case serve.EventAgentStart:
-			handle = ev.Handle
-			if !g.json {
-				fmt.Fprint(out, p.primary("@"+handle+":")+" ")
-			}
-		case serve.EventAgentDelta:
-			if !g.json {
-				fmt.Fprint(out, ev.Text)
-			}
-		case serve.EventAgentReset:
-			if !g.json {
-				fmt.Fprintln(out, "\n"+p.dim("[retrying; the reply starts over]"))
-				fmt.Fprint(out, p.primary("@"+handle+":")+" ")
-			}
-		case serve.EventAgentCommit:
-			if !g.json {
-				fmt.Fprintln(out)
-			}
-		case serve.EventAgentSkipped:
-			if !g.json {
-				fmt.Fprintln(out, p.dim("@"+ev.Handle+" skipped: "+ev.Reason))
-			}
 		case serve.EventAgentError:
-			if !g.json && handle != "" {
-				fmt.Fprintln(out)
-			}
 			failed = exitOperationalf("@%s: %s; nothing is committed for it", ev.Handle, ev.Error)
 		case serve.EventChainEnd:
 			if failed == nil && ev.Error != "" {
@@ -239,6 +221,123 @@ func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
 			return failed
 		}
 	}
+}
+
+// runConversationFollow prints every chain in the Conversation as it
+// streams, until Ctrl-C, which only detaches: the chain runs on and its
+// replies still commit (ADR 0015).
+func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) error {
+	conv, err := queriedConversation(g, keyQuery)
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	stream, err := serve.Client{Socket: g.paths().Socket}.ConversationStream(ctx, conv)
+	if err != nil {
+		return serveError(err)
+	}
+	defer stream.Close()
+	cp := newChainPrinter(g)
+	p := g.out()
+	for {
+		ev, err := stream.Next()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return exitOperationalf("lost the serve: %w", err)
+		}
+		if err := cp.print(ev); err != nil {
+			return err
+		}
+		if g.json {
+			continue
+		}
+		switch ev.Type {
+		case serve.EventChainStart:
+			fmt.Fprintln(g.app.Stdout, p.dim(fmt.Sprintf("[agents answering seq %d]", ev.Chain)))
+		case serve.EventAgentError:
+			fmt.Fprintf(g.app.Stderr, "%s @%s: %s; nothing is committed for it\n", paletteFor(g.app.Stderr, g.app.Getenv).concern("defios:"), ev.Handle, ev.Error)
+		case serve.EventChainEnd:
+			if ev.Error != "" {
+				fmt.Fprintln(g.app.Stdout, p.concern("["+ev.Error+"]"))
+			} else if ev.Cancelled {
+				fmt.Fprintln(g.app.Stdout, p.dim("[cancelled; nothing is committed for the agent that was answering]"))
+			}
+		}
+	}
+}
+
+// runConversationCancel cancels the chain running in the Conversation, and
+// says whether there was one.
+func runConversationCancel(cmd *cobra.Command, g *globals, keyQuery string) error {
+	conv, err := queriedConversation(g, keyQuery)
+	if err != nil {
+		return err
+	}
+	v, err := serve.Client{Socket: g.paths().Socket}.ConversationCancel(cmd.Context(), conv, 0)
+	if err != nil {
+		return serveError(err)
+	}
+	if g.json {
+		return g.emitJSON(v)
+	}
+	if v.Cancelled {
+		fmt.Fprintln(g.app.Stdout, "cancelled the running chain: nothing is committed for the agent that was answering, and the rest of the chain is dropped")
+	} else {
+		fmt.Fprintln(g.app.Stdout, "no chain was running")
+	}
+	return nil
+}
+
+// queriedConversation is the Conversation --key names, or nil for
+// Group-level talk.
+func queriedConversation(g *globals, keyQuery string) ([]byte, error) {
+	if keyQuery == "" {
+		return nil, nil
+	}
+	return resolveConversation(g, keyQuery)
+}
+
+// chainPrinter prints chain events as they stream: each agent's reply
+// labelled @handle:, or under --json each event as a line.
+type chainPrinter struct {
+	g      *globals
+	enc    *json.Encoder
+	handle string // the agent answering, once one starts
+}
+
+func newChainPrinter(g *globals) *chainPrinter {
+	return &chainPrinter{g: g, enc: json.NewEncoder(g.app.Stdout)}
+}
+
+func (c *chainPrinter) print(ev serve.ChainEvent) error {
+	if c.g.json {
+		return c.enc.Encode(ev)
+	}
+	p := c.g.out()
+	out := c.g.app.Stdout
+	switch ev.Type {
+	case serve.EventAgentStart:
+		c.handle = ev.Handle
+		fmt.Fprint(out, p.primary("@"+c.handle+":")+" ")
+	case serve.EventAgentDelta:
+		fmt.Fprint(out, ev.Text)
+	case serve.EventAgentReset:
+		fmt.Fprintln(out, "\n"+p.dim("[retrying; the reply starts over]"))
+		fmt.Fprint(out, p.primary("@"+c.handle+":")+" ")
+	case serve.EventAgentCommit:
+		fmt.Fprintln(out)
+		c.handle = ""
+	case serve.EventAgentSkipped:
+		fmt.Fprintln(out, p.dim("@"+ev.Handle+" skipped: "+ev.Reason))
+	case serve.EventAgentError, serve.EventChainEnd:
+		if c.handle != "" {
+			fmt.Fprintln(out) // the reply was cut off
+		}
+		c.handle = ""
+	}
+	return nil
 }
 
 func runConversationRecap(cmd *cobra.Command, g *globals, keyQuery string, baseSeq uint64, text string) error {

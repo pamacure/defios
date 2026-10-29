@@ -222,7 +222,14 @@ defios conversation send --key ecdsa:<hex> "@auditor, is this transfer sane?"
 defios conversation send --detach "@auditor, summarise the day"
 ```
 
-A client can watch the same chains with `GET /v1/conversation/stream` on the socket (newline-delimited JSON events) and cancel one with `POST /v1/conversation/cancel`, as [ADR 0015](docs/adr/0015-agent-profiles-handles-and-agent-chains.md) describes.
+From another terminal, `conversation follow` watches a Conversation's chains on this machine and keeps following, one chain after another. Started mid-chain, it shows the agent answering now, its reply so far, then the rest. Ctrl-C only detaches it: the chain keeps running and its replies still commit. `--json` prints the raw events. `conversation cancel` cancels the running chain and says whether one was running. An attached `send` reports the cancel and exits 2:
+
+```bash
+defios conversation follow --key ecdsa:<hex>
+defios conversation cancel --key ecdsa:<hex>
+```
+
+Other clients use the same endpoints on the socket: `GET /v1/conversation/stream` (newline-delimited JSON events) and `POST /v1/conversation/cancel`, as [ADR 0015](docs/adr/0015-agent-profiles-handles-and-agent-chains.md) describes.
 
 An unknown Key exits 1:
 
