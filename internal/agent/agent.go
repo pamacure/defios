@@ -25,12 +25,13 @@ import (
 // anthropicVersion is the Messages API version this package speaks.
 const anthropicVersion = "2023-06-01"
 
-// MaxTokens bounds each model call: max_tokens for Anthropic,
-// max_completion_tokens for OpenAI. A call that stops there is an error.
+// MaxTokens bounds each model call when a Request sets no bound:
+// max_tokens for Anthropic, max_completion_tokens for OpenAI. A call that
+// stops at its bound is an error.
 const MaxTokens = 8192
 
-// MaxCalls is how many model calls a run may make before it must have said
-// something or stayed silent.
+// MaxCalls is how many model calls a run may make, when a Request sets no
+// MaxTurns, before it must have said something or stayed silent.
 const MaxCalls = 8
 
 // MaxSay is the most bytes a say may carry; a longer one is refused.
@@ -54,8 +55,36 @@ type Request struct {
 	URL      string // the whole endpoint: base URL and API path
 	APIKey   string // empty sends none
 	Model    string // the provider's model id
-	System   string
-	Turns    []Turn // the talk so far, alternating and ending with User
+	// System is the stable part of the system prompt, the same for an agent
+	// at every depth; SystemDepth, what differs by depth, follows it directly
+	// as one prompt. Anthropic gets them as two blocks with a cache
+	// breakpoint between; OpenAI caches the shared prefix itself (ADR 0018).
+	System      string
+	SystemDepth string
+	Turns       []Turn // the talk so far, alternating and ending with User
+
+	// The Agent Profile's options (ADR 0018). MaxTokens bounds each call
+	// (0 is MaxTokens), MaxTurns the calls in the run (0 is MaxCalls), and a
+	// nil Temperature is left out of the request.
+	MaxTokens   int
+	Temperature *float64
+	MaxTurns    int
+}
+
+// maxTokens is the bound on each of req's calls.
+func (req Request) maxTokens() int {
+	if req.MaxTokens > 0 {
+		return req.MaxTokens
+	}
+	return MaxTokens
+}
+
+// maxTurns is how many calls req's run may make.
+func (req Request) maxTurns() int {
+	if req.MaxTurns > 0 {
+		return req.MaxTurns
+	}
+	return MaxCalls
 }
 
 // Turn is one message of the talk as the Model sees it (ADR 0018): the
@@ -148,14 +177,14 @@ type call struct {
 // its turn without one, or something fails. Each call carries everything
 // the run has generated so far. A call is retried on a
 // rate limit, overload, 5xx response or dropped connection, up to Retries
-// times. A call that stops at MaxTokens, or MaxCalls calls without a say,
-// is an error.
+// times. A call that stops at its token bound, or a run that reaches its
+// turn bound without a say, is an error.
 func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error) {
 	conv, err := newConversation(req)
 	if err != nil {
 		return Result{}, err
 	}
-	for range MaxCalls {
+	for range req.maxTurns() {
 		out, err := c.call(ctx, req, conv.body(), ev)
 		if err != nil {
 			return Result{}, err
@@ -167,7 +196,7 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 			ev.record("usage", out.usage)
 		}
 		if out.stop == "max_tokens" || out.stop == "length" {
-			return Result{}, fmt.Errorf("agent: the model stopped at max_tokens %d before it finished", MaxTokens)
+			return Result{}, fmt.Errorf("agent: the model stopped at max_tokens %d before it finished", req.maxTokens())
 		}
 		var results []toolResult
 		for _, b := range out.blocks {
@@ -185,7 +214,7 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 		}
 		conv.add(out.blocks, results)
 	}
-	return Result{}, fmt.Errorf("agent: %d model calls without an accepted say", MaxCalls)
+	return Result{}, fmt.Errorf("agent: %d model calls without an accepted say", req.maxTurns())
 }
 
 // checkSay is the text of an acceptable say, or why b is refused.
@@ -212,25 +241,44 @@ func checkSay(b Block) (text, refusal string) {
 // accepted say ends the run.
 type toolResult struct{ id, text string }
 
-// conversation is a run's request so far, in its provider's shape.
+// conversation is a run's request so far, in its provider's shape. Each call
+// sends the one before it as an unchanged prefix, so a provider can read it
+// from cache (ADR 0018).
 type conversation struct {
-	req  Request
-	msgs []any
+	req    Request
+	system []any // Anthropic's system blocks
+	msgs   []any
+	// latest is the Anthropic tool result holding the moving cache
+	// breakpoint; the next one takes it, keeping within the four allowed.
+	latest map[string]any
 }
+
+// ephemeral is an Anthropic cache breakpoint.
+var ephemeral = map[string]any{"type": "ephemeral"}
 
 func newConversation(req Request) (*conversation, error) {
 	c := &conversation{req: req}
 	switch req.Provider {
 	case model.Anthropic:
-	case model.OpenAI:
 		if req.System != "" {
-			c.msgs = append(c.msgs, map[string]any{"role": "system", "content": req.System})
+			c.system = append(c.system, map[string]any{"type": "text", "text": req.System, "cache_control": ephemeral})
+		}
+		if req.SystemDepth != "" {
+			c.system = append(c.system, map[string]any{"type": "text", "text": req.SystemDepth})
+		}
+	case model.OpenAI:
+		if system := req.System + req.SystemDepth; system != "" {
+			c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
 		}
 	default:
 		return nil, fmt.Errorf("agent: provider %q must be anthropic or openai", req.Provider)
 	}
-	for _, t := range req.Turns {
-		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": t.Text})
+	for i, t := range req.Turns {
+		var content any = t.Text
+		if req.Provider == model.Anthropic && i == len(req.Turns)-1 {
+			content = []any{map[string]any{"type": "text", "text": t.Text, "cache_control": ephemeral}}
+		}
+		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": content})
 	}
 	return c, nil
 }
@@ -255,6 +303,11 @@ func (c *conversation) add(blocks []Block, results []toolResult) {
 		for i, r := range results {
 			answers[i] = map[string]any{"type": "tool_result", "tool_use_id": r.id, "content": r.text, "is_error": true}
 		}
+		if c.latest != nil {
+			delete(c.latest, "cache_control")
+		}
+		c.latest = answers[len(answers)-1].(map[string]any)
+		c.latest["cache_control"] = ephemeral
 		c.msgs = append(c.msgs,
 			map[string]any{"role": "assistant", "content": content},
 			map[string]any{"role": "user", "content": answers})
@@ -290,13 +343,14 @@ func (c *conversation) body() []byte {
 	var v any
 	if c.req.Provider == model.Anthropic {
 		v = struct {
-			Model     string `json:"model"`
-			MaxTokens int    `json:"max_tokens"`
-			System    string `json:"system,omitempty"`
-			Messages  []any  `json:"messages"`
-			Tools     []any  `json:"tools"`
-			Stream    bool   `json:"stream"`
-		}{c.req.Model, MaxTokens, c.req.System, c.msgs,
+			Model       string   `json:"model"`
+			MaxTokens   int      `json:"max_tokens"`
+			Temperature *float64 `json:"temperature,omitempty"`
+			System      []any    `json:"system,omitempty"`
+			Messages    []any    `json:"messages"`
+			Tools       []any    `json:"tools"`
+			Stream      bool     `json:"stream"`
+		}{c.req.Model, c.req.maxTokens(), c.req.Temperature, c.system, c.msgs,
 			[]any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}, true}
 	} else {
 		v = struct {
@@ -304,11 +358,12 @@ func (c *conversation) body() []byte {
 			Messages            []any          `json:"messages"`
 			Tools               []any          `json:"tools"`
 			MaxCompletionTokens int            `json:"max_completion_tokens"`
+			Temperature         *float64       `json:"temperature,omitempty"`
 			Stream              bool           `json:"stream"`
 			StreamOptions       map[string]any `json:"stream_options"`
 		}{c.req.Model, c.msgs,
 			[]any{map[string]any{"type": "function", "function": map[string]any{"name": sayTool, "description": sayDescription, "parameters": saySchema}}},
-			MaxTokens, true, map[string]any{"include_usage": true}}
+			c.req.maxTokens(), c.req.Temperature, true, map[string]any{"include_usage": true}}
 	}
 	body, _ := json.Marshal(v) // maps, strings and valid raw JSON only
 	return body

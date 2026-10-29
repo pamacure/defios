@@ -147,6 +147,39 @@ func TestRunBoundsAreErrors(t *testing.T) {
 	}
 }
 
+// A profile's max_tokens and temperature reach each request, and its
+// max_turns bounds the run: reached without a say, it is agent.error and
+// nothing commits.
+func TestProfileOptionsShapeTheRun(t *testing.T) {
+	a, _, gid, provider := agentPair(t, "auditor")
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), "model = \"claude\"\n",
+		"model = \"claude\"\nmax_tokens = 4000\ntemperature = 0.2\nmax_turns = 2\n", 1))
+	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) { streamSay(w, "") })
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := untilEnd(t, s, v.Seq)
+	if last := events[len(events)-2]; last.Type != serve.EventAgentError || !strings.Contains(last.Error, "2 model calls") {
+		t.Fatalf("events = %s, error %q", summary(events), last.Error)
+	}
+	if n := len(provider.seen()); n != 2 {
+		t.Fatalf("%d calls, want 2", n)
+	}
+	req, _ := transcript(t, a, v.Seq)[0]["request"].(map[string]any)
+	if req["max_tokens"] != float64(4000) || req["temperature"] != 0.2 {
+		t.Fatalf("request = %v", req)
+	}
+	time.Sleep(200 * time.Millisecond)
+	for _, ff := range freeforms(t, a.groupLevelRows(t, gid, 1)) {
+		if ff.Handle != "" {
+			t.Fatalf("an agent committed %+v", ff)
+		}
+	}
+}
+
 // Each chain's Transcript holds one line per request, output block, usage
 // and outcome, each tagged with its step, Handle, depth and attempt, and
 // never the key.
@@ -185,6 +218,34 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	if raw := readFile(t, a.paths.TranscriptFile(group.ImplicitAlias, "group", v.Seq)); strings.Contains(raw, "sk-local") {
 		t.Fatal("the Transcript holds the API key")
 	}
+}
+
+// A call's cache usage is recorded with its usage in the Transcript.
+func TestTheTranscriptRecordsCacheUsage(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor")
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		event(w, "message_start", `{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_creation_input_tokens":40,"cache_read_input_tokens":900,"output_tokens":1}}}`)
+		event(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		endSay(w, "ok")
+	})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, v.Seq)
+	for _, l := range transcript(t, a, v.Seq) {
+		if l["kind"] != "usage" {
+			continue
+		}
+		u, _ := l["usage"].(map[string]any)
+		if u["cache_creation_input_tokens"] != float64(40) || u["cache_read_input_tokens"] != float64(900) || u["output_tokens"] != float64(3) {
+			t.Fatalf("usage = %v", u)
+		}
+		return
+	}
+	t.Fatal("the Transcript has no usage")
 }
 
 // A cancel mid-run ends the run's Transcript with outcome cancelled.

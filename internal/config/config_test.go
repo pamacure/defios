@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -254,6 +255,16 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 		"old [agent] model":   "[agent]\nmodel = \"claude\"",
 		"old [agent] window":  "[agent]\ntoken_window = 200000",
 		"unknown profile key": "[agents.auditor]\nmodel = \"claude\"\nsoul = \"SOUL.md\"",
+		"zero max_tokens":     "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = 0",
+		"negative max_tokens": "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = -1",
+		"string max_tokens":   "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = \"4000\"",
+		"float max_tokens":    "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = 4000.5",
+		"zero max_turns":      "[agents.auditor]\nmodel = \"claude\"\nmax_turns = 0",
+		"negative max_turns":  "[agents.auditor]\nmodel = \"claude\"\nmax_turns = -3",
+		"negative temp":       "[agents.auditor]\nmodel = \"claude\"\ntemperature = -0.1",
+		"string temp":         "[agents.auditor]\nmodel = \"claude\"\ntemperature = \"hot\"",
+		"nan temp":            "[agents.auditor]\nmodel = \"claude\"\ntemperature = nan",
+		"inf temp":            "[agents.auditor]\nmodel = \"claude\"\ntemperature = inf",
 	} {
 		if _, err := config.ReadFile(write(t, body)); err == nil {
 			t.Errorf("%s: read without error", name)
@@ -261,12 +272,58 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 	}
 	for name, body := range map[string]string{
 		"profile in a Conversation": "[agents.auditor]\nmodel = \"claude\"",
+		"options in a Conversation": "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = 4000",
 		"bad handle in profiles":    "[agent]\nprofiles = [\"Auditor\"]",
 		"zero max_depth":            "[agent]\nmax_depth = 0",
 	} {
 		if _, err := config.ReadWorkspace(write(t, body)); err == nil {
 			t.Errorf("Conversation %s: read without error", name)
 		}
+	}
+}
+
+// A profile's max_tokens, temperature and max_turns resolve with it; unset,
+// they are 8192, absent and 8. A whole-number temperature is a number too.
+func TestIncludedResolvesProfileOptions(t *testing.T) {
+	c, err := config.ReadFile(write(t, `
+[agents.auditor]
+model = "claude"
+max_tokens = 4000
+temperature = 0.2
+max_turns = 3
+
+[agents.scribe]
+model = "claude"
+
+[agents.poet]
+model = "claude"
+temperature = 1
+
+[agent]
+profiles = ["auditor", "scribe", "poet"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Included(config.Workspace{}, "/r", "/h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type opts struct {
+		maxTokens, maxTurns int
+		temperature         string
+	}
+	var have []opts
+	for _, p := range got.Profiles {
+		temp := "unset"
+		if p.Temperature != nil {
+			temp = fmt.Sprint(*p.Temperature)
+		}
+		have = append(have, opts{p.MaxTokens, p.MaxTurns, temp})
+	}
+	want := []opts{{4000, 3, "0.2"}, {8192, 8, "unset"}, {8192, 8, "1"}}
+	if !reflect.DeepEqual(have, want) {
+		t.Fatalf("options = %+v, want %+v", have, want)
 	}
 }
 
@@ -301,7 +358,7 @@ max_depth = 3
 
 	got, err := c.Included(config.Workspace{}, root, home)
 	want := config.Included{
-		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: "/home/op/.config/defios/agents/auditor", Model: "claude"}},
+		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: "/home/op/.config/defios/agents/auditor", Model: "claude", MaxTokens: 8192, MaxTurns: 8}},
 		MaxDepth: 3,
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -311,9 +368,9 @@ max_depth = 3
 	got, err = c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"quant", "trader", "scout"}}}, root, home)
 	want = config.Included{
 		Profiles: []config.ResolvedProfile{
-			{Handle: "quant", Dir: "/home/op/.config/defios/shared/quant", Model: "gpt"},
-			{Handle: "trader", Dir: "/srv/agents/trader", Model: "gpt"},
-			{Handle: "scout", Dir: "/home/op/agents/scout", Model: "claude"},
+			{Handle: "quant", Dir: "/home/op/.config/defios/shared/quant", Model: "gpt", MaxTokens: 8192, MaxTurns: 8},
+			{Handle: "trader", Dir: "/srv/agents/trader", Model: "gpt", MaxTokens: 8192, MaxTurns: 8},
+			{Handle: "scout", Dir: "/home/op/agents/scout", Model: "claude", MaxTokens: 8192, MaxTurns: 8},
 		},
 		MaxDepth: 3,
 	}

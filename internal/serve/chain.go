@@ -570,7 +570,8 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	}
 	local := ws.Providers[m.Provider]
 	base, withKey := model.Endpoint(m, local.BaseURL)
-	req := agent.Request{Provider: m.Provider, URL: model.CallURL(m, base), Model: m.ModelID}
+	req := agent.Request{Provider: m.Provider, URL: model.CallURL(m, base), Model: m.ModelID,
+		MaxTokens: p.MaxTokens, Temperature: p.Temperature, MaxTurns: p.MaxTurns}
 	if withKey && local.APIKey != "" {
 		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
 		if req.APIKey, err = r.Resolve(local.APIKey); err != nil {
@@ -581,7 +582,9 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + preamble(handle, depth, inc, where)
+	stable, atDepth := preamble(handle, depth, inc, where)
+	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + stable
+	req.SystemDepth = atDepth
 	if req.Turns, err = s.talkSoFar(store, conv, handle); err != nil {
 		return agent.Request{}, inc, err
 	}
@@ -607,11 +610,12 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 	return "", ErrNoConversation
 }
 
-// preamble is what the serve tells an agent after its SYSTEM.md: who it is,
-// where it is answering, how the talk reads, that only say posts and how,
-// and either the Handles it may summon or that it may summon none at its
-// depth (ADR 0015, ADR 0018).
-func preamble(handle string, depth uint32, inc config.Included, where string) string {
+// preamble is what the serve tells an agent after its SYSTEM.md, in two
+// parts (ADR 0015, ADR 0018). The stable part, the same at every depth so a
+// provider caches it, says who it is, where it is answering, how the talk
+// reads, and that only say posts and how. The depth part gives its depth and
+// either the Handles it may summon or that it may summon none.
+func preamble(handle string, depth uint32, inc config.Included, where string) (stable, atDepth string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
 	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone, whichever Node wrote them as @%s. "+
@@ -619,6 +623,8 @@ func preamble(handle string, depth uint32, inc config.Included, where string) st
 	fmt.Fprintf(&b, "This is a group chat. Only what you pass to the say tool is posted to it, as one message from @%s, and calling say ends your turn. "+
 		"Everything else you write stays private. Keep your message to a paragraph or two of plain text, like a longer group-chat message, at most %d bytes. "+
 		"If you have nothing worth saying, end your turn without calling say and you stay silent.\n", handle, agent.MaxSay)
+	stable = b.String()
+	b.Reset()
 	var others []config.ResolvedProfile
 	if canSummon(depth, inc) {
 		for _, p := range inc.Profiles {
@@ -631,7 +637,7 @@ func preamble(handle string, depth uint32, inc config.Included, where string) st
 	if len(others) == 0 {
 		b.WriteString("An @handle in your message summons nobody.\n")
 	}
-	return b.String()
+	return stable, b.String()
 }
 
 // talkSoFar is conv's talk as handle sees it: the lean view as turns.
