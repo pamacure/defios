@@ -4,6 +4,7 @@ package nodedir
 
 import (
 	"path/filepath"
+	"strconv"
 )
 
 // Lookup is the environment the resolution reads. Every input is explicit so
@@ -129,6 +130,20 @@ func (p Paths) CoslFile(alias string) string {
 // own tsnet identity on each tailnet.
 func (p Paths) TsnetDir(alias string) string {
 	return filepath.Join(p.GroupDir(alias), "tsnet")
+}
+
+// TranscriptsDir is group/<alias>/transcripts/: what this Node's agents
+// generated, never replicated and outside the Vault (ADR 0018). A replica
+// wipe, a restore and Pruning leave it alone.
+func (p Paths) TranscriptsDir(alias string) string {
+	return filepath.Join(p.GroupDir(alias), "transcripts")
+}
+
+// TranscriptFile is the Transcript of the chain started by seq chain in a
+// Conversation: conversation is its hex Conversation ID, or "group" for
+// Group-level talk.
+func (p Paths) TranscriptFile(alias, conversation string, chain uint64) string {
+	return filepath.Join(p.TranscriptsDir(alias), conversation, strconv.FormatUint(chain, 10)+".jsonl")
 }
 
 // ConversationWorkspace is config/group/<alias>/<name>/, name being the

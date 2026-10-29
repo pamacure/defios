@@ -147,6 +147,31 @@ func TestConversationSendStreamsTheChain(t *testing.T) {
 	}
 }
 
+// What an agent says prints when it commits, under its Handle, after any
+// text it streamed; a silent agent is shown as silent.
+func TestConversationSendPrintsSaidTextAndSilence(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{events: []serve.ChainEvent{
+		{Type: serve.EventChainStart, Chain: 9},
+		{Type: serve.EventAgentStart, Chain: 9, Handle: "auditor", Depth: 1},
+		{Type: serve.EventAgentDelta, Chain: 9, Text: "checking"},
+		{Type: serve.EventAgentCommit, Chain: 9, Seq: 10, Text: "all good"},
+		{Type: serve.EventAgentStart, Chain: 9, Handle: "scribe", Depth: 1},
+		{Type: serve.EventAgentSilent, Chain: 9, Handle: "scribe"},
+		{Type: serve.EventChainEnd, Chain: 9},
+	}})
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "@auditor @scribe")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	for _, want := range []string{"@auditor: checking\n", "@auditor: all good\n", "@scribe stayed silent\n"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
+		}
+	}
+}
+
 // --detach returns at commit, and so does a message that mentions nobody:
 // neither watches.
 func TestConversationSendDetachAndNoMentionReturnAtCommit(t *testing.T) {

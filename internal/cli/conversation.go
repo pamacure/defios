@@ -192,8 +192,9 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 }
 
 // followChain prints the chain the message at seq started, until it ends:
-// each agent's reply as it streams, labelled @handle:, or under --json each
-// event as a line. Other chains in the Conversation are not this send's.
+// each agent's text as it streams and its message as it commits, labelled
+// @handle:, or under --json each event as a line. Other chains in the
+// Conversation are not this send's.
 func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
 	cp := newChainPrinter(g)
 	var failed error
@@ -299,12 +300,14 @@ func queriedConversation(g *globals, keyQuery string) ([]byte, error) {
 	return resolveConversation(g, keyQuery)
 }
 
-// chainPrinter prints chain events as they stream: each agent's reply
-// labelled @handle:, or under --json each event as a line.
+// chainPrinter prints chain events as they stream: each agent's text
+// labelled @handle: as it streams, then what it says when that commits, or
+// under --json each event as a line.
 type chainPrinter struct {
 	g      *globals
 	enc    *json.Encoder
 	handle string // the agent answering, once one starts
+	open   bool   // a line of its streamed text is open
 }
 
 func newChainPrinter(g *globals) *chainPrinter {
@@ -317,24 +320,39 @@ func (c *chainPrinter) print(ev serve.ChainEvent) error {
 	}
 	p := c.g.out()
 	out := c.g.app.Stdout
+	label := func() string { return p.primary("@"+c.handle+":") + " " }
+	endLine := func() {
+		if c.open {
+			fmt.Fprintln(out)
+		}
+		c.open = false
+	}
 	switch ev.Type {
 	case serve.EventAgentStart:
-		c.handle = ev.Handle
-		fmt.Fprint(out, p.primary("@"+c.handle+":")+" ")
+		c.handle, c.open = ev.Handle, false
 	case serve.EventAgentDelta:
+		if !c.open {
+			fmt.Fprint(out, label())
+			c.open = true
+		}
 		fmt.Fprint(out, ev.Text)
 	case serve.EventAgentReset:
-		fmt.Fprintln(out, "\n"+p.dim("[retrying; the reply starts over]"))
-		fmt.Fprint(out, p.primary("@"+c.handle+":")+" ")
+		endLine()
+		fmt.Fprintln(out, p.dim("[retrying; the reply starts over]"))
 	case serve.EventAgentCommit:
-		fmt.Fprintln(out)
+		endLine()
+		if ev.Text != "" {
+			fmt.Fprintln(out, label()+ev.Text)
+		}
+		c.handle = ""
+	case serve.EventAgentSilent:
+		endLine()
+		fmt.Fprintln(out, p.dim("@"+ev.Handle+" stayed silent"))
 		c.handle = ""
 	case serve.EventAgentSkipped:
 		fmt.Fprintln(out, p.dim("@"+ev.Handle+" skipped: "+ev.Reason))
 	case serve.EventAgentError, serve.EventChainEnd:
-		if c.handle != "" {
-			fmt.Fprintln(out) // the reply was cut off
-		}
+		endLine() // the reply was cut off
 		c.handle = ""
 	}
 	return nil

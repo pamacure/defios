@@ -26,11 +26,13 @@ import (
 type providerCall struct {
 	Key    string
 	System string
-	Prompt string
+	Prompt string // the first message's text
+	Turns  int    // how many messages the call carried
 }
 
 // fakeProvider is an Anthropic Messages endpoint. reply answers each call,
-// numbered from 1; by default it streams "reply <n>" in two deltas.
+// numbered from 1; by default it streams the text "thinking", then says
+// "reply <n>".
 type fakeProvider struct {
 	*httptest.Server
 	mu    sync.Mutex
@@ -41,18 +43,21 @@ type fakeProvider struct {
 func newFakeProvider(t *testing.T) *fakeProvider {
 	t.Helper()
 	p := &fakeProvider{}
-	p.reply = func(n int, w http.ResponseWriter, _ *http.Request) { streamText(w, "reply ", fmt.Sprint(n)) }
+	p.reply = func(n int, w http.ResponseWriter, _ *http.Request) {
+		streamParts(w, "thinking")
+		endSay(w, fmt.Sprint("reply ", n))
+	}
 	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			System   string `json:"system"`
 			Messages []struct {
-				Content string `json:"content"`
+				Content json.RawMessage `json:"content"`
 			} `json:"messages"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		call := providerCall{Key: r.Header.Get("x-api-key"), System: body.System}
+		call := providerCall{Key: r.Header.Get("x-api-key"), System: body.System, Turns: len(body.Messages)}
 		if len(body.Messages) > 0 {
-			call.Prompt = body.Messages[0].Content
+			json.Unmarshal(body.Messages[0].Content, &call.Prompt)
 		}
 		p.mu.Lock()
 		p.calls = append(p.calls, call)
@@ -76,20 +81,57 @@ func (p *fakeProvider) set(reply func(n int, w http.ResponseWriter, r *http.Requ
 	p.reply = reply
 }
 
-// streamText writes an Anthropic stream of parts, then its end.
-func streamText(w http.ResponseWriter, parts ...string) {
-	streamParts(w, parts...)
-	fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+// event writes one server-sent event and flushes it.
+func event(w http.ResponseWriter, typ, data string) {
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", typ, data)
+	w.(http.Flusher).Flush()
 }
 
-// streamParts writes the deltas only: a stream that has begun.
+// streamParts begins an Anthropic stream with a text block of parts: a
+// stream that has begun. endSay or endTurn ends it.
 func streamParts(w http.ResponseWriter, parts ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
+	event(w, "message_start", `{"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":1}}}`)
+	event(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+	streamDeltas(w, parts...)
+}
+
+// streamDeltas streams more of the text block streamParts began.
+func streamDeltas(w http.ResponseWriter, parts ...string) {
 	for _, p := range parts {
 		raw, _ := json.Marshal(p)
-		fmt.Fprintf(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":%s}}\n\n", raw)
-		w.(http.Flusher).Flush()
+		event(w, "content_block_delta", fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%s}}`, raw))
 	}
+}
+
+// endSay ends a begun stream with a say of text.
+func endSay(w http.ResponseWriter, text string) {
+	input, _ := json.Marshal(map[string]string{"text": text})
+	partial, _ := json.Marshal(string(input))
+	event(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+	event(w, "content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"say","input":{}}}`)
+	event(w, "content_block_delta", fmt.Sprintf(`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":%s}}`, partial))
+	event(w, "content_block_stop", `{"type":"content_block_stop","index":1}`)
+	endTurn(w, "tool_use")
+}
+
+// endTurn ends a begun stream with stop.
+func endTurn(w http.ResponseWriter, stop string) {
+	event(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"`+stop+`"},"usage":{"output_tokens":3}}`)
+	event(w, "message_stop", `{"type":"message_stop"}`)
+}
+
+// streamSay says text with no text before it.
+func streamSay(w http.ResponseWriter, text string) {
+	streamParts(w)
+	endSay(w, text)
+}
+
+// streamText streams parts and ends the turn without a say: silence.
+func streamText(w http.ResponseWriter, parts ...string) {
+	streamParts(w, parts...)
+	event(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+	endTurn(w, "end_turn")
 }
 
 // agentNode configures n with Agent Profiles answering on provider: each
@@ -199,6 +241,45 @@ func untilEnd(t *testing.T, s *serve.ChainStream, seq uint64) []serve.ChainEvent
 	return out
 }
 
+// untilStreaming reads the chain started by seq until handle has streamed
+// text, returning the chain's events so far: a cancel after it finds the
+// delta published.
+func untilStreaming(t *testing.T, s *serve.ChainStream, seq uint64, handle string) []serve.ChainEvent {
+	t.Helper()
+	var out []serve.ChainEvent
+	done := make(chan error, 1)
+	go func() {
+		current := ""
+		for {
+			ev, err := s.Next()
+			if err != nil {
+				done <- err
+				return
+			}
+			if ev.Chain != seq {
+				continue
+			}
+			out = append(out, ev)
+			if ev.Type == serve.EventAgentStart {
+				current = ev.Handle
+			}
+			if ev.Type == serve.EventAgentDelta && current == handle {
+				done <- nil
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stream: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("@%s never streamed in chain %d; got %+v", handle, seq, out)
+	}
+	return out
+}
+
 // summary is events as "type:detail" words, deltas joined to their text.
 func summary(events []serve.ChainEvent) string {
 	var out []string
@@ -210,6 +291,8 @@ func summary(events []serve.ChainEvent) string {
 			out = append(out, "delta:"+ev.Text)
 		case serve.EventAgentCommit:
 			out = append(out, "commit")
+		case serve.EventAgentSilent:
+			out = append(out, "silent:@"+ev.Handle)
 		case serve.EventAgentSkipped:
 			out = append(out, "skipped:@"+ev.Handle)
 		case serve.EventAgentError:
@@ -245,8 +328,9 @@ func freeforms(t *testing.T, rows []cosl.Row) []*coslv1.AppFreeform {
 	return out
 }
 
-// A person's mention runs the agent: its reply streams to a watcher as it is
-// generated, and commits once as one row with its Handle at depth 1. The
+// A person's mention runs the agent: its text streams to a watcher as it is
+// generated, and what it says, and nothing else, commits once as one row
+// with its Handle at depth 1. The
 // agent is told who it is and reads the talk in the lean format, and the
 // provider gets this Node's own key at this Node's own base_url.
 func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
@@ -257,7 +341,7 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.Seq)
-	if got := summary(events); got != "chain.start start:@auditor/1 delta:reply  delta:1 commit end" {
+	if got := summary(events); got != "chain.start start:@auditor/1 delta:thinking commit end" {
 		t.Fatalf("events = %s", got)
 	}
 	rows := b.groupLevelRows(t, gid, 2)
@@ -287,7 +371,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.Seq)
-	want := "chain.start start:@scribe/1 delta:reply  delta:1 commit start:@auditor/1 delta:reply  delta:2 commit end"
+	want := "chain.start start:@scribe/1 delta:thinking commit start:@auditor/1 delta:thinking commit end"
 	if got := summary(events); got != want {
 		t.Fatalf("events = %s", got)
 	}
@@ -339,7 +423,8 @@ func TestRetryResetsAndCommitsTheFinalReply(t *testing.T) {
 		case 2:
 			streamParts(w, "half") // cut off
 		default:
-			streamText(w, "whole")
+			streamParts(w, "whole")
+			endSay(w, "whole")
 		}
 	})
 	s := watch(t, a)
@@ -393,7 +478,7 @@ func holdProvider(provider *fakeProvider) (started chan int, release chan struct
 		started <- n
 		select {
 		case <-release:
-			streamText(w, " done")
+			endSay(w, "start done")
 		case <-r.Context().Done():
 		}
 	})
@@ -412,10 +497,11 @@ func TestCancelCommitsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-started
+	seen := untilStreaming(t, s, v.Seq, "auditor")
 	if c, err := a.client().ConversationCancel(ctx, nil, v.Seq); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 delta:start end:cancelled" {
+	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != "chain.start start:@auditor/1 delta:start end:cancelled" {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -606,14 +692,15 @@ func TestALateWatcherSeesTheCurrentAgent(t *testing.T) {
 	started, release := holdProvider(provider)
 	provider.set(func(n int, w http.ResponseWriter, r *http.Request) {
 		if n == 1 {
-			streamText(w, "reply 1")
+			streamSay(w, "reply 1")
 			return
 		}
 		streamParts(w, "so", " far")
 		started <- n
 		select {
 		case <-release:
-			streamText(w, " done")
+			streamDeltas(w, " done")
+			endSay(w, "so far done")
 		case <-r.Context().Done():
 		}
 	})
@@ -655,10 +742,11 @@ func TestWatchersLeavingDoNotStopTheChain(t *testing.T) {
 	s := watch(t, a)
 	release <- struct{}{}
 	<-started // auditor's reply committed; scribe is answering
+	seen := untilStreaming(t, s, v.Seq, "scribe")
 	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit start:@scribe/1 delta:start end:cancelled") {
+	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); !strings.HasSuffix(got, "commit start:@scribe/1 delta:start end:cancelled") {
 		t.Fatalf("events = %s", got)
 	}
 	if rows := a.groupLevelRows(t, gid, 2); len(rows) != 2 {
@@ -673,11 +761,11 @@ func replyAs(provider *fakeProvider, replies map[string]string) {
 		sys := provider.seen()[n-1].System
 		for h, text := range replies {
 			if strings.HasPrefix(sys, "You are "+h+".") {
-				streamText(w, text)
+				streamSay(w, text)
 				return
 			}
 		}
-		streamText(w, fmt.Sprint("reply ", n))
+		streamSay(w, fmt.Sprint("reply ", n))
 	})
 }
 
@@ -692,10 +780,10 @@ func TestAnAgentsMentionAtMaxDepthIsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.Seq)
-	if got := summary(events); got != "chain.start start:@auditor/1 delta:ask @scribe commit skipped:@scribe end" {
+	if got := summary(events); got != "chain.start start:@auditor/1 commit skipped:@scribe end" {
 		t.Fatalf("events = %s", got)
 	}
-	if reason := events[4].Reason; !strings.Contains(reason, "max_depth 1") {
+	if reason := events[3].Reason; !strings.Contains(reason, "max_depth 1") {
 		t.Fatalf("reason = %q", reason)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "ask @scribe" || ffs[1].Handle != "auditor" {
@@ -721,9 +809,9 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "chain.start start:@auditor/1 delta:@quant, and me, @auditor commit " +
-		"start:@quant/2 delta:ask @scribe commit skipped:@scribe " +
-		"start:@scribe/1 delta:reply 3 commit end"
+	want := "chain.start start:@auditor/1 commit " +
+		"start:@quant/2 commit skipped:@scribe " +
+		"start:@scribe/1 commit end"
 	if got := summary(untilEnd(t, s, v.Seq)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
@@ -753,7 +841,7 @@ func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
 	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		if n == 1 {
-			streamText(w, "@quant")
+			streamSay(w, "@quant")
 			return
 		}
 		w.WriteHeader(400)
@@ -764,7 +852,7 @@ func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 delta:@quant commit start:@quant/2 error:@quant end" {
+	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 commit start:@quant/2 error:@quant end" {
 		t.Fatalf("events = %s", got)
 	}
 	if n := len(provider.seen()); n != 2 {
@@ -781,7 +869,7 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 	started := make(chan int, 1)
 	provider.set(func(n int, w http.ResponseWriter, r *http.Request) {
 		if n == 1 {
-			streamText(w, "@quant")
+			streamSay(w, "@quant")
 			return
 		}
 		streamParts(w, "start")
@@ -795,10 +883,11 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-started
+	seen := untilStreaming(t, s, v.Seq, "quant")
 	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 delta:@quant commit start:@quant/2 delta:start end:cancelled" {
+	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != "chain.start start:@auditor/1 commit start:@quant/2 delta:start end:cancelled" {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)

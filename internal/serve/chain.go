@@ -30,15 +30,16 @@ import (
 )
 
 // Chain events on GET /v1/conversation/stream, one JSON object per line
-// (ADR 0015). Every event names its chain by the seq of the person's message
-// that started it.
+// (ADR 0015, ADR 0018). Every event names its chain by the seq of the
+// person's message that started it.
 const (
 	EventChainStart   = "chain.start"
 	EventAgentStart   = "agent.start"   // handle, depth
-	EventAgentDelta   = "agent.delta"   // text
-	EventAgentReset   = "agent.reset"   // a retry starts the reply over
+	EventAgentDelta   = "agent.delta"   // text the agent generates
+	EventAgentReset   = "agent.reset"   // a retry starts the model call over
 	EventAgentSkipped = "agent.skipped" // handle, reason
-	EventAgentCommit  = "agent.commit"  // seq
+	EventAgentCommit  = "agent.commit"  // seq, text: an accepted say committed
+	EventAgentSilent  = "agent.silent"  // handle: it ended without say
 	EventAgentError   = "agent.error"   // handle, error
 	EventChainEnd     = "chain.end"     // cancelled
 )
@@ -52,7 +53,7 @@ type ChainEvent struct {
 	Text   string `json:"text,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
-	Seq    uint64 `json:"seq,omitempty"` // agent.commit: the reply's row
+	Seq    uint64 `json:"seq,omitempty"` // agent.commit: the message's row
 	// Cancelled, on chain.end, means the chain was cut short by a cancel.
 	// Error, on chain.end, means the serve stopped and the chain is lost.
 	Cancelled bool `json:"cancelled,omitempty"`
@@ -99,7 +100,7 @@ func (sh *shown) fold(ev ChainEvent) {
 		}
 	case EventAgentReset:
 		sh.reply = nil
-	case EventAgentCommit, EventAgentSkipped, EventAgentError:
+	case EventAgentCommit, EventAgentSilent, EventAgentSkipped, EventAgentError:
 		sh.agent, sh.reply = nil, nil
 	case EventChainEnd:
 		*sh = shown{}
@@ -126,6 +127,19 @@ type chain struct {
 	cancel  context.CancelFunc
 	// cancelled tells a cancel from the serve stopping; both end ctx.
 	cancelled atomic.Bool
+	// step counts the chain's runs, depth-first; tr is its Transcript.
+	// Only the chain's worker touches them.
+	step int
+	tr   *transcript
+}
+
+// transcriptName is conv's directory under transcripts/: its hex
+// Conversation ID, or "group" for Group-level talk.
+func transcriptName(conv []byte) string {
+	if conv == nil {
+		return "group"
+	}
+	return conversationKey(conv)
 }
 
 func conversationKey(conv []byte) string { return hex.EncodeToString(conv) }
@@ -322,17 +336,20 @@ func (s *server) runChain(c *chain) {
 		s.chains.publish(c.conv, ev)
 	}
 	if c.ctx.Err() == nil {
+		c.tr = &transcript{path: s.opts.Paths.TranscriptFile(s.opts.Alias, transcriptName(c.conv), c.seq), logf: s.opts.Logf}
+		defer c.tr.close()
 		publish(ChainEvent{Type: EventChainStart})
 		s.runAgents(c, c.handles, 1, publish)
 	}
 	s.chains.end(c)
 }
 
-// runAgents runs handles at depth, each followed by the agents its reply
-// summons at depth+1. It reports whether the chain goes on.
+// runAgents runs handles at depth, each followed by the agents its message
+// summons at depth+1; a silent agent summons nobody. It reports whether the
+// chain goes on.
 func (s *server) runAgents(c *chain, handles []string, depth uint32, publish func(ChainEvent)) bool {
 	for _, h := range handles {
-		text, inc, err := s.runAgent(c.ctx, c.conv, h, depth, publish)
+		res, inc, err := s.runAgent(c, h, depth, publish)
 		if c.ctx.Err() != nil {
 			return false
 		}
@@ -344,14 +361,17 @@ func (s *server) runAgents(c *chain, handles []string, depth uint32, publish fun
 			publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
 			return false
 		}
-		if !s.runAgents(c, s.summoned(c, h, depth, text, inc, publish), depth+1, publish) {
+		if res.Silent {
+			continue
+		}
+		if !s.runAgents(c, s.summoned(c, h, depth, res.Said, inc, publish), depth+1, publish) {
 			return false
 		}
 	}
 	return true
 }
 
-// summoned is the Handles that handle's reply at depth summons under inc,
+// summoned is the Handles that handle's message at depth summons under inc,
 // in mention order. A mention that cannot summon is skipped, logged and
 // published; handle's mention of itself is ignored (ADR 0015).
 func (s *server) summoned(c *chain, handle string, depth uint32, reply string, inc config.Included, publish func(ChainEvent)) []string {
@@ -382,45 +402,85 @@ func canSummon(depth uint32, inc config.Included) bool { return int(depth) < inc
 // included; runAgent has already published the skip.
 var errSkipped = errors.New("skipped")
 
-// runAgent generates the agent's reply to the talk so far, commits it and
-// returns it, with what was included where it answered.
-func (s *server) runAgent(ctx context.Context, conv []byte, handle string, depth uint32, publish func(ChainEvent)) (string, config.Included, error) {
+// runAgent runs the agent on the talk so far, as step c.step+1 of c:
+// commits what it says, or reports it silent, and returns how it ended,
+// with what was included where it answered. Everything the run generates,
+// and how it ended, goes to c's Transcript (ADR 0018); a run cut off by the
+// serve stopping records no outcome.
+func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(ChainEvent)) (res agent.Result, inc config.Included, err error) {
 	_, store, ok := s.current()
 	if !ok {
-		return "", config.Included{}, ErrNoReplica
+		return res, inc, ErrNoReplica
 	}
-	req, inc, err := s.agentRequest(store, conv, handle, depth)
+	req, inc, err := s.agentRequest(store, c.conv, handle, depth)
 	if errors.Is(err, errSkipped) {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
-		return "", inc, err
+		return res, inc, err
 	}
+	c.step++
+	line := func(l TranscriptLine) {
+		l.Step, l.Handle, l.Depth, l.Attempt = c.step, handle, depth, 1
+		c.tr.write(l)
+	}
+	var said uint64
+	defer func() {
+		switch {
+		case err == nil && res.Silent:
+			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeSilent})
+		case err == nil:
+			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeSaid, Seq: said})
+		case c.cancelled.Load():
+			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeCancelled})
+		case c.ctx.Err() != nil:
+			// The serve stopped: no outcome, so a retry knows it was cut off.
+		default:
+			line(TranscriptLine{Kind: "outcome", Outcome: OutcomeError, Error: err.Error()})
+		}
+	}()
 	if err != nil {
-		return "", inc, err
+		return res, inc, err
 	}
 	publish(ChainEvent{Type: EventAgentStart, Handle: handle, Depth: depth})
 	client := agent.Client{Backoff: s.opts.AgentBackoff}
-	text, err := client.Generate(ctx, req, agent.Events{
+	res, err = client.Run(c.ctx, req, agent.Events{
 		Delta: func(t string) { publish(ChainEvent{Type: EventAgentDelta, Text: t}) },
 		Reset: func() { publish(ChainEvent{Type: EventAgentReset}) },
+		Record: func(r agent.Record) {
+			l := TranscriptLine{Kind: r.Kind}
+			switch r.Kind {
+			case "request":
+				l.Request = r.Data
+			case "block":
+				l.Block = r.Data
+			case "usage":
+				l.Usage = r.Data
+			}
+			line(l)
+		},
 	})
 	if err != nil {
-		return "", inc, err
+		return res, inc, err
 	}
-	// Once the reply is whole, a cancel no longer cuts it: an append in
+	if res.Silent {
+		publish(ChainEvent{Type: EventAgentSilent, Handle: handle})
+		return res, inc, nil
+	}
+	// Once a say is accepted, a cancel no longer cuts it: an append in
 	// flight could land anyway, and agent.commit must report it if it does.
-	commit := context.WithoutCancel(ctx)
-	v, err := s.conversationSend(commit, text, handle, depth, conv)
+	commit := context.WithoutCancel(c.ctx)
+	v, err := s.conversationSend(commit, res.Said, handle, depth, c.conv)
 	if err != nil {
-		return "", inc, err
+		return res, inc, err
 	}
-	// The next agent reads this reply from the replica.
+	// The next agent reads this message from the replica.
 	wait, cancel := context.WithTimeout(commit, raftx.ApplyTimeout)
 	defer cancel()
 	if err := waitApplied(wait, store, v.Seq); err != nil {
-		return "", inc, err
+		return res, inc, err
 	}
-	publish(ChainEvent{Type: EventAgentCommit, Seq: v.Seq})
-	return text, inc, nil
+	said = v.Seq
+	publish(ChainEvent{Type: EventAgentCommit, Seq: v.Seq, Text: res.Said})
+	return res, inc, nil
 }
 
 // waitApplied returns once the replica has applied seq.
@@ -511,13 +571,16 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 }
 
 // preamble is what the serve tells an agent after its SYSTEM.md: who it is,
-// where it is answering, how the talk reads, and either the Handles it may
-// summon or that it may summon none at its depth (ADR 0015).
+// where it is answering, how the talk reads, that only say posts and how,
+// and either the Handles it may summon or that it may summon none at its
+// depth (ADR 0015, ADR 0018).
 func preamble(handle string, depth uint32, inc config.Included, where string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
 	b.WriteString("The talk so far follows, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for an agent's.\n")
-	fmt.Fprintf(&b, "Your reply is committed as one message from @%s.\n", handle)
+	fmt.Fprintf(&b, "This is a group chat. Only what you pass to the say tool is posted to it, as one message from @%s, and calling say ends your turn. "+
+		"Everything else you write stays private. Keep your message to a paragraph or two of plain text, like a longer group-chat message, at most %d bytes. "+
+		"If you have nothing worth saying, end your turn without calling say and you stay silent.\n", handle, agent.MaxSay)
 	var others []config.ResolvedProfile
 	if canSummon(depth, inc) {
 		for _, p := range inc.Profiles {
@@ -528,7 +591,7 @@ func preamble(handle string, depth uint32, inc config.Included, where string) st
 	}
 	fmt.Fprintf(&b, "You are at depth %d of at most %d. Agents you may summon by mentioning them: %s.\n", depth, inc.MaxDepth, listHandles(others))
 	if len(others) == 0 {
-		b.WriteString("An @handle in your reply summons nobody.\n")
+		b.WriteString("An @handle in your message summons nobody.\n")
 	}
 	return b.String()
 }
