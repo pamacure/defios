@@ -114,7 +114,7 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now()}
+	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), retries: make(chan retryCall)}
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()
@@ -174,7 +174,8 @@ type server struct {
 	watchCancel context.CancelFunc // stops watchWorkspaces, keepPruned and followMentions
 	watchDone   chan struct{}
 
-	chains chainHub // this Node's chains of agents, and their watchers
+	chains  chainHub       // this Node's chains of agents, and their watchers
+	retries chan retryCall // to the replica's mention follower
 }
 
 // bindSocket listens on path with mode 0600. A live listener there means
