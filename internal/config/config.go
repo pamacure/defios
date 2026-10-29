@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"defios.com/internal/agent"
 	"defios.com/internal/group"
 	"defios.com/internal/mention"
 	"defios.com/internal/model"
@@ -41,14 +43,22 @@ type Config struct {
 	Workspace
 }
 
-// Profile is one Agent Profile: its profile directory and the Model alias it
-// runs on.
+// Profile is one Agent Profile: its profile directory, the Model alias it
+// runs on, and its model options (ADR 0018).
 type Profile struct {
 	// Dir is the profile directory, holding SYSTEM.md. "~" expands, a
 	// relative path is under the config directory, and empty is
 	// agents/<handle>.
 	Dir   string `toml:"dir,omitempty"`
 	Model string `toml:"model"`
+	// MaxTokens bounds each model call; 0 is unset, which is
+	// agent.MaxTokens.
+	MaxTokens int `toml:"max_tokens,omitzero"`
+	// Temperature is left out of the request when nil.
+	Temperature *float64 `toml:"temperature,omitempty"`
+	// MaxTurns is how many model calls a summon may make; 0 is unset,
+	// which is agent.MaxCalls.
+	MaxTurns int `toml:"max_turns,omitzero"`
 }
 
 // Workspace is the part of a config.toml a Conversation's may override.
@@ -108,7 +118,7 @@ func ReadFile(path string) (Config, error) {
 	if err := c.Workspace.validate(md); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
-	if err := c.validateAgents(); err != nil {
+	if err := c.validateAgents(md); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return c, nil
@@ -193,8 +203,9 @@ func (w Workspace) validate(md toml.MetaData) error {
 }
 
 // validateAgents checks the Group's Agent Profiles, and that its own [agent]
-// profiles includes only Handles it defines.
-func (c Config) validateAgents() error {
+// profiles includes only Handles it defines; md tells an explicit
+// max_tokens or max_turns of 0 from an unset one.
+func (c Config) validateAgents(md toml.MetaData) error {
 	for h, p := range c.Agents {
 		if err := ValidateHandle(h); err != nil {
 			return fmt.Errorf("[agents.%s]: %w", h, err)
@@ -204,6 +215,15 @@ func (c Config) validateAgents() error {
 		}
 		if err := group.ValidateAlias(p.Model); err != nil {
 			return fmt.Errorf("[agents.%s] model: %w", h, err)
+		}
+		if md.IsDefined("agents", h, "max_tokens") && p.MaxTokens < 1 {
+			return fmt.Errorf("[agents.%s] max_tokens %d must be a positive integer", h, p.MaxTokens)
+		}
+		if md.IsDefined("agents", h, "max_turns") && p.MaxTurns < 1 {
+			return fmt.Errorf("[agents.%s] max_turns %d must be a positive integer", h, p.MaxTurns)
+		}
+		if t := p.Temperature; t != nil && !(*t >= 0 && !math.IsInf(*t, 1)) {
+			return fmt.Errorf("[agents.%s] temperature %v must be a non-negative number", h, *t)
 		}
 	}
 	for _, h := range c.Agent.Profiles {
@@ -275,11 +295,15 @@ type Included struct {
 	MaxDepth int
 }
 
-// ResolvedProfile is an included Agent Profile with its directory resolved.
+// ResolvedProfile is an included Agent Profile with its directory resolved
+// and its options defaulted.
 type ResolvedProfile struct {
-	Handle string
-	Dir    string // absolute
-	Model  string // a Model alias
+	Handle      string
+	Dir         string // absolute
+	Model       string // a Model alias
+	MaxTokens   int
+	Temperature *float64 // nil is unset
+	MaxTurns    int
 }
 
 // Included resolves the profiles and depth for talk whose Workspace is conv,
@@ -297,7 +321,15 @@ func (c Config) Included(conv Workspace, root, home string) (Included, error) {
 		if !ok {
 			return Included{}, fmt.Errorf("config: [agent] profiles: no [agents.%s] is defined in the Group config", h)
 		}
-		out.Profiles = append(out.Profiles, ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Model: p.Model})
+		r := ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Model: p.Model,
+			MaxTokens: p.MaxTokens, Temperature: p.Temperature, MaxTurns: p.MaxTurns}
+		if r.MaxTokens == 0 {
+			r.MaxTokens = agent.MaxTokens
+		}
+		if r.MaxTurns == 0 {
+			r.MaxTurns = agent.MaxCalls
+		}
+		out.Profiles = append(out.Profiles, r)
 	}
 	return out, nil
 }

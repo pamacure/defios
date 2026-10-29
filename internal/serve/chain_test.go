@@ -29,9 +29,9 @@ type providerCall struct {
 	// Stable is the system text up to its cache breakpoint, and Depth the
 	// text after it.
 	Stable, Depth string
-	Prompt   string // the first message's text
-	Turns    string // every message, "[role] content" a line each
-	Messages int    // how many messages the call carried
+	Prompt        string // the first message's text
+	Turns         string // every message, "[role] content" a line each
+	Messages      int    // how many messages the call carried
 }
 
 // fakeProvider is an Anthropic Messages endpoint. reply answers each call,
