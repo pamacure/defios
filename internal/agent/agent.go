@@ -34,8 +34,21 @@ type Request struct {
 	APIKey   string // empty sends none
 	Model    string // the provider's model id
 	System   string
-	Prompt   string // the one user message: the talk so far
+	Turns    []Turn // the talk so far, alternating and ending with User
 }
+
+// Turn is one message of the talk as the Model sees it (ADR 0018): the
+// agent's own message is an Assistant turn, everything else User content.
+type Turn struct {
+	Role string // User or Assistant
+	Text string
+}
+
+// The roles a Turn takes; both providers name them alike.
+const (
+	User      = "user"
+	Assistant = "assistant"
+)
 
 // Events receive a reply as it is generated. Either may be nil.
 type Events struct {
@@ -196,6 +209,10 @@ func requestBody(req Request) ([]byte, error) {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
+	turns := make([]message, len(req.Turns))
+	for i, t := range req.Turns {
+		turns[i] = message{t.Role, t.Text}
+	}
 	switch req.Provider {
 	case model.Anthropic:
 		return json.Marshal(struct {
@@ -204,7 +221,7 @@ func requestBody(req Request) ([]byte, error) {
 			System    string    `json:"system,omitempty"`
 			Messages  []message `json:"messages"`
 			Stream    bool      `json:"stream"`
-		}{req.Model, maxTokens, req.System, []message{{"user", req.Prompt}}, true})
+		}{req.Model, maxTokens, req.System, turns, true})
 	case model.OpenAI:
 		var msgs []message
 		if req.System != "" {
@@ -214,7 +231,7 @@ func requestBody(req Request) ([]byte, error) {
 			Model    string    `json:"model"`
 			Messages []message `json:"messages"`
 			Stream   bool      `json:"stream"`
-		}{req.Model, append(msgs, message{"user", req.Prompt}), true})
+		}{req.Model, append(msgs, turns...), true})
 	}
 	return nil, fmt.Errorf("agent: provider %q must be anthropic or openai", req.Provider)
 }

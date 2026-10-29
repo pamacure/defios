@@ -26,7 +26,8 @@ import (
 type providerCall struct {
 	Key    string
 	System string
-	Prompt string
+	Prompt string // the first message's content
+	Turns  string // every message, "[role] content" a line each
 }
 
 // fakeProvider is an Anthropic Messages endpoint. reply answers each call,
@@ -46,6 +47,7 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 		var body struct {
 			System   string `json:"system"`
 			Messages []struct {
+				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"messages"`
 		}
@@ -53,6 +55,9 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 		call := providerCall{Key: r.Header.Get("x-api-key"), System: body.System}
 		if len(body.Messages) > 0 {
 			call.Prompt = body.Messages[0].Content
+		}
+		for _, m := range body.Messages {
+			call.Turns += "[" + m.Role + "] " + m.Content + "\n"
 		}
 		p.mu.Lock()
 		p.calls = append(p.calls, call)
@@ -304,6 +309,38 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 	}
 }
 
+// An agent sees its own messages as assistant turns, the one bob's Node
+// wrote as @auditor included, and the rest as lean lines in user turns
+// (ADR 0018). Its preamble says so.
+func TestAnAgentSeesItsOwnMessagesAsAssistantTurns(t *testing.T) {
+	a, b, gid, provA := agentPair(t, "auditor")
+	provB := newFakeProvider(t)
+	agentNode(t, b, provB, "auditor")
+	ctx := context.Background()
+	sb := watch(t, b)
+	v, err := b.client().ConversationSend(ctx, "@auditor?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, sb, v.Seq)
+	a.groupLevelRows(t, gid, 2)
+	sa := watch(t, a)
+	if v, err = a.client().ConversationSend(ctx, "@auditor and\nyou?", nil); err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, sa, v.Seq)
+	calls := provA.seen()
+	if len(calls) != 1 {
+		t.Fatalf("alice's calls = %+v", calls)
+	}
+	if want := "[user] bob: @auditor?\n[assistant] reply 1\n[user] alice: @auditor and\\nyou?\n"; calls[0].Turns != want {
+		t.Fatalf("turns =\n%s\nwant\n%s", calls[0].Turns, want)
+	}
+	if !strings.Contains(calls[0].System, "your own earlier messages are your turns") {
+		t.Fatalf("system prompt = %q", calls[0].System)
+	}
+}
+
 // Only the Node whose person wrote the mention runs the agent, though both
 // define it; an agent's own reply summons nobody.
 func TestOnlyTheMentioningNodeRunsTheAgent(t *testing.T) {
@@ -464,8 +501,15 @@ func TestASecondMentionWaitsForTheRunningChain(t *testing.T) {
 	if want := []uint64{first.Seq, first.Seq, second.Seq, second.Seq}; fmt.Sprint(order) != fmt.Sprint(want) {
 		t.Fatalf("chain start/end order %v, want %v", order, want)
 	}
-	if calls := provider.seen(); len(calls) != 2 || !strings.Contains(calls[1].Prompt, "alice/@auditor: start done") {
+	// The talk ends with the agent's own reply to the first, so a fixed user
+	// turn follows it.
+	calls := provider.seen()
+	if len(calls) != 2 {
 		t.Fatalf("calls = %+v", calls)
+	}
+	want := "[user] alice: @auditor one\nalice: @auditor two\n[assistant] start done\n[user] (You have been summoned again. Reply now.)\n"
+	if calls[1].Turns != want {
+		t.Fatalf("second turns =\n%s\nwant\n%s", calls[1].Turns, want)
 	}
 }
 

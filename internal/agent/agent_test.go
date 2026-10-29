@@ -54,17 +54,24 @@ func (r *recorder) events() agent.Events {
 
 func (r *recorder) String() string { return strings.Join(r.log, " ") }
 
+// talk is a Request's turns as the serve builds them (ADR 0018), and
+// wantTalk how they read as decoded messages.
+var talk = []agent.Turn{
+	{Role: agent.User, Text: "alice: @auditor hi"},
+	{Role: agent.Assistant, Text: "hello"},
+	{Role: agent.User, Text: "alice: and?"},
+}
+
+const wantTalk = "[{user alice: @auditor hi} {assistant hello} {user alice: and?}]"
+
 // An Anthropic Model streams its text deltas, and is called with the system
-// prompt, the prompt as the one user message, and the key in x-api-key.
+// prompt, the turns as messages in order, and the key in x-api-key.
 func TestAnthropicStreamsDeltas(t *testing.T) {
 	var got struct {
-		Model    string `json:"model"`
-		System   string `json:"system"`
-		Stream   bool   `json:"stream"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+		Model    string                           `json:"model"`
+		System   string                           `json:"system"`
+		Stream   bool                             `json:"stream"`
+		Messages []struct{ Role, Content string } `json:"messages"`
 	}
 	var key, version, path string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +84,7 @@ func TestAnthropicStreamsDeltas(t *testing.T) {
 	var rec recorder
 	text, err := agent.Client{}.Generate(context.Background(), agent.Request{
 		Provider: model.Anthropic, URL: srv.URL + "/v1/messages", APIKey: "sk-test",
-		Model: "claude-x", System: "be brief", Prompt: "alice: hi",
+		Model: "claude-x", System: "be brief", Turns: talk,
 	}, rec.events())
 	if err != nil {
 		t.Fatal(err)
@@ -88,21 +95,17 @@ func TestAnthropicStreamsDeltas(t *testing.T) {
 	if path != "/v1/messages" || key != "sk-test" || version == "" {
 		t.Fatalf("path %q key %q version %q", path, key, version)
 	}
-	if got.Model != "claude-x" || got.System != "be brief" || !got.Stream || len(got.Messages) != 1 ||
-		got.Messages[0].Role != "user" || got.Messages[0].Content != "alice: hi" {
+	if got.Model != "claude-x" || got.System != "be brief" || !got.Stream || fmt.Sprint(got.Messages) != wantTalk {
 		t.Fatalf("request = %+v", got)
 	}
 }
 
 // An OpenAI Model streams its content deltas, with the system prompt as the
-// first message and the key as a bearer token.
+// first message before the turns and the key as a bearer token.
 func TestOpenAIStreamsDeltas(t *testing.T) {
 	var got struct {
-		Model    string `json:"model"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+		Model    string                           `json:"model"`
+		Messages []struct{ Role, Content string } `json:"messages"`
 	}
 	var auth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +118,7 @@ func TestOpenAIStreamsDeltas(t *testing.T) {
 	var rec recorder
 	text, err := agent.Client{}.Generate(context.Background(), agent.Request{
 		Provider: model.OpenAI, URL: srv.URL + "/chat/completions", APIKey: "sk-o",
-		Model: "gpt-x", System: "be brief", Prompt: "alice: hi",
+		Model: "gpt-x", System: "be brief", Turns: talk,
 	}, rec.events())
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +126,8 @@ func TestOpenAIStreamsDeltas(t *testing.T) {
 	if text != "Hi there" || rec.String() != "delta:Hi delta: there" || auth != "Bearer sk-o" {
 		t.Fatalf("text %q, events %s, auth %q", text, &rec, auth)
 	}
-	if got.Model != "gpt-x" || len(got.Messages) != 2 || got.Messages[0].Role != "system" || got.Messages[1].Content != "alice: hi" {
+	if got.Model != "gpt-x" || len(got.Messages) != 4 || got.Messages[0] != (struct{ Role, Content string }{"system", "be brief"}) ||
+		fmt.Sprint(got.Messages[1:]) != wantTalk {
 		t.Fatalf("request = %+v", got)
 	}
 }
@@ -140,7 +144,7 @@ func TestNoKeySendsNoCredential(t *testing.T) {
 				sse(w, openaiText("ok")...)
 			}
 		}))
-		if _, err := (agent.Client{}).Generate(context.Background(), agent.Request{Provider: p, URL: srv.URL, Model: "m", Prompt: "p"}, agent.Events{}); err != nil {
+		if _, err := (agent.Client{}).Generate(context.Background(), agent.Request{Provider: p, URL: srv.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{}); err != nil {
 			t.Fatal(err)
 		}
 		srv.Close()
@@ -168,7 +172,7 @@ func failing(t *testing.T, fail func(n int, w http.ResponseWriter) bool) (*httpt
 
 func generate(srv *httptest.Server, ev agent.Events) (string, error) {
 	c := agent.Client{Backoff: time.Millisecond}
-	return c.Generate(context.Background(), agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Prompt: "p"}, ev)
+	return c.Generate(context.Background(), agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, ev)
 }
 
 // Rate limits, overload, 5xx and dropped connections are retried; a retry
@@ -261,7 +265,7 @@ func TestCancelEndsTheRequest(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	_, err := agent.Client{Backoff: time.Millisecond}.Generate(ctx, agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Prompt: "p"}, agent.Events{})
+	_, err := agent.Client{Backoff: time.Millisecond}.Generate(ctx, agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{})
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("err %v after %d calls, want context.Canceled once", err, calls)
 	}
