@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"defios.com/internal/agent"
-	"defios.com/internal/model"
 )
 
 // sse writes server-sent events, flushing after each.
@@ -198,9 +197,9 @@ func (s *script) body(n int) map[string]any {
 	return s.bodies[n-1]
 }
 
-func run(s *script, provider string, ev agent.Events) (agent.Result, error) {
+func run(s *script, shape agent.Shape, ev agent.Events) (agent.Result, error) {
 	return agent.Client{Backoff: time.Millisecond}.Run(context.Background(), agent.Request{
-		Provider: provider, URL: s.URL, APIKey: "sk-secret", Model: "m", System: "be brief\n", SystemDepth: "at depth 1\n", Turns: talk,
+		Shape: shape, URL: s.URL, APIKey: "sk-secret", Body: map[string]any{"model": "m"}, System: "be brief\n", SystemDepth: "at depth 1\n", Turns: talk,
 	}, ev)
 }
 
@@ -221,13 +220,14 @@ const wantTalk = "[map[content:alice: @auditor hi role:user] map[content:hello r
 const wantAnthropicTalk = "[map[content:alice: @auditor hi role:user] map[content:hello role:assistant] " +
 	"map[content:[map[cache_control:map[type:ephemeral] text:alice: and? type:text]] role:user]]"
 
-// An Anthropic run streams its text, sends the turns in order, offers say
-// as its only tool with max_tokens 8192, and a say commits exactly its
-// text: the text outside it is never the result.
+// A Messages run streams its text, sends the turns in order, offers say
+// as its only tool, and a say commits exactly its text: the text outside it
+// is never the result. DeFiOS writes no model, stream or max-token field:
+// those are the profile's body (ADR 0019).
 func TestAnthropicSayIsTheResult(t *testing.T) {
 	s := newScript(t, anthropicSays("let me think", "all good"))
 	var rec recorder
-	res, err := run(s, model.Anthropic, rec.events())
+	res, err := run(s, agent.Messages, rec.events())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,8 +242,8 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 		t.Fatalf("headers %v", h)
 	}
 	body := s.body(1)
-	if body["model"] != "m" || body["stream"] != true || body["max_tokens"] != float64(8192) {
-		t.Fatalf("body = %v", body)
+	if body["model"] != "m" || len(body) != 4 {
+		t.Fatalf("body = %v, want model, system, messages and tools only", body)
 	}
 	tools, _ := body["tools"].([]any)
 	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "say" {
@@ -277,7 +277,7 @@ func TestAnthropicStreamsEveryBlockWithItsKind(t *testing.T) {
 	reply = append(reply, anthropicEnd("tool_use")...)
 	s := newScript(t, reply)
 	var rec recorder
-	if res, err := run(s, model.Anthropic, rec.events()); err != nil || res.Said != "done" {
+	if res, err := run(s, agent.Messages, rec.events()); err != nil || res.Said != "done" {
 		t.Fatalf("result %+v err %v", res, err)
 	}
 	if want := `thinking:hmm, ok text:so tool:say {}` + "\n" + `say {"text":"done"}`; rec.String() != want {
@@ -285,13 +285,13 @@ func TestAnthropicStreamsEveryBlockWithItsKind(t *testing.T) {
 	}
 }
 
-// An OpenAI run does the same over Chat Completions: the system prompt as
-// the first message before the turns, the key as a bearer token, say as a function tool and
-// max_completion_tokens 8192.
+// A Chat Completions run does the same: the system prompt as the first
+// message before the turns, the key as a bearer token, say as a function
+// tool, and nothing else but the profile's body.
 func TestOpenAISayIsTheResult(t *testing.T) {
 	s := newScript(t, openaiSays("hmm", "all good"))
 	var rec recorder
-	res, err := run(s, model.OpenAI, rec.events())
+	res, err := run(s, agent.ChatCompletions, rec.events())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,8 +302,8 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 		t.Fatalf("headers %v", s.headers[0])
 	}
 	body := s.body(1)
-	if body["max_completion_tokens"] != float64(8192) {
-		t.Fatalf("body = %v", body)
+	if body["model"] != "m" || len(body) != 3 {
+		t.Fatalf("body = %v, want model, messages and tools only", body)
 	}
 	tools, _ := body["tools"].([]any)
 	if len(tools) != 1 || tools[0].(map[string]any)["function"].(map[string]any)["name"] != "say" {
@@ -320,9 +320,9 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 // is the result. Both providers.
 func TestARefusedSayIsRewritten(t *testing.T) {
 	long := strings.Repeat("a", 4097)
-	for _, p := range []string{model.Anthropic, model.OpenAI} {
+	for _, p := range []agent.Shape{agent.Messages, agent.ChatCompletions} {
 		says := anthropicSays
-		if p == model.OpenAI {
+		if p == agent.ChatCompletions {
 			says = openaiSays
 		}
 		s := newScript(t, says("first", long), says("second", ""), says("third", "short"))
@@ -335,7 +335,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 		}
 		second, _ := json.Marshal(messages(s.body(2)))
 		for _, want := range []string{"first", "4097 bytes", "4096", `"is_error":true`} {
-			if p == model.OpenAI && want == `"is_error":true` {
+			if p == agent.ChatCompletions && want == `"is_error":true` {
 				want = `"role":"tool"`
 			}
 			if !strings.Contains(string(second), want) {
@@ -355,7 +355,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 // which takes the breakpoint from the one before it (ADR 0018).
 func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
 	s := newScript(t, anthropicSays("first", ""), anthropicSays("second", ""), anthropicSays("third", "done"))
-	if _, err := run(s, model.Anthropic, agent.Events{}); err != nil {
+	if _, err := run(s, agent.Messages, agent.Events{}); err != nil {
 		t.Fatal(err)
 	}
 	const wantSystem = "[map[cache_control:map[type:ephemeral] text:be brief\n type:text] map[text:at depth 1\n type:text]]"
@@ -388,9 +388,9 @@ func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
 // Each call of a run sends the call before it as an unchanged prefix: the
 // same system prompt and tools, and its messages first. Both providers.
 func TestASecondCallExtendsTheFirst(t *testing.T) {
-	for _, p := range []string{model.Anthropic, model.OpenAI} {
+	for _, p := range []agent.Shape{agent.Messages, agent.ChatCompletions} {
 		says := anthropicSays
-		if p == model.OpenAI {
+		if p == agent.ChatCompletions {
 			says = openaiSays
 		}
 		s := newScript(t, says("first", ""), says("second", "done"))
@@ -412,7 +412,7 @@ func TestASecondCallExtendsTheFirst(t *testing.T) {
 
 // Ending the turn without say is silence. Both providers.
 func TestEndingWithoutSayIsSilent(t *testing.T) {
-	for p, reply := range map[string][]string{model.Anthropic: anthropicText("nothing to add"), model.OpenAI: openaiText("nothing to add")} {
+	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("nothing to add"), agent.ChatCompletions: openaiText("nothing to add")} {
 		s := newScript(t, reply)
 		res, err := run(s, p, agent.Events{})
 		if err != nil || !res.Silent || res.Said != "" || s.calls() != 1 {
@@ -421,14 +421,16 @@ func TestEndingWithoutSayIsSilent(t *testing.T) {
 	}
 }
 
-// A call that stops at max_tokens is an error.
+// A call that stops at its token bound is an error, read from the stop
+// reason the API returns: Messages' max_tokens, Chat Completions' length.
 func TestMaxTokensIsAnError(t *testing.T) {
 	anth := append([]string{anthropicStart()}, anthropicTextBlock(0, "on and on")...)
 	anth = append(anth, anthropicEnd("max_tokens")...)
 	oai := []string{openaiChunk(`{"content":"on and on"}`, ""), openaiChunk(`{}`, "length"), `data: [DONE]`}
-	for p, reply := range map[string][]string{model.Anthropic: anth, model.OpenAI: oai} {
+	for p, reply := range map[agent.Shape][]string{agent.Messages: anth, agent.ChatCompletions: oai} {
 		s := newScript(t, reply)
-		if _, err := run(s, p, agent.Events{}); err == nil || !strings.Contains(err.Error(), "max_tokens") || s.calls() != 1 {
+		stop := map[agent.Shape]string{agent.Messages: "max_tokens", agent.ChatCompletions: "length"}[p]
+		if _, err := run(s, p, agent.Events{}); err == nil || !strings.Contains(err.Error(), "token bound") || !strings.Contains(err.Error(), stop) || s.calls() != 1 {
 			t.Fatalf("%s: err %v after %d calls", p, err, s.calls())
 		}
 	}
@@ -437,40 +439,74 @@ func TestMaxTokensIsAnError(t *testing.T) {
 // A run that reaches 8 calls without an accepted say is an error.
 func TestEightCallsWithoutSayIsAnError(t *testing.T) {
 	s := newScript(t, anthropicSays("again", ""))
-	_, err := run(s, model.Anthropic, agent.Events{})
+	_, err := run(s, agent.Messages, agent.Events{})
 	if err == nil || !strings.Contains(err.Error(), "8 model calls") || s.calls() != 8 {
 		t.Fatalf("err %v after %d calls", err, s.calls())
 	}
 }
 
-// A profile's options reach each call under its provider's field:
-// max_tokens to Anthropic, max_completion_tokens to OpenAI, temperature to
-// both. Unset, the bound is 8192 and temperature is absent.
-func TestProfileOptionsReachTheRequest(t *testing.T) {
-	temp := 0.2
-	for p, reply := range map[string][]string{model.Anthropic: anthropicText("ok"), model.OpenAI: openaiText("ok")} {
-		field := "max_tokens"
-		if p == model.OpenAI {
-			field = "max_completion_tokens"
-		}
+// The profile's body merges over what DeFiOS writes: a key it does not
+// write is added as is, nested objects stay nested, and anything else
+// replaces what is there, even DeFiOS's own (ADR 0019). Both shapes.
+func TestTheProfileBodyMergesOverTheRequest(t *testing.T) {
+	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok")} {
 		s := newScript(t, reply)
 		_, err := agent.Client{}.Run(context.Background(), agent.Request{
-			Provider: p, URL: s.URL, Model: "m", Turns: talk, MaxTokens: 4000, Temperature: &temp,
+			Shape: p, URL: s.URL, Turns: talk, Body: map[string]any{
+				"model": "m", "stream": true, "max_tokens": int64(1024), "temperature": 0.2,
+				"thinking": map[string]any{"type": "adaptive", "budget": map[string]any{"tokens": int64(7)}},
+				"tools":    []any{"theirs"},
+			},
 		}, agent.Events{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if body := s.body(1); body[field] != float64(4000) || body["temperature"] != 0.2 {
+		body := s.body(1)
+		if body["model"] != "m" || body["stream"] != true || body["max_tokens"] != float64(1024) || body["temperature"] != 0.2 {
 			t.Errorf("%s: body = %v", p, body)
 		}
-
-		s = newScript(t, reply)
-		if _, err := run(s, p, agent.Events{}); err != nil {
-			t.Fatal(err)
+		if got := fmt.Sprint(body["thinking"]); got != "map[budget:map[tokens:7] type:adaptive]" {
+			t.Errorf("%s: thinking = %s", p, got)
 		}
-		body := s.body(1)
-		if _, ok := body["temperature"]; ok || body[field] != float64(8192) {
-			t.Errorf("%s: unset options sent %v", p, body)
+		if got := fmt.Sprint(body["tools"]); got != "[theirs]" {
+			t.Errorf("%s: tools = %s, want the body's in place of say", p, got)
+		}
+		if len(messages(body)) == 0 {
+			t.Errorf("%s: the conversation is gone: %v", p, body)
+		}
+	}
+}
+
+// A reply that is not an event stream is an error, not retried, until
+// non-streamed replies are read (#78).
+func TestAReplyThatIsNotStreamedIsAnError(t *testing.T) {
+	srv, calls := failing(t, func(_ int, w http.ResponseWriter) bool {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"type":"message","content":[]}`))
+		return true
+	})
+	if _, err := generate(srv, agent.Events{}); err == nil || *calls != 1 || !strings.Contains(err.Error(), "stream") {
+		t.Fatalf("err %v after %d calls, want one error naming stream", err, *calls)
+	}
+}
+
+// The suffix of a Provider's api_path picks its shape; any other path has
+// none.
+func TestShapeOfAPIPath(t *testing.T) {
+	for path, want := range map[string]string{
+		"/v1/messages":             "messages",
+		"/anthropic/v1/messages":   "messages",
+		"/v1/chat/completions":     "chat_completions",
+		"/chat/completions":        "chat_completions",
+		"/openai/chat/completions": "chat_completions",
+	} {
+		if sh, ok := agent.ShapeOf(path); !ok || sh.Name != want {
+			t.Errorf("%s: shape %+v, %v; want %s", path, sh, ok, want)
+		}
+	}
+	for _, path := range []string{"/v1/foo", "/v1/messages/", "/v1/completions", "/v1/decisions", "", "/v1/messagesx"} {
+		if sh, ok := agent.ShapeOf(path); ok {
+			t.Errorf("%q: shape %+v, want none", path, sh)
 		}
 	}
 }
@@ -479,15 +515,15 @@ func TestProfileOptionsReachTheRequest(t *testing.T) {
 func TestMaxTurnsBoundsTheRun(t *testing.T) {
 	s := newScript(t, anthropicSays("again", ""))
 	_, err := agent.Client{}.Run(context.Background(), agent.Request{
-		Provider: model.Anthropic, URL: s.URL, Model: "m", Turns: talk, MaxTurns: 3,
+		Shape: agent.Messages, URL: s.URL, Turns: talk, MaxTurns: 3,
 	}, agent.Events{})
 	if err == nil || !strings.Contains(err.Error(), "3 model calls") || s.calls() != 3 {
 		t.Fatalf("err %v after %d calls", err, s.calls())
 	}
 }
 
-// A max_tokens over the model's cap, or a temperature the model refuses,
-// is a 400 from the provider: an error, not retried.
+// A body the API rejects, such as a max_tokens over the model's cap, is a
+// 400 from the provider: an error, not retried.
 func TestAProviderRefusingAnOptionIsNotRetried(t *testing.T) {
 	srv, calls := failing(t, func(_ int, w http.ResponseWriter) bool {
 		w.WriteHeader(400)
@@ -504,7 +540,7 @@ func TestAProviderRefusingAnOptionIsNotRetried(t *testing.T) {
 func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {
 	s := newScript(t, anthropicSays("first", ""), anthropicSays("second", "done"))
 	var rec recorder
-	if _, err := run(s, model.Anthropic, rec.events()); err != nil {
+	if _, err := run(s, agent.Messages, rec.events()); err != nil {
 		t.Fatal(err)
 	}
 	if got := rec.kinds(); got != "request block block usage request block block usage" {
@@ -529,9 +565,9 @@ func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {
 
 // With no key, no credential header is sent at all.
 func TestNoKeySendsNoCredential(t *testing.T) {
-	for p, reply := range map[string][]string{model.Anthropic: anthropicText("ok"), model.OpenAI: openaiText("ok")} {
+	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok")} {
 		s := newScript(t, reply)
-		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Provider: p, URL: s.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{}); err != nil {
+		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{}); err != nil {
 			t.Fatal(err)
 		}
 		if h := s.headers[0]; h.Get("x-api-key")+h.Get("Authorization") != "" {
@@ -558,7 +594,7 @@ func failing(t *testing.T, fail func(n int, w http.ResponseWriter) bool) (*httpt
 
 func generate(srv *httptest.Server, ev agent.Events) (agent.Result, error) {
 	c := agent.Client{Backoff: time.Millisecond}
-	return c.Run(context.Background(), agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, ev)
+	return c.Run(context.Background(), agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, ev)
 }
 
 // Rate limits, overload, 5xx and dropped connections are retried; a retry
@@ -651,7 +687,7 @@ func TestCancelEndsTheRequest(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	_, err := agent.Client{Backoff: time.Millisecond}.Run(ctx, agent.Request{Provider: model.Anthropic, URL: srv.URL, Model: "m", Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{})
+	_, err := agent.Client{Backoff: time.Millisecond}.Run(ctx, agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{})
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("err %v after %d calls, want context.Canceled once", err, calls)
 	}

@@ -94,7 +94,7 @@ func (a App) rootCommand(g *globals) *cobra.Command {
 	root.AddCommand(serveCommand(g))
 	root.AddCommand(conversationCommand(g))
 	root.AddCommand(networkCommand(g))
-	root.AddCommand(modelCommand(g))
+	root.AddCommand(providerCommand(g))
 	root.AddCommand(secretCommand(g))
 	root.AddCommand(signCommand(g))
 	root.AddCommand(sessionCommand(g))

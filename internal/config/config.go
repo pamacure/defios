@@ -10,17 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
 	"defios.com/internal/agent"
 	"defios.com/internal/group"
 	"defios.com/internal/mention"
-	"defios.com/internal/model"
 	"defios.com/internal/secret"
 )
 
@@ -43,30 +42,29 @@ type Config struct {
 	Workspace
 }
 
-// Profile is one Agent Profile: its profile directory, the Model alias it
-// runs on, and its model options (ADR 0018).
+// Profile is one Agent Profile: its profile directory, the Provider alias it
+// runs on, and its request body (ADR 0018, ADR 0019).
 type Profile struct {
 	// Dir is the profile directory, holding SYSTEM.md. "~" expands, a
 	// relative path is under the config directory, and empty is
 	// agents/<handle>.
-	Dir   string `toml:"dir,omitempty"`
-	Model string `toml:"model"`
-	// MaxTokens bounds each model call; 0 is unset, which is
-	// agent.DefaultMaxTokens.
-	MaxTokens int `toml:"max_tokens,omitzero"`
-	// Temperature is left out of the request when nil.
-	Temperature *float64 `toml:"temperature,omitempty"`
+	Dir string `toml:"dir,omitempty"`
+	// Provider is the alias of the Provider it calls, resolved at summon.
+	Provider string `toml:"provider"`
 	// MaxTurns is how many model calls a summon may make; 0 is unset,
 	// which is agent.DefaultMaxTurns.
 	MaxTurns int `toml:"max_turns,omitzero"`
+	// Body is the request's other fields, as TOML nests them: the model id
+	// always, and whatever else the API shape takes. It merges over what
+	// DeFiOS writes. ReadFile converts it to JSON values.
+	Body map[string]any `toml:"body,omitempty"`
 }
 
 // Workspace is the part of a config.toml a Conversation's may override.
 type Workspace struct {
 	// Networks are this Node's local RPC endpoints, by Network alias.
 	Networks map[string]Network `toml:"networks,omitempty"`
-	// Providers hold the credential for every Model of a provider, by
-	// provider.
+	// Providers hold this Node's credential for a Provider, by its alias.
 	Providers map[string]Provider `toml:"providers,omitempty"`
 	Agent     Agent               `toml:"agent,omitempty"`
 }
@@ -76,11 +74,11 @@ type Network struct {
 	RPCURLs []string `toml:"rpc_urls"`
 }
 
-// Provider is a provider's credential reference and the endpoint this Node
-// trusts with it.
+// Provider is this Node's credential for a Provider: a Secret reference,
+// sent to the Provider's base_url on the log (ADR 0019). Without one no key
+// is sent.
 type Provider struct {
-	APIKey  string `toml:"api_key,omitempty"`
-	BaseURL string `toml:"base_url,omitempty"`
+	APIKey string `toml:"api_key,omitempty"`
 }
 
 // Agent is which agents may answer in Group-level talk, or in that
@@ -147,11 +145,17 @@ func decode(path string, into any) (toml.MetaData, error) {
 	if err != nil {
 		return md, fmt.Errorf("config: %w", err)
 	}
-	if extra := md.Undecoded(); len(extra) > 0 {
-		keys := make([]string, len(extra))
-		for i, k := range extra {
-			keys[i] = k.String()
+	_, isGroup := into.(*Config)
+	var keys []string
+	for _, k := range md.Undecoded() {
+		// A profile's body is free-form: whatever it holds is decoded into
+		// it, though the decoder does not mark nested keys as such.
+		if isGroup && len(k) > 3 && k[0] == "agents" && k[2] == "body" {
+			continue
 		}
+		keys = append(keys, k.String())
+	}
+	if len(keys) > 0 {
 		return md, fmt.Errorf("config: %s: unknown key %s", path, strings.Join(keys, ", "))
 	}
 	return md, nil
@@ -169,20 +173,13 @@ func (w Workspace) validate(md toml.MetaData) error {
 			}
 		}
 	}
-	for name, p := range w.Providers {
-		switch name {
-		case model.Anthropic, model.OpenAI:
-		default:
-			return fmt.Errorf("[providers.%s]: provider must be anthropic or openai", name)
+	for alias, p := range w.Providers {
+		if err := group.ValidateAlias(alias); err != nil {
+			return fmt.Errorf("[providers.%s]: %w", alias, err)
 		}
 		if p.APIKey != "" {
 			if _, err := secret.ParseRef(p.APIKey); err != nil {
-				return fmt.Errorf("[providers.%s] api_key: %w", name, err)
-			}
-		}
-		if p.BaseURL != "" {
-			if u, err := url.Parse(p.BaseURL); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-				return fmt.Errorf("[providers.%s] base_url %q must be an http or https URL with a host", name, p.BaseURL)
+				return fmt.Errorf("[providers.%s] api_key: %w", alias, err)
 			}
 		}
 	}
@@ -202,28 +199,33 @@ func (w Workspace) validate(md toml.MetaData) error {
 	return nil
 }
 
-// validateAgents checks the Group's Agent Profiles, and that its own [agent]
-// profiles includes only Handles it defines; md tells an explicit
-// max_tokens or max_turns of 0 from an unset one.
+// validateAgents checks the Group's Agent Profiles, converting each body to
+// JSON values, and that its own [agent] profiles includes only Handles it
+// defines; md tells an explicit max_turns of 0 from an unset one.
 func (c Config) validateAgents(md toml.MetaData) error {
 	for h, p := range c.Agents {
 		if err := ValidateHandle(h); err != nil {
 			return fmt.Errorf("[agents.%s]: %w", h, err)
 		}
-		if p.Model == "" {
-			return fmt.Errorf("[agents.%s]: model is required: the alias of the Model it runs on", h)
+		if p.Provider == "" {
+			return fmt.Errorf("[agents.%s]: provider is required: the alias of the Provider it runs on", h)
 		}
-		if err := group.ValidateAlias(p.Model); err != nil {
-			return fmt.Errorf("[agents.%s] model: %w", h, err)
-		}
-		if md.IsDefined("agents", h, "max_tokens") && p.MaxTokens < 1 {
-			return fmt.Errorf("[agents.%s] max_tokens %d must be a positive integer", h, p.MaxTokens)
+		if err := group.ValidateAlias(p.Provider); err != nil {
+			return fmt.Errorf("[agents.%s] provider: %w", h, err)
 		}
 		if md.IsDefined("agents", h, "max_turns") && p.MaxTurns < 1 {
 			return fmt.Errorf("[agents.%s] max_turns %d must be a positive integer", h, p.MaxTurns)
 		}
-		if t := p.Temperature; t != nil && !(*t >= 0 && !math.IsInf(*t, 1)) {
-			return fmt.Errorf("[agents.%s] temperature %v must be a non-negative number", h, *t)
+		if t := md.Type("agents", h, "body"); t != "" && t != "Hash" {
+			return fmt.Errorf("[agents.%s] body must be a table", h)
+		}
+		body, err := jsonValue(p.Body)
+		if err != nil {
+			return fmt.Errorf("[agents.%s.body]%w", h, err)
+		}
+		if p.Body != nil {
+			p.Body = body.(map[string]any)
+			c.Agents[h] = p
 		}
 	}
 	for _, h := range c.Agent.Profiles {
@@ -248,7 +250,7 @@ func ValidateHandle(h string) error {
 }
 
 // Merge is w with over laid on it table by table: a Network's rpc_urls, a
-// provider's api_key or base_url, an [agent] profiles list (even an empty
+// Provider's api_key, an [agent] profiles list (even an empty
 // one), or a max_depth that over sets wins, and everything over leaves unset
 // comes from w. Neither input is changed.
 func (w Workspace) Merge(over Workspace) Workspace {
@@ -272,9 +274,6 @@ func (w Workspace) Merge(over Workspace) Workspace {
 			if p.APIKey != "" {
 				cur.APIKey = p.APIKey
 			}
-			if p.BaseURL != "" {
-				cur.BaseURL = p.BaseURL
-			}
 			out.Providers[name] = cur
 		}
 	}
@@ -296,14 +295,13 @@ type Included struct {
 }
 
 // ResolvedProfile is an included Agent Profile with its directory resolved
-// and its options defaulted.
+// and max_turns defaulted.
 type ResolvedProfile struct {
-	Handle      string
-	Dir         string // absolute
-	Model       string // a Model alias
-	MaxTokens   int
-	Temperature *float64 // nil is unset
-	MaxTurns    int
+	Handle   string
+	Dir      string // absolute
+	Provider string // a Provider alias
+	MaxTurns int
+	Body     map[string]any // JSON values; nil when unset
 }
 
 // Included resolves the profiles and depth for talk whose Workspace is conv,
@@ -321,11 +319,8 @@ func (c Config) Included(conv Workspace, root, home string) (Included, error) {
 		if !ok {
 			return Included{}, fmt.Errorf("config: [agent] profiles: no [agents.%s] is defined in the Group config", h)
 		}
-		r := ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Model: p.Model,
-			MaxTokens: p.MaxTokens, Temperature: p.Temperature, MaxTurns: p.MaxTurns}
-		if r.MaxTokens == 0 {
-			r.MaxTokens = agent.DefaultMaxTokens
-		}
+		r := ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Provider: p.Provider,
+			MaxTurns: p.MaxTurns, Body: p.Body}
 		if r.MaxTurns == 0 {
 			r.MaxTurns = agent.DefaultMaxTurns
 		}
@@ -345,4 +340,53 @@ func profileDir(dir, handle, root, home string) string {
 	default:
 		return filepath.Join(root, dir)
 	}
+}
+
+// jsonValue is v, a value TOML decoded, as a JSON value: a table is an
+// object, an array of tables an array of objects. A date-time, date or time
+// has no JSON form and is an error, as is a NaN or infinite float; the
+// error is the path to the value.
+func jsonValue(v any) (any, error) {
+	switch x := v.(type) {
+	case nil, string, bool, int64:
+		return x, nil
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil, fmt.Errorf(": %v has no JSON form", x)
+		}
+		return x, nil
+	case time.Time:
+		return nil, fmt.Errorf(": a TOML date or time has no JSON form; quote it as a string")
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			j, err := jsonValue(e)
+			if err != nil {
+				return nil, fmt.Errorf(".%s%w", k, err)
+			}
+			out[k] = j
+		}
+		return out, nil
+	case []map[string]any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			j, err := jsonValue(e)
+			if err != nil {
+				return nil, fmt.Errorf("[%d]%w", i, err)
+			}
+			out[i] = j
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			j, err := jsonValue(e)
+			if err != nil {
+				return nil, fmt.Errorf("[%d]%w", i, err)
+			}
+			out[i] = j
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf(": a %T has no JSON form", v)
 }

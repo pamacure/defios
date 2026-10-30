@@ -27,9 +27,9 @@ const (
 	TypeSignAccept      uint32 = 11
 	TypeSignBroadcast   uint32 = 12
 	TypeAppRecap        uint32 = 13 // docs/adr/0012-recap-on-the-log-pruning-off-it.md
-	TypeModelCreate     uint32 = 14
-	TypeModelUpdate     uint32 = 15
-	TypeModelRemove     uint32 = 16
+	TypeProviderCreate  uint32 = 14 // docs/adr/0019-providers-replace-models-on-the-cosl.md
+	TypeProviderUpdate  uint32 = 15
+	TypeProviderRemove  uint32 = 16
 )
 
 // kind is one registry entry: its wire name and its payload schema.
@@ -54,9 +54,9 @@ var registry = map[uint32]kind{
 	TypeSignAccept:      {"sign.accept", func() proto.Message { return &coslv1.SignAccept{} }},
 	TypeSignBroadcast:   {"sign.broadcast", func() proto.Message { return &coslv1.SignBroadcast{} }},
 	TypeAppRecap:        {"app.recap", func() proto.Message { return &coslv1.AppRecap{} }},
-	TypeModelCreate:     {"model.create", func() proto.Message { return &coslv1.ModelConfig{} }},
-	TypeModelUpdate:     {"model.update", func() proto.Message { return &coslv1.ModelConfig{} }},
-	TypeModelRemove:     {"model.remove", func() proto.Message { return &coslv1.ModelRemove{} }},
+	TypeProviderCreate:  {"provider.create", func() proto.Message { return &coslv1.ProviderConfig{} }},
+	TypeProviderUpdate:  {"provider.update", func() proto.Message { return &coslv1.ProviderConfig{} }},
+	TypeProviderRemove:  {"provider.remove", func() proto.Message { return &coslv1.ProviderRemove{} }},
 }
 
 // ErrUnknownType is returned by DecodePayload for ids outside the registry.

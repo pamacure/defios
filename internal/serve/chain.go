@@ -22,7 +22,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
-	"defios.com/internal/model"
+	"defios.com/internal/provider"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/secret"
@@ -638,9 +638,10 @@ func waitApplied(ctx context.Context, store *cosl.Store, seq uint64) error {
 	}
 }
 
-// agentRequest is the call to the Model that answers as handle: its
+// agentRequest is the call to the Provider that answers as handle: its
 // SYSTEM.md and the serve's preamble, then the talk so far as turns by
-// Handle (ADR 0018), sent where this Node's config says with its key (ADR 0013).
+// Handle (ADR 0018), sent to the Provider on the log with this Node's key
+// for it (ADR 0019).
 func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
 	_, ws, inc, err := s.included(store, conv)
 	if err != nil {
@@ -655,26 +656,23 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	if err != nil {
 		return agent.Request{}, inc, fmt.Errorf("@%s's profile: %w", handle, err)
 	}
-	rows, err := store.Log(cosl.Query{MsgTypes: model.MsgTypes})
+	rows, err := store.Log(cosl.Query{MsgTypes: provider.MsgTypes})
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	models, err := model.Fold(rows)
+	providers, err := provider.Fold(rows)
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	m, err := model.Get(models, p.Model)
+	prov, err := provider.Get(providers, p.Provider)
 	if err != nil {
 		return agent.Request{}, inc, fmt.Errorf("@%s runs on %w", handle, err)
 	}
-	local := ws.Providers[m.Provider]
-	base, withKey := model.Endpoint(m, local.BaseURL)
-	req := agent.Request{Provider: m.Provider, URL: model.CallURL(m, base), Model: m.ModelID,
-		MaxTokens: p.MaxTokens, Temperature: p.Temperature, MaxTurns: p.MaxTurns}
-	if withKey && local.APIKey != "" {
+	req := agent.Request{Shape: prov.Shape(), URL: prov.URL(), Body: p.Body, MaxTurns: p.MaxTurns}
+	if key := ws.Providers[prov.Alias].APIKey; key != "" {
 		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
-		if req.APIKey, err = r.Resolve(local.APIKey); err != nil {
-			return agent.Request{}, inc, fmt.Errorf("[providers.%s] api_key: %w", m.Provider, err)
+		if req.APIKey, err = r.Resolve(key); err != nil {
+			return agent.Request{}, inc, fmt.Errorf("[providers.%s] api_key: %w", prov.Alias, err)
 		}
 	}
 	where, err := s.whereSaid(store, conv)

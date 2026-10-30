@@ -22,7 +22,7 @@ func secretCommand(g *globals) *cobra.Command {
 		Use:   "secret",
 		Short: "Hold a Group's Secrets in this Node's Vault",
 		Long: `A Secret is a value config.toml refers to as "$NAME" but never contains: tailnet_auth_key,
-[networks.<alias>] rpc_urls and [providers.<provider>] api_key.
+[networks.<alias>] rpc_urls and [providers.<alias>] api_key.
 It is sealed into this Node's Vault, per Group, and never replicates.
 An environment variable of the same name, when set, takes precedence.`,
 	}

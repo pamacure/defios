@@ -25,6 +25,7 @@ import (
 // providerCall is one request the fake provider saw.
 type providerCall struct {
 	Key    string
+	Path   string // the URL path called
 	System string // the system blocks' text, joined
 	// Stable is the system text up to its cache breakpoint, and Depth the
 	// text after it.
@@ -63,7 +64,7 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 			} `json:"messages"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		call := providerCall{Key: r.Header.Get("x-api-key"), Messages: len(body.Messages)}
+		call := providerCall{Key: r.Header.Get("x-api-key"), Path: r.URL.Path, Messages: len(body.Messages)}
 		cached := false
 		for _, b := range body.System {
 			call.System += b.Text
@@ -117,6 +118,18 @@ func (p *fakeProvider) seen() []providerCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]providerCall(nil), p.calls...)
+}
+
+// seenWith is the calls made with key: the calls of the one Node whose key
+// it is.
+func (p *fakeProvider) seenWith(key string) []providerCall {
+	var out []providerCall
+	for _, c := range p.seen() {
+		if c.Key == key {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (p *fakeProvider) set(reply func(n int, w http.ResponseWriter, r *http.Request)) {
@@ -178,10 +191,11 @@ func streamText(w http.ResponseWriter, parts ...string) {
 	endTurn(w, "end_turn")
 }
 
-// agentNode configures n with Agent Profiles answering on provider: each
-// Handle runs Model "claude", which this Node trusts at provider's URL with
-// $ANTHROPIC_KEY, and has a SYSTEM.md saying who it is.
-func agentNode(t *testing.T, n *node, provider *fakeProvider, handles ...string) {
+// agentNode configures n with Agent Profiles: each Handle runs on the
+// Provider "claude" with a streamed Messages body, this Node's key for it is
+// $ANTHROPIC_KEY, set to "sk-<n's name>", and each has a SYSTEM.md saying
+// who it is.
+func agentNode(t *testing.T, n *node, handles ...string) {
 	t.Helper()
 	var cfg strings.Builder
 	for _, h := range handles {
@@ -192,17 +206,18 @@ func agentNode(t *testing.T, n *node, provider *fakeProvider, handles ...string)
 		if err := os.WriteFile(filepath.Join(dir, "SYSTEM.md"), []byte("You are "+h+"."), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(&cfg, "[agents.%s]\ndir = %q\nmodel = \"claude\"\n\n", h, dir)
+		fmt.Fprintf(&cfg, "[agents.%s]\ndir = %q\nprovider = \"claude\"\n\n", h, dir)
+		fmt.Fprintf(&cfg, "[agents.%s.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n\n", h)
 	}
 	fmt.Fprintf(&cfg, "[agent]\nprofiles = [\"%s\"]\n\n", strings.Join(handles, `", "`))
-	fmt.Fprintf(&cfg, "[providers.anthropic]\napi_key = \"$ANTHROPIC_KEY\"\nbase_url = %q\n", provider.URL)
+	cfg.WriteString("[providers.claude]\napi_key = \"$ANTHROPIC_KEY\"\n")
 	writeConfig(t, n.paths.GroupConfigFile(group.ImplicitAlias), cfg.String())
-	n.secrets["ANTHROPIC_KEY"] = "sk-local"
+	n.secrets["ANTHROPIC_KEY"] = "sk-" + n.name
 }
 
-// agentPair is a valid Group of alice and bob with the Model "claude" on
-// the log, and alice's Agent Profiles for handles answering on a fake
-// provider. Retries back off by a millisecond.
+// agentPair is a valid Group of alice and bob with the Provider "claude"
+// on the log, a fake Messages API, and alice's Agent Profiles for handles
+// running on it. Retries back off by a millisecond.
 func agentPair(t *testing.T, handles ...string) (a, b *node, gid group.ID, provider *fakeProvider) {
 	t.Helper()
 	a, b = pairWith(t, func(n *node) {
@@ -211,13 +226,13 @@ func agentPair(t *testing.T, handles ...string) (a, b *node, gid group.ID, provi
 	gid = formValid(t, a, b)
 	a.joins(t, gid, 2)
 	b.joins(t, gid, 2)
-	v, err := a.client().ModelAdd(context.Background(), &coslv1.ModelConfig{Alias: "claude", Provider: "anthropic", Model: "claude-test"})
+	provider = newFakeProvider(t)
+	v, err := a.client().ProviderAdd(context.Background(), &coslv1.ProviderConfig{Alias: "claude", BaseUrl: provider.URL, ApiPath: "/v1/messages"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.applied(t, v.Seq)
-	provider = newFakeProvider(t)
-	agentNode(t, a, provider, handles...)
+	agentNode(t, a, handles...)
 	return a, b, gid, provider
 }
 
@@ -404,7 +419,7 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 		t.Fatalf("agent.commit seq %d, row at %d", commit.Seq, rows[1].Seq)
 	}
 	calls := provider.seen()
-	if len(calls) != 1 || calls[0].Key != "sk-local" || calls[0].Prompt != "alice: @auditor is this fine?" {
+	if len(calls) != 1 || calls[0].Key != "sk-"+a.name || calls[0].Prompt != "alice: @auditor is this fine?" {
 		t.Fatalf("calls = %+v", calls)
 	}
 	if sys := calls[0].System; !strings.HasPrefix(sys, "You are auditor.") || !strings.Contains(sys, "@auditor") || !strings.Contains(sys, "Group-level") {
@@ -443,9 +458,8 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 // wrote as @auditor included, and the rest as lean lines in user turns
 // (ADR 0018). Its preamble says so.
 func TestAnAgentSeesItsOwnMessagesAsAssistantTurns(t *testing.T) {
-	a, b, gid, provA := agentPair(t, "auditor")
-	provB := newFakeProvider(t)
-	agentNode(t, b, provB, "auditor")
+	a, b, gid, provider := agentPair(t, "auditor")
+	agentNode(t, b, "auditor")
 	ctx := context.Background()
 	sb := watch(t, b)
 	v, err := b.client().ConversationSend(ctx, "@auditor?", nil)
@@ -459,7 +473,7 @@ func TestAnAgentSeesItsOwnMessagesAsAssistantTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	untilEnd(t, sa, v.Seq)
-	calls := provA.seen()
+	calls := provider.seenWith("sk-" + a.name)
 	if len(calls) != 1 {
 		t.Fatalf("alice's calls = %+v", calls)
 	}
@@ -474,9 +488,8 @@ func TestAnAgentSeesItsOwnMessagesAsAssistantTurns(t *testing.T) {
 // Only the Node whose person wrote the mention runs the agent, though both
 // define it; an agent's own reply summons nobody.
 func TestOnlyTheMentioningNodeRunsTheAgent(t *testing.T) {
-	a, b, gid, provA := agentPair(t, "auditor")
-	provB := newFakeProvider(t)
-	agentNode(t, b, provB, "auditor")
+	a, b, gid, provider := agentPair(t, "auditor")
+	agentNode(t, b, "auditor")
 	sb := watch(t, b)
 	v, err := b.client().ConversationSend(context.Background(), "@auditor?", nil)
 	if err != nil {
@@ -487,10 +500,10 @@ func TestOnlyTheMentioningNodeRunsTheAgent(t *testing.T) {
 	}
 	a.groupLevelRows(t, gid, 2)
 	time.Sleep(300 * time.Millisecond) // a has seen both rows; give it time to act wrongly
-	if n := len(provA.seen()); n != 0 {
+	if n := len(provider.seenWith("sk-" + a.name)); n != 0 {
 		t.Fatalf("alice's provider called %d times for bob's mention", n)
 	}
-	if n := len(provB.seen()); n != 1 {
+	if n := len(provider.seenWith("sk-" + b.name)); n != 1 {
 		t.Fatalf("bob's provider called %d times, want 1", n)
 	}
 }
@@ -645,34 +658,41 @@ func TestASecondMentionWaitsForTheRunningChain(t *testing.T) {
 	}
 }
 
-// A base_url that only the log names gets the call but never this Node's
-// key: any Node in the Group can set that one (ADR 0013).
-func TestTheKeyNeverReachesALogOnlyBaseURL(t *testing.T) {
-	a, _, _, local := agentPair(t, "auditor")
-	collector := newFakeProvider(t)
+// provider edit changes where the next summon calls: the Provider's
+// base_url and api_path on the log, with this Node's key for it (ADR 0019).
+func TestAProviderEditTakesEffectAtTheNextSummon(t *testing.T) {
+	a, _, _, first := agentPair(t, "auditor")
 	ctx := context.Background()
-	if _, err := a.client().ModelEdit(ctx, &coslv1.ModelConfig{Alias: "claude", Provider: "anthropic", Model: "claude-test", BaseUrl: collector.URL}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := strings.Replace(readFile(t, a.paths.GroupConfigFile(group.ImplicitAlias)), fmt.Sprintf("base_url = %q\n", local.URL), "", 1)
-	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), cfg)
 	s := watch(t, a)
 	v, err := a.client().ConversationSend(ctx, "@auditor", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	untilEnd(t, s, v.Seq)
-	if calls := collector.seen(); len(calls) != 1 || calls[0].Key != "" {
-		t.Fatalf("log-only base_url saw %+v", calls)
+
+	second := newFakeProvider(t)
+	e, err := a.client().ProviderEdit(ctx, &coslv1.ProviderConfig{Alias: "claude", BaseUrl: second.URL + "/gateway", ApiPath: "/anthropic/v1/messages"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if n := len(local.seen()); n != 0 {
-		t.Fatalf("the local base_url, now unset, was called %d times", n)
+	a.applied(t, e.Seq)
+	v, err = a.client().ConversationSend(ctx, "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, v.Seq)
+	if calls := first.seen(); len(calls) != 1 {
+		t.Fatalf("the first endpoint saw %d calls, want 1", len(calls))
+	}
+	calls := second.seen()
+	if len(calls) != 1 || calls[0].Key != "sk-"+a.name || calls[0].Path != "/gateway/anthropic/v1/messages" {
+		t.Fatalf("the edited endpoint saw %+v", calls)
 	}
 }
 
 // A Conversation's [agent] profiles naming no [agents.*] table fails the
-// agent with the file to fix; an unknown Model alias or a missing SYSTEM.md
-// fails it when summoned.
+// agent with the file to fix; an unknown Provider alias or a missing
+// SYSTEM.md fails it when summoned.
 func TestSummonErrorsNameWhatToFix(t *testing.T) {
 	a, _, _, _ := agentPair(t, "auditor")
 	s := watch(t, a)
@@ -688,9 +708,9 @@ func TestSummonErrorsNameWhatToFix(t *testing.T) {
 	}
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
 	cfg := readFile(t, path)
-	writeConfig(t, path, strings.Replace(cfg, `model = "claude"`, `model = "gone"`, 1))
-	if ev := send("@auditor"); ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, "gone") {
-		t.Errorf("unknown Model: %+v", ev)
+	writeConfig(t, path, strings.Replace(cfg, `provider = "claude"`, `provider = "gone"`, 1))
+	if ev := send("@auditor"); ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, "gone") || !strings.Contains(ev.Error, "no such provider") {
+		t.Errorf("unknown Provider: %+v", ev)
 	}
 	writeConfig(t, path, cfg)
 	dir := regexpDir(t, cfg)

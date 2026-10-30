@@ -184,7 +184,7 @@ func TestCoslLogTypeFilterLimitAndJSON(t *testing.T) {
 	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 3 || strings.Count(r.stdout, "\n") != 3 {
 		t.Errorf("not one row per line: %v\n%s", err, r.stdout)
 	}
-	if r := run(t, nil, "", "--dir", dir, "cosl", "log", "--type", "model.create", "--json"); r.code != 0 || r.stdout != "" {
+	if r := run(t, nil, "", "--dir", dir, "cosl", "log", "--type", "provider.create", "--json"); r.code != 0 || r.stdout != "" {
 		t.Errorf("empty log: exit %d, stdout %q", r.code, r.stdout)
 	}
 

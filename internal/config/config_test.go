@@ -1,7 +1,7 @@
 package config_test
 
 import (
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -99,14 +99,13 @@ rpc_urls = ["$BTC_RPC"]
 
 [providers.anthropic]
 api_key = "$DEFIOS_ANTHROPIC"
-base_url = "https://proxy.example"
 
 [agents.auditor]
 dir = "agents/auditor"
-model = "claude"
+provider = "claude"
 
 [agents.trader]
-model = "gpt"
+provider = "gpt"
 
 [agent]
 profiles = ["auditor"]
@@ -125,13 +124,13 @@ func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
 			"eth": {RPCURLs: []string{"$ALCHEMY_ETH", "$INFURA_ETH"}},
 			"btc": {RPCURLs: []string{"$BTC_RPC"}},
 		},
-		Providers: map[string]config.Provider{"anthropic": {APIKey: "$DEFIOS_ANTHROPIC", BaseURL: "https://proxy.example"}},
+		Providers: map[string]config.Provider{"anthropic": {APIKey: "$DEFIOS_ANTHROPIC"}},
 		Agent:     config.Agent{Profiles: []string{"auditor"}, MaxDepth: 2},
 	}
 	if !reflect.DeepEqual(c.Workspace, want) || c.TailnetAuthKey != "$TS_AUTHKEY" {
 		t.Fatalf("read %+v", c)
 	}
-	wantAgents := map[string]config.Profile{"auditor": {Dir: "agents/auditor", Model: "claude"}, "trader": {Model: "gpt"}}
+	wantAgents := map[string]config.Profile{"auditor": {Dir: "agents/auditor", Provider: "claude"}, "trader": {Provider: "gpt"}}
 	if !reflect.DeepEqual(c.Agents, wantAgents) {
 		t.Fatalf("read %+v", c)
 	}
@@ -147,8 +146,8 @@ func TestConfigRefusesLiteralSecretsAndUnknownKeys(t *testing.T) {
 		"interpolated reference":   "[networks.eth]\nrpc_urls = [\"https://eth.example/v2/$KEY\"]",
 		"lowercase reference":      "[providers.openai]\napi_key = \"$openai\"",
 		"old auth_key":             `auth_key = "tskey-auth-abc"`,
-		"unknown provider":         "[providers.mistral]\napi_key = \"$KEY\"",
-		"bad base_url":             "[providers.openai]\nbase_url = \"ftp://x\"",
+		"bad provider alias":       "[providers.Mistral]\napi_key = \"$KEY\"",
+		"old local base_url":       "[providers.openai]\nbase_url = \"https://proxy.example\"",
 	} {
 		if _, err := config.ReadFile(write(t, body)); err == nil {
 			t.Errorf("%s: read without error", name)
@@ -185,7 +184,6 @@ func TestConversationMergesOverTheGroupTableByTable(t *testing.T) {
 rpc_urls = ["$CONV_ETH"]
 
 [providers.anthropic]
-base_url = "https://other-proxy.example"
 
 [providers.openai]
 api_key = "$DEFIOS_OPENAI"
@@ -203,7 +201,7 @@ profiles = ["trader"]
 			"btc": {RPCURLs: []string{"$BTC_RPC"}},
 		},
 		Providers: map[string]config.Provider{
-			"anthropic": {APIKey: "$DEFIOS_ANTHROPIC", BaseURL: "https://other-proxy.example"},
+			"anthropic": {APIKey: "$DEFIOS_ANTHROPIC"},
 			"openai":    {APIKey: "$DEFIOS_OPENAI"},
 		},
 		Agent: config.Agent{Profiles: []string{"trader"}, MaxDepth: 2},
@@ -236,43 +234,48 @@ func TestPrunePolicyDefaultsOffAndIsGroupOnly(t *testing.T) {
 }
 
 // An Agent Profile is defined only in the Group's config.toml, under a Handle
-// that a mention can name (ADR 0016) and is not "user", and names the Model
-// it runs on; [agent] includes only Handles the Group defines, at a depth of
+// that a mention can name (ADR 0016) and is not "user", and names the
+// Provider it runs on; [agent] includes only Handles the Group defines, at a depth of
 // at least 1.
 func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 	for name, body := range map[string]string{
-		"bad handle":          "[agents.Auditor]\nmodel = \"claude\"",
-		"reserved handle":     "[agents.user]\nmodel = \"claude\"",
-		"handle ending in -":  "[agents.auditor-]\nmodel = \"claude\"",
-		"handle ending in _":  "[agents.auditor_]\nmodel = \"claude\"",
-		"handle with --":      "[agents.au--di]\nmodel = \"claude\"",
-		"missing model":       "[agents.auditor]\ndir = \"agents/auditor\"",
-		"bad model alias":     "[agents.auditor]\nmodel = \"Claude!\"",
-		"undefined handle":    "[agents.auditor]\nmodel = \"claude\"\n[agent]\nprofiles = [\"trader\"]",
-		"handle listed twice": "[agents.auditor]\nmodel = \"claude\"\n[agent]\nprofiles = [\"auditor\", \"auditor\"]",
+		"bad handle":          "[agents.Auditor]\nprovider = \"claude\"",
+		"reserved handle":     "[agents.user]\nprovider = \"claude\"",
+		"handle ending in -":  "[agents.auditor-]\nprovider = \"claude\"",
+		"handle ending in _":  "[agents.auditor_]\nprovider = \"claude\"",
+		"handle with --":      "[agents.au--di]\nprovider = \"claude\"",
+		"missing provider":    "[agents.auditor]\ndir = \"agents/auditor\"",
+		"bad provider alias":  "[agents.auditor]\nprovider = \"Claude!\"",
+		"undefined handle":    "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"trader\"]",
+		"handle listed twice": "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"auditor\", \"auditor\"]",
 		"zero max_depth":      "[agent]\nmax_depth = 0",
 		"negative max_depth":  "[agent]\nmax_depth = -1",
 		"old [agent] model":   "[agent]\nmodel = \"claude\"",
 		"old [agent] window":  "[agent]\ntoken_window = 200000",
-		"unknown profile key": "[agents.auditor]\nmodel = \"claude\"\nsoul = \"SOUL.md\"",
-		"zero max_tokens":     "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = 0",
-		"negative max_tokens": "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = -1",
-		"string max_tokens":   "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = \"4000\"",
-		"float max_tokens":    "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = 4000.5",
-		"zero max_turns":      "[agents.auditor]\nmodel = \"claude\"\nmax_turns = 0",
-		"negative max_turns":  "[agents.auditor]\nmodel = \"claude\"\nmax_turns = -3",
-		"negative temp":       "[agents.auditor]\nmodel = \"claude\"\ntemperature = -0.1",
-		"string temp":         "[agents.auditor]\nmodel = \"claude\"\ntemperature = \"hot\"",
-		"nan temp":            "[agents.auditor]\nmodel = \"claude\"\ntemperature = nan",
-		"inf temp":            "[agents.auditor]\nmodel = \"claude\"\ntemperature = inf",
+		"unknown profile key": "[agents.auditor]\nprovider = \"claude\"\nsoul = \"SOUL.md\"",
+		"old model key":       "[agents.auditor]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"",
+		"old max_tokens key":  "[agents.auditor]\nprovider = \"claude\"\nmax_tokens = 4000",
+		"old temperature key": "[agents.auditor]\nprovider = \"claude\"\ntemperature = 0.2",
+		"zero max_turns":      "[agents.auditor]\nprovider = \"claude\"\nmax_turns = 0",
+		"negative max_turns":  "[agents.auditor]\nprovider = \"claude\"\nmax_turns = -3",
+		"body not a table":    "[agents.auditor]\nprovider = \"claude\"\nbody = \"x\"",
+		"date-time in body":   "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nsince = 2026-01-01T00:00:00Z",
+		"local date in body":  "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body.metadata]\nday = 2026-01-01",
+		"time in an array":    "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nat = [07:32:00]",
+		"nan in body":         "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\ntemperature = nan",
 	} {
-		if _, err := config.ReadFile(write(t, body)); err == nil {
+		_, err := config.ReadFile(write(t, body))
+		if err == nil {
 			t.Errorf("%s: read without error", name)
+		} else if strings.Contains(name, "date") || strings.Contains(name, "time in") {
+			if !strings.Contains(err.Error(), "date or time") {
+				t.Errorf("%s: %v, want it to say a date or time has no JSON form", name, err)
+			}
 		}
 	}
 	for name, body := range map[string]string{
-		"profile in a Conversation": "[agents.auditor]\nmodel = \"claude\"",
-		"options in a Conversation": "[agents.auditor]\nmodel = \"claude\"\nmax_tokens = 4000",
+		"profile in a Conversation": "[agents.auditor]\nprovider = \"claude\"",
+		"body in a Conversation":    "[agents.auditor.body]\nmodel = \"claude-opus-5-5\"",
 		"bad handle in profiles":    "[agent]\nprofiles = [\"Auditor\"]",
 		"zero max_depth":            "[agent]\nmax_depth = 0",
 	} {
@@ -282,25 +285,34 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 	}
 }
 
-// A profile's max_tokens, temperature and max_turns resolve with it; unset,
-// they are 8192, absent and 8. A whole-number temperature is a number too.
-func TestIncludedResolvesProfileOptions(t *testing.T) {
+// A profile's body is its request's other fields, as TOML nests them,
+// converted to JSON values: tables are objects, an array of tables an array
+// of objects, integers and floats numbers. max_turns resolves with it;
+// unset, it is 8, and an unset body is empty.
+func TestIncludedResolvesTheProfileBody(t *testing.T) {
 	c, err := config.ReadFile(write(t, `
 [agents.auditor]
-model = "claude"
-max_tokens = 4000
-temperature = 0.2
+provider = "claude"
 max_turns = 3
 
-[agents.scribe]
-model = "claude"
-
-[agents.poet]
-model = "claude"
+[agents.auditor.body]
+model = "claude-opus-5-5"
+stream = true
+max_tokens = 4096
 temperature = 1
+stop_sequences = ["END"]
+
+[agents.auditor.body.thinking]
+type = "adaptive"
+
+[[agents.auditor.body.metadata.tags]]
+name = "a"
+
+[agents.scribe]
+provider = "local"
 
 [agent]
-profiles = ["auditor", "scribe", "poet"]
+profiles = ["auditor", "scribe"]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -309,21 +321,17 @@ profiles = ["auditor", "scribe", "poet"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	type opts struct {
-		maxTokens, maxTurns int
-		temperature         string
+	auditor, scribe := got.Profiles[0], got.Profiles[1]
+	raw, err := json.Marshal(auditor.Body)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var have []opts
-	for _, p := range got.Profiles {
-		temp := "unset"
-		if p.Temperature != nil {
-			temp = fmt.Sprint(*p.Temperature)
-		}
-		have = append(have, opts{p.MaxTokens, p.MaxTurns, temp})
+	const want = `{"max_tokens":4096,"metadata":{"tags":[{"name":"a"}]},"model":"claude-opus-5-5","stop_sequences":["END"],"stream":true,"temperature":1,"thinking":{"type":"adaptive"}}`
+	if string(raw) != want || auditor.Provider != "claude" || auditor.MaxTurns != 3 {
+		t.Fatalf("auditor = %+v\nbody %s\nwant %s", auditor, raw, want)
 	}
-	want := []opts{{4000, 3, "0.2"}, {8192, 8, "unset"}, {8192, 8, "1"}}
-	if !reflect.DeepEqual(have, want) {
-		t.Fatalf("options = %+v, want %+v", have, want)
+	if scribe.Provider != "local" || scribe.MaxTurns != 8 || len(scribe.Body) != 0 {
+		t.Fatalf("scribe = %+v", scribe)
 	}
 }
 
@@ -333,19 +341,19 @@ profiles = ["auditor", "scribe", "poet"]
 func TestIncludedResolvesTheProfiles(t *testing.T) {
 	c, err := config.ReadFile(write(t, `
 [agents.auditor]
-model = "claude"
+provider = "claude"
 
 [agents.trader]
 dir = "/srv/agents/trader"
-model = "gpt"
+provider = "gpt"
 
 [agents.scout]
 dir = "~/agents/scout"
-model = "claude"
+provider = "claude"
 
 [agents.quant]
 dir = "shared/quant"
-model = "gpt"
+provider = "gpt"
 
 [agent]
 profiles = ["auditor"]
@@ -358,7 +366,7 @@ max_depth = 3
 
 	got, err := c.Included(config.Workspace{}, root, home)
 	want := config.Included{
-		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: "/home/op/.config/defios/agents/auditor", Model: "claude", MaxTokens: 8192, MaxTurns: 8}},
+		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: "/home/op/.config/defios/agents/auditor", Provider: "claude", MaxTurns: 8}},
 		MaxDepth: 3,
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -368,9 +376,9 @@ max_depth = 3
 	got, err = c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"quant", "trader", "scout"}}}, root, home)
 	want = config.Included{
 		Profiles: []config.ResolvedProfile{
-			{Handle: "quant", Dir: "/home/op/.config/defios/shared/quant", Model: "gpt", MaxTokens: 8192, MaxTurns: 8},
-			{Handle: "trader", Dir: "/srv/agents/trader", Model: "gpt", MaxTokens: 8192, MaxTurns: 8},
-			{Handle: "scout", Dir: "/home/op/agents/scout", Model: "claude", MaxTokens: 8192, MaxTurns: 8},
+			{Handle: "quant", Dir: "/home/op/.config/defios/shared/quant", Provider: "gpt", MaxTurns: 8},
+			{Handle: "trader", Dir: "/srv/agents/trader", Provider: "gpt", MaxTurns: 8},
+			{Handle: "scout", Dir: "/home/op/agents/scout", Provider: "claude", MaxTurns: 8},
 		},
 		MaxDepth: 3,
 	}

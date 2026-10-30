@@ -147,14 +147,14 @@ func TestRunBoundsAreErrors(t *testing.T) {
 	}
 }
 
-// A profile's max_tokens and temperature reach each request, and its
-// max_turns bounds the run: reached without a say, it is agent.error and
-// nothing commits.
+// A profile's body reaches each request as nested JSON, and its max_turns
+// bounds the run: reached without a say, it is agent.error and nothing
+// commits.
 func TestProfileOptionsShapeTheRun(t *testing.T) {
 	a, _, gid, provider := agentPair(t, "auditor")
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
-	writeConfig(t, path, strings.Replace(readFile(t, path), "model = \"claude\"\n",
-		"model = \"claude\"\nmax_tokens = 4000\ntemperature = 0.2\nmax_turns = 2\n", 1))
+	cfg := strings.Replace(readFile(t, path), "provider = \"claude\"\n", "provider = \"claude\"\nmax_turns = 2\n", 1)
+	writeConfig(t, path, cfg+"\n[agents.auditor.body.thinking]\ntype = \"adaptive\"\n")
 	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) { streamSay(w, "") })
 	s := watch(t, a)
 	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
@@ -169,7 +169,8 @@ func TestProfileOptionsShapeTheRun(t *testing.T) {
 		t.Fatalf("%d calls, want 2", n)
 	}
 	req, _ := transcript(t, a, v.Seq)[0]["request"].(map[string]any)
-	if req["max_tokens"] != float64(4000) || req["temperature"] != 0.2 {
+	thinking, _ := req["thinking"].(map[string]any)
+	if req["model"] != "claude-test" || req["stream"] != true || req["max_tokens"] != float64(1024) || thinking["type"] != "adaptive" {
 		t.Fatalf("request = %v", req)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -221,7 +222,7 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	if req["model"] != "claude-test" || len(req["messages"].([]any)) != 3 {
 		t.Fatalf("second request = %v", req)
 	}
-	if raw := readFile(t, a.paths.TranscriptFile(group.ImplicitAlias, "group", v.Seq)); strings.Contains(raw, "sk-local") {
+	if raw := readFile(t, a.paths.TranscriptFile(group.ImplicitAlias, "group", v.Seq)); strings.Contains(raw, "sk-"+a.name) {
 		t.Fatal("the Transcript holds the API key")
 	}
 }

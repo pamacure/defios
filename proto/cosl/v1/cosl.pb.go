@@ -828,36 +828,34 @@ func (x *NetworkRemove) GetAlias() string {
 	return ""
 }
 
-// ModelConfig is the payload of model.create and model.update
-// (docs/adr/0012-recap-on-the-log-pruning-off-it.md): a model a future agent
-// may use, folded by alias exactly as NetworkConfig is. An update carries the
-// whole config and supersedes the alias's current one. Credentials never ride
-// the log.
-type ModelConfig struct {
+// ProviderConfig is the payload of provider.create and provider.update
+// (docs/adr/0019-providers-replace-models-on-the-cosl.md): an endpoint an
+// agent may call, folded by alias exactly as NetworkConfig is. An update
+// carries the whole config and supersedes the alias's current one; the
+// suffix of api_path picks the API shape. Credentials never ride the log.
+type ProviderConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Alias         string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`                    // ^[a-z0-9][a-z0-9_-]{0,63}$
-	Provider      string                 `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`              // anthropic | openai; fixed for the alias's life
-	Model         string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`                    // the provider's model id
-	BaseUrl       string                 `protobuf:"bytes,4,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"` // optional, http(s); unset = the provider's
-	ApiPath       string                 `protobuf:"bytes,5,opt,name=api_path,json=apiPath,proto3" json:"api_path,omitempty"` // optional, e.g. /v1/messages; unset = the provider's
+	BaseUrl       string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"` // http(s), no userinfo, query or fragment
+	ApiPath       string                 `protobuf:"bytes,3,opt,name=api_path,json=apiPath,proto3" json:"api_path,omitempty"` // absolute, e.g. /v1/messages; its suffix picks the shape
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ModelConfig) Reset() {
-	*x = ModelConfig{}
+func (x *ProviderConfig) Reset() {
+	*x = ProviderConfig{}
 	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ModelConfig) String() string {
+func (x *ProviderConfig) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ModelConfig) ProtoMessage() {}
+func (*ProviderConfig) ProtoMessage() {}
 
-func (x *ModelConfig) ProtoReflect() protoreflect.Message {
+func (x *ProviderConfig) ProtoReflect() protoreflect.Message {
 	mi := &file_cosl_v1_cosl_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -869,67 +867,53 @@ func (x *ModelConfig) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ModelConfig.ProtoReflect.Descriptor instead.
-func (*ModelConfig) Descriptor() ([]byte, []int) {
+// Deprecated: Use ProviderConfig.ProtoReflect.Descriptor instead.
+func (*ProviderConfig) Descriptor() ([]byte, []int) {
 	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *ModelConfig) GetAlias() string {
+func (x *ProviderConfig) GetAlias() string {
 	if x != nil {
 		return x.Alias
 	}
 	return ""
 }
 
-func (x *ModelConfig) GetProvider() string {
-	if x != nil {
-		return x.Provider
-	}
-	return ""
-}
-
-func (x *ModelConfig) GetModel() string {
-	if x != nil {
-		return x.Model
-	}
-	return ""
-}
-
-func (x *ModelConfig) GetBaseUrl() string {
+func (x *ProviderConfig) GetBaseUrl() string {
 	if x != nil {
 		return x.BaseUrl
 	}
 	return ""
 }
 
-func (x *ModelConfig) GetApiPath() string {
+func (x *ProviderConfig) GetApiPath() string {
 	if x != nil {
 		return x.ApiPath
 	}
 	return ""
 }
 
-type ModelRemove struct {
+type ProviderRemove struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Alias         string                 `protobuf:"bytes,1,opt,name=alias,proto3" json:"alias,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ModelRemove) Reset() {
-	*x = ModelRemove{}
+func (x *ProviderRemove) Reset() {
+	*x = ProviderRemove{}
 	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ModelRemove) String() string {
+func (x *ProviderRemove) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ModelRemove) ProtoMessage() {}
+func (*ProviderRemove) ProtoMessage() {}
 
-func (x *ModelRemove) ProtoReflect() protoreflect.Message {
+func (x *ProviderRemove) ProtoReflect() protoreflect.Message {
 	mi := &file_cosl_v1_cosl_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -941,12 +925,12 @@ func (x *ModelRemove) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ModelRemove.ProtoReflect.Descriptor instead.
-func (*ModelRemove) Descriptor() ([]byte, []int) {
+// Deprecated: Use ProviderRemove.ProtoReflect.Descriptor instead.
+func (*ProviderRemove) Descriptor() ([]byte, []int) {
 	return file_cosl_v1_cosl_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *ModelRemove) GetAlias() string {
+func (x *ProviderRemove) GetAlias() string {
 	if x != nil {
 		return x.Alias
 	}
@@ -1822,14 +1806,12 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\acluster\x18\x06 \x01(\tR\acluster\x12!\n" +
 	"\fgenesis_hash\x18\a \x01(\tR\vgenesisHash\"%\n" +
 	"\rNetworkRemove\x12\x14\n" +
-	"\x05alias\x18\x01 \x01(\tR\x05alias\"\x8b\x01\n" +
-	"\vModelConfig\x12\x14\n" +
-	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x1a\n" +
-	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x14\n" +
-	"\x05model\x18\x03 \x01(\tR\x05model\x12\x19\n" +
-	"\bbase_url\x18\x04 \x01(\tR\abaseUrl\x12\x19\n" +
-	"\bapi_path\x18\x05 \x01(\tR\aapiPath\"#\n" +
-	"\vModelRemove\x12\x14\n" +
+	"\x05alias\x18\x01 \x01(\tR\x05alias\"\\\n" +
+	"\x0eProviderConfig\x12\x14\n" +
+	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x19\n" +
+	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
+	"\bapi_path\x18\x03 \x01(\tR\aapiPath\"&\n" +
+	"\x0eProviderRemove\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\"\xa7\x01\n" +
 	"\vSignRequest\x12C\n" +
 	"\ftransactions\x18\x01 \x03(\v2\x1f.defios.cosl.v1.SignTransactionR\ftransactions\x12\x16\n" +
@@ -1913,8 +1895,8 @@ var file_cosl_v1_cosl_proto_goTypes = []any{
 	(*AppRecap)(nil),          // 8: defios.cosl.v1.AppRecap
 	(*NetworkConfig)(nil),     // 9: defios.cosl.v1.NetworkConfig
 	(*NetworkRemove)(nil),     // 10: defios.cosl.v1.NetworkRemove
-	(*ModelConfig)(nil),       // 11: defios.cosl.v1.ModelConfig
-	(*ModelRemove)(nil),       // 12: defios.cosl.v1.ModelRemove
+	(*ProviderConfig)(nil),    // 11: defios.cosl.v1.ProviderConfig
+	(*ProviderRemove)(nil),    // 12: defios.cosl.v1.ProviderRemove
 	(*SignRequest)(nil),       // 13: defios.cosl.v1.SignRequest
 	(*SignAccept)(nil),        // 14: defios.cosl.v1.SignAccept
 	(*SignBroadcast)(nil),     // 15: defios.cosl.v1.SignBroadcast

@@ -115,21 +115,27 @@ defios conversation send --key ecdsa:<hex> "about this key"
 
 Check it: `defios conversation log` (Group talk) and `defios conversation log --key ecdsa:<hex>` (the Key's talk) show the same messages on both machines, and `defios cosl log` shows every row on the log.
 
-### 6. Add a Model
+### 6. Add a Provider
 
-Register a Model under the alias `claude`, which replicates to the whole Group:
+A Provider is an endpoint an agent calls: a base URL and an API path. It replicates to the whole Group. The `anthropic` preset is Anthropic's Messages API:
 
 ```bash
-defios model add claude --provider anthropic --model claude-opus-5-5
+defios provider add anthropic
 ```
 
-Store the provider's API key in this Node's Vault (it never replicates):
+For any other endpoint, give both fields. The path's suffix picks the API shape, `/messages` or `/chat/completions`:
+
+```bash
+defios provider add local --base-url http://127.0.0.1:8080 --api-path /v1/chat/completions
+```
+
+Store the Provider's API key in this Node's Vault (it never replicates):
 
 ```bash
 defios secret set ANTHROPIC_API_KEY
 ```
 
-Check it: `defios model list` shows the Model on both machines, and `defios secret show ANTHROPIC_API_KEY` says where the key comes from.
+Check it: `defios provider list` shows the Provider on both machines, and `defios secret show ANTHROPIC_API_KEY` says where the key comes from.
 
 ### 7. Create an agent
 
@@ -141,18 +147,25 @@ echo "You review proposed transactions and point out anything risky." \
   > ~/.config/defios/agents/auditor/SYSTEM.md
 ```
 
-Then edit `~/.config/defios/group/personal/config.toml` to include the agent in Group talk under the existing `[agent]` table, bind it to the Handle `@auditor`, and give it the API key:
+Then edit `~/.config/defios/group/personal/config.toml` to include the agent in Group talk under the existing `[agent]` table, bind it to the Handle `@auditor` on the `anthropic` Provider, and give that Provider the API key:
 
 ```toml
 [agent]
 profiles = ["auditor"]
 
 [agents.auditor]
-model = "claude"
+provider = "anthropic"
+
+[agents.auditor.body]
+model = "claude-opus-5-5"
+stream = true
+max_tokens = 8192
 
 [providers.anthropic]
 api_key = "$ANTHROPIC_API_KEY"
 ```
+
+The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[agents.auditor.body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `[providers.<alias>]` table.
 
 Mention the agent to have it answer:
 

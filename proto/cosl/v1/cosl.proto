@@ -107,20 +107,18 @@ message NetworkRemove {
   string alias = 1;
 }
 
-// ModelConfig is the payload of model.create and model.update
-// (docs/adr/0012-recap-on-the-log-pruning-off-it.md): a model a future agent
-// may use, folded by alias exactly as NetworkConfig is. An update carries the
-// whole config and supersedes the alias's current one. Credentials never ride
-// the log.
-message ModelConfig {
+// ProviderConfig is the payload of provider.create and provider.update
+// (docs/adr/0019-providers-replace-models-on-the-cosl.md): an endpoint an
+// agent may call, folded by alias exactly as NetworkConfig is. An update
+// carries the whole config and supersedes the alias's current one; the
+// suffix of api_path picks the API shape. Credentials never ride the log.
+message ProviderConfig {
   string alias = 1;                   // ^[a-z0-9][a-z0-9_-]{0,63}$
-  string provider = 2;                // anthropic | openai; fixed for the alias's life
-  string model = 3;                   // the provider's model id
-  string base_url = 4;                // optional, http(s); unset = the provider's
-  string api_path = 5;                // optional, e.g. /v1/messages; unset = the provider's
+  string base_url = 2;                // http(s), no userinfo, query or fragment
+  string api_path = 3;                // absolute, e.g. /v1/messages; its suffix picks the shape
 }
 
-message ModelRemove {
+message ProviderRemove {
   string alias = 1;
 }
 

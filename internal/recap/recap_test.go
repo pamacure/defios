@@ -52,7 +52,7 @@ func seqs(rows []cosl.Row) []uint64 {
 func TestFoldWithoutRecapIsAllTalk(t *testing.T) {
 	rows := []cosl.Row{
 		talk(t, 1, "a"),
-		rowOf(t, 2, cosl.TypeModelRemove, &coslv1.ModelRemove{Alias: "noise"}),
+		rowOf(t, 2, cosl.TypeProviderRemove, &coslv1.ProviderRemove{Alias: "noise"}),
 		talk(t, 3, "b"),
 	}
 	v, err := Fold(rows)

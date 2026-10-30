@@ -1,9 +1,10 @@
-// Package agent runs a summoned agent against a Model (docs/adr/0015-agent-
-// profiles-handles-and-agent-chains.md, docs/adr/0018-an-agent-says-one-
-// message.md). A run is a loop of streaming model calls over the Anthropic
-// Messages or OpenAI Chat Completions API, offering one tool, say: an
-// accepted say is the run's result and ends it; a turn that ends without one
-// is silence. Each call is retried when a provider says it is worth it.
+// Package agent runs a summoned agent against a Provider (docs/adr/0015-
+// agent-profiles-handles-and-agent-chains.md, docs/adr/0018-an-agent-says-
+// one-message.md, docs/adr/0019-providers-replace-models-on-the-cosl.md). A
+// run is a loop of streamed model calls in one API Shape, offering one
+// tool, say: an accepted say is the run's result and ends it; a turn that
+// ends without one is silence. Each call is retried when a provider says it
+// is worth it.
 package agent
 
 import (
@@ -14,22 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-
-	"defios.com/internal/model"
 )
-
-// anthropicVersion is the Messages API version this package speaks.
-const anthropicVersion = "2023-06-01"
-
-// DefaultMaxTokens is max_tokens when a Request sets none: the bound on
-// each model call, sent as max_tokens to Anthropic and
-// max_completion_tokens to OpenAI. A call that stops at its bound is an
-// error.
-const DefaultMaxTokens = 8192
 
 // DefaultMaxTurns is max_turns when a Request sets none: how many model
 // calls a run may make before it must have said something or stayed
@@ -53,10 +44,9 @@ var saySchema = json.RawMessage(`{"type":"object","properties":{"text":{"type":"
 
 // Request is one run to make.
 type Request struct {
-	Provider string // model.Anthropic or model.OpenAI
-	URL      string // the whole endpoint: base URL and API path
-	APIKey   string // empty sends none
-	Model    string // the provider's model id
+	Shape  Shape  // the API shape, from the Provider's api_path
+	URL    string // the whole endpoint: base URL and API path
+	APIKey string // empty sends none
 	// System is the stable part of the system prompt, the same for an agent
 	// at every depth; SystemDepth, what differs by depth, follows it directly
 	// as one prompt. Anthropic gets them as two blocks with a cache
@@ -65,21 +55,12 @@ type Request struct {
 	SystemDepth string
 	Turns       []Turn // the talk so far, alternating and ending with User
 
-	// The Agent Profile's options (ADR 0018). MaxTokens bounds each call
-	// (0 is DefaultMaxTokens), MaxTurns the calls in the run (0 is
-	// DefaultMaxTurns), and a
-	// nil Temperature is left out of the request.
-	MaxTokens   int
-	Temperature *float64
-	MaxTurns    int
-}
-
-// maxTokens is the bound on each of req's calls.
-func (req Request) maxTokens() int {
-	if req.MaxTokens > 0 {
-		return req.MaxTokens
-	}
-	return DefaultMaxTokens
+	// Body is the Agent Profile's request body, JSON values only: it merges
+	// over what DeFiOS writes, the conversation and the say tool (ADR 0019).
+	// The model id, streaming and any token bound are set here or not at all.
+	Body map[string]any
+	// MaxTurns bounds the calls in the run; 0 is DefaultMaxTurns.
+	MaxTurns int
 }
 
 // maxTurns is how many calls req's run may make.
@@ -230,7 +211,11 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 	}
 	st := &stream{delta: ev.Delta}
 	for range req.maxTurns() {
-		out, err := c.call(ctx, req, conv.body(), ev, st)
+		body, err := conv.body()
+		if err != nil {
+			return Result{}, err
+		}
+		out, err := c.call(ctx, req, body, ev, st)
 		if err != nil {
 			return Result{}, err
 		}
@@ -241,7 +226,7 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 			ev.record(RecordUsage, out.usage)
 		}
 		if out.stop == "max_tokens" || out.stop == "length" {
-			return Result{}, fmt.Errorf("agent: the model stopped at max_tokens %d before it finished", req.maxTokens())
+			return Result{}, fmt.Errorf("agent: the model stopped at its token bound (stop reason %s) before it finished", out.stop)
 		}
 		var results []toolResult
 		for _, b := range out.blocks {
@@ -305,24 +290,24 @@ var ephemeral = map[string]any{"type": "ephemeral"}
 
 func newConversation(req Request) (*conversation, error) {
 	c := &conversation{req: req}
-	switch req.Provider {
-	case model.Anthropic:
+	switch req.Shape {
+	case Messages:
 		if req.System != "" {
 			c.system = append(c.system, map[string]any{"type": "text", "text": req.System, "cache_control": ephemeral})
 		}
 		if req.SystemDepth != "" {
 			c.system = append(c.system, map[string]any{"type": "text", "text": req.SystemDepth})
 		}
-	case model.OpenAI:
+	case ChatCompletions:
 		if system := req.System + req.SystemDepth; system != "" {
 			c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
 		}
 	default:
-		return nil, fmt.Errorf("agent: provider %q must be anthropic or openai", req.Provider)
+		return nil, fmt.Errorf("agent: no API shape for this call; an api_path must end in one of %s", strings.Join(ShapeSuffixes(), ", "))
 	}
 	for i, t := range req.Turns {
 		var content any = t.Text
-		if req.Provider == model.Anthropic && i == len(req.Turns)-1 {
+		if req.Shape == Messages && i == len(req.Turns)-1 {
 			content = []any{map[string]any{"type": "text", "text": t.Text, "cache_control": ephemeral}}
 		}
 		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": content})
@@ -332,7 +317,7 @@ func newConversation(req Request) (*conversation, error) {
 
 // add appends a call's output and the answers to its tool calls.
 func (c *conversation) add(blocks []Block, results []toolResult) {
-	if c.req.Provider == model.Anthropic {
+	if c.req.Shape == Messages {
 		content := make([]any, 0, len(blocks))
 		for _, b := range blocks {
 			switch b.Type {
@@ -385,35 +370,24 @@ func (c *conversation) add(blocks []Block, results []toolResult) {
 	}
 }
 
-// body is the next call's request body.
-func (c *conversation) body() []byte {
-	var v any
-	if c.req.Provider == model.Anthropic {
-		v = struct {
-			Model       string   `json:"model"`
-			MaxTokens   int      `json:"max_tokens"`
-			Temperature *float64 `json:"temperature,omitempty"`
-			System      []any    `json:"system,omitempty"`
-			Messages    []any    `json:"messages"`
-			Tools       []any    `json:"tools"`
-			Stream      bool     `json:"stream"`
-		}{c.req.Model, c.req.maxTokens(), c.req.Temperature, c.system, c.msgs,
-			[]any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}, true}
+// body is the next call's request body: the conversation and the say tool
+// in the shape's own fields, with the profile's body merged over them. It
+// fails only on a body value JSON cannot hold.
+func (c *conversation) body() ([]byte, error) {
+	v := map[string]any{"messages": c.msgs}
+	if c.req.Shape == Messages {
+		if len(c.system) > 0 {
+			v["system"] = c.system
+		}
+		v["tools"] = []any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}
 	} else {
-		v = struct {
-			Model               string         `json:"model"`
-			Messages            []any          `json:"messages"`
-			Tools               []any          `json:"tools"`
-			MaxCompletionTokens int            `json:"max_completion_tokens"`
-			Temperature         *float64       `json:"temperature,omitempty"`
-			Stream              bool           `json:"stream"`
-			StreamOptions       map[string]any `json:"stream_options"`
-		}{c.req.Model, c.msgs,
-			[]any{map[string]any{"type": "function", "function": map[string]any{"name": sayTool, "description": sayDescription, "parameters": saySchema}}},
-			c.req.maxTokens(), c.req.Temperature, true, map[string]any{"include_usage": true}}
+		v["tools"] = []any{map[string]any{"type": "function", "function": map[string]any{"name": sayTool, "description": sayDescription, "parameters": saySchema}}}
 	}
-	body, _ := json.Marshal(v) // maps, strings and valid raw JSON only
-	return body
+	body, err := json.Marshal(mergeBody(v, c.req.Body))
+	if err != nil {
+		return nil, fmt.Errorf("agent: the profile's body: %w", err)
+	}
+	return body, nil
 }
 
 // call makes one model call with body, retrying what is worth retrying; a
@@ -492,17 +466,7 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 	}
 	hreq.Header.Set("Content-Type", "application/json")
 	hreq.Header.Set("Accept", "text/event-stream")
-	switch req.Provider {
-	case model.Anthropic:
-		hreq.Header.Set("anthropic-version", anthropicVersion)
-		if req.APIKey != "" {
-			hreq.Header.Set("x-api-key", req.APIKey)
-		}
-	case model.OpenAI:
-		if req.APIKey != "" {
-			hreq.Header.Set("Authorization", "Bearer "+req.APIKey)
-		}
-	}
+	req.Shape.auth.set(hreq.Header, req.APIKey)
 	client := c.HTTP
 	if client == nil {
 		client = http.DefaultClient
@@ -520,8 +484,11 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 		}
 		return call{}, err
 	}
+	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt != "text/event-stream" {
+		return call{}, fmt.Errorf("agent: the reply is %q, not an event stream; set stream = true in the profile's body", mt)
+	}
 	var p parser
-	if req.Provider == model.Anthropic {
+	if req.Shape == Messages {
 		p = &anthropicParser{st: st}
 	} else {
 		p = &openaiParser{st: st}

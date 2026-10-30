@@ -127,9 +127,9 @@ func Summary(msgType uint32, payload []byte) string {
 		return fmt.Sprintf("alias=%s type=%s", oneLine(p.Alias), oneLine(p.Type))
 	case *coslv1.NetworkRemove:
 		return fmt.Sprintf("alias=%s", oneLine(p.Alias))
-	case *coslv1.ModelConfig:
-		return fmt.Sprintf("alias=%s provider=%s model=%s", oneLine(p.Alias), oneLine(p.Provider), oneLine(p.Model))
-	case *coslv1.ModelRemove:
+	case *coslv1.ProviderConfig:
+		return fmt.Sprintf("alias=%s base_url=%s api_path=%s", oneLine(p.Alias), oneLine(p.BaseUrl), oneLine(p.ApiPath))
+	case *coslv1.ProviderRemove:
 		return fmt.Sprintf("alias=%s", oneLine(p.Alias))
 	}
 	return ""

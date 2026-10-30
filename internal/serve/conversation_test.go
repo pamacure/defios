@@ -282,10 +282,10 @@ func TestConversationSendAsAgent(t *testing.T) {
 	b.joins(t, gid, 2)
 	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), `
 [agents.auditor]
-model = "claude"
+provider = "claude"
 
 [agents.scribe]
-model = "claude"
+provider = "claude"
 
 [agent]
 profiles = ["auditor"]
@@ -356,10 +356,10 @@ func TestConversationSendRefusesUnresolvedMention(t *testing.T) {
 	b.joins(t, gid, 2)
 	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), `
 [agents.auditor]
-model = "claude"
+provider = "claude"
 
 [agents.scribe]
-model = "claude"
+provider = "claude"
 
 [agent]
 profiles = ["auditor"]
