@@ -114,6 +114,9 @@ per Node, and a Node that falls past `SnapshotThreshold` re-transfers all of it.
   Network's type is), the provider's `model` id, and an optional `base_url`
   and `api_path`; neither may carry userinfo or a query, so a credential
   cannot ride along.
+  *Superseded by [ADR 0019](0019-providers-replace-models-on-the-cosl.md): ids 14/15/16 are
+  `provider.create` / `provider.update` / `provider.remove`, a config of
+  `base_url` and `api_path` only; the model id lives in the Agent Profile.*
 - Credentials for those models live in the Vault, with an environment variable
   taking precedence when set and `init` never writing one — the `TS_AUTHKEY`
   precedent in `config.toml`. This is a deliberate departure from

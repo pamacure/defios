@@ -79,6 +79,9 @@ stream, the CLI, retry and text only are amended there.*
   `[providers.<provider>] api_key`, from the environment or the Group's Vault,
   under ADR 0013's endpoint rule. The same profile runs on each Group's own
   key.
+  *Amended by [ADR 0019](0019-providers-replace-models-on-the-cosl.md): a profile names a
+  `provider` alias and puts its model id in `[agents.<handle>.body]`; the key
+  is `[providers.<alias>] api_key`.*
 - **Wire.** `AppFreeform` gains `handle` (field 3), empty when a person wrote
   the message and shown as `user`, and `depth` (field 4), 0 for a person.
   Rows written before this decode as a person's at depth 0. `conversation log`

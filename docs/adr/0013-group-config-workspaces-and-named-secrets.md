@@ -70,6 +70,9 @@ to a deployed Node, so nothing is migrated.
   `api_key` is attached only to a local `base_url` or the provider's default,
   never to a `base_url` that exists only on the log, because any Node in the
   Group can set that one.
+  *Superseded by [ADR 0019](0019-providers-replace-models-on-the-cosl.md): the Group is trusted, so
+  the key goes to the Provider's `base_url` from the log, and
+  `[providers.<alias>]` holds only `api_key`.*
 - **Secret-bearing fields** are exactly `tailnet_auth_key`, `rpc_urls` entries and
   `api_key`. Each must be a reference, `"$NAME"`, with `NAME` matching
   `[A-Z_][A-Z0-9_]*`. A literal is refused when the file is read, so a

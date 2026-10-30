@@ -68,6 +68,9 @@ whole output, and there is a retry verb.
   A value a provider refuses is an error that is not retried. Thinking is a
   later option. A call that stops at `max_tokens`, or a run that reaches
   `max_turns` before `say`, is an error: nothing commits.
+  *Amended by [ADR 0019](0019-providers-replace-models-on-the-cosl.md): `max_tokens` and
+  `temperature` are gone; they, and every other request field, go in
+  `[agents.<handle>.body]` under the shape's own names. `max_turns` stays.*
 - **Transcript.** Each chain writes one JSONL file under the Group's data
   directory, `group/<alias>/transcripts/<conversation>/<chain>.jsonl`, where
   `<conversation>` is the hex Conversation ID or `group` for Group-level

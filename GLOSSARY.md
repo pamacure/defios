@@ -57,12 +57,12 @@ A Node's local directory of settings for one Group, or for one Conversation with
 _Avoid_: profile, project, config dir, profile directory
 
 **Agent Profile**:
-One agent persona a Node can summon into talk: a profile directory holding its system prompt, and the Model it runs on, that a Group's config binds to a Handle. Node-local and never replicated; one profile may serve any of the Node's Groups and Keys, but answers only in a Conversation (or Group-level talk) whose config includes its Handle.
+One agent persona a Node can summon into talk: a profile directory holding its system prompt, and the Provider and Model ID it runs on, that a Group's config binds to a Handle. Node-local and never replicated; one profile may serve any of the Node's Groups and Keys, but answers only in a Conversation (or Group-level talk) whose config includes its Handle.
 _Avoid_: agent (that is the running thing, not its definition), persona, bot, workspace
 
 **Handle**:
 The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes every message under its Handle, from any Node, as its own words.
-_Avoid_: agent name, username, alias (that is a Group's, Network's or Model's local label)
+_Avoid_: agent name, username, alias (that is a Group's, Network's or Provider's local label)
 
 **Transcript**:
 Everything the agents of one chain generated — thinking, text, tool calls and their results — kept on the Node that ran the chain and never replicated. Only what its agents say reaches the COSL; the Transcript is the rest, and other parties never see it.
@@ -112,9 +112,13 @@ _Avoid_: tombstone (that is a Network removal marker, which destroys nothing), d
 A blockchain a Group may broadcast a signed transaction to, described by a config the Group maintains on its COSL and recalls by a local alias (e.g. `ethereum-mainnet`). Each Network is of one type — Bitcoin, Ethereum, or Solana — which fixes the curve a signing Key must use for it.
 _Avoid_: chain config, blockchain configuration, RPC, endpoint
 
-**Model**:
-A language model a Group's agent may use, described by a config the Group maintains on its COSL and recalls by a local alias, as a Network is: a provider (Anthropic or OpenAI, fixed for the alias's life), the provider's model id, and optionally an endpoint. Credentials for it never ride the COSL: each Node names a Secret for them in its own config.
-_Avoid_: LLM config, provider (that is one field of a Model), engine (that is a threshold-signing engine)
+**Provider**:
+An LLM API a Group's agents may call, described by a config the Group maintains on its COSL and recalled by its alias, as a Network is: a base URL and an API path, whose path also fixes the shape of request it speaks. The alias is the Provider; there is no separate provider name behind it. Credentials for it never ride the COSL: each Node names a Secret for them in its own config.
+_Avoid_: Model (a Provider names no model), endpoint, LLM config
+
+**Model ID**:
+The provider's own name for one of the models a Provider serves (e.g. `claude-opus-5-5`), which an Agent Profile writes into the request it sends its Provider. Not a config, not on the COSL, and not checked against anything until the call.
+_Avoid_: Model, model alias
 
 **Sign Request**:
 One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several Networks of the Key's curve, but each signed transaction is broadcastable on exactly one Network. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `aborted` or `expired`.
