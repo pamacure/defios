@@ -123,10 +123,22 @@ A Provider is an endpoint an agent calls: a base URL and an API path. It replica
 defios provider add anthropic
 ```
 
-For any other endpoint, give both fields. The path's suffix picks the API shape, `/messages` or `/chat/completions`:
+The `openai` preset is OpenAI's Responses API:
+
+```bash
+defios provider add openai
+```
+
+For any other endpoint, give both fields. The path's suffix picks the API shape, `/messages`, `/chat/completions` or `/responses`:
 
 ```bash
 defios provider add local --base-url http://127.0.0.1:8080 --api-path /v1/chat/completions
+```
+
+To reach the same endpoint in another shape, add a second Provider. For example, OpenAI's Chat Completions next to the `openai` preset; both can use the same key:
+
+```bash
+defios provider add openai-cc --preset openai --api-path /v1/chat/completions
 ```
 
 Store the Provider's API key in this Node's Vault (it never replicates):
@@ -166,6 +178,28 @@ api_key = "$ANTHROPIC_API_KEY"
 ```
 
 The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[agents.auditor.body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `[providers.<alias>]` table.
+
+An agent on the `openai` preset takes the Responses API's own fields:
+
+```toml
+[agents.auditor]
+provider = "openai"
+
+[agents.auditor.body]
+model = "gpt-5"
+stream = true
+max_output_tokens = 8192
+store = false
+include = ["reasoning.encrypted_content"]
+
+[agents.auditor.body.reasoning]
+effort = "medium"
+
+[providers.openai]
+api_key = "$OPENAI_API_KEY"
+```
+
+Each call resends the whole conversation, and the model's reasoning from earlier calls of the same turn goes back with it. With `store = false`, OpenAI keeps nothing, so ask for `reasoning.encrypted_content` to carry that reasoning across calls.
 
 Mention the agent to have it answer:
 

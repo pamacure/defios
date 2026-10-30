@@ -40,7 +40,8 @@ const sayDescription = "Post your message to the group chat. Only what you pass 
 	"End your turn without calling it to stay silent."
 
 // saySchema is say's input: one string.
-var saySchema = json.RawMessage(`{"type":"object","properties":{"text":{"type":"string","description":"The message to post."}},"required":["text"]}`)
+// It admits no other property, as a strict function tool requires.
+var saySchema = json.RawMessage(`{"type":"object","properties":{"text":{"type":"string","description":"The message to post."}},"required":["text"],"additionalProperties":false}`)
 
 // Request is one run to make.
 type Request struct {
@@ -181,7 +182,7 @@ type Client struct {
 
 // Block is one output block of a model call, whichever the provider.
 type Block struct {
-	Type      string          `json:"type"` // text, thinking, redacted_thinking or tool_use
+	Type      string          `json:"type"` // text, thinking, redacted_thinking, reasoning or tool_use
 	Text      string          `json:"text,omitempty"`
 	Thinking  string          `json:"thinking,omitempty"`
 	Signature string          `json:"signature,omitempty"`
@@ -189,13 +190,19 @@ type Block struct {
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
+	// Item is a Responses output item as it came back, replayed as is on
+	// the run's next call: a reasoning item keeps its encrypted content.
+	Item json.RawMessage `json:"item,omitempty"`
 }
 
 // call is what one model call returned.
 type call struct {
 	blocks []Block
-	stop   string         // the provider's stop or finish reason
-	usage  map[string]any // as the provider reported it
+	stop   string // the provider's stop or finish reason
+	// incomplete is a Responses reply that came back incomplete, for the
+	// reason in stop.
+	incomplete bool
+	usage      map[string]any // as the provider reported it
 }
 
 // Run makes req's run: model calls until a say is accepted, the model ends
@@ -225,8 +232,11 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 		if out.usage != nil {
 			ev.record(RecordUsage, out.usage)
 		}
-		if out.stop == "max_tokens" || out.stop == "length" {
+		if out.stop == "max_tokens" || out.stop == "length" || out.stop == "max_output_tokens" {
 			return Result{}, fmt.Errorf("agent: the model stopped at its token bound (stop reason %s) before it finished", out.stop)
+		}
+		if out.incomplete {
+			return Result{}, fmt.Errorf("agent: the reply came back incomplete (%s)", out.stop)
 		}
 		var results []toolResult
 		for _, b := range out.blocks {
@@ -298,7 +308,7 @@ func newConversation(req Request) (*conversation, error) {
 		if req.SystemDepth != "" {
 			c.system = append(c.system, map[string]any{"type": "text", "text": req.SystemDepth})
 		}
-	case ChatCompletions:
+	case ChatCompletions, Responses:
 		if system := req.System + req.SystemDepth; system != "" {
 			c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
 		}
@@ -317,34 +327,72 @@ func newConversation(req Request) (*conversation, error) {
 
 // add appends a call's output and the answers to its tool calls.
 func (c *conversation) add(blocks []Block, results []toolResult) {
-	if c.req.Shape == Messages {
-		content := make([]any, 0, len(blocks))
-		for _, b := range blocks {
-			switch b.Type {
-			case "text":
-				content = append(content, map[string]any{"type": "text", "text": b.Text})
-			case "thinking":
-				content = append(content, map[string]any{"type": "thinking", "thinking": b.Thinking, "signature": b.Signature})
-			case "redacted_thinking":
-				content = append(content, map[string]any{"type": "redacted_thinking", "data": b.Data})
-			case "tool_use":
-				content = append(content, map[string]any{"type": "tool_use", "id": b.ID, "name": b.Name, "input": b.Input})
-			}
-		}
-		answers := make([]any, len(results))
-		for i, r := range results {
-			answers[i] = map[string]any{"type": "tool_result", "tool_use_id": r.id, "content": r.text, "is_error": true}
-		}
-		if c.latest != nil {
-			delete(c.latest, "cache_control")
-		}
-		c.latest = answers[len(answers)-1].(map[string]any)
-		c.latest["cache_control"] = ephemeral
-		c.msgs = append(c.msgs,
-			map[string]any{"role": "assistant", "content": content},
-			map[string]any{"role": "user", "content": answers})
-		return
+	switch c.req.Shape {
+	case Messages:
+		c.addMessages(blocks, results)
+	case Responses:
+		c.addResponses(blocks, results)
+	default:
+		c.addChatCompletions(blocks, results)
 	}
+}
+
+// addResponses appends each output item as it came back, then the answers
+// to its function calls.
+func (c *conversation) addResponses(blocks []Block, results []toolResult) {
+	for _, b := range blocks {
+		switch {
+		case b.Item != nil:
+			c.msgs = append(c.msgs, b.Item)
+		case b.Type == "text":
+			c.msgs = append(c.msgs, map[string]any{"role": "assistant", "content": b.Text})
+		case b.Type == "tool_use":
+			c.msgs = append(c.msgs, map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": toolArguments(b.Input)})
+		}
+	}
+	for _, r := range results {
+		c.msgs = append(c.msgs, map[string]any{"type": "function_call_output", "call_id": r.id, "output": r.text})
+	}
+}
+
+// toolArguments is a tool call's input as the arguments string it came as.
+func toolArguments(input json.RawMessage) string {
+	var s string
+	if json.Unmarshal(input, &s) == nil {
+		return s // arguments that were not JSON, kept as sent
+	}
+	return string(input)
+}
+
+func (c *conversation) addMessages(blocks []Block, results []toolResult) {
+	content := make([]any, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			content = append(content, map[string]any{"type": "text", "text": b.Text})
+		case "thinking":
+			content = append(content, map[string]any{"type": "thinking", "thinking": b.Thinking, "signature": b.Signature})
+		case "redacted_thinking":
+			content = append(content, map[string]any{"type": "redacted_thinking", "data": b.Data})
+		case "tool_use":
+			content = append(content, map[string]any{"type": "tool_use", "id": b.ID, "name": b.Name, "input": b.Input})
+		}
+	}
+	answers := make([]any, len(results))
+	for i, r := range results {
+		answers[i] = map[string]any{"type": "tool_result", "tool_use_id": r.id, "content": r.text, "is_error": true}
+	}
+	if c.latest != nil {
+		delete(c.latest, "cache_control")
+	}
+	c.latest = answers[len(answers)-1].(map[string]any)
+	c.latest["cache_control"] = ephemeral
+	c.msgs = append(c.msgs,
+		map[string]any{"role": "assistant", "content": content},
+		map[string]any{"role": "user", "content": answers})
+}
+
+func (c *conversation) addChatCompletions(blocks []Block, results []toolResult) {
 	var text strings.Builder
 	var calls []any
 	for _, b := range blocks {
@@ -352,12 +400,7 @@ func (c *conversation) add(blocks []Block, results []toolResult) {
 		case "text":
 			text.WriteString(b.Text)
 		case "tool_use":
-			args := string(b.Input)
-			var s string
-			if json.Unmarshal(b.Input, &s) == nil {
-				args = s // arguments that were not JSON, kept as sent
-			}
-			calls = append(calls, map[string]any{"id": b.ID, "type": "function", "function": map[string]any{"name": b.Name, "arguments": args}})
+			calls = append(calls, map[string]any{"id": b.ID, "type": "function", "function": map[string]any{"name": b.Name, "arguments": toolArguments(b.Input)}})
 		}
 	}
 	msg := map[string]any{"role": "assistant", "tool_calls": calls}
@@ -375,12 +418,16 @@ func (c *conversation) add(blocks []Block, results []toolResult) {
 // fails only on a body value JSON cannot hold.
 func (c *conversation) body() ([]byte, error) {
 	v := map[string]any{"messages": c.msgs}
-	if c.req.Shape == Messages {
+	switch c.req.Shape {
+	case Messages:
 		if len(c.system) > 0 {
 			v["system"] = c.system
 		}
 		v["tools"] = []any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}
-	} else {
+	case Responses:
+		v = map[string]any{"input": c.msgs}
+		v["tools"] = []any{map[string]any{"type": "function", "name": sayTool, "description": sayDescription, "parameters": saySchema}}
+	default:
 		v["tools"] = []any{map[string]any{"type": "function", "function": map[string]any{"name": sayTool, "description": sayDescription, "parameters": saySchema}}}
 	}
 	body, err := json.Marshal(mergeBody(v, c.req.Body))
@@ -488,9 +535,12 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 		return call{}, fmt.Errorf("agent: the reply is %q, not an event stream; set stream = true in the profile's body", mt)
 	}
 	var p parser
-	if req.Shape == Messages {
+	switch req.Shape {
+	case Messages:
 		p = &anthropicParser{st: st}
-	} else {
+	case Responses:
+		p = &responsesParser{st: st}
+	default:
 		p = &openaiParser{st: st}
 	}
 	if err := readEvents(resp.Body, p.event); err != nil {

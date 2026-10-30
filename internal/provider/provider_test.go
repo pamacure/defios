@@ -152,6 +152,10 @@ func TestPresets(t *testing.T) {
 	if !ok || p.BaseURL != "https://api.anthropic.com" || p.APIPath != "/v1/messages" {
 		t.Fatalf("anthropic preset = %+v, %v", p, ok)
 	}
+	p, ok = Preset("openai")
+	if !ok || p.BaseURL != "https://api.openai.com" || p.APIPath != "/v1/responses" {
+		t.Fatalf("openai preset = %+v, %v", p, ok)
+	}
 	if _, ok := Preset("acme"); ok {
 		t.Fatal("acme is a preset")
 	}

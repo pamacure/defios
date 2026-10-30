@@ -58,6 +58,7 @@ func fromConfig(c *coslv1.ProviderConfig, id [32]byte) Provider {
 // presets are the complete rows `provider add` may start from.
 var presets = map[string]Provider{
 	"anthropic": {Alias: "anthropic", BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"},
+	"openai":    {Alias: "openai", BaseURL: "https://api.openai.com", APIPath: "/v1/responses"},
 }
 
 // Preset is the preset named name.

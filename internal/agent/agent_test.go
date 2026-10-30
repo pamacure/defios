@@ -116,6 +116,81 @@ func openaiText(parts ...string) []string {
 	return append(out, openaiChunk(`{}`, "stop"), openaiUsage, `data: [DONE]`)
 }
 
+// responsesEvent is a Responses stream event of typ with fields, a JSON
+// object's members.
+func responsesEvent(typ, fields string) string {
+	if fields != "" {
+		fields = "," + fields
+	}
+	return "event: " + typ + "\ndata: {\"type\":\"" + typ + "\"" + fields + "}"
+}
+
+const responsesUsage = `"usage":{"input_tokens":10,"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2}}`
+
+// responsesEnd closes a Responses stream as completed.
+func responsesEnd() string {
+	return responsesEvent("response.completed", `"response":{"id":"resp_1","status":"completed",`+responsesUsage+`}`)
+}
+
+// responsesMessage is an output message item at index streaming parts.
+func responsesMessage(index int, parts ...string) []string {
+	out := []string{responsesEvent("response.output_item.added", fmt.Sprintf(`"output_index":%d,"item":{"id":"msg_%d","type":"message","role":"assistant","status":"in_progress","content":[]}`, index, index))}
+	for _, p := range parts {
+		out = append(out, responsesEvent("response.output_text.delta", fmt.Sprintf(`"output_index":%d,"item_id":"msg_%d","content_index":0,"delta":%s`, index, index, jsonString(p))))
+	}
+	text := jsonString(strings.Join(parts, ""))
+	return append(out, responsesEvent("response.output_item.done", fmt.Sprintf(`"output_index":%d,"item":{"id":"msg_%d","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":%s,"annotations":[]}]}`, index, index, text)))
+}
+
+// responsesCall is a function_call item at index whose arguments stream in
+// two halves.
+func responsesCall(index int, callID, name, args string) []string {
+	half := len(args) / 2
+	item := func(status, a string) string {
+		return fmt.Sprintf(`{"id":"fc_%d","type":"function_call","status":%q,"call_id":%q,"name":%q,"arguments":%s}`, index, status, callID, name, jsonString(a))
+	}
+	return []string{
+		responsesEvent("response.output_item.added", fmt.Sprintf(`"output_index":%d,"item":%s`, index, item("in_progress", ""))),
+		responsesEvent("response.function_call_arguments.delta", fmt.Sprintf(`"output_index":%d,"item_id":"fc_%d","delta":%s`, index, index, jsonString(args[:half]))),
+		responsesEvent("response.function_call_arguments.delta", fmt.Sprintf(`"output_index":%d,"item_id":"fc_%d","delta":%s`, index, index, jsonString(args[half:]))),
+		responsesEvent("response.output_item.done", fmt.Sprintf(`"output_index":%d,"item":%s`, index, item("completed", args))),
+	}
+}
+
+// responsesReasoning is a reasoning item at index whose summary streams in
+// parts, carrying encrypted content.
+func responsesReasoning(index int, encrypted string, parts ...string) []string {
+	out := []string{responsesEvent("response.output_item.added", fmt.Sprintf(`"output_index":%d,"item":{"id":"rs_%d","type":"reasoning","summary":[]}`, index, index))}
+	for _, p := range parts {
+		out = append(out, responsesEvent("response.reasoning_summary_text.delta", fmt.Sprintf(`"output_index":%d,"item_id":"rs_%d","summary_index":0,"delta":%s`, index, index, jsonString(p))))
+	}
+	summary := jsonString(strings.Join(parts, ""))
+	return append(out, responsesEvent("response.output_item.done", fmt.Sprintf(`"output_index":%d,"item":{"id":"rs_%d","type":"reasoning","summary":[{"type":"summary_text","text":%s}],"encrypted_content":%q}`, index, index, summary, encrypted)))
+}
+
+// responsesSays streams thought as a message, then a say of text.
+func responsesSays(thought, text string) []string {
+	out := []string{responsesEvent("response.created", `"response":{"id":"resp_1","status":"in_progress"}`)}
+	out = append(out, responsesMessage(0, thought)...)
+	out = append(out, responsesCall(1, "call_1", "say", sayInput(text))...)
+	return append(out, responsesEnd())
+}
+
+// responsesText streams parts as one message and ends the turn.
+func responsesText(parts ...string) []string {
+	return append(responsesMessage(0, parts...), responsesEnd())
+}
+
+// says is each shape's fake for a run that thinks thought and says text.
+var says = map[agent.Shape]func(thought, text string) []string{
+	agent.Messages: anthropicSays, agent.ChatCompletions: openaiSays, agent.Responses: responsesSays,
+}
+
+// texts is each shape's fake for a turn that ends without a say.
+var texts = map[agent.Shape]func(parts ...string) []string{
+	agent.Messages: anthropicText, agent.ChatCompletions: openaiText, agent.Responses: responsesText,
+}
+
 // recorder collects what Run reports as it goes, consecutive deltas of a
 // kind as one "kind:text" entry.
 type recorder struct {
@@ -203,7 +278,14 @@ func run(s *script, shape agent.Shape, ev agent.Events) (agent.Result, error) {
 	}, ev)
 }
 
-func messages(body map[string]any) []any { m, _ := body["messages"].([]any); return m }
+// messages is a request's conversation: its messages, or its input items.
+func messages(body map[string]any) []any {
+	if in, ok := body["input"].([]any); ok {
+		return in
+	}
+	m, _ := body["messages"].([]any)
+	return m
+}
 
 // talk is a Request's turns as the serve builds them (ADR 0018), and
 // wantTalk how they read as sent.
@@ -315,16 +397,129 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 	}
 }
 
+// A Responses run sends the system prompt and the turns as input items,
+// the key as a bearer token, say as a flat function tool, and nothing else
+// but the profile's body; text and the say stream as they come.
+func TestResponsesSayIsTheResult(t *testing.T) {
+	s := newScript(t, responsesSays("hmm", "all good"))
+	var rec recorder
+	res, err := run(s, agent.Responses, rec.events())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:say {"text":"all good"}` {
+		t.Fatalf("result = %+v, events %s", res, &rec)
+	}
+	if s.headers[0].Get("Authorization") != "Bearer sk-secret" || s.headers[0].Get("x-api-key") != "" {
+		t.Fatalf("headers %v", s.headers[0])
+	}
+	body := s.body(1)
+	if body["model"] != "m" || len(body) != 3 {
+		t.Fatalf("body = %v, want model, input and tools only", body)
+	}
+	tools, _ := body["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %v", body["tools"])
+	}
+	tool := tools[0].(map[string]any)
+	if tool["type"] != "function" || tool["name"] != "say" || tool["description"] == nil || tool["parameters"] == nil || tool["function"] != nil {
+		t.Fatalf("tool = %v, want a flat function tool", tool)
+	}
+	in := messages(body)
+	if len(in) != 4 || fmt.Sprint(in[0]) != "map[content:be brief\nat depth 1\n role:system]" || fmt.Sprint(in[1:]) != wantTalk {
+		t.Fatalf("input = %v", in)
+	}
+}
+
+// Reasoning streams as thinking and is kept on the run's blocks; the next
+// call of the run replays every output item as it came back, the reasoning
+// with its encrypted content, followed by the answer to the refused say as
+// a function_call_output.
+func TestResponsesReplaysItsOutputItems(t *testing.T) {
+	first := append([]string{}, responsesReasoning(0, "gAAAA-secret-thoughts", "weighing ", "it")...)
+	first = append(first, responsesCall(1, "call_9", "say", sayInput(""))...)
+	first = append(first, responsesEnd())
+	s := newScript(t, first, responsesSays("again", "done"))
+	var rec recorder
+	res, err := run(s, agent.Responses, rec.events())
+	if err != nil || res.Said != "done" {
+		t.Fatalf("result %+v err %v", res, err)
+	}
+	if want := `thinking:weighing it tool:say {"text":""} text:again tool:say {"text":"done"}`; rec.String() != want {
+		t.Fatalf("events %s\nwant   %s", &rec, want)
+	}
+	in := messages(s.body(2))
+	if len(in) != 7 {
+		t.Fatalf("second call's input = %v", in)
+	}
+	if fmt.Sprint(in[:4]) != fmt.Sprint(messages(s.body(1))) {
+		t.Fatalf("second call's input does not begin with the first's: %v", in)
+	}
+	reasoning, call, output := in[4].(map[string]any), in[5].(map[string]any), in[6].(map[string]any)
+	if reasoning["type"] != "reasoning" || reasoning["id"] != "rs_0" || reasoning["encrypted_content"] != "gAAAA-secret-thoughts" ||
+		fmt.Sprint(reasoning["summary"]) != "[map[text:weighing it type:summary_text]]" {
+		t.Fatalf("reasoning replayed as %v", reasoning)
+	}
+	if call["type"] != "function_call" || call["call_id"] != "call_9" || call["name"] != "say" || call["arguments"] != sayInput("") {
+		t.Fatalf("function call replayed as %v", call)
+	}
+	if output["type"] != "function_call_output" || output["call_id"] != "call_9" || !strings.Contains(fmt.Sprint(output["output"]), "empty") {
+		t.Fatalf("refusal = %v", output)
+	}
+	if got := rec.kinds(); got != "request block block usage request block block usage" {
+		t.Fatalf("records = %s", got)
+	}
+	if b := string(rec.records[1].Data); !strings.Contains(b, `"type":"reasoning"`) || !strings.Contains(b, "weighing it") {
+		t.Fatalf("reasoning block recorded as %s", b)
+	}
+	if u := string(rec.records[3].Data); !strings.Contains(u, `"input_tokens":10`) || !strings.Contains(u, "reasoning_tokens") {
+		t.Fatalf("usage recorded as %s", u)
+	}
+}
+
+// A Responses reply that comes back incomplete is an error: at its token
+// bound like the other shapes, and for any other reason too.
+func TestAnIncompleteResponseIsAnError(t *testing.T) {
+	for reason, want := range map[string]string{"max_output_tokens": "token bound", "content_filter": "content_filter"} {
+		reply := append(responsesMessage(0, "on and on"), responsesEvent("response.incomplete",
+			`"response":{"id":"resp_1","status":"incomplete","incomplete_details":{"reason":"`+reason+`"},`+responsesUsage+`}`))
+		s := newScript(t, reply)
+		var rec recorder
+		_, err := run(s, agent.Responses, rec.events())
+		if err == nil || !strings.Contains(err.Error(), want) || s.calls() != 1 {
+			t.Fatalf("%s: err %v after %d calls", reason, err, s.calls())
+		}
+		if !strings.Contains(rec.kinds(), "usage") {
+			t.Errorf("%s: records = %s, want the usage", reason, rec.kinds())
+		}
+	}
+}
+
+// A Responses stream that fails says why; a server error is retried, and a
+// stream that ends without completing was cut off.
+func TestAFailedResponseIsAnError(t *testing.T) {
+	failed := []string{responsesEvent("response.failed", `"response":{"id":"resp_1","status":"failed","error":{"code":"server_error","message":"boom"}}`)}
+	s := newScript(t, failed, failed, failed, responsesSays("ok", "fine"))
+	if res, err := run(s, agent.Responses, agent.Events{}); err != nil || res.Said != "fine" || s.calls() != 4 {
+		t.Fatalf("server_error: result %+v err %v after %d calls", res, err, s.calls())
+	}
+	bad := []string{responsesEvent("error", `"code":"invalid_prompt","message":"no way"`)}
+	s = newScript(t, bad)
+	if _, err := run(s, agent.Responses, agent.Events{}); err == nil || !strings.Contains(err.Error(), "no way") || s.calls() != 1 {
+		t.Fatalf("error event: err %v after %d calls", err, s.calls())
+	}
+	s = newScript(t, responsesMessage(0, "partial"))
+	if _, err := run(s, agent.Responses, agent.Events{}); err == nil || !strings.Contains(err.Error(), "cut off") || s.calls() != 4 {
+		t.Fatalf("cut off: err %v after %d calls", err, s.calls())
+	}
+}
+
 // A say over 4096 bytes, or an empty one, is refused with a tool error
 // saying why; the next call carries everything so far, and a shorter say
-// is the result. Both providers.
+// is the result. Every shape.
 func TestARefusedSayIsRewritten(t *testing.T) {
 	long := strings.Repeat("a", 4097)
-	for _, p := range []agent.Shape{agent.Messages, agent.ChatCompletions} {
-		says := anthropicSays
-		if p == agent.ChatCompletions {
-			says = openaiSays
-		}
+	for p, says := range says {
 		s := newScript(t, says("first", long), says("second", ""), says("third", "short"))
 		res, err := run(s, p, agent.Events{})
 		if err != nil {
@@ -335,8 +530,8 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 		}
 		second, _ := json.Marshal(messages(s.body(2)))
 		for _, want := range []string{"first", "4097 bytes", "4096", `"is_error":true`} {
-			if p == agent.ChatCompletions && want == `"is_error":true` {
-				want = `"role":"tool"`
+			if want == `"is_error":true` {
+				want = map[agent.Shape]string{agent.Messages: want, agent.ChatCompletions: `"role":"tool"`, agent.Responses: `"type":"function_call_output"`}[p]
 			}
 			if !strings.Contains(string(second), want) {
 				t.Errorf("%s: second call lacks %q: %s", p, want, second)
@@ -386,13 +581,9 @@ func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
 }
 
 // Each call of a run sends the call before it as an unchanged prefix: the
-// same system prompt and tools, and its messages first. Both providers.
+// same system prompt and tools, and its messages first. Every shape.
 func TestASecondCallExtendsTheFirst(t *testing.T) {
-	for _, p := range []agent.Shape{agent.Messages, agent.ChatCompletions} {
-		says := anthropicSays
-		if p == agent.ChatCompletions {
-			says = openaiSays
-		}
+	for p, says := range says {
 		s := newScript(t, says("first", ""), says("second", "done"))
 		if _, err := run(s, p, agent.Events{}); err != nil {
 			t.Fatalf("%s: %v", p, err)
@@ -403,16 +594,16 @@ func TestASecondCallExtendsTheFirst(t *testing.T) {
 			t.Errorf("%s: second call's messages do not begin with the first's:\n%v\n%v", p, m1, m2)
 		}
 		for k, v := range first {
-			if k != "messages" && fmt.Sprint(second[k]) != fmt.Sprint(v) {
+			if k != "messages" && k != "input" && fmt.Sprint(second[k]) != fmt.Sprint(v) {
 				t.Errorf("%s: %s changed: %v, then %v", p, k, v, second[k])
 			}
 		}
 	}
 }
 
-// Ending the turn without say is silence. Both providers.
+// Ending the turn without say is silence. Every shape.
 func TestEndingWithoutSayIsSilent(t *testing.T) {
-	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("nothing to add"), agent.ChatCompletions: openaiText("nothing to add")} {
+	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("nothing to add"), agent.ChatCompletions: openaiText("nothing to add"), agent.Responses: responsesText("nothing to add")} {
 		s := newScript(t, reply)
 		res, err := run(s, p, agent.Events{})
 		if err != nil || !res.Silent || res.Said != "" || s.calls() != 1 {
@@ -449,7 +640,7 @@ func TestEightCallsWithoutSayIsAnError(t *testing.T) {
 // write is added as is, nested objects stay nested, and anything else
 // replaces what is there, even DeFiOS's own (ADR 0019). Both shapes.
 func TestTheProfileBodyMergesOverTheRequest(t *testing.T) {
-	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok")} {
+	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok"), agent.Responses: responsesText("ok")} {
 		s := newScript(t, reply)
 		_, err := agent.Client{}.Run(context.Background(), agent.Request{
 			Shape: p, URL: s.URL, Turns: talk, Body: map[string]any{
@@ -499,6 +690,8 @@ func TestShapeOfAPIPath(t *testing.T) {
 		"/v1/chat/completions":     "chat_completions",
 		"/chat/completions":        "chat_completions",
 		"/openai/chat/completions": "chat_completions",
+		"/v1/responses":            "responses",
+		"/openai/v1/responses":     "responses",
 	} {
 		if sh, ok := agent.ShapeOf(path); !ok || sh.Name != want {
 			t.Errorf("%s: shape %+v, %v; want %s", path, sh, ok, want)
@@ -565,7 +758,7 @@ func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {
 
 // With no key, no credential header is sent at all.
 func TestNoKeySendsNoCredential(t *testing.T) {
-	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok")} {
+	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok"), agent.Responses: responsesText("ok")} {
 		s := newScript(t, reply)
 		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{}); err != nil {
 			t.Fatal(err)

@@ -9,7 +9,7 @@ import (
 // its reply is read, and how its key is sent (ADR 0019). A Provider's
 // api_path picks it by suffix; nothing else does.
 type Shape struct {
-	Name   string // messages or chat_completions
+	Name   string // messages, chat_completions or responses
 	Suffix string // what a Provider's api_path ends in
 	auth   auth
 }
@@ -50,7 +50,10 @@ var (
 	// ChatCompletions is OpenAI's Chat Completions API.
 	ChatCompletions = Shape{Name: "chat_completions", Suffix: "/chat/completions", auth: authBearer}
 
-	shapes = []Shape{Messages, ChatCompletions}
+	// Responses is OpenAI's Responses API.
+	Responses = Shape{Name: "responses", Suffix: "/responses", auth: authBearer}
+
+	shapes = []Shape{Messages, ChatCompletions, Responses}
 )
 
 // ShapeOf is the shape whose suffix apiPath ends in; ok is false when none

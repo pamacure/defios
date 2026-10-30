@@ -54,6 +54,9 @@ func TestProviderAddWritesACompleteRow(t *testing.T) {
 		{[]string{"anthropic"}, `{"alias":"anthropic","api_path":"/v1/messages","base_url":"https://api.anthropic.com"}`},
 		{[]string{"local", "--base-url", "http://127.0.0.1:8080", "--api-path", "/v1/chat/completions"},
 			`{"alias":"local","api_path":"/v1/chat/completions","base_url":"http://127.0.0.1:8080"}`},
+		{[]string{"openai"}, `{"alias":"openai","api_path":"/v1/responses","base_url":"https://api.openai.com"}`},
+		{[]string{"openai-cc", "--preset", "openai", "--api-path", "/v1/chat/completions"},
+			`{"alias":"openai-cc","api_path":"/v1/chat/completions","base_url":"https://api.openai.com"}`},
 		{[]string{"work", "--preset", "anthropic"}, `{"alias":"work","api_path":"/v1/messages","base_url":"https://api.anthropic.com"}`},
 		{[]string{"anthropic", "--base-url", "https://proxy.example"}, `{"alias":"anthropic","api_path":"/v1/messages","base_url":"https://proxy.example"}`},
 	} {
