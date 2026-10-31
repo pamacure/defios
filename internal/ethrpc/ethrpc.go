@@ -7,19 +7,24 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"defios.com/internal/jsonrpc"
 )
 
-// Send submits raw, whose hash is hash, to the first of urls that takes it.
-// Only http(s) endpoints are used. A node that already has the transaction
-// (still pending, or mined) is success with known set: identical bytes give
-// an identical hash, so submitting twice is harmless.
-func Send(ctx context.Context, urls []string, raw []byte, hash [32]byte) (known bool, err error) {
+// Send submits raw, whose hash is hash, to the first of urls that serves
+// chain chainID and takes it. An endpoint whose eth_chainId is another
+// chain's is skipped (ADR 0023). Only http(s) endpoints are used. A node that
+// already has the transaction (still pending, or mined) is success with known
+// set: identical bytes give an identical hash, so submitting twice is harmless.
+func Send(ctx context.Context, urls []string, chainID uint64, raw []byte, hash [32]byte) (known bool, err error) {
 	var errs []error
 	for _, u := range jsonrpc.HTTPURLs(urls) {
-		known, err := send(ctx, u, raw, hash)
+		known, err := false, serves(ctx, u, chainID)
+		if err == nil {
+			known, err = send(ctx, u, raw, hash)
+		}
 		if err == nil {
 			return known, nil
 		}
@@ -29,6 +34,22 @@ func Send(ctx context.Context, urls []string, raw []byte, hash [32]byte) (known 
 		return false, errors.New("ethrpc: the network has no http(s) rpc url to broadcast to")
 	}
 	return false, errors.Join(errs...)
+}
+
+// serves checks that endpoint's eth_chainId is chainID.
+func serves(ctx context.Context, endpoint string, chainID uint64) error {
+	var got string
+	if err := jsonrpc.Call(ctx, endpoint, "eth_chainId", nil, &got); err != nil {
+		return err
+	}
+	id, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(got), "0x"), 16, 64)
+	if err != nil || !strings.HasPrefix(strings.ToLower(got), "0x") {
+		return fmt.Errorf("eth_chainId: %q is not a chain id", got)
+	}
+	if id != chainID {
+		return fmt.Errorf("serves ethereum chain %d, not ethereum chain %d; skipped", id, chainID)
+	}
+	return nil
 }
 
 func send(ctx context.Context, endpoint string, raw []byte, hash [32]byte) (bool, error) {

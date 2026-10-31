@@ -3,15 +3,12 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"strings"
+	"reflect"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
-	"defios.com/internal/cosl"
 	"defios.com/internal/network"
-	"defios.com/internal/serve"
-	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // networkFlags are the per-type fields add and edit take.
@@ -26,38 +23,63 @@ type networkFlags struct {
 
 func (f *networkFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.typ, "type", "", "bitcoin | ethereum | solana")
-	cmd.Flags().StringArrayVar(&f.rpcURLs, "rpc-url", nil, "RPC endpoint, repeatable (failover order); replicated to every Node")
+	cmd.Flags().StringArrayVar(&f.rpcURLs, "rpc-url", nil, `RPC endpoint, repeatable (failover order): a plain http(s) URL with no credential, or "$NAME", a Secret holding the full URL`)
 	cmd.Flags().Uint64Var(&f.chainID, "chain-id", 0, "ethereum chain id")
 	cmd.Flags().StringVar(&f.btcNetwork, "bitcoin-network", "", "bitcoin: mainnet | testnet | signet | regtest")
 	cmd.Flags().StringVar(&f.cluster, "cluster", "", "solana: mainnet-beta | devnet | testnet | localnet")
 	cmd.Flags().StringVar(&f.genesisHash, "genesis-hash", "", "solana: genesis hash (base58), optional")
 }
 
+// apply sets on n each field whose flag cmd was given.
+func (f *networkFlags) apply(cmd *cobra.Command, n *network.Network) {
+	fl := cmd.Flags()
+	if fl.Changed("type") {
+		n.Type = f.typ
+	}
+	if fl.Changed("rpc-url") {
+		n.RPCURLs = f.rpcURLs
+	}
+	if fl.Changed("chain-id") {
+		n.ChainID = f.chainID
+	}
+	if fl.Changed("bitcoin-network") {
+		n.BitcoinNetwork = f.btcNetwork
+	}
+	if fl.Changed("cluster") {
+		n.Cluster = f.cluster
+	}
+	if fl.Changed("genesis-hash") {
+		n.GenesisHash = f.genesisHash
+	}
+}
+
 func networkCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "network",
-		Short: "Define the blockchain Networks this Group can broadcast to",
-		Long: `Networks live on the Group's COSL, identical on every Node, and are named by a local alias.
-A Node may override a Network's RPC endpoints locally, so API keys never replicate: name them as
-Secrets under [networks.<alias>] rpc_urls = ["$NAME", ...] in the Group's config.toml (see secret).
-A Conversation's config.toml may override them again for its Key's broadcasts.`,
+		Short: "Define the blockchain Networks this Node signs for",
+		Long: `A Network is this Node's own: a [networks.<alias>] table in the Group's config.toml, naming a
+chain (its type and identity: an ethereum chain id, a bitcoin network, a solana cluster) and the RPC
+endpoints this Node reaches it by. A Sign Request names the chain, never an alias, so other Nodes may
+call it differently. This Node accepts only Sign Requests for chains it has a Network for.
+An rpc url is a plain http(s) URL with no credential, or "$NAME", a Secret holding the full URL with
+its key or basic auth (see secret). A Conversation's config.toml may override a Network table whole.`,
 	}
 
 	var add networkFlags
 	addCmd := &cobra.Command{
 		Use:   "add <alias>",
-		Short: "Add a Network (requires serve)",
+		Short: "Add a Network to the Group's config.toml",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := &coslv1.NetworkConfig{
-				Alias: args[0], Type: add.typ, RpcUrls: add.rpcURLs, ChainId: add.chainID,
-				Network: add.btcNetwork, Cluster: add.cluster, GenesisHash: add.genesisHash,
-			}
-			if err := network.Validate(cfg); err != nil {
-				return exitUsagef("%w", err)
-			}
-			v, err := serve.Client{Socket: g.paths().Socket}.NetworkAdd(cmd.Context(), cfg)
-			return networkWritten(g, "added "+args[0], v, err)
+			return editNetworks(g, func(nets map[string]network.Network) (string, error) {
+				if _, ok := nets[args[0]]; ok {
+					return "", fmt.Errorf("%w: %q", network.ErrExists, args[0])
+				}
+				var n network.Network
+				add.apply(cmd, &n)
+				nets[args[0]] = n
+				return "added " + args[0], nil
+			})
 		},
 	}
 	add.bind(addCmd)
@@ -65,62 +87,52 @@ A Conversation's config.toml may override them again for its Key's broadcasts.`,
 	var edit networkFlags
 	editCmd := &cobra.Command{
 		Use:   "edit <alias>",
-		Short: "Change fields of a Network; unspecified fields keep their value (requires serve)",
+		Short: "Change fields of a Network; unspecified fields keep their value",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cur, err := currentNetwork(g, args[0])
-			if err != nil {
-				return err
-			}
-			cfg := cur.Config()
-			fl := cmd.Flags()
-			if fl.Changed("type") {
-				cfg.Type = edit.typ
-			}
-			if fl.Changed("rpc-url") {
-				cfg.RpcUrls = edit.rpcURLs
-			}
-			if fl.Changed("chain-id") {
-				cfg.ChainId = edit.chainID
-			}
-			if fl.Changed("bitcoin-network") {
-				cfg.Network = edit.btcNetwork
-			}
-			if fl.Changed("cluster") {
-				cfg.Cluster = edit.cluster
-			}
-			if fl.Changed("genesis-hash") {
-				cfg.GenesisHash = edit.genesisHash
-			}
-			if err := network.Validate(cfg); err != nil {
-				return exitUsagef("%w", err)
-			}
-			v, err := serve.Client{Socket: g.paths().Socket}.NetworkEdit(cmd.Context(), cfg)
-			return networkWritten(g, "edited "+args[0], v, err)
+			return editNetworks(g, func(nets map[string]network.Network) (string, error) {
+				cur, ok := nets[args[0]]
+				if !ok {
+					return "", fmt.Errorf("%w: %q", network.ErrUnknown, args[0])
+				}
+				n := cur
+				n.RPCURLs = append([]string(nil), cur.RPCURLs...)
+				edit.apply(cmd, &n)
+				if reflect.DeepEqual(n, cur) {
+					return "", fmt.Errorf("%w: %q", network.ErrUnchanged, args[0])
+				}
+				nets[args[0]] = n
+				return "edited " + args[0], nil
+			})
 		},
 	}
 	edit.bind(editCmd)
 
 	removeCmd := &cobra.Command{
 		Use:   "remove <alias>",
-		Short: "Remove a Network (requires serve)",
+		Short: "Remove a Network from the Group's config.toml",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := serve.Client{Socket: g.paths().Socket}.NetworkRemove(cmd.Context(), args[0])
-			return networkWritten(g, "removed "+args[0], v, err)
+		RunE: func(_ *cobra.Command, args []string) error {
+			return editNetworks(g, func(nets map[string]network.Network) (string, error) {
+				if _, ok := nets[args[0]]; !ok {
+					return "", fmt.Errorf("%w: %q", network.ErrUnknown, args[0])
+				}
+				delete(nets, args[0])
+				return "removed " + args[0], nil
+			})
 		},
 	}
 
 	listCmd := &cobra.Command{
 		Use:   "list",
-		Short: "List the Group's Networks: alias, type, identifying field",
+		Short: "List this Node's Networks: alias, type, chain",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runNetworkList(g) },
 	}
 	bindGroupFlag(g, listCmd)
 	showCmd := &cobra.Command{
 		Use:   "show <alias>",
-		Short: "Show one Network, with the RPC endpoints this Node would use",
+		Short: "Show one Network, with the RPC endpoints this Node uses",
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(_ *cobra.Command, args []string) error { return runNetworkShow(g, args[0]) },
 	}
@@ -130,52 +142,69 @@ A Conversation's config.toml may override them again for its Key's broadcasts.`,
 	return root
 }
 
-func networkWritten(g *globals, what string, v serve.SendView, err error) error {
+// editNetworks applies change to the [networks] of the Group's config.toml
+// and writes it back, if what results is a config the file may hold. It
+// needs no serve: a Network is this Node's alone (ADR 0023).
+func editNetworks(g *globals, change func(map[string]network.Network) (string, error)) error {
+	alias, err := g.resolveAlias()
 	if err != nil {
-		switch {
-		case errors.Is(err, network.ErrInvalid), errors.Is(err, network.ErrExists), errors.Is(err, network.ErrUnknown), errors.Is(err, network.ErrUnchanged):
-			return exitUsagef("%w", err)
-		}
-		return sendError(err)
+		return err
+	}
+	path := g.paths().GroupConfigFile(alias)
+	cfg, err := config.ReadFile(path)
+	if err != nil {
+		return exitOperational(err)
+	}
+	if cfg.Networks == nil {
+		cfg.Networks = map[string]network.Network{}
+	}
+	what, err := change(cfg.Networks)
+	if err == nil {
+		_, err = network.List(cfg.Networks)
+	}
+	if err != nil {
+		return networkError(err)
+	}
+	if len(cfg.Networks) == 0 {
+		cfg.Networks = nil
+	}
+	if err := config.WriteFile(path, cfg); err != nil {
+		return exitOperational(err)
 	}
 	if g.json {
-		return g.emitJSON(v)
+		return g.emitJSON(struct {
+			Result string `json:"result"`
+		}{what})
 	}
-	fmt.Fprintf(g.app.Stdout, "%s as seq %d (msg_id %s)\n", what, v.Seq, v.MsgID)
+	fmt.Fprintln(g.app.Stdout, what)
 	return nil
 }
 
-// networkView is one Network, human or JSON. RPCURLs are what this Node
-// would use; RPCOverridden says they come from the local override.
-type networkView struct {
-	Alias         string   `json:"alias"`
-	Type          string   `json:"type"`
-	Curve         string   `json:"curve"`
-	ChainID       uint64   `json:"chain_id,omitempty"`
-	Network       string   `json:"network,omitempty"`
-	Cluster       string   `json:"cluster,omitempty"`
-	GenesisHash   string   `json:"genesis_hash,omitempty"`
-	RPCURLs       []string `json:"rpc_urls"`
-	RPCOverridden bool     `json:"rpc_overridden"`
+func networkError(err error) error {
+	switch {
+	case errors.Is(err, network.ErrInvalid), errors.Is(err, network.ErrExists), errors.Is(err, network.ErrUnknown), errors.Is(err, network.ErrUnchanged):
+		return exitUsagef("%w", err)
+	}
+	return exitOperational(err)
 }
 
-// foldNetworks reads the folded Networks of the targeted Group and this
-// Node's Group-level overrides for them, which are shown as the references
-// they are: resolving one would print a Secret.
-func foldNetworks(g *globals) ([]networkView, error) {
-	store, err := openReplica(g)
-	if err != nil {
-		return nil, err
-	}
-	defer store.Close()
-	rows, err := store.Log(cosl.Query{})
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	nets, err := network.Fold(rows)
-	if err != nil {
-		return nil, exitOperational(err)
-	}
+// networkView is one Network, human or JSON. RPCURLs are as written: a
+// reference is shown, never resolved, which would print a Secret.
+type networkView struct {
+	Alias       string   `json:"alias"`
+	Type        string   `json:"type"`
+	Chain       string   `json:"chain"`
+	Curve       string   `json:"curve"`
+	ChainID     uint64   `json:"chain_id,omitempty"`
+	Network     string   `json:"network,omitempty"`
+	Cluster     string   `json:"cluster,omitempty"`
+	GenesisHash string   `json:"genesis_hash,omitempty"`
+	RPCURLs     []string `json:"rpc_urls"`
+}
+
+// readNetworks is the Networks of the targeted Group's config.toml. A Group
+// with no config.toml has none.
+func readNetworks(g *globals) ([]networkView, error) {
 	alias, err := g.resolveAlias()
 	if err != nil {
 		return nil, err
@@ -184,61 +213,26 @@ func foldNetworks(g *globals) ([]networkView, error) {
 	if err != nil {
 		return nil, exitOperational(err)
 	}
-	ov := network.Overrides{}
-	for a, n := range cfg.Networks {
-		if len(n.RPCURLs) > 0 {
-			ov[a] = n.RPCURLs
-		}
+	nets, err := network.List(cfg.Networks)
+	if err != nil {
+		return nil, exitOperational(err)
 	}
 	views := make([]networkView, len(nets))
 	for i, n := range nets {
-		urls, overridden := ov.Effective(n)
+		urls := n.RPCURLs
 		if urls == nil {
 			urls = []string{}
 		}
 		views[i] = networkView{
-			Alias: n.Alias, Type: n.Type, Curve: n.Curve(), ChainID: n.ChainID,
-			Network: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash,
-			RPCURLs: urls, RPCOverridden: overridden,
+			Alias: n.Alias, Type: n.Type, Chain: n.Chain().String(), Curve: n.Curve(), ChainID: n.ChainID,
+			Network: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash, RPCURLs: urls,
 		}
 	}
 	return views, nil
 }
 
-// currentNetwork is the live log-state config of alias, for edit.
-func currentNetwork(g *globals, alias string) (network.Network, error) {
-	store, err := openReplica(g)
-	if err != nil {
-		return network.Network{}, err
-	}
-	defer store.Close()
-	rows, err := store.Log(cosl.Query{})
-	if err != nil {
-		return network.Network{}, exitOperational(err)
-	}
-	nets, err := network.Fold(rows)
-	if err != nil {
-		return network.Network{}, exitOperational(err)
-	}
-	n, err := network.Get(nets, alias)
-	if err != nil {
-		return network.Network{}, exitUsagef("%w", err)
-	}
-	return n, nil
-}
-
-func (v networkView) identifier() string {
-	switch v.Type {
-	case network.Ethereum:
-		return fmt.Sprintf("chain_id=%d", v.ChainID)
-	case network.Bitcoin:
-		return "network=" + v.Network
-	}
-	return "cluster=" + v.Cluster
-}
-
 func runNetworkList(g *globals) error {
-	views, err := foldNetworks(g)
+	views, err := readNetworks(g)
 	if err != nil {
 		return err
 	}
@@ -247,13 +241,13 @@ func runNetworkList(g *globals) error {
 	}
 	p := g.out()
 	for _, v := range views {
-		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", p.primary(v.Alias), v.Type, v.identifier())
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s\n", p.primary(v.Alias), v.Type, v.Chain)
 	}
 	return nil
 }
 
 func runNetworkShow(g *globals, alias string) error {
-	views, err := foldNetworks(g)
+	views, err := readNetworks(g)
 	if err != nil {
 		return err
 	}
@@ -265,16 +259,9 @@ func runNetworkShow(g *globals, alias string) error {
 			return g.emitJSON(v)
 		}
 		out, p := g.app.Stdout, g.out()
-		fmt.Fprintf(out, "alias %s\ntype %s\ncurve %s\n%s\n", p.primary(v.Alias), v.Type, v.Curve, strings.Replace(v.identifier(), "=", " ", 1))
-		if v.GenesisHash != "" {
-			fmt.Fprintf(out, "genesis_hash %s\n", v.GenesisHash)
-		}
-		src := "log"
-		if v.RPCOverridden {
-			src = "local override"
-		}
+		fmt.Fprintf(out, "alias %s\ntype %s\nchain %s\ncurve %s\n", p.primary(v.Alias), v.Type, v.Chain, v.Curve)
 		for _, u := range v.RPCURLs {
-			fmt.Fprintf(out, "rpc_url %s %s\n", u, p.dim("("+src+")"))
+			fmt.Fprintf(out, "rpc_url %s\n", u)
 		}
 		return nil
 	}

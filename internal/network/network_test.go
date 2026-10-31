@@ -2,156 +2,128 @@ package network
 
 import (
 	"errors"
-	"reflect"
+	"strings"
 	"testing"
-
-	"google.golang.org/protobuf/proto"
-
-	"defios.com/internal/cosl"
-	coslv1 "defios.com/proto/cosl/v1"
 )
 
-func eth(alias string, chain uint64, urls ...string) *coslv1.NetworkConfig {
-	return &coslv1.NetworkConfig{Alias: alias, Type: "ethereum", ChainId: chain, RpcUrls: urls}
-}
-
-// rowOf wraps a payload as the COSL row the FSM would have stored.
-func rowOf(t *testing.T, seq uint64, typ uint32, msg proto.Message) cosl.Row {
-	t.Helper()
-	payload, err := proto.Marshal(msg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, err := proto.Marshal(&coslv1.Envelope{Version: 1, MsgType: typ, Payload: payload})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cosl.Row{Seq: seq, MsgType: typ, Envelope: env}
+func eth(alias string, chain uint64, urls ...string) Network {
+	return Network{Alias: alias, Type: Ethereum, ChainID: chain, RPCURLs: urls}
 }
 
 func TestValidate(t *testing.T) {
-	good := []*coslv1.NetworkConfig{
-		eth("ethereum-mainnet", 1, "https://rpc.example", "wss://rpc2.example"),
+	good := []Network{
+		eth("ethereum-mainnet", 1, "https://rpc.example", "http://127.0.0.1:8545/v1", "$ALCHEMY"),
 		eth("eth-no-rpc", 11155111),
-		{Alias: "btc", Type: "bitcoin", Network: "signet"},
-		{Alias: "sol", Type: "solana", Cluster: "devnet"},
-		{Alias: "sol2", Type: "solana", Cluster: "mainnet-beta", GenesisHash: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"},
+		{Alias: "btc", Type: Bitcoin, BitcoinNetwork: "signet"},
+		{Alias: "sol", Type: Solana, Cluster: "devnet"},
+		{Alias: "sol2", Type: Solana, Cluster: "mainnet-beta", GenesisHash: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"},
 	}
-	for _, c := range good {
-		if err := Validate(c); err != nil {
-			t.Errorf("%s: %v", c.Alias, err)
+	for _, n := range good {
+		if err := Validate(n); err != nil {
+			t.Errorf("%s: %v", n.Alias, err)
 		}
 	}
-	bad := map[string]*coslv1.NetworkConfig{
+	bad := map[string]Network{
 		"bad alias":        eth("Bad Alias", 1),
 		"empty alias":      eth("", 1),
 		"unknown type":     {Alias: "x", Type: "dogecoin"},
-		"eth no chain":     {Alias: "x", Type: "ethereum"},
-		"eth with cluster": {Alias: "x", Type: "ethereum", ChainId: 1, Cluster: "devnet"},
-		"btc bad network":  {Alias: "x", Type: "bitcoin", Network: "mainnet2"},
-		"btc with chain":   {Alias: "x", Type: "bitcoin", Network: "mainnet", ChainId: 1},
-		"sol bad cluster":  {Alias: "x", Type: "solana", Cluster: "moon"},
-		"sol bad genesis":  {Alias: "x", Type: "solana", Cluster: "devnet", GenesisHash: "not base58!"},
+		"eth no chain":     {Alias: "x", Type: Ethereum},
+		"eth with cluster": {Alias: "x", Type: Ethereum, ChainID: 1, Cluster: "devnet"},
+		"btc bad network":  {Alias: "x", Type: Bitcoin, BitcoinNetwork: "mainnet2"},
+		"btc with chain":   {Alias: "x", Type: Bitcoin, BitcoinNetwork: "mainnet", ChainID: 1},
+		"sol bad cluster":  {Alias: "x", Type: Solana, Cluster: "moon"},
+		"sol bad genesis":  {Alias: "x", Type: Solana, Cluster: "devnet", GenesisHash: "not base58!"},
 		"bad rpc scheme":   eth("x", 1, "ftp://rpc.example"),
+		"websocket rpc":    eth("x", 1, "wss://rpc.example"),
 		"rpc no host":      eth("x", 1, "https://"),
+		"rpc userinfo":     eth("x", 1, "https://u:p@rpc.example"),
+		"rpc query":        eth("x", 1, "https://rpc.example/?key=x"),
+		"bad reference":    eth("x", 1, "$lower"),
 	}
-	for name, c := range bad {
-		if err := Validate(c); !errors.Is(err, ErrInvalid) {
+	for name, n := range bad {
+		if err := Validate(n); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: got %v, want ErrInvalid", name, err)
 		}
 	}
 }
 
+// A plain URL that would carry a credential is refused without echoing it.
+func TestValidateDoesNotEchoACredential(t *testing.T) {
+	for _, u := range []string{"https://user:hunter2@rpc.example", "https://rpc.example/?key=hunter2"} {
+		if err := Validate(eth("x", 1, u)); err == nil || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+}
+
 func TestCurveByType(t *testing.T) {
-	for typ, want := range map[string]string{"bitcoin": "ecdsa", "ethereum": "ecdsa", "solana": "eddsa"} {
-		if got := (Network{Type: typ}).Curve(); got != want {
-			t.Errorf("%s curve = %q, want %q", typ, got, want)
+	for typ, want := range map[string]string{Ethereum: "ecdsa", Bitcoin: "ecdsa", Solana: "eddsa"} {
+		if got := (Chain{Type: typ}).Curve(); got != want {
+			t.Errorf("%s curve = %s, want %s", typ, got, want)
 		}
 	}
 }
 
-func TestFoldSupersedesAndTombstones(t *testing.T) {
-	rows := []cosl.Row{
-		rowOf(t, 1, cosl.TypeNetworkCreate, eth("b", 10)),
-		rowOf(t, 2, cosl.TypeNetworkCreate, eth("a", 1, "https://old.example")),
-		rowOf(t, 3, cosl.TypeNetworkUpdate, eth("a", 1, "https://new.example")),
-		rowOf(t, 4, cosl.TypeNetworkRemove, &coslv1.NetworkRemove{Alias: "b"}),
-		rowOf(t, 5, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "noise"}),
-	}
-	got, err := Fold(rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Alias != "a" || !reflect.DeepEqual(got[0].RPCURLs, []string{"https://new.example"}) {
-		t.Fatalf("fold = %+v", got)
-	}
-}
-
-func TestFoldIgnoresRacesAndInvalidMessages(t *testing.T) {
-	rows := []cosl.Row{
-		rowOf(t, 1, cosl.TypeNetworkCreate, eth("a", 1)),
-		rowOf(t, 2, cosl.TypeNetworkCreate, eth("a", 99)),                                                           // lost the create race
-		rowOf(t, 3, cosl.TypeNetworkUpdate, eth("ghost", 5)),                                                        // nothing to supersede
-		rowOf(t, 4, cosl.TypeNetworkUpdate, &coslv1.NetworkConfig{Alias: "a", Type: "bitcoin", Network: "mainnet"}), // type change
-		rowOf(t, 5, cosl.TypeNetworkUpdate, eth("a", 0)),                                                            // invalid
-		rowOf(t, 6, cosl.TypeNetworkRemove, &coslv1.NetworkRemove{Alias: "ghost"}),
-	}
-	got, err := Fold(rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].ChainID != 1 {
-		t.Fatalf("fold = %+v", got)
-	}
-}
-
-func TestRemovedAliasCanBeCreatedAgain(t *testing.T) {
-	got, err := Fold([]cosl.Row{
-		rowOf(t, 1, cosl.TypeNetworkCreate, eth("a", 1)),
-		rowOf(t, 2, cosl.TypeNetworkRemove, &coslv1.NetworkRemove{Alias: "a"}),
-		rowOf(t, 3, cosl.TypeNetworkCreate, eth("a", 2)),
-	})
-	if err != nil || len(got) != 1 || got[0].ChainID != 2 {
-		t.Fatalf("fold = %+v, %v", got, err)
-	}
-}
-
-// The writer refuses what Fold would skip, and an update to the config
-// already live, which would only add a row.
-func TestCheck(t *testing.T) {
-	live := []Network{fromConfig(eth("a", 1, "https://rpc.example"), [32]byte{1})}
-	cases := []struct {
-		name  string
-		typ   uint32
-		cfg   *coslv1.NetworkConfig
-		alias string
-		want  error
-	}{
-		{"create new", cosl.TypeNetworkCreate, eth("b", 1), "b", nil},
-		{"create live", cosl.TypeNetworkCreate, eth("a", 1), "a", ErrExists},
-		{"update live", cosl.TypeNetworkUpdate, eth("a", 1, "https://other.example"), "a", nil},
-		{"update unchanged", cosl.TypeNetworkUpdate, eth("a", 1, "https://rpc.example"), "a", ErrUnchanged},
-		{"update type", cosl.TypeNetworkUpdate, &coslv1.NetworkConfig{Alias: "a", Type: "bitcoin", Network: "mainnet"}, "a", ErrInvalid},
-		{"update absent", cosl.TypeNetworkUpdate, eth("b", 1), "b", ErrUnknown},
-		{"remove live", cosl.TypeNetworkRemove, nil, "a", nil},
-		{"remove absent", cosl.TypeNetworkRemove, nil, "b", ErrUnknown},
-	}
-	for _, c := range cases {
-		err := Check(live, c.typ, c.cfg, c.alias)
-		if (c.want == nil && err != nil) || (c.want != nil && !errors.Is(err, c.want)) {
-			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
+// A chain prints as its identity, never an alias.
+func TestChainString(t *testing.T) {
+	for c, want := range map[Chain]string{
+		{Type: Ethereum, ChainID: 1}:                             "ethereum chain 1",
+		{Type: Bitcoin, BitcoinNetwork: "testnet"}:               "bitcoin testnet",
+		{Type: Solana, Cluster: "devnet"}:                        "solana devnet",
+		{Type: Solana, Cluster: "localnet", GenesisHash: "abcd"}: "solana localnet genesis abcd",
+	} {
+		if got := c.String(); got != want {
+			t.Errorf("%+v = %q, want %q", c, got, want)
 		}
 	}
 }
 
-func TestOverrideBeatsLogRPC(t *testing.T) {
-	ov := Overrides{"ethereum-mainnet": {"https://key.example/SECRET"}}
-	n := Network{Alias: "ethereum-mainnet", RPCURLs: []string{"https://public.example"}}
-	if urls, overridden := ov.Effective(n); !overridden || !reflect.DeepEqual(urls, []string{"https://key.example/SECRET"}) {
-		t.Fatalf("override: %v %v", urls, overridden)
+// List is a config's Networks by alias, each validated; two aliases for one
+// chain are refused.
+func TestListRefusesTwoAliasesForOneChain(t *testing.T) {
+	nets, err := List(map[string]Network{"main": eth("", 1), "op": eth("", 10)})
+	if err != nil || len(nets) != 2 || nets[0].Alias != "main" || nets[1].Alias != "op" {
+		t.Fatalf("List = %+v, %v", nets, err)
 	}
-	other := Network{Alias: "other", RPCURLs: []string{"https://public.example"}}
-	if urls, overridden := ov.Effective(other); overridden || !reflect.DeepEqual(urls, other.RPCURLs) {
-		t.Fatalf("no override: %v %v", urls, overridden)
+	if _, err := List(map[string]Network{"a": eth("", 1), "b": eth("", 1, "https://other.example")}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("two aliases for chain 1: %v", err)
+	}
+	sol := func(g string) Network { return Network{Type: Solana, Cluster: "localnet", GenesisHash: g} }
+	if _, err := List(map[string]Network{"a": sol(""), "b": sol("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d")}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("two aliases for solana localnet: %v", err)
+	}
+	if _, err := List(map[string]Network{"Bad": eth("", 1)}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad alias: %v", err)
+	}
+}
+
+// Find is the local Network for a chain a request names: by its identity,
+// whatever this Node calls it. A Solana request that pins a genesis hash
+// does not match a local Network pinned to another.
+func TestFindMatchesByIdentity(t *testing.T) {
+	nets := []Network{
+		eth("mine", 1),
+		{Alias: "btc", Type: Bitcoin, BitcoinNetwork: "testnet"},
+		{Alias: "sol", Type: Solana, Cluster: "devnet", GenesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"},
+	}
+	for c, want := range map[Chain]string{
+		{Type: Ethereum, ChainID: 1}:               "mine",
+		{Type: Bitcoin, BitcoinNetwork: "testnet"}: "btc",
+		{Type: Solana, Cluster: "devnet"}:          "sol",
+		{Type: Solana, Cluster: "devnet", GenesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"}: "sol",
+	} {
+		if n, err := Find(nets, c); err != nil || n.Alias != want {
+			t.Errorf("%s: %+v, %v", c, n, err)
+		}
+	}
+	for _, c := range []Chain{
+		{Type: Ethereum, ChainID: 5},
+		{Type: Bitcoin, BitcoinNetwork: "mainnet"},
+		{Type: Solana, Cluster: "devnet", GenesisHash: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"},
+	} {
+		_, err := Find(nets, c)
+		if !errors.Is(err, ErrNoChain) || !strings.Contains(err.Error(), c.String()) {
+			t.Errorf("%s: %v, want ErrNoChain naming the chain", c, err)
+		}
 	}
 }

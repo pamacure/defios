@@ -171,7 +171,6 @@ func (s *server) localHandler() http.Handler {
 	})
 	s.conversationRoutes(mux)
 	s.chainRoutes(mux)
-	s.networkRoutes(mux)
 	s.signRoutes(mux)
 	s.broadcastRoutes(mux)
 	s.sessionRoutes(mux)
@@ -226,9 +225,8 @@ var errorKinds = []struct {
 	{ErrChainBusy, "chain-busy", http.StatusConflict},
 	{ErrNotAChain, "not-a-chain", http.StatusBadRequest},
 	{network.ErrInvalid, "bad-network", http.StatusBadRequest},
-	{network.ErrExists, "network-exists", http.StatusConflict},
 	{network.ErrUnknown, "no-network", http.StatusNotFound},
-	{network.ErrUnchanged, "network-unchanged", http.StatusConflict},
+	{network.ErrNoChain, "no-chain", http.StatusUnprocessableEntity},
 	{signreq.ErrInvalid, "bad-sign-request", http.StatusBadRequest},
 	{signreq.ErrCurveMismatch, "curve-mismatch", http.StatusUnprocessableEntity},
 	{signreq.ErrUnknown, "no-sign-request", http.StatusNotFound},

@@ -47,43 +47,40 @@ func TestAssembleEthereumRejectsBadSignature(t *testing.T) {
 }
 
 // A request's signed transactions pair each transaction with its signature, in
-// order, on the Network it names; a signature set of the wrong size is refused.
+// order, on the chain it names; a signature set of the wrong size is refused.
 func TestSignedTransactions(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
 	r := rowOf(t, 1, 0xa1, now, conv[:], req(ethTx()))
 	sig := append(bytes.Repeat([]byte{0x05}, 64), 0)
-	history := map[[32]byte]network.Network{ethID: nets[0]}
 
-	got, err := Signed([]cosl.Row{r}, r.MsgID, [][]byte{sig}, history)
+	got, err := Signed([]cosl.Row{r}, r.MsgID, [][]byte{sig})
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantRaw, wantHash, _ := AssembleEthereum(1, ethTx().Intent.(*coslv1.SignTransaction_Ethereum).Ethereum, sig)
-	if len(got) != 1 || !bytes.Equal(got[0].Raw, wantRaw) || !bytes.Equal(got[0].ID, wantHash[:]) || got[0].Network.Alias != "eth" || got[0].NetworkConfigID != ethID {
+	if len(got) != 1 || !bytes.Equal(got[0].Raw, wantRaw) || !bytes.Equal(got[0].ID, wantHash[:]) || got[0].Chain != (network.Chain{Type: "ethereum", ChainID: 1}) {
 		t.Fatalf("signed = %+v", got)
 	}
-	if _, err := Signed([]cosl.Row{r}, r.MsgID, nil, history); !errors.Is(err, ErrInvalid) {
+	if _, err := Signed([]cosl.Row{r}, r.MsgID, nil); !errors.Is(err, ErrInvalid) {
 		t.Errorf("no signatures: %v", err)
 	}
-	if _, err := Signed([]cosl.Row{r}, [32]byte{9}, [][]byte{sig}, history); !errors.Is(err, ErrUnknown) {
+	if _, err := Signed([]cosl.Row{r}, [32]byte{9}, [][]byte{sig}); !errors.Is(err, ErrUnknown) {
 		t.Errorf("unknown request: %v", err)
 	}
-	if _, err := Signed([]cosl.Row{r}, r.MsgID, [][]byte{sig}, nil); !errors.Is(err, ErrInvalid) {
-		t.Errorf("unknown network: %v", err)
+	noChain := ethTx()
+	noChain.GetEthereum().ChainId = 0
+	bad := rowOf(t, 2, 0xb2, now, conv[:], req(noChain))
+	if _, err := Signed([]cosl.Row{bad}, bad.MsgID, [][]byte{sig}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("no chain id: %v", err)
 	}
 }
 
-// Several transactions on different Networks of one curve assemble in order,
-// each bound to its own Network (chain id) and signature.
+// Several transactions on different chains of one curve assemble in order,
+// each bound to its own chain id and signature.
 func TestSignedMultipleTransactionsAcrossNetworks(t *testing.T) {
-	const otherID = byte(7)
-	history := map[[32]byte]network.Network{
-		ethID:     nets[0],
-		{otherID}: {Alias: "op", ConfigID: [32]byte{otherID}, Type: "ethereum", ChainID: 10},
-	}
 	second := ethTx()
-	second.NetworkConfigId = append([]byte{otherID}, make([]byte, 31)...)
+	second.GetEthereum().ChainId = 10
 	third := ethTx()
 	third.Intent.(*coslv1.SignTransaction_Ethereum).Ethereum.Nonce = 1
 
@@ -91,15 +88,15 @@ func TestSignedMultipleTransactionsAcrossNetworks(t *testing.T) {
 	r := rowOf(t, 1, 0xa1, time.Unix(10_000, 0), conv[:], req(ethTx(), second, third))
 	sigs := [][]byte{append(bytes.Repeat([]byte{1}, 64), 0), append(bytes.Repeat([]byte{2}, 64), 1), append(bytes.Repeat([]byte{3}, 64), 0)}
 
-	got, err := Signed([]cosl.Row{r}, r.MsgID, sigs, history)
+	got, err := Signed([]cosl.Row{r}, r.MsgID, sigs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0].Network.Alias != "eth" || got[1].Network.Alias != "op" || got[2].Network.Alias != "eth" {
+	if len(got) != 3 || got[0].Chain.ChainID != 1 || got[1].Chain.ChainID != 10 || got[2].Chain.ChainID != 1 {
 		t.Fatalf("signed = %+v", got)
 	}
 	for i, tx := range []*coslv1.SignTransaction{ethTx(), second, third} {
-		raw, _, _ := AssembleEthereum(history[[32]byte(tx.NetworkConfigId)].ChainID, tx.Intent.(*coslv1.SignTransaction_Ethereum).Ethereum, sigs[i])
+		raw, _, _ := AssembleEthereum(tx.GetEthereum().ChainId, tx.Intent.(*coslv1.SignTransaction_Ethereum).Ethereum, sigs[i])
 		if !bytes.Equal(got[i].Raw, raw) {
 			t.Errorf("transaction %d is not bound to its own Network and signature", i)
 		}

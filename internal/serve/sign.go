@@ -27,8 +27,10 @@ type signInspectRequest struct {
 
 // signPropose commits a sign.request scoped to the Key's Conversation. The
 // proposer's envelope signature is its acceptance, so one append is both the
-// proposal and the accept; no Session exists until t Nodes have accepted. The writer validates against the folded Networks
-// and Keys first, so a bad request fails loudly here (ADR 0009).
+// proposal and the accept; no Session exists until t Nodes have accepted.
+// The aliases are this Node's Networks for the Key, resolved to the chains
+// the request names (ADR 0023). The writer validates first, so a bad request
+// fails loudly here (ADR 0009).
 func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendView, error) {
 	replica, store, running := s.current()
 	rec, held := s.slot.Current()
@@ -43,11 +45,8 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 	if err != nil {
 		return SendView{}, err
 	}
-	rows, err := store.Log(cosl.Query{MsgTypes: network.MsgTypes})
-	if err != nil {
-		return SendView{}, err
-	}
-	nets, err := network.Fold(rows)
+	conv := key.ConversationID(k.Curve, k.PublicKey)
+	nets, err := s.localNetworks(store, conv[:])
 	if err != nil {
 		return SendView{}, err
 	}
@@ -55,10 +54,9 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 	if err != nil {
 		return SendView{}, err
 	}
-	if err := signreq.Validate(payload, k, nets); err != nil {
+	if err := signreq.Validate(payload, k); err != nil {
 		return SendView{}, err
 	}
-	conv := key.ConversationID(k.Curve, k.PublicKey)
 	author := cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}
 	signed, err := author.Sign(cosl.TypeSignRequest, conv[:], payload)
 	if err != nil {
@@ -104,6 +102,44 @@ func signInfoFrom(store *cosl.Store) func([32]byte) (session.SignInfo, error) {
 	}
 }
 
+// localNetworks are this Node's Networks for a Key's Sign Requests: the
+// Group config.toml's [networks] with the Key's Conversation Workspace
+// merged over it, table by table (ADR 0023). They are the chains this Node
+// signs for.
+func (s *server) localNetworks(store *cosl.Store, conversation []byte) ([]network.Network, error) {
+	cfg, conv, err := s.readConfig(store, conversation)
+	if err != nil {
+		return nil, err
+	}
+	return network.List(cfg.Workspace.Merge(conv).Networks)
+}
+
+// acceptSign is this Node's accept of a Sign Request, which it gives only
+// when it has a Network for every chain the request names: a Node's
+// Networks are the chains it is willing to sign for.
+func (s *server) acceptSign(svc *session.Service, ctx context.Context, id [32]byte) error {
+	_, store, running := s.current()
+	if !running {
+		return ErrNoReplica
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeSignRequest}})
+	if err != nil {
+		return err
+	}
+	req, conv, err := signreq.Request(rows, id)
+	if err != nil {
+		return err
+	}
+	nets, err := s.localNetworks(store, conv)
+	if err != nil {
+		return err
+	}
+	if err := signreq.CheckChains(req, nets); err != nil {
+		return err
+	}
+	return svc.AcceptSign(ctx, id)
+}
+
 // signAnswer is this Node's accept or decline of a Sign Request.
 // reply, if set, builds the response body after answer ran.
 func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(*session.Service, context.Context, [32]byte) error, reply func() any) {
@@ -144,7 +180,7 @@ type DeclineView struct {
 
 func (s *server) signRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sign/accept", func(w http.ResponseWriter, r *http.Request) {
-		s.signAnswer(w, r, (*session.Service).AcceptSign, nil)
+		s.signAnswer(w, r, s.acceptSign, nil)
 	})
 	mux.HandleFunc("POST /v1/sign/decline", func(w http.ResponseWriter, r *http.Request) {
 		var result session.DeclineResult
@@ -210,12 +246,7 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		history, err := network.History(rows)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		d, err := signreq.Inspect(rows, req.MsgID, history, time.Now())
+		d, err := signreq.Inspect(rows, req.MsgID, time.Now())
 		if err != nil {
 			writeError(w, err)
 			return

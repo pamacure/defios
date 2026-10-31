@@ -153,7 +153,7 @@ func TestValidateChecksTheFeePayerIsTheKeysAddress(t *testing.T) {
 	tx := solTx()
 	tx.GetSolana().FeePayer = b58of(1)
 	tx.GetSolana().Instructions[0].Accounts = nil
-	if err := Validate(req(tx), eddsaKey, nets); err == nil {
+	if err := Validate(req(tx), eddsaKey); err == nil {
 		t.Error("a fee payer that is not the Key's address was accepted")
 	}
 }
@@ -162,13 +162,12 @@ func TestSignedSolanaAssemblesAndIdentifiesByTheSignature(t *testing.T) {
 	sig := bytes.Repeat([]byte{7}, 64)
 	conv := key.ConversationID("eddsa", eddsaKey.PublicKey)
 	r := rowOf(t, 1, 0xa1, time.Unix(10_000, 0), conv[:], req(solTx()))
-	history := map[[32]byte]network.Network{solID: nets[2]}
-	got, err := Signed([]cosl.Row{r}, r.MsgID, [][]byte{sig}, history)
+	got, err := Signed([]cosl.Row{r}, r.MsgID, [][]byte{sig})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want, _ := AssembleSolana(solTx().GetSolana(), sig)
-	if len(got) != 1 || !bytes.Equal(got[0].Raw, want) || !bytes.Equal(got[0].ID, sig) || got[0].Network.Alias != "sol" {
+	if len(got) != 1 || !bytes.Equal(got[0].Raw, want) || !bytes.Equal(got[0].ID, sig) || got[0].Chain != (network.Chain{Type: "solana", Cluster: "devnet"}) {
 		t.Fatalf("signed = %+v", got)
 	}
 }
