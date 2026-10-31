@@ -94,17 +94,8 @@ func AgentFreeform(text, handle string, depth uint32) (*coslv1.AppFreeform, erro
 	return ff, nil
 }
 
-// Recap is an app.recap payload accounting for talk up to baseSeq. Its text
-// is bounded as app.freeform's is.
-func Recap(text string, baseSeq uint64) (*coslv1.AppRecap, error) {
-	if err := CheckText(text); err != nil {
-		return nil, err
-	}
-	return &coslv1.AppRecap{Text: text, BaseSeq: baseSeq}, nil
-}
-
 // CheckText reports whether text is within the app.freeform bound, which
-// app.recap shares.
+// a Recap's text shares.
 func CheckText(text string) error {
 	switch {
 	case text == "":

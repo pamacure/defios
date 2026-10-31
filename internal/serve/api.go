@@ -21,7 +21,6 @@ import (
 	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/raftx"
-	"defios.com/internal/recap"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 )
@@ -236,8 +235,6 @@ var errorKinds = []struct {
 	{key.ErrUnknown, "no-key", http.StatusNotFound},
 	{key.ErrAmbiguous, "ambiguous-key", http.StatusConflict},
 	{cosl.ErrBadText, "bad-text", http.StatusBadRequest},
-	{recap.ErrStale, "stale-recap", http.StatusConflict},
-	{recap.ErrBadBase, "bad-recap-base", http.StatusBadRequest},
 	{session.ErrBadCurve, "bad-curve", http.StatusBadRequest},
 	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},
 	{session.ErrNotParticipant, "not-participant", http.StatusForbidden},

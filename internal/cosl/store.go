@@ -330,10 +330,11 @@ func (s *Store) prune(conversationID []byte, cut string, bound any) (int, error)
 }
 
 // Pruned is how many payloads one prune destroyed in one Conversation (nil
-// ConversationID is Group-level talk).
+// ConversationID is Group-level talk), and the latest of them.
 type Pruned struct {
 	ConversationID []byte
 	Messages       int
+	Last           uint64 // the highest seq whose payload it destroyed
 }
 
 // PruneAllOlderThan is PruneOlderThan across every Conversation, Group-level
@@ -370,6 +371,7 @@ func (s *Store) PruneAllOlderThan(cutoff time.Time) ([]Pruned, error) {
 			byConv[string(conv)] = t
 		}
 		t.first = min(t.first, seq)
+		t.p.Last = max(t.p.Last, seq)
 		t.p.Messages++
 	}
 	rows.Close()

@@ -7,38 +7,63 @@ import (
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// Said is one entry of the lean view: a row and what it says, with the
-// Handle of the agent that wrote it, empty for a person or a Recap.
+// Said is one message of the lean view: a row and what it says, with the
+// Handle of the agent that wrote it, empty for a person.
 type Said struct {
 	Row    cosl.Row
 	Handle string
 	Text   string
 }
 
-// Lean is v as an agent reads it (`conversation log --lean`, ADR 0012): the
-// live Recap, then the talk after it that this replica still holds. Pruned
-// talk has nothing to say.
-func (v View) Lean() ([]Said, error) {
-	out := make([]Said, 0, len(v.Talk)+1)
-	if v.Live != nil {
-		out = append(out, Said{Row: v.Live.Row, Text: v.Live.Text})
-	}
-	for _, r := range v.Talk {
-		if r.Pruned() {
+// View is one Conversation as this Node's agents read it, and as
+// `conversation log --lean` prints it (ADR 0024).
+type View struct {
+	Recap *Recap // this Node's, nil if it has none
+	Talk  []Said // the talk after Recap.BaseSeq this replica still holds; all of it with no Recap
+	// Missing is whether this replica has pruned talk the Recap does not
+	// account for, or any talk with no Recap: this Node's agents read
+	// nothing in its place.
+	Missing bool
+}
+
+// Lean is the view of one Conversation's rows, in seq order as a Query on
+// its Conversation ID (or GroupLevel) returns them, under this Node's Recap
+// r, nil for none. Nothing is folded from the log: only r stands in for
+// talk.
+func Lean(r *Recap, rows []cosl.Row) (View, error) {
+	v := View{Recap: r}
+	for _, row := range rows {
+		if row.MsgType != cosl.TypeAppFreeform || (r != nil && row.Seq <= r.BaseSeq) {
 			continue
 		}
-		env, err := r.Decode()
+		if row.Pruned() {
+			v.Missing = true
+			continue
+		}
+		env, err := row.Decode()
 		if err != nil {
-			return nil, err
+			return View{}, err
 		}
 		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
 		if err != nil {
-			return nil, fmt.Errorf("recap: seq %d: %w", r.Seq, err)
+			return View{}, fmt.Errorf("recap: seq %d: %w", row.Seq, err)
 		}
 		ff := msg.(*coslv1.AppFreeform)
-		out = append(out, Said{Row: r, Handle: ff.Handle, Text: ff.Text})
+		v.Talk = append(v.Talk, Said{Row: row, Handle: ff.Handle, Text: ff.Text})
 	}
-	return out, nil
+	return v, nil
+}
+
+// Check is `conversation recap`'s precondition: baseSeq names an
+// app.freeform among rows, one Conversation's. A pruned one still counts:
+// its row, and so its place in the talk, remains.
+func Check(rows []cosl.Row, baseSeq uint64) error {
+	for _, r := range rows {
+		if r.Seq == baseSeq && r.MsgType == cosl.TypeAppFreeform {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: seq %d is not one on this replica (if it was just sent, it may not have arrived yet)", ErrBadBase, baseSeq)
 }
 
 // Speaker is how a lean line names who wrote it: the sender's display

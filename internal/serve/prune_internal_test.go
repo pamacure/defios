@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"defios.com/internal/cosl/coslbench"
 	"defios.com/internal/group"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/recap"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -265,5 +267,49 @@ func TestPrunePolicyLogsAPersistentErrorOnce(t *testing.T) {
 	p.fallback()
 	if len(lines) != 0 {
 		t.Fatalf("with no policy, a wake over a closed replica logged %q", lines)
+	}
+}
+
+// The policy warns when it destroys talk past this Node's RECAP.md, or any
+// talk of a Conversation with no RECAP.md: this Node's agents then lose it
+// with no account in its place. Talk the Recap accounts for prunes quietly.
+func TestPrunePolicyWarnsWhenItPrunesPastTheRecap(t *testing.T) {
+	var lines []string
+	clock := time.Now()
+	s, store, p := policyOn(t, day, &lines, &clock)
+	clock = restoreTalk(t, store, 0).Add(2 * day)
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lastGroup uint64
+	for _, r := range rows {
+		if r.ConversationID == nil {
+			lastGroup = r.Seq
+		}
+	}
+	recapFile := func(conv []byte) string {
+		return s.opts.Paths.RecapFile(s.opts.Alias, nodedir.ConversationName(conv))
+	}
+	if err := recap.Write(recapFile(nil), recap.Recap{BaseSeq: lastGroup, Text: "all of it"}); err != nil {
+		t.Fatal(err)
+	}
+	p.wake()
+	warnings := matching(lines, "warning")
+	if len(warnings) != 1 || strings.Contains(warnings[0], "Group-level") || !strings.Contains(warnings[0], "no RECAP.md") {
+		t.Fatalf("logged %q, want one warning, for the Key's Conversation, which has no RECAP.md", lines)
+	}
+
+	lines = nil
+	if err := recap.Write(recapFile(nil), recap.Recap{BaseSeq: rows[0].Seq, Text: "the first message"}); err != nil {
+		t.Fatal(err)
+	}
+	restoreTalk(t, store, 1)
+	p.wake()
+	warnings = matching(lines, "warning")
+	if len(warnings) != 2 || !slices.ContainsFunc(warnings, func(l string) bool {
+		return strings.Contains(l, "Group-level talk") && strings.Contains(l, fmt.Sprintf("past seq %d", rows[0].Seq))
+	}) {
+		t.Fatalf("logged %q, want a warning for Group-level talk pruned past its RECAP.md", lines)
 	}
 }

@@ -119,6 +119,21 @@ func TestTranscriptsLiveInTheConversationDir(t *testing.T) {
 	}
 }
 
+// A Conversation's directory is named by its hex Conversation ID, or
+// "group" for Group-level talk, and its Recap is RECAP.md in it (ADR 0024).
+func TestTheRecapIsInTheConversationDir(t *testing.T) {
+	if got := nodedir.ConversationName(nil); got != "group" {
+		t.Fatalf("Group-level name %q", got)
+	}
+	if got := nodedir.ConversationName([]byte{0xab, 0x12}); got != "ab12" {
+		t.Fatalf("Conversation name %q", got)
+	}
+	p := nodedir.Resolve(nodedir.Lookup{Dir: "/tmp/n1", Getenv: envOf(nil), Home: "/h"})
+	if got := p.RecapFile("home", "ab12"); got != "/tmp/n1/group/home/conversations/ab12/RECAP.md" {
+		t.Fatalf("recap file %q", got)
+	}
+}
+
 // Under XDG, a Group's config lives under the config tree and its data under
 // the data tree, both at group/<alias>/.
 func TestAliasPathsSplitConfigAndData(t *testing.T) {

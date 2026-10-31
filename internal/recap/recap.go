@@ -1,119 +1,142 @@
-// Package recap folds a Conversation's talk as readers see it
-// (docs/adr/0012-recap-on-the-log-pruning-off-it.md): the live Recap stands in
-// place of the app.freeform rows it accounts for. As with Networks
-// (docs/adr/0008-networks-on-cosl.md) Raft order is the authority and a Recap
-// supersedes by fold, never by a write to the replica. Pruning is the one
-// write here, and it is Node-local: it destroys the payloads of the talk the
-// live Recap already accounts for.
+// Package recap is a Node's Recap of a Conversation and the talk as that
+// Node's agents read it (docs/adr/0024-a-recap-is-a-local-file.md). A Recap
+// is the file RECAP.md in the Conversation's data directory: this Node's own
+// account of the talk up to a seq, never on the COSL and replaced whole each
+// time it is written.
 package recap
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
-	"slices"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"defios.com/internal/cosl"
-	coslv1 "defios.com/proto/cosl/v1"
 )
 
-var (
-	// ErrStale is a Recap that covers no further than the live one.
-	ErrStale = errors.New("recap: base seq must be beyond the live Recap's")
-	// ErrBadBase is a Recap whose base seq names no talk of its Conversation.
-	ErrBadBase = errors.New("recap: base seq must name an app.freeform of this Conversation")
-)
+// ErrBadBase is a Recap whose base seq names no talk of its Conversation.
+var ErrBadBase = errors.New("recap: base seq must name an app.freeform of this Conversation")
 
-// Recap is the live Recap of a folded Conversation.
+// Recap is one RECAP.md.
 type Recap struct {
-	Row     cosl.Row
-	Text    string
 	BaseSeq uint64 // the highest seq it accounts for
-	Covers  int    // app.freeform rows at or below BaseSeq, derived at read time
+	Text    string
 }
 
-// View is one Conversation as readers see it.
-type View struct {
-	Live *Recap     // nil until a Recap applies
-	Talk []cosl.Row // app.freeform rows after Live.BaseSeq; every one with no Recap
-	Full []Entry    // every app.freeform and every Recap that applied, in seq order
+// Covers reports whether r, this Node's Recap or nil for none, accounts for
+// the talk up to seq: Pruning past it leaves this Node's agents without talk
+// that nothing stands in for.
+func (r *Recap) Covers(seq uint64) bool { return r != nil && seq <= r.BaseSeq }
+
+// fence opens and closes RECAP.md's front matter.
+const fence = "---"
+
+// Read is the Recap at path, nil if there is none. A RECAP.md that does not
+// parse is an error naming it: a Recap is never silently ignored.
+func Read(path string) (*Recap, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("recap: %w", err)
+	}
+	r, err := parse(b)
+	if err != nil {
+		return nil, fmt.Errorf("recap: %s: %w", path, err)
+	}
+	return &r, nil
 }
 
-// Entry is one row of a Conversation's full history: talk, or a Recap that
-// applied when it committed.
-type Entry struct {
-	Row        cosl.Row
-	Recap      *Recap // nil for talk
-	Superseded bool   // hidden from the folded view: talk the live Recap covers, or an earlier Recap
-}
-
-// Fold replays one Conversation's rows, in seq order as a Query on its
-// Conversation ID (or GroupLevel) returns them, into the view readers see.
-// A Recap that does not apply to the state it meets is skipped, identically
-// on every Node: one whose base_seq is not beyond the live Recap's, one whose
-// base_seq names no earlier app.freeform of this Conversation, and one whose
-// payload is undecodable or whose text app.freeform would refuse. A skipped
-// Recap never accounted for anything, so it is not in Full either.
-func Fold(rows []cosl.Row) (View, error) {
-	var live *Recap
-	var full []Entry
-	var talkSeqs []uint64
-	isTalk := map[uint64]bool{}
-	for _, r := range rows {
-		switch r.MsgType {
-		case cosl.TypeAppFreeform:
-			full = append(full, Entry{Row: r})
-			talkSeqs = append(talkSeqs, r.Seq)
-			isTalk[r.Seq] = true
-		case cosl.TypeAppRecap:
-			env, err := r.Decode()
-			if err != nil {
-				return View{}, fmt.Errorf("recap: seq %d: %w", r.Seq, err)
-			}
-			// The FSM does not parse payloads, so an undecodable one is
-			// skipped rather than allowed to break every reader.
-			msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-			if err != nil {
-				continue
-			}
-			p := msg.(*coslv1.AppRecap)
-			if cosl.CheckText(p.Text) != nil || !isTalk[p.BaseSeq] {
-				continue
-			}
-			if live != nil && p.BaseSeq <= live.BaseSeq {
-				continue
-			}
-			// Every earlier talk row is at or below the base or after it,
-			// and talkSeqs is ascending.
-			covers, _ := slices.BinarySearch(talkSeqs, p.BaseSeq)
-			live = &Recap{Row: r, Text: p.Text, BaseSeq: p.BaseSeq, Covers: covers + 1}
-			full = append(full, Entry{Row: r, Recap: live})
+// parse reads RECAP.md: a front matter fenced by "---" lines giving
+// base_seq and nothing else, then the text. Line ends may be CRLF, as an
+// editor may leave them, and blank lines around the text are not part of it.
+func parse(b []byte) (Recap, error) {
+	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+	if len(lines) == 0 || lines[0] != fence {
+		return Recap{}, errors.New(`it must open with a front matter, a "---" line`)
+	}
+	end := -1
+	for i, l := range lines[1:] {
+		if l == fence {
+			end = i + 1
+			break
 		}
 	}
-	v := View{Live: live, Full: full}
-	for i, e := range full {
-		switch {
-		case e.Recap != nil:
-			v.Full[i].Superseded = e.Recap != live
-		case live != nil && e.Row.Seq <= live.BaseSeq:
-			v.Full[i].Superseded = true
-		default:
-			v.Talk = append(v.Talk, e.Row)
-		}
+	if end < 0 {
+		return Recap{}, errors.New(`its front matter is not closed by a "---" line`)
 	}
-	return v, nil
+	var r Recap
+	for _, l := range lines[1:end] {
+		k, v, _ := strings.Cut(l, ":")
+		if k = strings.TrimSpace(k); k != "base_seq" {
+			return Recap{}, fmt.Errorf("its front matter may give only base_seq, not %q", k)
+		}
+		if r.BaseSeq != 0 {
+			return Recap{}, errors.New("its front matter gives base_seq twice")
+		}
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		if err != nil || n == 0 {
+			return Recap{}, fmt.Errorf("base_seq %q must be a seq, a whole number above 0", strings.TrimSpace(v))
+		}
+		r.BaseSeq = n
+	}
+	if r.BaseSeq == 0 {
+		return Recap{}, errors.New("its front matter must give base_seq")
+	}
+	r.Text = strings.Trim(strings.Join(lines[end+1:], "\n"), "\n")
+	if err := cosl.CheckText(r.Text); err != nil {
+		return Recap{}, err
+	}
+	return r, nil
 }
 
-// Check is the writer's precondition for appending a Recap covering up to
-// baseSeq to the Conversation folded into v; Fold would skip one that fails
-// it. Every row already on the replica precedes the new one.
-func Check(v View, baseSeq uint64) error {
-	if v.Live != nil && baseSeq <= v.Live.BaseSeq {
-		return fmt.Errorf("%w: it covers up to seq %d", ErrStale, v.Live.BaseSeq)
+// format is r as RECAP.md.
+func (r Recap) format() []byte {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "%s\nbase_seq: %d\n%s\n%s\n", fence, r.BaseSeq, fence, r.Text)
+	return b.Bytes()
+}
+
+// Write replaces the Recap at path with r, whole: it writes a temporary file
+// beside it, syncs it and renames it over RECAP.md, so a crash leaves the old
+// Recap or the new one, never part of either. It makes the directory if need
+// be. Its text is bounded as app.freeform's is.
+func Write(path string, r Recap) error {
+	if r.BaseSeq == 0 {
+		return fmt.Errorf("%w: seq 0 is no message", ErrBadBase)
 	}
-	for _, r := range v.Talk {
-		if r.Seq == baseSeq {
-			return nil
-		}
+	if err := cosl.CheckText(r.Text); err != nil {
+		return err
 	}
-	return fmt.Errorf("%w: seq %d is not one on this replica (if it was just sent, it may not have arrived yet)", ErrBadBase, baseSeq)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("recap: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".RECAP.md.*")
+	if err != nil {
+		return fmt.Errorf("recap: %w", err)
+	}
+	defer os.Remove(tmp.Name()) // a no-op once renamed
+	_, err = tmp.Write(r.format())
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		return fmt.Errorf("recap: %w", err)
+	}
+	if d, err := os.Open(dir); err == nil {
+		d.Sync() // best effort: the rename is durable once the directory is
+		d.Close()
+	}
+	return nil
 }

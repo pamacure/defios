@@ -23,6 +23,7 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
+	"defios.com/internal/nodedir"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/secret"
@@ -141,15 +142,6 @@ type chain struct {
 	// dry walks the chain as a retry would without running or reusing
 	// anything for real: see runAgents.
 	dry bool
-}
-
-// transcriptName is conv's directory under conversations/: its hex
-// Conversation ID, or "group" for Group-level talk.
-func transcriptName(conv []byte) string {
-	if conv == nil {
-		return "group"
-	}
-	return conversationKey(conv)
 }
 
 func conversationKey(conv []byte) string { return hex.EncodeToString(conv) }
@@ -383,7 +375,7 @@ func (s *server) runChain(c *chain) {
 		s.chains.publish(c.conv, ev)
 	}
 	if c.ctx.Err() == nil {
-		c.tr = &transcript{path: s.opts.Paths.TranscriptFile(s.opts.Alias, transcriptName(c.conv), c.seq), logf: s.opts.Logf}
+		c.tr = &transcript{path: s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(c.conv), c.seq), logf: s.opts.Logf}
 		defer c.tr.close()
 		publish(ChainEvent{Type: EventChainStart})
 		s.runAgents(c, mentioned(c.handles), 1, publish)
@@ -672,12 +664,14 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	stable, atDepth := preamble(handle, depth, inc, where)
-	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + stable
-	req.SystemDepth = atDepth
-	if req.Turns, err = s.talkSoFar(store, conv, handle); err != nil {
+	turns, missing, err := s.talkSoFar(store, conv, handle)
+	if err != nil {
 		return agent.Request{}, inc, err
 	}
+	stable, atDepth := preamble(handle, depth, inc, where, missing)
+	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + stable
+	req.SystemDepth = atDepth
+	req.Turns = turns
 	return req, inc, nil
 }
 
@@ -703,14 +697,18 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 // preamble is what the serve tells an agent after its SYSTEM.md, in two
 // parts (ADR 0015, ADR 0018). The stable part, the same at every depth so a
 // provider caches it, says who it is, where it is answering, how the talk
-// reads, and that only say posts and how. The depth part gives its depth and
-// either the Handles it may summon or that it may summon none.
-func preamble(handle string, depth uint32, inc config.Included, where string) (stable, atDepth string) {
+// reads, that earlier talk is missing if it is (ADR 0024), and that only
+// say posts and how. The depth part gives its depth and either the Handles
+// it may summon or that it may summon none.
+func preamble(handle string, depth uint32, inc config.Included, where string, missing bool) (stable, atDepth string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
 	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone: those your Node wrote as @%s. "+
 		"Everything else is in the other turns, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for another agent's. "+
 		"@%s from another Node is another agent.\n", handle, handle)
+	if missing {
+		b.WriteString("Earlier talk is missing: this Node has pruned some of it, and no Recap of this Node's accounts for it.\n")
+	}
 	fmt.Fprintf(&b, "This is a group chat. Only what you pass to the say tool is posted to it, as one message from @%s, and calling say ends your turn. "+
 		"Everything else you write stays private. Keep your message to a paragraph or two of plain text, like a longer group-chat message, at most %d bytes. "+
 		"If you have nothing worth saying, end your turn without calling say and you stay silent.\n", handle, agent.MaxSay)
@@ -731,23 +729,36 @@ func preamble(handle string, depth uint32, inc config.Included, where string) (s
 	return stable, b.String()
 }
 
-// talkSoFar is conv's talk as handle sees it: the lean view as turns.
-func (s *server) talkSoFar(store *cosl.Store, conv []byte, handle string) ([]agent.Turn, error) {
-	q := cosl.Query{GroupLevel: conv == nil, ConversationID: conv}
-	rows, err := store.Log(q)
+// talkSoFar is conv's talk as handle sees it (ADR 0024): this Node's
+// RECAP.md opening the first user turn, then the lean view of the talk
+// after it as turns; and whether earlier talk is missing, pruned with no
+// Recap of this Node's in its place. Another Node's Recap is never read: it
+// is that Node's file. A RECAP.md that does not parse fails the summon.
+func (s *server) talkSoFar(store *cosl.Store, conv []byte, handle string) ([]agent.Turn, bool, error) {
+	r, err := recap.Read(s.opts.Paths.RecapFile(s.opts.Alias, nodedir.ConversationName(conv)))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	v, err := recap.Fold(rows)
+	rows, err := store.Log(cosl.Query{GroupLevel: conv == nil, ConversationID: conv})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	said, err := v.Lean()
+	v, err := recap.Lean(r, rows)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	var opening string
+	if r != nil {
+		opening = recapOpening(*r)
 	}
 	rec, _ := s.slot.Current()
-	return talkTurns(said, func(r cosl.Row) string { return displayName(rec, r) }, s.opts.Node.NodeID, handle), nil
+	return talkTurns(opening, v.Talk, func(r cosl.Row) string { return displayName(rec, r) }, s.opts.Node.NodeID, handle), v.Missing, nil
+}
+
+// recapOpening is how this Node's Recap opens the first user turn: framed
+// as this Node's own account of the talk up to its base seq.
+func recapOpening(r recap.Recap) string {
+	return fmt.Sprintf("(This Node's Recap: its own account of the talk up to seq %d, in place of that talk.)\n%s\n(End of the Recap. The talk after it follows.)", r.BaseSeq, r.Text)
 }
 
 // The fixed user turns that keep the talk alternating when it opens or ends
@@ -762,11 +773,15 @@ const (
 // assistant turn holding its text alone; everything else, the same Handle
 // from another Node included, is a lean line, consecutive lines merged
 // into one user turn. Consecutive messages of its
-// own merge a blank line apart. A fixed user turn goes before talk that
-// opens with its own message and after talk that ends with one, so the
-// turns alternate and start and end with user.
-func talkTurns(said []recap.Said, name func(cosl.Row) string, node identity.ID, handle string) []agent.Turn {
+// own merge a blank line apart. A non-empty opening, this Node's Recap,
+// starts the first user turn (ADR 0024). Without one, a fixed user turn goes
+// before talk that opens with its own message; and one goes after talk that
+// ends with its own, so the turns alternate and start and end with user.
+func talkTurns(opening string, said []recap.Said, name func(cosl.Row) string, node identity.ID, handle string) []agent.Turn {
 	var turns []agent.Turn
+	if opening != "" {
+		turns = append(turns, agent.Turn{Role: agent.User, Text: opening})
+	}
 	add := func(role, text, sep string) {
 		if n := len(turns); n > 0 && turns[n-1].Role == role {
 			turns[n-1].Text += sep + text

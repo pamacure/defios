@@ -31,7 +31,7 @@ func TestQueryNarrowsToTypesAndAfterSeq(t *testing.T) {
 	f.apply(2, 1, f.signed(0, f.envelope(0, cosl.TypeSessionAbort, &coslv1.SessionAbort{SessionId: make([]byte, 32)})))
 	f.apply(3, 1, f.signed(0, f.envelope(0, cosl.TypeAppFreeform, freeform("b"))))
 	f.apply(4, 1, f.signed(0, f.envelope(0, cosl.TypeSessionAbort, &coslv1.SessionAbort{SessionId: make([]byte, 32)})))
-	f.apply(5, 1, f.signed(0, f.envelope(0, cosl.TypeAppRecap, &coslv1.AppRecap{})))
+	f.apply(5, 1, f.signed(0, f.envelope(0, cosl.TypeSessionComplete, &coslv1.SessionComplete{})))
 
 	read := func(q cosl.Query) []cosl.Row {
 		t.Helper()
@@ -41,7 +41,7 @@ func TestQueryNarrowsToTypesAndAfterSeq(t *testing.T) {
 		}
 		return rows
 	}
-	sameSeqs(t, read(cosl.Query{MsgTypes: []uint32{cosl.TypeSessionAbort, cosl.TypeAppRecap}}), 2, 4, 5)
+	sameSeqs(t, read(cosl.Query{MsgTypes: []uint32{cosl.TypeSessionAbort, cosl.TypeSessionComplete}}), 2, 4, 5)
 	sameSeqs(t, read(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}}), 1, 3)
 	sameSeqs(t, read(cosl.Query{AfterSeq: 3}), 4, 5)
 	sameSeqs(t, read(cosl.Query{MsgTypes: []uint32{cosl.TypeSessionAbort}, AfterSeq: 2}), 4)

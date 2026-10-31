@@ -27,7 +27,8 @@ const (
 	// are never reused: a reader meets them as any unknown type.
 	TypeSignAccept    uint32 = 11
 	TypeSignBroadcast uint32 = 12
-	TypeAppRecap      uint32 = 13 // docs/adr/0012-recap-on-the-log-pruning-off-it.md
+	// 13 was app.recap. It is reserved and never reused: a Recap is this
+	// Node's RECAP.md, never a COSL message (docs/adr/0024-a-recap-is-a-local-file.md).
 	// 14, 15 and 16 were provider.create, provider.update and
 	// provider.remove. They are reserved and never reused: a Provider is
 	// Node-local config (docs/adr/0022-members-are-trusted-for-their-own-messages.md),
@@ -52,7 +53,6 @@ var registry = map[uint32]kind{
 	TypeSignRequest:     {"sign.request", func() proto.Message { return &coslv1.SignRequest{} }},
 	TypeSignAccept:      {"sign.accept", func() proto.Message { return &coslv1.SignAccept{} }},
 	TypeSignBroadcast:   {"sign.broadcast", func() proto.Message { return &coslv1.SignBroadcast{} }},
-	TypeAppRecap:        {"app.recap", func() proto.Message { return &coslv1.AppRecap{} }},
 }
 
 // ErrUnknownType is returned by DecodePayload for ids outside the registry.

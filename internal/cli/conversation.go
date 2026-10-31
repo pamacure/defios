@@ -20,6 +20,7 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
+	"defios.com/internal/nodedir"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/serve"
@@ -80,24 +81,24 @@ func conversationCommand(g *globals) *cobra.Command {
 	var opts logOptions
 	log := &cobra.Command{
 		Use:   "log",
-		Short: "Print messages: seq, time, display name, text. The live Recap stands in for the talk it covers. --key scopes to that Key",
+		Short: "Print the messages this Node holds: seq, time, display name, text. --key scopes to that Key",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runConversationLog(g, keyQuery, opts) },
 	}
 	log.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
-	log.Flags().IntVar(&opts.limit, "limit", 0, "only the latest N messages after the live Recap (with --full, the latest N rows)")
-	log.Flags().BoolVar(&opts.full, "full", false, "also show what the live Recap supersedes; a pruned row shows as metadata only")
-	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, the live Recap then every message after it, for an agent's context")
+	log.Flags().IntVar(&opts.limit, "limit", 0, "only the latest N messages (with --lean, after this Node's Recap)")
+	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
+	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it, as its agents read them")
 	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	var baseSeq uint64
 	var text string
 	recapCmd := &cobra.Command{
 		Use:   "recap --base-seq <n> --text <text>",
-		Short: "Append a Recap accounting for talk up to --base-seq (requires serve). --key scopes it to that Key",
+		Short: "Write this Node's RECAP.md, its own account of the talk up to --base-seq, which its agents read in place of that talk. Nothing reaches the COSL. --key scopes it to that Key",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runConversationRecap(cmd, g, keyQuery, baseSeq, text)
+		RunE: func(*cobra.Command, []string) error {
+			return runConversationRecap(g, keyQuery, baseSeq, text)
 		},
 	}
 	recapCmd.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
@@ -105,6 +106,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	recapCmd.Flags().StringVar(&text, "text", "", "the account of the talk it covers")
 	recapCmd.MarkFlagRequired("base-seq")
 	recapCmd.MarkFlagRequired("text")
+	bindGroupFlag(g, recapCmd)
 	root.AddCommand(recapCmd)
 	var cut pruneCut
 	prune := &cobra.Command{
@@ -456,30 +458,82 @@ func (c *chainPrinter) print(ev serve.ChainEvent) error {
 	return nil
 }
 
-func runConversationRecap(cmd *cobra.Command, g *globals, keyQuery string, baseSeq uint64, text string) error {
+// recapLine is `conversation recap`'s result: the Recap's base seq and
+// the RECAP.md it wrote.
+type recapLine struct {
+	BaseSeq uint64 `json:"base_seq"`
+	Path    string `json:"path"`
+}
+
+// runConversationRecap writes this Node's RECAP.md for the Conversation
+// (ADR 0024). Like Pruning it is Node-local and appends nothing, so it needs
+// no serve: it reads this Node's replica only to check that baseSeq names an
+// app.freeform of the Conversation.
+func runConversationRecap(g *globals, keyQuery string, baseSeq uint64, text string) error {
 	if err := cosl.CheckText(text); err != nil {
 		return exitUsagef("%w", err)
 	}
-	var conv []byte
-	if keyQuery != "" {
-		id, err := resolveConversation(g, keyQuery)
-		if err != nil {
-			return err
-		}
-		conv = id
-	}
-	v, err := serve.Client{Socket: g.paths().Socket}.ConversationRecap(cmd.Context(), text, baseSeq, conv)
+	store, err := openReplica(g)
 	if err != nil {
-		if errors.Is(err, recap.ErrStale) || errors.Is(err, recap.ErrBadBase) {
-			return exitUsagef("%w", err)
-		}
-		return sendError(err)
+		return err
+	}
+	defer store.Close()
+	conv, err := optionalConversation(store, keyQuery)
+	if err != nil {
+		return err
+	}
+	rows, err := store.Log(cosl.Query{GroupLevel: conv == nil, ConversationID: conv})
+	if err != nil {
+		return exitOperational(err)
+	}
+	if err := recap.Check(rows, baseSeq); err != nil {
+		return exitUsagef("%w", err)
+	}
+	path, err := recapPath(g, conv)
+	if err != nil {
+		return err
+	}
+	if err := recap.Write(path, recap.Recap{BaseSeq: baseSeq, Text: text}); err != nil {
+		return exitOperational(err)
 	}
 	if g.json {
-		return g.emitJSON(v)
+		return g.emitJSON(recapLine{BaseSeq: baseSeq, Path: path})
 	}
-	fmt.Fprintf(g.app.Stdout, "recap as seq %d (msg_id %s)\n", v.Seq, v.MsgID)
+	fmt.Fprintf(g.app.Stdout, "wrote this Node's Recap of the talk up to seq %d to %s\n", baseSeq, path)
 	return nil
+}
+
+// optionalConversation is the Conversation keyQuery names, or nil for
+// Group-level talk when it is empty.
+func optionalConversation(store *cosl.Store, keyQuery string) ([]byte, error) {
+	if keyQuery == "" {
+		return nil, nil
+	}
+	return conversationID(store, keyQuery)
+}
+
+// recapPath is this Node's RECAP.md for conv, nil for Group-level talk, in
+// the Group the command targets.
+func recapPath(g *globals, conv []byte) (string, error) {
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return "", err
+	}
+	return g.paths().RecapFile(alias, nodedir.ConversationName(conv)), nil
+}
+
+// readRecap is this Node's Recap of conv, nil if it has none. One that does
+// not parse is an operational error naming the file.
+func readRecap(g *globals, conv []byte) (*recap.Recap, error) {
+	path, err := recapPath(g, conv)
+	if err != nil {
+		return nil, err
+	}
+	r, err := recap.Read(path)
+	if err != nil {
+		return nil, exitOperational(err)
+	}
+	return r, nil
 }
 
 // pruneCut is which talk `conversation prune` destroys: at or below seq
@@ -499,7 +553,9 @@ type pruneLine struct {
 
 // runConversationPrune writes this Node's replica directly: Pruning is
 // Node-local, appends nothing and tells no other Node, so it needs no serve
-// (ADR 0012, ADR 0024).
+// (ADR 0012, ADR 0024). It warns when it destroys talk this Node's RECAP.md
+// does not account for: this Node's agents lose that talk with no account
+// in its place.
 func runConversationPrune(g *globals, keyQuery string, cut pruneCut) error {
 	var age config.Age
 	if cut.olderThan != "" {
@@ -517,23 +573,42 @@ func runConversationPrune(g *globals, keyQuery string, cut pruneCut) error {
 	if err != nil {
 		return err
 	}
-	var conv []byte
-	if keyQuery != "" {
-		if conv, err = conversationID(store, keyQuery); err != nil {
-			return err
-		}
+	conv, err := optionalConversation(store, keyQuery)
+	if err != nil {
+		return err
 	}
+	rc, err := readRecap(g, conv)
+	if err != nil {
+		return err
+	}
+	cutoff := time.Now().Add(-time.Duration(age))
+	cuts := func(r cosl.Row) bool { return r.Seq <= cut.before }
+	if age != 0 {
+		cuts = func(r cosl.Row) bool { return r.CreatedAt < cutoff.UnixNano() }
+	}
+	rows, err := store.Log(cosl.Query{GroupLevel: conv == nil, ConversationID: conv, MsgTypes: []uint32{cosl.TypeAppFreeform}})
+	if err != nil {
+		return exitOperational(err)
+	}
+	lost := slices.ContainsFunc(rows, func(r cosl.Row) bool { return !r.Pruned() && cuts(r) && !rc.Covers(r.Seq) })
 	var n int
 	if age != 0 {
-		n, err = store.PruneOlderThan(conv, time.Now().Add(-time.Duration(age)))
+		n, err = store.PruneOlderThan(conv, cutoff)
 	} else {
 		n, err = store.Prune(conv, cut.before)
 	}
 	if err != nil {
 		return exitOperational(err)
 	}
+	warn := paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:")
+	switch {
+	case lost && rc == nil:
+		fmt.Fprintln(g.app.Stderr, warn+" this Node has no RECAP.md for this talk, so its agents lose what was pruned with no account of it in its place; `conversation recap` writes one")
+	case lost:
+		fmt.Fprintf(g.app.Stderr, "%s this pruned talk past seq %d, the base_seq of this Node's RECAP.md, so its agents lose it with no account of it in its place\n", warn, rc.BaseSeq)
+	}
 	if policy == 0 {
-		fmt.Fprintln(g.app.Stderr, paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:")+` this Node has no prune policy, so a later snapshot restore from a Node that kept this talk brings it back; set an age, such as prune = "90d", in this Group's config.toml to keep it pruned`)
+		fmt.Fprintln(g.app.Stderr, warn+` this Node has no prune policy, so a later snapshot restore from a Node that kept this talk brings it back; set an age, such as prune = "90d", in this Group's config.toml to keep it pruned`)
 	}
 	if g.json {
 		line := pruneLine{Before: cut.before, Messages: n}
@@ -583,8 +658,7 @@ func sendError(err error) error {
 	return serveError(err)
 }
 
-// messageLine is one `conversation log` row, human or JSON: an app.freeform,
-// or the live Recap with the count of messages it covers.
+// messageLine is one `conversation log` row, human or JSON: an app.freeform.
 type messageLine struct {
 	Seq               uint64 `json:"seq"`
 	Term              uint64 `json:"term"`
@@ -600,16 +674,15 @@ type messageLine struct {
 	Depth       *uint32 `json:"depth,omitempty"`
 	Text        string  `json:"text"`
 	ContentType string  `json:"content_type"`
-	BaseSeq     uint64  `json:"base_seq,omitempty"` // app.recap only
-	Covers      int     `json:"covers,omitempty"`   // app.recap only
-	Superseded  bool    `json:"superseded,omitempty"`
 	Pruned      bool    `json:"pruned,omitempty"` // no text: only the row's metadata remains
 }
 
-// leanLine is one `conversation log --lean` entry: who said it and what.
+// leanLine is one `conversation log --lean` entry: who said what, or this
+// Node's Recap with the seq it accounts up to.
 type leanLine struct {
-	SenderDisplayName string `json:"sender_display_name"`
-	Handle            string `json:"handle,omitempty"` // an agent's only
+	SenderDisplayName string `json:"sender_display_name,omitempty"` // talk only
+	Handle            string `json:"handle,omitempty"`              // an agent's only
+	BaseSeq           uint64 `json:"base_seq,omitempty"`            // the Recap only
 	Text              string `json:"text"`
 }
 
@@ -631,6 +704,9 @@ func newMessageLine(rec *group.Record, r cosl.Row) messageLine {
 	}
 }
 
+// runConversationLog prints the Conversation's talk this replica holds,
+// unfolded (ADR 0024): every message not pruned, and under --full the
+// pruned ones too as placeholders. --lean is what this Node's agents read.
 func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if opts.limit < 0 {
 		return exitUsagef("--limit must be >= 0")
@@ -647,35 +723,28 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 		return err
 	}
 	defer store.Close()
-
-	var q cosl.Query
-	if keyQuery == "" {
-		q.GroupLevel = true
-	} else {
-		id, err := conversationID(store, keyQuery)
-		if err != nil {
-			return err
-		}
-		q.ConversationID = id
+	conv, err := optionalConversation(store, keyQuery)
+	if err != nil {
+		return err
 	}
-	rows, err := store.Log(q)
+	rows, err := store.Log(cosl.Query{GroupLevel: conv == nil, ConversationID: conv, MsgTypes: []uint32{cosl.TypeAppFreeform}})
 	if err != nil {
 		return exitOperational(err)
 	}
-	view, err := recap.Fold(rows)
-	if err != nil {
-		return exitOperational(err)
+	if opts.lean {
+		return emitLean(g, rec, conv, rows, opts.limit)
 	}
-	lines := make([]messageLine, 0, len(view.Full))
-	for _, e := range logEntries(view, opts) {
-		l, err := newEntryLine(rec, e)
+	if !opts.full {
+		rows = slices.DeleteFunc(rows, cosl.Row.Pruned)
+	}
+	rows = latest(rows, opts.limit)
+	lines := make([]messageLine, 0, len(rows))
+	for _, r := range rows {
+		l, err := newTalkLine(rec, r)
 		if err != nil {
 			return exitOperational(err)
 		}
 		lines = append(lines, l)
-	}
-	if opts.lean {
-		return emitLean(g, lines)
 	}
 	if g.json {
 		return emitJSONL(g, lines)
@@ -683,11 +752,8 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	p := g.out()
 	for _, l := range lines {
 		text := cosl.EscapeNewlines(l.Text)
-		switch {
-		case l.Pruned:
+		if l.Pruned {
 			text = p.dim("[pruned]")
-		case l.MsgType == cosl.TypeName(cosl.TypeAppRecap):
-			text = p.dim(fmt.Sprintf("[recap of %d messages to seq %d]", l.Covers, l.BaseSeq)) + " " + text
 		}
 		who := p.primary(l.SenderDisplayName)
 		if l.Handle != nil {
@@ -707,29 +773,6 @@ func handleLabel(handle string) string {
 	return "@" + handle
 }
 
-// logEntries is what a view shows. --full is every row and --limit keeps
-// its latest ones; otherwise --limit trims only the talk, since the live
-// Recap always stands in for what it hides. --lean drops pruned talk before
-// the limit counts it: it has nothing to show for one.
-func logEntries(view recap.View, opts logOptions) []recap.Entry {
-	if opts.full {
-		return latest(view.Full, opts.limit)
-	}
-	talk := view.Talk
-	if opts.lean {
-		talk = slices.DeleteFunc(slices.Clone(talk), cosl.Row.Pruned)
-	}
-	talk = latest(talk, opts.limit)
-	entries := make([]recap.Entry, 0, len(talk)+1)
-	if view.Live != nil {
-		entries = append(entries, recap.Entry{Row: view.Live.Row, Recap: view.Live})
-	}
-	for _, r := range talk {
-		entries = append(entries, recap.Entry{Row: r})
-	}
-	return entries
-}
-
 // latest is the last n of xs, or all of them when n is 0.
 func latest[T any](xs []T, n int) []T {
 	if n > 0 && len(xs) > n {
@@ -738,50 +781,61 @@ func latest[T any](xs []T, n int) []T {
 	return xs
 }
 
-// newEntryLine is e as a log row: a Recap, talk, or a pruned row's metadata.
-func newEntryLine(rec *group.Record, e recap.Entry) (messageLine, error) {
-	l := newMessageLine(rec, e.Row)
-	l.Superseded = e.Superseded
-	switch {
-	case e.Recap != nil:
-		l.Text, l.BaseSeq, l.Covers = e.Recap.Text, e.Recap.BaseSeq, e.Recap.Covers
-		l.Handle, l.Depth = new(string), new(uint32)
-	case e.Row.Pruned():
+// newTalkLine is an app.freeform row as a log row, or a pruned one's
+// metadata.
+func newTalkLine(rec *group.Record, r cosl.Row) (messageLine, error) {
+	l := newMessageLine(rec, r)
+	if r.Pruned() {
 		l.Pruned = true
-	default:
-		env, err := e.Row.Decode()
-		if err != nil {
-			return messageLine{}, err
-		}
-		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-		if err != nil {
-			return messageLine{}, fmt.Errorf("cosl: seq %d: %w", e.Row.Seq, err)
-		}
-		ff := msg.(*coslv1.AppFreeform)
-		l.Text, l.ContentType = ff.Text, ff.ContentType
-		l.Handle, l.Depth = &ff.Handle, &ff.Depth
+		return l, nil
 	}
+	env, err := r.Decode()
+	if err != nil {
+		return messageLine{}, err
+	}
+	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+	if err != nil {
+		return messageLine{}, fmt.Errorf("cosl: seq %d: %w", r.Seq, err)
+	}
+	ff := msg.(*coslv1.AppFreeform)
+	l.Text, l.ContentType = ff.Text, ff.ContentType
+	l.Handle, l.Depth = &ff.Handle, &ff.Depth
 	return l, nil
 }
 
-// emitLean prints `<display name>: <text>`, or `<display name>/@handle:
-// <text>` for an agent's, one entry per line, and nothing
-// else: timestamps are advisory and never ordering, while who said what is
-// load-bearing in a multi-party Conversation.
-func emitLean(g *globals, lines []messageLine) error {
-	lean := make([]leanLine, len(lines))
-	for i, l := range lines {
-		lean[i] = leanLine{SenderDisplayName: l.SenderDisplayName, Text: l.Text}
-		if l.Handle != nil {
-			lean[i].Handle = *l.Handle
-		}
+// emitLean prints the Conversation as this Node's agents read it: its
+// RECAP.md as `[recap to seq <n>] <text>`, then the talk after it that
+// this replica holds, the latest limit of it, as `<display name>: <text>`,
+// or `<display name>/@handle: <text>` for an agent's, one entry per line
+// and nothing else: timestamps are advisory and never ordering, while who
+// said what is load-bearing in a multi-party Conversation.
+func emitLean(g *globals, rec *group.Record, conv []byte, rows []cosl.Row, limit int) error {
+	r, err := readRecap(g, conv)
+	if err != nil {
+		return err
+	}
+	v, err := recap.Lean(r, rows)
+	if err != nil {
+		return exitOperational(err)
+	}
+	talk := latest(v.Talk, limit)
+	lean := make([]leanLine, 0, len(talk)+1)
+	if r != nil {
+		lean = append(lean, leanLine{BaseSeq: r.BaseSeq, Text: r.Text})
+	}
+	for _, s := range talk {
+		lean = append(lean, leanLine{SenderDisplayName: rosterName(rec.Roster(), s.Row.Sender), Handle: s.Handle, Text: s.Text})
 	}
 	if g.json {
 		return emitJSONL(g, lean)
 	}
 	p := g.out()
 	for _, l := range lean {
-		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(recap.Speaker(l.SenderDisplayName, l.Handle)+":"), cosl.EscapeNewlines(l.Text))
+		who := p.primary(recap.Speaker(l.SenderDisplayName, l.Handle) + ":")
+		if l.BaseSeq != 0 {
+			who = p.dim(fmt.Sprintf("[recap to seq %d]", l.BaseSeq))
+		}
+		fmt.Fprintf(g.app.Stdout, "%s %s\n", who, cosl.EscapeNewlines(l.Text))
 	}
 	return nil
 }

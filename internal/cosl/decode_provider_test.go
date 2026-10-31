@@ -35,3 +35,18 @@ func TestProviderIdsAreRetired(t *testing.T) {
 		}
 	}
 }
+
+// app.recap (13) is retired (ADR 0024): a Recap is this Node's RECAP.md,
+// never a COSL message. A row under it reads like any unknown type.
+func TestAppRecapIsRetired(t *testing.T) {
+	payload := []byte{0x0a, 0x01, 'x'}
+	if got := cosl.TypeName(13); got != "unknown(13)" {
+		t.Errorf("name %q, want unknown(13)", got)
+	}
+	if _, ok := cosl.TypeByName("app.recap"); ok {
+		t.Error("app.recap still resolves")
+	}
+	if _, err := cosl.DecodePayload(13, payload); !errors.Is(err, cosl.ErrUnknownType) {
+		t.Errorf("decode = %v, want ErrUnknownType", err)
+	}
+}

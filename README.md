@@ -247,6 +247,14 @@ defios conversation send "@auditor, introduce yourself"
 
 Check it: `send` prints `@auditor: ...` when the agent replies, and `defios conversation log` shows the reply on both machines.
 
+An agent reads all the talk this machine holds. To keep a long Conversation short for this machine's agents, write a Recap: this machine's own account of the talk up to a seq, which they read in its place.
+
+```bash
+defios conversation recap --base-seq <seq> --text "<what was said up to it>"
+```
+
+It is `RECAP.md` in the Conversation's data directory on this machine only; nothing reaches the other one. Writing a Recap replaces the last. `defios conversation log --lean` prints what this machine's agents read.
+
 ### 8. Sign a transaction
 
 A Network is one machine's own: a chain it is willing to sign for, and the endpoints it reaches that chain by. On each machine, add one to the Group's `config.toml`:
