@@ -191,11 +191,11 @@ func streamText(w http.ResponseWriter, parts ...string) {
 	endTurn(w, "end_turn")
 }
 
-// agentNode configures n with Agent Profiles: each Handle runs on the
-// Provider "claude" with a streamed Messages body, this Node's key for it is
-// $ANTHROPIC_KEY, set to "sk-<n's name>", and each has a SYSTEM.md saying
-// who it is.
-func agentNode(t *testing.T, n *node, handles ...string) {
+// agentNode configures n with Agent Profiles: each Handle runs on n's
+// Provider "claude", the Messages API at baseURL, with a streamed body; n's
+// key for it is $ANTHROPIC_KEY, set to "sk-<n's name>", and each has a
+// SYSTEM.md saying who it is.
+func agentNode(t *testing.T, n *node, baseURL string, handles ...string) {
 	t.Helper()
 	var cfg strings.Builder
 	for _, h := range handles {
@@ -210,14 +210,14 @@ func agentNode(t *testing.T, n *node, handles ...string) {
 		fmt.Fprintf(&cfg, "[agents.%s.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n\n", h)
 	}
 	fmt.Fprintf(&cfg, "[agent]\nprofiles = [\"%s\"]\n\n", strings.Join(handles, `", "`))
-	cfg.WriteString("[providers.claude]\napi_key = \"$ANTHROPIC_KEY\"\n")
+	fmt.Fprintf(&cfg, "[providers.claude]\nbase_url = %q\napi_path = \"/v1/messages\"\napi_key = \"$ANTHROPIC_KEY\"\n", baseURL)
 	writeConfig(t, n.paths.GroupConfigFile(group.ImplicitAlias), cfg.String())
 	n.secrets["ANTHROPIC_KEY"] = "sk-" + n.name
 }
 
-// agentPair is a valid Group of alice and bob with the Provider "claude"
-// on the log, a fake Messages API, and alice's Agent Profiles for handles
-// running on it. Retries back off by a millisecond.
+// agentPair is a valid Group of alice and bob, a fake Messages API, and
+// alice's Agent Profiles for handles running on it as her Provider
+// "claude". Retries back off by a millisecond.
 func agentPair(t *testing.T, handles ...string) (a, b *node, gid group.ID, provider *fakeProvider) {
 	t.Helper()
 	a, b = pairWith(t, func(n *node) {
@@ -227,12 +227,7 @@ func agentPair(t *testing.T, handles ...string) (a, b *node, gid group.ID, provi
 	a.joins(t, gid, 2)
 	b.joins(t, gid, 2)
 	provider = newFakeProvider(t)
-	v, err := a.client().ProviderAdd(context.Background(), &coslv1.ProviderConfig{Alias: "claude", BaseUrl: provider.URL, ApiPath: "/v1/messages"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.applied(t, v.Seq)
-	agentNode(t, a, handles...)
+	agentNode(t, a, provider.URL, handles...)
 	return a, b, gid, provider
 }
 
@@ -459,7 +454,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 // alice's sees its message as a lean line (ADR 0021). Its preamble says so.
 func TestAnAgentIsOneNodesHandle(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor")
-	agentNode(t, b, "auditor")
+	agentNode(t, b, provider.URL, "auditor")
 	ctx := context.Background()
 	sb := watch(t, b)
 	v, err := b.client().ConversationSend(ctx, "@auditor?", nil)
@@ -490,7 +485,7 @@ func TestAnAgentIsOneNodesHandle(t *testing.T) {
 // define it; an agent's own reply summons nobody.
 func TestOnlyTheMentioningNodeRunsTheAgent(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor")
-	agentNode(t, b, "auditor")
+	agentNode(t, b, provider.URL, "auditor")
 	sb := watch(t, b)
 	v, err := b.client().ConversationSend(context.Background(), "@auditor?", nil)
 	if err != nil {
@@ -506,6 +501,45 @@ func TestOnlyTheMentioningNodeRunsTheAgent(t *testing.T) {
 	}
 	if n := len(provider.seenWith("sk-" + b.name)); n != 1 {
 		t.Fatalf("bob's provider called %d times, want 1", n)
+	}
+}
+
+// A Provider is each Node's own (ADR 0022): two Nodes whose "claude" is at
+// different base_urls each send their key only to their own server, and
+// nothing about a Provider is on the log.
+func TestEachNodesKeyGoesOnlyToItsOwnBaseURL(t *testing.T) {
+	a, b, gid, alices := agentPair(t, "auditor")
+	bobs := newFakeProvider(t)
+	agentNode(t, b, bobs.URL, "auditor")
+	ctx := context.Background()
+	sa := watch(t, a)
+	v, err := a.client().ConversationSend(ctx, "@auditor from alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, sa, v.Seq)
+	b.groupLevelRows(t, gid, 2)
+	sb := watch(t, b)
+	if v, err = b.client().ConversationSend(ctx, "@auditor from bob", nil); err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, sb, v.Seq)
+	if calls := alices.seen(); len(calls) != 1 || calls[0].Key != "sk-"+a.name {
+		t.Fatalf("alice's server saw %+v; want only alice's key", calls)
+	}
+	if calls := bobs.seen(); len(calls) != 1 || calls[0].Key != "sk-"+b.name {
+		t.Fatalf("bob's server saw %+v; want only bob's key", calls)
+	}
+	for _, n := range []*node{a, b} {
+		store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := store.Log(cosl.Query{MsgTypes: []uint32{14, 15, 16}})
+		store.Close()
+		if err != nil || len(rows) != 0 {
+			t.Fatalf("%s's replica holds provider rows: %d, %v", n.name, len(rows), err)
+		}
 	}
 }
 
@@ -659,8 +693,8 @@ func TestASecondMentionWaitsForTheRunningChain(t *testing.T) {
 	}
 }
 
-// provider edit changes where the next summon calls: the Provider's
-// base_url and api_path on the log, with this Node's key for it (ADR 0019).
+// Editing a Provider's table changes where the next summon calls, with no
+// restart: its base_url and api_path, with this Node's key for it.
 func TestAProviderEditTakesEffectAtTheNextSummon(t *testing.T) {
 	a, _, _, first := agentPair(t, "auditor")
 	ctx := context.Background()
@@ -672,11 +706,10 @@ func TestAProviderEditTakesEffectAtTheNextSummon(t *testing.T) {
 	untilEnd(t, s, v.Seq)
 
 	second := newFakeProvider(t)
-	e, err := a.client().ProviderEdit(ctx, &coslv1.ProviderConfig{Alias: "claude", BaseUrl: second.URL + "/gateway", ApiPath: "/anthropic/v1/messages"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.applied(t, e.Seq)
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	cfg := strings.Replace(readFile(t, path), fmt.Sprintf("base_url = %q\napi_path = \"/v1/messages\"", first.URL),
+		fmt.Sprintf("base_url = %q\napi_path = \"/anthropic/v1/messages\"", second.URL+"/gateway"), 1)
+	writeConfig(t, path, cfg)
 	v, err = a.client().ConversationSend(ctx, "@auditor", nil)
 	if err != nil {
 		t.Fatal(err)

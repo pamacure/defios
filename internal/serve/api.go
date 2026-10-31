@@ -20,7 +20,6 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
-	"defios.com/internal/provider"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/session"
@@ -174,7 +173,6 @@ func (s *server) localHandler() http.Handler {
 	s.conversationRoutes(mux)
 	s.chainRoutes(mux)
 	s.networkRoutes(mux)
-	s.providerRoutes(mux)
 	s.signRoutes(mux)
 	s.broadcastRoutes(mux)
 	s.sessionRoutes(mux)
@@ -232,10 +230,6 @@ var errorKinds = []struct {
 	{network.ErrExists, "network-exists", http.StatusConflict},
 	{network.ErrUnknown, "no-network", http.StatusNotFound},
 	{network.ErrUnchanged, "network-unchanged", http.StatusConflict},
-	{provider.ErrInvalid, "bad-provider", http.StatusBadRequest},
-	{provider.ErrExists, "provider-exists", http.StatusConflict},
-	{provider.ErrUnknown, "no-provider", http.StatusNotFound},
-	{provider.ErrUnchanged, "provider-unchanged", http.StatusConflict},
 	{signreq.ErrInvalid, "bad-sign-request", http.StatusBadRequest},
 	{signreq.ErrCurveMismatch, "curve-mismatch", http.StatusUnprocessableEntity},
 	{signreq.ErrUnknown, "no-sign-request", http.StatusNotFound},

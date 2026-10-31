@@ -2,101 +2,175 @@ package cli_test
 
 import (
 	"encoding/json"
-	"net"
-	"net/http"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
-	"sync"
 	"testing"
+
+	"defios.com/internal/config"
+	"defios.com/internal/group"
+	"defios.com/internal/nodedir"
 )
 
-// providerServe answers /v1/provider/* on dir/serve.sock, recording each
-// request body by path.
-func providerServe(t *testing.T, dir string) func() []string {
+// groupConfig is the Group's config.toml under dir, as config reads it.
+func groupConfig(t *testing.T, dir string) config.Config {
 	t.Helper()
-	l, err := net.Listen("unix", filepath.Join(dir, "serve.sock"))
+	c, err := config.ReadFile(nodedir.Resolve(nodedir.Lookup{Dir: dir}).GroupConfigFile(group.ImplicitAlias))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var mu sync.Mutex
-	var seen []string
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/provider/", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
-		raw, _ := json.Marshal(body)
-		mu.Lock()
-		seen = append(seen, r.URL.Path+" "+string(raw))
-		mu.Unlock()
-		w.Write([]byte(`{"seq":7,"term":1,"msg_id":"ab"}`))
-	})
-	srv := &http.Server{Handler: mux}
-	go srv.Serve(l)
-	t.Cleanup(func() { srv.Close() })
-	return func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]string(nil), seen...)
-	}
+	return c
 }
 
-// provider add writes a complete row: an alias that names a preset uses
+// provider add writes a complete [providers.<alias>] table to the Group's
+// config.toml, with no serve running: an alias that names a preset uses
 // it, --preset names one for any alias, and flags override its fields.
-// Without a preset both fields are required, and an api_path no shape
-// matches is refused before anything is written.
-func TestProviderAddWritesACompleteRow(t *testing.T) {
+// Without a preset both fields are required, an api_path no shape matches
+// is refused, and so is an alias already there; a refused add writes
+// nothing.
+func TestProviderAddWritesTheGroupsConfig(t *testing.T) {
 	dir := t.TempDir()
-	seen := providerServe(t, dir)
+	mustInit(t, dir)
+	mustGroupNew(t, dir)
 	for _, c := range []struct {
 		args []string
-		want string
+		want config.Provider
 	}{
-		{[]string{"anthropic"}, `{"alias":"anthropic","api_path":"/v1/messages","base_url":"https://api.anthropic.com"}`},
+		{[]string{"anthropic"}, config.Provider{BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}},
 		{[]string{"local", "--base-url", "http://127.0.0.1:8080", "--api-path", "/v1/chat/completions"},
-			`{"alias":"local","api_path":"/v1/chat/completions","base_url":"http://127.0.0.1:8080"}`},
-		{[]string{"openai"}, `{"alias":"openai","api_path":"/v1/responses","base_url":"https://api.openai.com"}`},
+			config.Provider{BaseURL: "http://127.0.0.1:8080", APIPath: "/v1/chat/completions"}},
+		{[]string{"openai"}, config.Provider{BaseURL: "https://api.openai.com", APIPath: "/v1/responses"}},
 		{[]string{"openai-cc", "--preset", "openai", "--api-path", "/v1/chat/completions"},
-			`{"alias":"openai-cc","api_path":"/v1/chat/completions","base_url":"https://api.openai.com"}`},
-		{[]string{"work", "--preset", "anthropic"}, `{"alias":"work","api_path":"/v1/messages","base_url":"https://api.anthropic.com"}`},
-		{[]string{"anthropic", "--base-url", "https://proxy.example"}, `{"alias":"anthropic","api_path":"/v1/messages","base_url":"https://proxy.example"}`},
+			config.Provider{BaseURL: "https://api.openai.com", APIPath: "/v1/chat/completions"}},
+		{[]string{"work", "--preset", "anthropic"}, config.Provider{BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}},
+		{[]string{"proxied", "--preset", "anthropic", "--base-url", "https://proxy.example"},
+			config.Provider{BaseURL: "https://proxy.example", APIPath: "/v1/messages"}},
 	} {
-		before := len(seen())
 		r := run(t, nil, "", append([]string{"--dir", dir, "provider", "add"}, c.args...)...)
-		if r.code != 0 || !strings.Contains(r.stdout, "seq 7") {
+		if r.code != 0 {
 			t.Fatalf("%v: exit %d, stdout %q, stderr %q", c.args, r.code, r.stdout, r.stderr)
 		}
-		if got := seen(); len(got) != before+1 || got[before] != "/v1/provider/add "+c.want {
-			t.Fatalf("%v: sent %v, want %s", c.args, got[before:], c.want)
+		if got := groupConfig(t, dir).Providers[c.args[0]]; !reflect.DeepEqual(got, c.want) {
+			t.Fatalf("%v: wrote %+v, want %+v", c.args, got, c.want)
 		}
 	}
-	before := len(seen())
+	before := groupConfig(t, dir)
 	for _, args := range [][]string{
 		{"x", "--base-url", "https://x.example", "--api-path", "/v1/foo"},
 		{"x", "--api-path", "/v1/foo"},
 		{"x"},
 		{"x", "--base-url", "https://x.example"},
 		{"x", "--preset", "acme"},
+		{"x", "--preset", "anthropic", "--base-url", "https://u:p@x.example"},
 		{"anthropic", "--api-path", "/v1/decisions"},
+		{"anthropic"},
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "provider", "add"}, args...)...)
 		if r.code != 1 {
 			t.Errorf("%v: exit %d, stderr %q; want 1", args, r.code, r.stderr)
 		}
 	}
-	if got := seen(); len(got) != before {
-		t.Fatalf("refused adds were sent: %v", got[before:])
+	if after := groupConfig(t, dir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("refused adds changed the config:\n%+v\nwant\n%+v", after, before)
+	}
+	if c := groupConfig(t, dir); c.HeadscaleURL != "https://hs.example" || c.DisplayName == "" {
+		t.Fatalf("add lost the rest of the config: %+v", c)
 	}
 }
 
-// provider remove writes a remove of the alias.
-func TestProviderRemove(t *testing.T) {
+// provider edit changes only the fields it is given, keeping the table's
+// api_key and body; an edit of an absent alias, or one that changes
+// nothing, is refused. provider remove drops the whole table.
+func TestProviderEditAndRemoveTheTable(t *testing.T) {
 	dir := t.TempDir()
-	seen := providerServe(t, dir)
-	if r := run(t, nil, "", "--dir", dir, "provider", "remove", "local"); r.code != 0 {
-		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	mustInit(t, dir)
+	mustGroupNew(t, dir)
+	path := nodedir.Resolve(nodedir.Lookup{Dir: dir}).GroupConfigFile(group.ImplicitAlias)
+	c := groupConfig(t, dir)
+	c.Providers = map[string]config.Provider{"claude": {
+		BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", APIKey: "$ANTHROPIC",
+		Body: map[string]any{"stream": true, "thinking": map[string]any{"type": "adaptive"}},
+	}}
+	if err := config.WriteFile(path, c); err != nil {
+		t.Fatal(err)
 	}
-	if got := seen(); len(got) != 1 || got[0] != `/v1/provider/remove {"alias":"local"}` {
-		t.Fatalf("sent %v", got)
+	if r := run(t, nil, "", "--dir", dir, "provider", "edit", "claude", "--base-url", "http://127.0.0.1:8080"); r.code != 0 {
+		t.Fatalf("edit: exit %d: %s", r.code, r.stderr)
+	}
+	want := config.Provider{
+		BaseURL: "http://127.0.0.1:8080", APIPath: "/v1/messages", APIKey: "$ANTHROPIC",
+		Body: map[string]any{"stream": true, "thinking": map[string]any{"type": "adaptive"}},
+	}
+	if got := groupConfig(t, dir).Providers["claude"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("edited %+v\nwant   %+v", got, want)
+	}
+	for _, args := range [][]string{
+		{"edit", "ghost", "--base-url", "https://x.example"},
+		{"edit", "claude", "--base-url", "http://127.0.0.1:8080"},
+		{"edit", "claude", "--api-path", "/v1/foo"},
+		{"remove", "ghost"},
+	} {
+		if r := run(t, nil, "", append([]string{"--dir", dir, "provider"}, args...)...); r.code != 1 {
+			t.Errorf("%v: exit %d, stderr %q; want 1", args, r.code, r.stderr)
+		}
+	}
+	if r := run(t, nil, "", "--dir", dir, "provider", "remove", "claude"); r.code != 0 {
+		t.Fatalf("remove: exit %d: %s", r.code, r.stderr)
+	}
+	if _, ok := groupConfig(t, dir).Providers["claude"]; ok {
+		t.Fatal("remove left the table")
+	}
+}
+
+// provider list and show read the config: the Group's, or with --key that
+// Key's Conversation config.toml merged over it. Neither shows the key's
+// value, only its reference.
+func TestProviderListAndShowReadTheMergedConfig(t *testing.T) {
+	dir := t.TempDir()
+	groupWithKeys(t, dir)
+	p := nodedir.Resolve(nodedir.Lookup{Dir: dir})
+	if err := os.MkdirAll(p.GroupConfigDir(group.ImplicitAlias), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.GroupConfigFile(group.ImplicitAlias), []byte(`
+[providers.claude]
+base_url = "https://api.anthropic.com"
+api_path = "/v1/messages"
+api_key = "$ANTHROPIC"
+
+[providers.local]
+base_url = "http://127.0.0.1:8080"
+api_path = "/v1/chat/completions"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conv := p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111")
+	if err := os.MkdirAll(filepath.Dir(conv), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(conv, []byte("[providers.claude]\nbase_url = \"https://gateway.example\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := run(t, nil, "", "--dir", dir, "provider", "list")
+	want := "claude  https://api.anthropic.com/v1/messages  messages\nlocal  http://127.0.0.1:8080/v1/chat/completions  chat_completions\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("list: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
+	}
+
+	r = run(t, nil, "", "--dir", dir, "provider", "show", "claude", "--key", "ab11", "--json")
+	var got map[string]any
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
+		t.Fatalf("show --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	wantShow := map[string]any{"alias": "claude", "base_url": "https://gateway.example", "api_path": "/v1/messages", "shape": "messages", "api_key": "$ANTHROPIC"}
+	if !reflect.DeepEqual(got, wantShow) {
+		t.Fatalf("show --key = %v\nwant %v", got, wantShow)
+	}
+
+	if r := run(t, nil, "", "--dir", dir, "provider", "show", "ghost"); r.code != 1 || !strings.Contains(r.stderr, "no such provider") {
+		t.Fatalf("show ghost: exit %d, stderr %q", r.code, r.stderr)
 	}
 }
 

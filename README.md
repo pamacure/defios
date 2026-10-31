@@ -117,7 +117,7 @@ Check it: `defios conversation log` (Group talk) and `defios conversation log --
 
 ### 6. Add a Provider
 
-A Provider is an endpoint an agent calls: a base URL and an API path. It replicates to the whole Group. The `anthropic` preset is Anthropic's Messages API:
+A Provider is an LLM API this Node's agents call: a base URL and an API path. It is this Node's own config, a `[providers.<alias>]` table in the Group's `config.toml`, and is never shared with the Group, so each machine adds its own and its key goes only to the base URL it named. `provider` needs no serve. The `anthropic` preset is Anthropic's Messages API:
 
 ```bash
 defios provider add anthropic
@@ -147,7 +147,7 @@ Store the Provider's API key in this Node's Vault (it never replicates):
 defios secret set ANTHROPIC_API_KEY
 ```
 
-Check it: `defios provider list` shows the Provider on both machines, and `defios secret show ANTHROPIC_API_KEY` says where the key comes from.
+Check it: `defios provider list` shows the Providers this machine has, and `defios secret show ANTHROPIC_API_KEY` says where the key comes from.
 
 ### 7. Create an agent
 
@@ -159,7 +159,7 @@ echo "You review proposed transactions and point out anything risky." \
   > ~/.config/defios/agents/auditor/SYSTEM.md
 ```
 
-Then edit `~/.config/defios/group/personal/config.toml` to include the agent in Group talk under the existing `[agent]` table, bind it to the Handle `@auditor` on the `anthropic` Provider, and give that Provider the API key:
+Then edit `~/.config/defios/group/personal/config.toml` to include the agent in Group talk under the existing `[agent]` table, bind it to the Handle `@auditor` on the `anthropic` Provider, and give that Provider the API key in the `[providers.anthropic]` table `provider add` wrote:
 
 ```toml
 [agent]
@@ -174,15 +174,19 @@ stream = true
 max_tokens = 8192
 
 [providers.anthropic]
+base_url = "https://api.anthropic.com"
+api_path = "/v1/messages"
 api_key = "$ANTHROPIC_API_KEY"
 ```
 
-The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[agents.auditor.body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `[providers.<alias>]` table.
+The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[agents.auditor.body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `api_key`.
 
 Fields that every agent on a Provider shares can go in the Provider's own `body` instead. A profile's body merges over its Provider's body, so an agent with no body of its own runs on the Provider's, and one that sets a field overrides only that field. Here both agents stream, and `@auditor` uses a larger model:
 
 ```toml
 [providers.anthropic]
+base_url = "https://api.anthropic.com"
+api_path = "/v1/messages"
 api_key = "$ANTHROPIC_API_KEY"
 
 [providers.anthropic.body]
@@ -200,7 +204,7 @@ provider = "anthropic"
 model = "claude-opus-5-5"
 ```
 
-A Conversation's own `config.toml` can set `[providers.<alias>.body]` too, and it merges over the Group's.
+A Conversation's own `config.toml` can override a `[providers.<alias>]` table key by key: one that sets only `base_url` keeps the Group's `api_path`, `api_key` and body, and its own `[providers.<alias>.body]` merges over the Group's.
 
 An agent on the `openai` preset takes the Responses API's own fields:
 
@@ -219,6 +223,8 @@ include = ["reasoning.encrypted_content"]
 effort = "medium"
 
 [providers.openai]
+base_url = "https://api.openai.com"
+api_path = "/v1/responses"
 api_key = "$OPENAI_API_KEY"
 ```
 
