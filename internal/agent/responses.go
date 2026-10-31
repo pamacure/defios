@@ -74,7 +74,7 @@ func (p *responsesParser) event(data string) (bool, error) {
 		if err := json.Unmarshal(ev.Item, &it); err != nil {
 			return false, fmt.Errorf("agent: bad event: %w", err)
 		}
-		b, err := p.at(ev.OutputIndex, true)
+		b, err := p.added(ev.OutputIndex)
 		if err != nil {
 			return false, err
 		}
@@ -91,21 +91,21 @@ func (p *responsesParser) event(data string) (bool, error) {
 			*b = Block{Type: it.Type}
 		}
 	case "response.output_text.delta", "response.refusal.delta":
-		b, err := p.at(ev.OutputIndex, false)
+		b, err := p.existing(ev.OutputIndex)
 		if err != nil {
 			return false, err
 		}
 		b.Text += ev.Delta
 		p.stream(ev.OutputIndex, KindText, ev.Delta)
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-		b, err := p.at(ev.OutputIndex, false)
+		b, err := p.existing(ev.OutputIndex)
 		if err != nil {
 			return false, err
 		}
 		b.Thinking += ev.Delta
 		p.stream(ev.OutputIndex, KindThinking, ev.Delta)
 	case "response.function_call_arguments.delta":
-		if _, err := p.at(ev.OutputIndex, false); err != nil {
+		if _, err := p.existing(ev.OutputIndex); err != nil {
 			return false, err
 		}
 		p.args[ev.OutputIndex].WriteString(ev.Delta)
@@ -119,7 +119,7 @@ func (p *responsesParser) event(data string) (bool, error) {
 		return true, nil
 	case "response.incomplete":
 		p.out.usage = ev.Response.Usage
-		p.out.stop, p.out.incomplete = ev.Response.IncompleteDetails.Reason, true
+		p.markIncomplete(ev.Response.IncompleteDetails.Reason)
 		return true, nil
 	case "response.failed":
 		if e := ev.Response.Error; e != nil {
@@ -132,18 +132,30 @@ func (p *responsesParser) event(data string) (bool, error) {
 	return false, nil
 }
 
-// at is the block of output item index; add makes room for a new one.
-func (p *responsesParser) at(index int, add bool) (*Block, error) {
+// markIncomplete marks the reply incomplete for reason; at the token bound it
+// is also truncated. Either way it is an error.
+func (p *responsesParser) markIncomplete(reason string) {
+	p.out.stop, p.out.incomplete = reason, true
+	p.out.truncated = reason == "max_output_tokens"
+}
+
+// added is the block of output item index, made room for if it is new.
+func (p *responsesParser) added(index int) (*Block, error) {
 	if index < 0 || index > 1024 {
 		return nil, fmt.Errorf("agent: bad event: output index %d", index)
-	}
-	if !add && index >= len(p.blocks) {
-		return nil, fmt.Errorf("agent: bad event: delta for output item %d before it was added", index)
 	}
 	for len(p.blocks) <= index {
 		p.blocks = append(p.blocks, Block{})
 		p.args = append(p.args, strings.Builder{})
 		p.started = append(p.started, false)
+	}
+	return &p.blocks[index], nil
+}
+
+// existing is the block of output item index, which must have been added.
+func (p *responsesParser) existing(index int) (*Block, error) {
+	if index < 0 || index >= len(p.blocks) {
+		return nil, fmt.Errorf("agent: bad event: delta for output item %d before it was added", index)
 	}
 	return &p.blocks[index], nil
 }
@@ -168,7 +180,7 @@ func (p *responsesParser) done(index int, raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &it); err != nil {
 		return fmt.Errorf("agent: bad event: %w", err)
 	}
-	b, err := p.at(index, true)
+	b, err := p.added(index)
 	if err != nil {
 		return err
 	}
@@ -234,7 +246,7 @@ func (p *responsesParser) reply(body []byte) error {
 	}
 	p.out.usage = r.Usage
 	if r.Status == "incomplete" {
-		p.out.stop, p.out.incomplete = r.IncompleteDetails.Reason, true
+		p.markIncomplete(r.IncompleteDetails.Reason)
 	}
 	return nil
 }

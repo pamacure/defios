@@ -199,6 +199,9 @@ type Block struct {
 type call struct {
 	blocks []Block
 	stop   string // the provider's stop or finish reason
+	// truncated is a reply that stopped at its token bound, as its shape
+	// says so.
+	truncated bool
 	// incomplete is a Responses reply that came back incomplete, for the
 	// reason in stop.
 	incomplete bool
@@ -232,7 +235,7 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 		if out.usage != nil {
 			ev.record(RecordUsage, out.usage)
 		}
-		if out.stop == "max_tokens" || out.stop == "length" || out.stop == "max_output_tokens" {
+		if out.truncated {
 			return Result{}, fmt.Errorf("agent: the model stopped at its token bound (stop reason %s) before it finished", out.stop)
 		}
 		if out.incomplete {
@@ -778,6 +781,7 @@ func (p *anthropicParser) result() call {
 		}
 	}
 	p.out.blocks = p.blocks
+	p.out.truncated = p.out.stop == "max_tokens"
 	return p.out
 }
 
@@ -915,5 +919,6 @@ func (p *openaiParser) result() call {
 		b.Input = toolInput(p.args[i].String())
 		p.out.blocks = append(p.out.blocks, b)
 	}
+	p.out.truncated = p.out.stop == "length"
 	return p.out
 }
