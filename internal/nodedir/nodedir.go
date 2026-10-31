@@ -3,6 +3,7 @@
 package nodedir
 
 import (
+	"encoding/hex"
 	"path/filepath"
 	"strconv"
 )
@@ -137,6 +138,21 @@ func (p Paths) TsnetDir(alias string) string {
 // ID, or "group" for Group-level talk (ADR 0024).
 func (p Paths) ConversationDir(alias, conversation string) string {
 	return filepath.Join(p.GroupDir(alias), "conversations", conversation)
+}
+
+// ConversationName is the name of a Conversation's directory: its hex
+// Conversation ID, or "group" for Group-level talk (nil id).
+func ConversationName(id []byte) string {
+	if id == nil {
+		return "group"
+	}
+	return hex.EncodeToString(id)
+}
+
+// RecapFile is a Conversation's RECAP.md: this Node's Recap of its talk,
+// local to this Node and never on the COSL (ADR 0024).
+func (p Paths) RecapFile(alias, conversation string) string {
+	return filepath.Join(p.ConversationDir(alias, conversation), "RECAP.md")
 }
 
 // TranscriptsDir is a Conversation's transcripts/: what this Node's agents

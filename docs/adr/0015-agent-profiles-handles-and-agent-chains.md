@@ -118,6 +118,9 @@ stream, the CLI, retry and text only are amended there.*
   *Amended by [ADR 0018](0018-an-agent-says-one-message.md): the talk is sent as turns, the
   agent's own messages from any Node as `assistant` turns, and within a
   summon each call carries the whole output so far.*
+  *Amended by [ADR 0024](0024-a-recap-is-a-local-file.md): the Recap read is
+  this Node's `RECAP.md`, not a live Recap on the log, and the preamble says
+  when pruned talk no Recap accounts for is missing.*
   *Amended by [ADR 0021](0021-an-agent-is-one-nodes-handle.md): only the
   agent's messages from its own Node are its turns.*
 - **Stream.** The serve's local socket gains `GET /v1/conversation/stream`,

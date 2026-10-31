@@ -265,27 +265,109 @@ func appender(t *testing.T, dir string, holder *identity.Node, seq uint64) func(
 	}
 }
 
-// groupWithRecap is groupWithTalk plus bob's Group-level Recap of seqs 2..4
-// at seq 6, alice's "after" at 7, and a stale Recap at 8 the fold skips.
-// Group-level talk folds to the Recap, then seqs 5 and 7.
+// groupWithRecap is groupWithTalk plus alice's "after" at 6, and this
+// Node's Recap of Group-level talk up to seq 4, written by `conversation
+// recap`. Group-level talk is seqs 2, 4, 5 and 6.
 func groupWithRecap(t *testing.T, dir string) {
 	t.Helper()
-	alice, bob := groupWithTalk(t, dir)
-	apply := appender(t, dir, alice, 5)
-	recapOf := func(text string, base uint64) proto.Message {
-		m, err := cosl.Recap(text, base)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return m
-	}
-	apply(bob, nil, recapOf("hello and hi", 4), cosl.TypeAppRecap)
+	alice, _ := groupWithTalk(t, dir)
 	ff, _ := cosl.Freeform("after")
-	apply(alice, nil, ff, cosl.TypeAppFreeform)
-	apply(alice, nil, recapOf("stale", 2), cosl.TypeAppRecap)
+	appender(t, dir, alice, 5)(alice, nil, ff, cosl.TypeAppFreeform)
+	if r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "4", "--text", "hello and hi"); r.code != 0 {
+		t.Fatalf("recap: exit %d: %s", r.code, r.stderr)
+	}
 }
 
-func TestConversationLogFoldsToTheLiveRecap(t *testing.T) {
+// recapFile is the RECAP.md of the Conversation named conversation in the
+// Node under dir.
+func recapFile(dir, conversation string) string {
+	return nodedir.Resolve(nodedir.Lookup{Dir: dir}).RecapFile(group.ImplicitAlias, conversation)
+}
+
+// conversation recap writes this Node's RECAP.md in the Conversation's
+// data directory, needing no serve, and no row reaches the COSL. Writing
+// again replaces it whole.
+func TestConversationRecapWritesRECAPmd(t *testing.T) {
+	dir := t.TempDir()
+	ecdsaPK, _ := groupWithKeys(t, dir) // Group-level talk at 2, 4, 5; the ECDSA Key's at 12
+	before := run(t, nil, "", "--dir", dir, "cosl", "log", "--json").stdout
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "4", "--text", "hello\nand hi")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	path := recapFile(dir, "group")
+	if !strings.Contains(r.stdout, "seq 4") || !strings.Contains(r.stdout, path) {
+		t.Errorf("stdout = %q", r.stdout)
+	}
+	if got := readFile(t, path); got != "---\nbase_seq: 4\n---\nhello\nand hi\n" {
+		t.Errorf("RECAP.md = %q", got)
+	}
+	if after := run(t, nil, "", "--dir", dir, "cosl", "log", "--json").stdout; after != before {
+		t.Errorf("the COSL changed:\n%s\n%s", before, after)
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "5", "--text", "all of it", "--json")
+	var got map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil || r.code != 0 {
+		t.Fatalf("--json: exit %d %v\n%s", r.code, err, r.stdout)
+	}
+	if got["base_seq"] != float64(5) || got["path"] != path {
+		t.Errorf("--json = %v", got)
+	}
+	if got := readFile(t, path); got != "---\nbase_seq: 5\n---\nall of it\n" {
+		t.Errorf("rewritten RECAP.md = %q", got)
+	}
+
+	id := key.ConversationID("ecdsa", ecdsaPK)
+	if r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--key", "ab11", "--base-seq", "12", "--text", "ecdsa talk"); r.code != 0 {
+		t.Fatalf("--key: exit %d: %s", r.code, r.stderr)
+	}
+	if got := readFile(t, recapFile(dir, hex.EncodeToString(id[:]))); got != "---\nbase_seq: 12\n---\necdsa talk\n" {
+		t.Errorf("the Key's RECAP.md = %q", got)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// conversation recap refuses, as usage, a base_seq that names no
+// app.freeform of the Conversation, and text app.freeform would refuse;
+// it writes nothing.
+func TestConversationRecapRefusalsExitUsage(t *testing.T) {
+	dir := t.TempDir()
+	groupWithTalk(t, dir) // membership.join at 1; Group-level talk at 2, 4, 5; a Key's at 3
+	for _, args := range [][]string{
+		{"--text", "no base"},
+		{"--base-seq", "4"},
+		{"--base-seq", "4", "--text", ""},
+		{"--base-seq", "1", "--text", "a membership.join"},
+		{"--base-seq", "3", "--text", "another Conversation's"},
+		{"--base-seq", "9", "--text", "not yet"},
+	} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "recap"}, args...)...)
+		if r.code != 1 {
+			t.Errorf("%q: exit %d, want 1; stderr %q", args, r.code, r.stderr)
+		}
+	}
+	r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "3", "--text", "x")
+	if !strings.Contains(r.stderr, "base seq must name an app.freeform of this Conversation") {
+		t.Errorf("stderr = %q", r.stderr)
+	}
+	if _, err := os.Stat(recapFile(dir, "group")); !os.IsNotExist(err) {
+		t.Fatalf("RECAP.md: %v", err)
+	}
+}
+
+// conversation log no longer folds: this Node's Recap stands in for
+// nothing, and every message this replica holds is shown.
+func TestConversationLogShowsAllTheTalkItHolds(t *testing.T) {
 	dir := t.TempDir()
 	groupWithRecap(t, dir)
 	r := run(t, nil, "", "--dir", dir, "conversation", "log")
@@ -293,33 +375,13 @@ func TestConversationLogFoldsToTheLiveRecap(t *testing.T) {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("want the Recap and 2 lines, got:\n%s", r.stdout)
+	if len(lines) != 4 || !strings.HasPrefix(lines[0], "2 ") || !strings.HasPrefix(lines[3], "6 ") || !strings.HasSuffix(lines[3], " alice user  after") {
+		t.Fatalf("log = %q", r.stdout)
 	}
-	if !strings.HasPrefix(lines[0], "6 ") || !strings.HasSuffix(lines[0], " bob user  [recap of 2 messages to seq 4] hello and hi") {
-		t.Errorf("recap line: %q", lines[0])
-	}
-	if !strings.HasPrefix(lines[1], "5 ") || !strings.HasPrefix(lines[2], "7 ") || !strings.HasSuffix(lines[2], " alice user  after") {
-		t.Errorf("talk lines: %q", lines[1:])
-	}
-
-	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--json")
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--limit", "1", "--json")
 	var rows []map[string]any
-	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 3 {
-		t.Fatalf("--json: %v\n%s", err, r.stdout)
-	}
-	if rows[0]["msg_type"] != "app.recap" || rows[0]["base_seq"] != float64(4) || rows[0]["covers"] != float64(2) || rows[0]["text"] != "hello and hi" {
-		t.Errorf("recap row = %v", rows[0])
-	}
-	if rows[1]["msg_type"] != "app.freeform" || rows[1]["covers"] != nil {
-		t.Errorf("talk row = %v", rows[1])
-	}
-
-	// --limit trims talk; the live Recap still stands in for what it hides.
-	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--limit", "1")
-	lines = strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "6 ") || !strings.HasPrefix(lines[1], "7 ") {
-		t.Errorf("--limit 1 = %q", r.stdout)
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 1 || rows[0]["seq"] != float64(6) {
+		t.Fatalf("--limit 1 --json: %v\n%s", err, r.stdout)
 	}
 }
 
@@ -344,26 +406,30 @@ func pruneTalk(t *testing.T, dir string, seqs ...uint64) {
 	}
 }
 
-// --full shows the talk the Recap supersedes in seq order, a pruned row as
-// metadata only, and composes with --limit.
+// The plain log shows only the talk that has not been pruned; --full also
+// shows each pruned row, as metadata only, in seq order, and composes with
+// --limit.
 func TestConversationLogFull(t *testing.T) {
 	dir := t.TempDir()
 	groupWithRecap(t, dir)
 	pruneTalk(t, dir, 2)
-	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
+	r := run(t, nil, "", "--dir", dir, "conversation", "log")
+	if lines := strings.Split(strings.TrimSpace(r.stdout), "\n"); len(lines) != 3 || !strings.HasPrefix(lines[0], "4 ") {
+		t.Errorf("log without the pruned row = %q", r.stdout)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("want 5 lines, got:\n%s", r.stdout)
+	if len(lines) != 4 {
+		t.Fatalf("want 4 lines, got:\n%s", r.stdout)
 	}
 	wants := []struct{ prefix, suffix string }{
 		{"2 ", " alice  [pruned]"},
 		{"4 ", " bob user  hi back"},
 		{"5 ", ` alice user  two\nlines`},
-		{"6 ", " bob user  [recap of 2 messages to seq 4] hello and hi"},
-		{"7 ", " alice user  after"},
+		{"6 ", " alice user  after"},
 	}
 	for i, w := range wants {
 		if !strings.HasPrefix(lines[i], w.prefix) || !strings.HasSuffix(lines[i], w.suffix) {
@@ -373,25 +439,26 @@ func TestConversationLogFull(t *testing.T) {
 
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--json")
 	var rows []map[string]any
-	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 5 {
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 4 {
 		t.Fatalf("--json: %v\n%s", err, r.stdout)
 	}
-	if rows[0]["pruned"] != true || rows[0]["text"] != "" || rows[0]["superseded"] != true || rows[0]["sender_display_name"] != "alice" {
+	if rows[0]["pruned"] != true || rows[0]["text"] != "" || rows[0]["sender_display_name"] != "alice" {
 		t.Errorf("pruned row = %v", rows[0])
 	}
-	if rows[1]["pruned"] != nil || rows[1]["superseded"] != true || rows[2]["superseded"] != nil {
-		t.Errorf("superseded flags: %v / %v", rows[1], rows[2])
+	if rows[1]["pruned"] != nil {
+		t.Errorf("held row = %v", rows[1])
 	}
 
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--limit", "2")
 	lines = strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "6 ") || !strings.HasPrefix(lines[1], "7 ") {
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "5 ") || !strings.HasPrefix(lines[1], "6 ") {
 		t.Errorf("--full --limit 2 = %q", r.stdout)
 	}
 }
 
-// --lean is the live Recap then every message after it, as display name and
-// text only: no seq, time, type, header or pruned placeholder.
+// --lean is this Node's RECAP.md, then the talk after its base_seq this
+// replica still holds, as display name and text only: no seq, time, type,
+// header or pruned placeholder. That is what an agent reads.
 func TestConversationLogLean(t *testing.T) {
 	dir := t.TempDir()
 	groupWithRecap(t, dir)
@@ -400,11 +467,11 @@ func TestConversationLogLean(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
-	if want := "bob: hello and hi\nalice: two\\nlines\nalice: after\n"; r.stdout != want {
+	if want := "[recap to seq 4] hello and hi\nalice: two\\nlines\nalice: after\n"; r.stdout != want {
 		t.Errorf("--lean = %q, want %q", r.stdout, want)
 	}
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--limit", "1")
-	if want := "bob: hello and hi\nalice: after\n"; r.stdout != want {
+	if want := "[recap to seq 4] hello and hi\nalice: after\n"; r.stdout != want {
 		t.Errorf("--lean --limit 1 = %q, want %q", r.stdout, want)
 	}
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--json")
@@ -412,20 +479,43 @@ func TestConversationLogLean(t *testing.T) {
 	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 3 || strings.Count(r.stdout, "\n") != 3 {
 		t.Fatalf("--json: %v\n%s", err, r.stdout)
 	}
-	if len(rows[0]) != 2 || rows[0]["sender_display_name"] != "bob" || rows[0]["text"] != "hello and hi" {
-		t.Errorf("lean row = %v", rows[0])
+	if len(rows[0]) != 2 || rows[0]["base_seq"] != float64(4) || rows[0]["text"] != "hello and hi" {
+		t.Errorf("recap row = %v", rows[0])
+	}
+	if len(rows[1]) != 2 || rows[1]["sender_display_name"] != "alice" || rows[1]["text"] != "two\nlines" {
+		t.Errorf("talk row = %v", rows[1])
 	}
 
-	// A pruned row the fold does not supersede still prints nothing, and
-	// --limit counts only what --lean can show.
-	pruneTalk(t, dir, 7)
-	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean")
-	if want := "bob: hello and hi\nalice: two\\nlines\n"; r.stdout != want {
-		t.Errorf("--lean over pruned talk = %q, want %q", r.stdout, want)
-	}
+	// Pruned talk after the Recap prints nothing, and --limit counts only
+	// what --lean can show.
+	pruneTalk(t, dir, 6)
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--limit", "1")
-	if want := "bob: hello and hi\nalice: two\\nlines\n"; r.stdout != want {
+	if want := "[recap to seq 4] hello and hi\nalice: two\\nlines\n"; r.stdout != want {
 		t.Errorf("--lean --limit 1 over pruned talk = %q, want %q", r.stdout, want)
+	}
+
+	// With no RECAP.md, --lean is all the talk this replica holds.
+	if err := os.Remove(recapFile(dir, "group")); err != nil {
+		t.Fatal(err)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean")
+	if want := "alice: two\\nlines\n"; r.stdout != want {
+		t.Errorf("--lean with no Recap = %q, want %q", r.stdout, want)
+	}
+}
+
+// A RECAP.md that does not parse is an error when --lean reads it, naming
+// the file, never silently ignored.
+func TestConversationLogLeanRefusesABadRECAPmd(t *testing.T) {
+	dir := t.TempDir()
+	groupWithRecap(t, dir)
+	path := recapFile(dir, "group")
+	if err := os.WriteFile(path, []byte("base_seq: 4\nhello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--lean")
+	if r.code != 2 || !strings.Contains(r.stderr, path) || r.stdout != "" {
+		t.Fatalf("exit %d, stdout %q, stderr %q; want 2 naming %s", r.code, r.stdout, r.stderr, path)
 	}
 }
 
@@ -442,54 +532,6 @@ func TestConversationLogLeanAndFullTakeKeyAndExcludeEachOther(t *testing.T) {
 	}
 	if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--full", "--lean"); r.code != 1 {
 		t.Errorf("--full --lean: exit %d, want 1; stderr %q", r.code, r.stderr)
-	}
-}
-
-func TestCoslLogNeverFolds(t *testing.T) {
-	dir := t.TempDir()
-	groupWithRecap(t, dir)
-	r := run(t, nil, "", "--dir", dir, "cosl", "log")
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s", r.code, r.stderr)
-	}
-	for _, want := range []string{"hello group", "hi back", "app.recap", "base_seq=4 text=hello and hi", "base_seq=2 text=stale"} {
-		if !strings.Contains(r.stdout, want) {
-			t.Errorf("cosl log lacks %q:\n%s", want, r.stdout)
-		}
-	}
-}
-
-func TestConversationRecapUsageAndServe(t *testing.T) {
-	dir := t.TempDir()
-	mustInit(t, dir)
-	for _, args := range [][]string{
-		{"conversation", "recap", "--text", "no base"},
-		{"conversation", "recap", "--base-seq", "3"},
-		{"conversation", "recap", "--base-seq", "3", "--text", ""},
-	} {
-		if r := run(t, nil, "", append([]string{"--dir", dir}, args...)...); r.code != 1 {
-			t.Errorf("%v: exit %d, want 1; stderr %q", args, r.code, r.stderr)
-		}
-	}
-	last := fakeLocalServe(t, dir, "/v1/conversation/", 200, "", `{"seq":8,"term":2,"msg_id":"`+strings.Repeat("ab", 32)+`"}`)
-	r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "3", "--text", "so far")
-	if r.code != 0 || last.Load() != "/v1/conversation/recap" || !strings.Contains(r.stdout, "8") {
-		t.Fatalf("exit %d, path %s, stdout %q, stderr %q", r.code, last.Load(), r.stdout, r.stderr)
-	}
-}
-
-func TestConversationRecapRefusalsExitUsage(t *testing.T) {
-	for kind, body := range map[string]string{
-		"stale-recap":    "recap: base seq must be beyond the live Recap's: it covers up to seq 4",
-		"bad-recap-base": "recap: base seq must name an app.freeform of this Conversation: seq 9 is not one",
-	} {
-		dir := t.TempDir()
-		mustInit(t, dir)
-		fakeLocalServe(t, dir, "/v1/conversation/", 400, kind, body)
-		r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "3", "--text", "so far")
-		if r.code != 1 || !strings.Contains(r.stderr, body) {
-			t.Errorf("%s: exit %d, want 1; stderr %q", kind, r.code, r.stderr)
-		}
 	}
 }
 
@@ -784,11 +826,41 @@ func TestConversationPruneOlderThan(t *testing.T) {
 	}
 }
 
+// conversation prune warns when it destroys talk past this Node's RECAP.md,
+// or any talk with no RECAP.md: this Node's agents lose it with no account
+// in its place. Pruning only talk the Recap accounts for does not.
+func TestConversationPruneWarnsPastTheRecap(t *testing.T) {
+	dir := t.TempDir()
+	groupWithTalk(t, dir) // Group-level talk at 2, 4, 5
+	r := run(t, nil, "", "--dir", dir, "conversation", "prune", "--before", "2")
+	if r.code != 0 || !strings.Contains(r.stderr, "no RECAP.md") {
+		t.Errorf("no Recap: exit %d, stderr %q", r.code, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "4", "--text", "hello and hi"); r.code != 0 {
+		t.Fatalf("recap: exit %d: %s", r.code, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "prune", "--before", "4")
+	if r.code != 0 || strings.Contains(r.stderr, "RECAP.md") {
+		t.Errorf("covered by the Recap: exit %d, stderr %q", r.code, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "prune", "--before", "5")
+	if r.code != 0 || !strings.Contains(r.stderr, "past seq 4") {
+		t.Errorf("past the Recap: exit %d, stderr %q", r.code, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "prune", "--before", "5")
+	if r.code != 0 || strings.Contains(r.stderr, "RECAP.md") {
+		t.Errorf("pruning nothing new: exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
 // With a prune policy on this Node, a restore cannot undo conversation
 // prune, so it does not warn that one would.
 func TestConversationPruneWithPolicyOnDoesNotWarn(t *testing.T) {
 	dir := t.TempDir()
 	groupWithTalk(t, dir)
+	if r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--base-seq", "4", "--text", "hello and hi"); r.code != 0 {
+		t.Fatalf("recap: exit %d: %s", r.code, r.stderr)
+	}
 	path := nodedir.Resolve(nodedir.Lookup{Dir: dir}).GroupConfigFile(group.ImplicitAlias)
 	if err := config.WriteFile(path, config.Config{DisplayName: "alice", Hostname: "defios-alice", Prune: config.Age(90 * 24 * time.Hour)}); err != nil {
 		t.Fatal(err)

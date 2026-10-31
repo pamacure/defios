@@ -27,7 +27,7 @@ func TestPruneDestroysOnlyCoveredTalk(t *testing.T) {
 	}
 	f.apply(1, 1, talk(nil, "one"))
 	f.apply(2, 1, talk(conv, "scoped"))
-	f.apply(3, 1, f.signed(0, f.envelope(0, cosl.TypeAppRecap, &coslv1.AppRecap{Text: "one", BaseSeq: 1})))
+	f.apply(3, 1, f.signed(0, f.envelope(0, cosl.TypeSessionAbort, &coslv1.SessionAbort{SessionId: make([]byte, 32)})))
 	f.apply(4, 1, talk(nil, "two"))
 	f.apply(5, 1, talk(nil, "after"))
 	before := f.rows()
@@ -107,7 +107,7 @@ func TestPruneOlderThanDestroysOnlyOlderTalk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []cosl.Pruned{{ConversationID: conv, Messages: 2}}; !slices.EqualFunc(got, want, samePruned) {
+	if want := []cosl.Pruned{{ConversationID: conv, Messages: 2, Last: 5}}; !slices.EqualFunc(got, want, samePruned) {
 		t.Fatalf("PruneAllOlderThan = %+v, want %+v", got, want)
 	}
 	if got := prunedSeqs(f); !slices.Equal(got, []uint64{1, 2, 5}) {
@@ -132,7 +132,7 @@ func prunedSeqs(f *fixture) []uint64 {
 }
 
 func samePruned(a, b cosl.Pruned) bool {
-	return bytes.Equal(a.ConversationID, b.ConversationID) && a.Messages == b.Messages
+	return bytes.Equal(a.ConversationID, b.ConversationID) && a.Messages == b.Messages && a.Last == b.Last
 }
 
 // Pruning while the FSM appends never fails an append: the prune policy
@@ -145,7 +145,7 @@ func TestPruneAlongsideAppendsFailsNone(t *testing.T) {
 		return f.signed(0, f.envelope(0, cosl.TypeAppFreeform, freeform(text)))
 	}
 	f.apply(1, 1, talk("first"))
-	f.apply(2, 1, f.signed(0, f.envelope(0, cosl.TypeAppRecap, &coslv1.AppRecap{Text: "first", BaseSeq: 1})))
+	f.apply(2, 1, f.signed(0, f.envelope(0, cosl.TypeSessionAbort, &coslv1.SessionAbort{SessionId: make([]byte, 32)})))
 	const n = 300
 	entries := make([][]byte, n)
 	for i := range entries {
@@ -181,7 +181,7 @@ func TestPruneAlongsideAppendsFailsNone(t *testing.T) {
 func TestTriggerAdmitsOnlyPruning(t *testing.T) {
 	f := newFixture(t)
 	f.apply(1, 1, f.signed(0, f.envelope(0, cosl.TypeAppFreeform, freeform("talk"))))
-	f.apply(2, 1, f.signed(0, f.envelope(0, cosl.TypeAppRecap, &coslv1.AppRecap{Text: "t", BaseSeq: 1})))
+	f.apply(2, 1, f.signed(0, f.envelope(0, cosl.TypeSessionAbort, &coslv1.SessionAbort{SessionId: make([]byte, 32)})))
 	db, err := sql.Open("sqlite", f.path)
 	if err != nil {
 		t.Fatal(err)

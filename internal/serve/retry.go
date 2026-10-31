@@ -17,6 +17,7 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/mention"
+	"defios.com/internal/nodedir"
 	"defios.com/internal/raftx"
 	coslv1 "defios.com/proto/cosl/v1"
 )
@@ -92,7 +93,7 @@ func (s *server) unfinished(conv []byte, seq uint64, handles []string, runs map[
 // latestUnfinished is the seq of the latest chain in conv whose Transcript
 // shows it unfinished, or 0.
 func (s *server) latestUnfinished(store *cosl.Store, conv []byte) (uint64, error) {
-	dir := s.opts.Paths.TranscriptsDir(s.opts.Alias, transcriptName(conv))
+	dir := s.opts.Paths.TranscriptsDir(s.opts.Alias, nodedir.ConversationName(conv))
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
@@ -108,7 +109,7 @@ func (s *server) latestUnfinished(store *cosl.Store, conv []byte) (uint64, error
 	}
 	slices.Sort(seqs)
 	for _, seq := range slices.Backward(seqs) {
-		runs, err := readTranscript(s.opts.Paths.TranscriptFile(s.opts.Alias, transcriptName(conv), seq))
+		runs, err := readTranscript(s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(conv), seq))
 		if err != nil {
 			return 0, err
 		}
@@ -184,7 +185,7 @@ func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, store *cosl.Stor
 	if s.chains.busy(conv, seq) {
 		return 0, ErrChainBusy
 	}
-	runs, err := readTranscript(s.opts.Paths.TranscriptFile(s.opts.Alias, transcriptName(conv), seq))
+	runs, err := readTranscript(s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(conv), seq))
 	if err != nil {
 		return 0, err
 	}

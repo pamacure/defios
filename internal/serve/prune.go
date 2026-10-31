@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/errlog"
 	"defios.com/internal/key"
+	"defios.com/internal/nodedir"
+	"defios.com/internal/recap"
 )
 
 // pruneEvery is how often the prune policy runs between restores.
@@ -148,9 +151,29 @@ func (p *prunePolicy) prune(now time.Time, restores uint64) error {
 	}
 	names := conversationNames(p.store)
 	for _, r := range pruned {
-		p.s.opts.Logf("serve: prune policy: pruned %d messages of %s older than %s", r.Messages, names(r.ConversationID), p.age)
+		name := names(r.ConversationID)
+		p.s.opts.Logf("serve: prune policy: pruned %d messages of %s older than %s", r.Messages, name, p.age)
+		if w := p.s.lostTalk(r); w != "" {
+			p.s.opts.Logf("serve: prune policy: warning: in %s, %s", name, w)
+		}
 	}
 	return nil
+}
+
+// lostTalk is why a prune of r leaves this Node's agents without talk that
+// nothing accounts for (ADR 0024), or "" if this Node's RECAP.md accounts for
+// all of it.
+func (s *server) lostTalk(r cosl.Pruned) string {
+	rc, err := recap.Read(s.opts.Paths.RecapFile(s.opts.Alias, nodedir.ConversationName(r.ConversationID)))
+	switch {
+	case err != nil:
+		return fmt.Sprintf("this Node's agents may have lost talk with no account of it: %v", err)
+	case rc == nil:
+		return "there is no RECAP.md, so this Node's agents lost that talk with no account of it in its place"
+	case !rc.Covers(r.Last):
+		return fmt.Sprintf("talk past seq %d, the base_seq of this Node's RECAP.md, is pruned, so this Node's agents lost it with no account of it in its place", rc.BaseSeq)
+	}
+	return ""
 }
 
 // conversationNames names a Conversation for the log as its Workspace is

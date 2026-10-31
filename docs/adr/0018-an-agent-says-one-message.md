@@ -61,6 +61,10 @@ whole output, and there is a retry verb.
   one Node's Handle, so only the messages its own Node wrote under its
   Handle are `assistant` turns; the same Handle from another Node is another
   agent, in `user` content.*
+  *Amended by [ADR 0024](0024-a-recap-is-a-local-file.md): the Recap is this
+  Node's `RECAP.md`, framed as its own account of the talk up to `base_seq`,
+  at the start of the first `user` turn, in place of the fixed turn when the
+  talk after it opens with the agent's own message.*
 - **Caching.** For Anthropic, the system prompt is sent as blocks:
   `SYSTEM.md` and the stable preamble first, the depth and summonable
   Handles last. Cache breakpoints sit after the stable blocks and on the

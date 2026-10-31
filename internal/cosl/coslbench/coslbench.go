@@ -1,7 +1,7 @@
 // Package coslbench builds large, realistic COSL replicas for benchmarks of
 // the code that reads them (docs/research/cosl-polling-benchmark.md). A
 // replica holds a two-Node Group's history: Keys minted by keygen Sessions,
-// Sign Requests signed by signing Sessions, and talk with Recaps. Round
+// Sign Requests signed by signing Sessions, and talk. Round
 // traffic is sized from a measured tss-lib run, since it dominates the
 // bytes.
 package coslbench
@@ -40,9 +40,6 @@ const (
 // talkText is about 60 tokens, where ADR 0012 measured text starting to
 // outweigh a row's envelope.
 var talkText = strings.Repeat("the quick brown fox jumps over the lazy dog ", 6)
-
-// recapEvery is how many messages of talk pass between Recaps.
-const recapEvery = 1000
 
 // Shape is how much history a replica holds.
 type Shape struct {
@@ -101,7 +98,7 @@ func Build(tb testing.TB, shape Shape) Replica {
 }
 
 // layout names the cache; bump it whenever build writes different rows.
-const layout = "v1"
+const layout = "v2"
 
 // fixed is the Group, Key and signature every replica shares.
 func fixed(tb testing.TB) Replica {
@@ -210,19 +207,12 @@ func build(r Replica, shape Shape, dst string) error {
 		signEvery = max(1, shape.Talk/shape.Signings)
 	}
 	signed := 0
-	var lastGroup uint64
 	for i := range shape.Talk {
 		conv := r.Conversation
 		if i%2 == 0 {
 			conv = nil
 		}
-		seq := w.commit(i%2, cosl.TypeAppFreeform, conv, &coslv1.AppFreeform{Text: fmt.Sprintf("%d %s", i, talkText)})
-		if conv == nil {
-			lastGroup = seq
-		}
-		if (i+1)%recapEvery == 0 {
-			w.commit(0, cosl.TypeAppRecap, nil, &coslv1.AppRecap{Text: "recap " + talkText, BaseSeq: lastGroup})
-		}
+		w.commit(i%2, cosl.TypeAppFreeform, conv, &coslv1.AppFreeform{Text: fmt.Sprintf("%d %s", i, talkText)})
 		if signEvery > 0 && (i+1)%signEvery == 0 && signed < shape.Signings {
 			w.signing(signed)
 			signed++

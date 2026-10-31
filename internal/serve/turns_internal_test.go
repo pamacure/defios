@@ -45,7 +45,7 @@ func render(turns []agent.Turn) string {
 // Consecutive messages of its own merge too, a blank line apart, so the
 // turns alternate.
 func TestTalkTurnsSplitByNodeAndHandle(t *testing.T) {
-	got := talkTurns([]recap.Said{
+	got := talkTurns("", []recap.Said{
 		said(1, "", "Recap: the key is minted"),
 		said(2, "", "@auditor check\nthis"),
 		said(3, "auditor", "looks fine\nto me"),
@@ -65,12 +65,12 @@ func TestTalkTurnsSplitByNodeAndHandle(t *testing.T) {
 // Talk that opens or ends with the agent's own message still alternates,
 // starting and ending with a user turn.
 func TestTalkTurnsOpenAndEndWithUser(t *testing.T) {
-	got := talkTurns([]recap.Said{said(1, "auditor", "first")}, byParity, aliceNode, "auditor")
+	got := talkTurns("", []recap.Said{said(1, "auditor", "first")}, byParity, aliceNode, "auditor")
 	want := "[user] " + talkOpensWithYou + "\n[assistant] first\n[user] " + talkEndsWithYou + "\n"
 	if r := render(got); r != want {
 		t.Fatalf("turns =\n%s\nwant\n%s", r, want)
 	}
-	if got := render(talkTurns(nil, byParity, aliceNode, "auditor")); got != "[user] "+talkEndsWithYou+"\n" {
+	if got := render(talkTurns("", nil, byParity, aliceNode, "auditor")); got != "[user] "+talkEndsWithYou+"\n" {
 		t.Fatalf("empty talk = %q", got)
 	}
 }

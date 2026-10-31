@@ -18,7 +18,6 @@ import (
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
 	"defios.com/internal/raftx"
-	"defios.com/internal/recap"
 )
 
 var (
@@ -50,12 +49,6 @@ type sendRequest struct {
 	// place in a chain.
 	Handle string `json:"handle,omitempty"`
 	Depth  uint32 `json:"depth,omitempty"`
-}
-
-type recapRequest struct {
-	Text           string `json:"text"`
-	BaseSeq        uint64 `json:"base_seq"`
-	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 // requestConversation is a request's Conversation ID, nil for Group-level
@@ -172,29 +165,6 @@ func listHandles(profiles []config.ResolvedProfile) string {
 	return strings.Join(hs, ", ")
 }
 
-// conversationRecap is `conversation recap`: author an app.recap accounting
-// for the Conversation's talk up to baseSeq and commit it. The writer checks
-// it against the folded Conversation first so a Recap the fold would skip
-// fails loudly; like the Networks writer it accepts that a Recap committing
-// between this read and the append can still make the fold skip it.
-func (s *server) conversationRecap(ctx context.Context, text string, baseSeq uint64, conversationID []byte) (SendView, error) {
-	payload, err := cosl.Recap(text, baseSeq)
-	if err != nil {
-		return SendView{}, err
-	}
-	return s.conversationAppend(ctx, cosl.TypeAppRecap, conversationID, payload, func(store *cosl.Store) error {
-		rows, err := store.Log(cosl.Query{GroupLevel: conversationID == nil, ConversationID: conversationID})
-		if err != nil {
-			return err
-		}
-		v, err := recap.Fold(rows)
-		if err != nil {
-			return err
-		}
-		return recap.Check(v, baseSeq)
-	})
-}
-
 // conversationAppend signs payload as typ in the Conversation (Group-level
 // when conversationID is nil) and commits it through Raft, bounded by the
 // §4.2 apply timeout; with the other Node down that bound is the failure.
@@ -268,23 +238,6 @@ func (s *server) conversationRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, v)
 	})
-	mux.HandleFunc("POST /v1/conversation/recap", func(w http.ResponseWriter, r *http.Request) {
-		var req recapRequest
-		if !s.readLocal(w, r, &req) {
-			return
-		}
-		conv, err := requestConversation(req.ConversationID)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		v, err := s.conversationRecap(r.Context(), req.Text, req.BaseSeq, conv)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, v)
-	})
 }
 
 // snapshotRoutes exposes Replica.Snapshot on the local API. No CLI verb
@@ -326,18 +279,5 @@ func (c Client) ConversationSendAs(ctx context.Context, text, handle string, dep
 		req.ConversationID = hex.EncodeToString(conversationID)
 	}
 	err := c.do(ctx, "/v1/conversation/send", req, &v)
-	return v, err
-}
-
-// ConversationRecap is `conversation recap`: commit an app.recap accounting
-// for the Conversation's talk up to baseSeq. A nil conversationID recaps
-// Group-level talk.
-func (c Client) ConversationRecap(ctx context.Context, text string, baseSeq uint64, conversationID []byte) (SendView, error) {
-	var v SendView
-	req := recapRequest{Text: text, BaseSeq: baseSeq}
-	if conversationID != nil {
-		req.ConversationID = hex.EncodeToString(conversationID)
-	}
-	err := c.do(ctx, "/v1/conversation/recap", req, &v)
 	return v, err
 }
