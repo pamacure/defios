@@ -773,6 +773,17 @@ func TestATruncatedJSONReplyIsRetried(t *testing.T) {
 	}
 }
 
+// A JSON reply over the size the agent reads is an error of its own, not
+// one cut off: it is not retried.
+func TestAnOversizedJSONReplyIsNotRetried(t *testing.T) {
+	huge := `{"type":"message","content":[{"type":"text","text":"` + strings.Repeat("a", 17<<20) + `"}],"stop_reason":"end_turn"}`
+	s := newScript(t, asJSON(huge))
+	_, err := run(s, agent.Messages, agent.Events{})
+	if err == nil || strings.Contains(err.Error(), "cut off") || !strings.Contains(err.Error(), "too large") || s.calls() != 1 {
+		t.Fatalf("err %v after %d calls, want too large after 1", err, s.calls())
+	}
+}
+
 // A JSON reply that stopped at its token bound is an error, read from the
 // stop reason it carries, with its blocks and usage recorded. Every shape.
 func TestAJSONReplyAtItsTokenBoundIsAnError(t *testing.T) {

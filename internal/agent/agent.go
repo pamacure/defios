@@ -559,11 +559,15 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 const maxReply = 16 << 20
 
 // readJSON hands a reply that is not streamed to fn whole. A body that
-// does not parse was cut off, like a stream that ends too soon.
+// does not parse was cut off, like a stream that ends too soon; one over
+// maxReply is refused, and not retried, since it would come back as large.
 func readJSON(r io.Reader, fn func(body []byte) error) error {
-	body, err := io.ReadAll(io.LimitReader(r, maxReply))
+	body, err := io.ReadAll(io.LimitReader(r, maxReply+1))
 	if err != nil {
 		return retry(fmt.Errorf("agent: reading the reply: %w", err))
+	}
+	if len(body) > maxReply {
+		return fmt.Errorf("agent: the reply is too large, over %d MiB", maxReply>>20)
 	}
 	if !json.Valid(body) {
 		return retry(errors.New("agent: the reply was cut off"))
