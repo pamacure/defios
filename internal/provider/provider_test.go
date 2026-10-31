@@ -5,167 +5,79 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/protobuf/proto"
-
 	"defios.com/internal/agent"
-	"defios.com/internal/cosl"
-	coslv1 "defios.com/proto/cosl/v1"
 )
 
-func anthropic(alias string) *coslv1.ProviderConfig {
-	return &coslv1.ProviderConfig{Alias: alias, BaseUrl: "https://api.anthropic.com", ApiPath: "/v1/messages"}
-}
-
-func local(alias string) *coslv1.ProviderConfig {
-	return &coslv1.ProviderConfig{Alias: alias, BaseUrl: "http://127.0.0.1:8080", ApiPath: "/v1/chat/completions"}
-}
-
-// rowOf wraps a payload as the COSL row the FSM would have stored.
-func rowOf(t *testing.T, seq uint64, typ uint32, msg proto.Message) cosl.Row {
-	t.Helper()
-	payload, err := proto.Marshal(msg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, err := proto.Marshal(&coslv1.Envelope{Version: 1, MsgType: typ, Payload: payload})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cosl.Row{Seq: seq, MsgType: typ, MsgID: [32]byte{byte(seq)}, Envelope: env}
-}
-
-// An update may change both base_url and api_path, even across shapes; a
-// remove drops the alias.
-func TestFoldSupersedesAndRemoves(t *testing.T) {
-	rows := []cosl.Row{
-		rowOf(t, 1, cosl.TypeProviderCreate, anthropic("b")),
-		rowOf(t, 2, cosl.TypeProviderCreate, anthropic("a")),
-		rowOf(t, 3, cosl.TypeProviderUpdate, local("a")),
-		rowOf(t, 4, cosl.TypeProviderRemove, &coslv1.ProviderRemove{Alias: "b"}),
-		rowOf(t, 5, cosl.TypeAppFreeform, &coslv1.AppFreeform{Text: "noise"}),
-	}
-	got, err := Fold(rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Alias != "a" || got[0].BaseURL != "http://127.0.0.1:8080" || got[0].APIPath != "/v1/chat/completions" || got[0].ConfigID != [32]byte{3} {
-		t.Fatalf("fold = %+v", got)
-	}
-	if got[0].Shape() != agent.ChatCompletions || got[0].URL() != "http://127.0.0.1:8080/v1/chat/completions" {
-		t.Fatalf("shape %v, url %s", got[0].Shape(), got[0].URL())
-	}
-}
-
 func TestValidate(t *testing.T) {
-	good := []*coslv1.ProviderConfig{
-		anthropic("anthropic"),
-		local("local"),
-		{Alias: "proxied", BaseUrl: "https://llm.example/anthropic/", ApiPath: "/v1/messages"},
-		{Alias: "oai", BaseUrl: "https://api.openai.com", ApiPath: "/v1/chat/completions"},
+	good := []Provider{
+		{Alias: "anthropic", BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"},
+		{Alias: "local", BaseURL: "http://127.0.0.1:8080", APIPath: "/v1/chat/completions"},
+		{Alias: "proxied", BaseURL: "https://llm.example/anthropic/", APIPath: "/v1/messages"},
+		{Alias: "oai", BaseURL: "https://api.openai.com", APIPath: "/v1/responses"},
 	}
-	for _, c := range good {
-		if err := Validate(c); err != nil {
-			t.Errorf("%s: %v", c.Alias, err)
+	for _, p := range good {
+		if err := Validate(p); err != nil {
+			t.Errorf("%s: %v", p.Alias, err)
 		}
 	}
-	bad := map[string]*coslv1.ProviderConfig{
-		"bad alias":       {Alias: "Bad Alias", BaseUrl: "https://x.example", ApiPath: "/v1/messages"},
-		"empty alias":     {BaseUrl: "https://x.example", ApiPath: "/v1/messages"},
-		"no base url":     {Alias: "x", ApiPath: "/v1/messages"},
-		"no api path":     {Alias: "x", BaseUrl: "https://x.example"},
-		"unknown shape":   {Alias: "x", BaseUrl: "https://x.example", ApiPath: "/v1/foo"},
-		"decisions":       {Alias: "x", BaseUrl: "https://x.example", ApiPath: "/v1/decisions"},
-		"bad url scheme":  {Alias: "x", BaseUrl: "ws://llm.example", ApiPath: "/v1/messages"},
-		"url no host":     {Alias: "x", BaseUrl: "https://", ApiPath: "/v1/messages"},
-		"url userinfo":    {Alias: "x", BaseUrl: "https://user:SECRET@llm.example", ApiPath: "/v1/messages"},
-		"url query":       {Alias: "x", BaseUrl: "https://llm.example?key=SECRET", ApiPath: "/v1/messages"},
-		"url fragment":    {Alias: "x", BaseUrl: "https://llm.example#frag", ApiPath: "/v1/messages"},
-		"relative path":   {Alias: "x", BaseUrl: "https://x.example", ApiPath: "v1/messages"},
-		"path with query": {Alias: "x", BaseUrl: "https://x.example", ApiPath: "/v1/messages?key=SECRET"},
-		"path fragment":   {Alias: "x", BaseUrl: "https://x.example", ApiPath: "/v1/messages#x"},
+	bad := map[string]Provider{
+		"bad alias":       {Alias: "Bad Alias", BaseURL: "https://x.example", APIPath: "/v1/messages"},
+		"empty alias":     {BaseURL: "https://x.example", APIPath: "/v1/messages"},
+		"no base url":     {Alias: "x", APIPath: "/v1/messages"},
+		"no api path":     {Alias: "x", BaseURL: "https://x.example"},
+		"unknown shape":   {Alias: "x", BaseURL: "https://x.example", APIPath: "/v1/foo"},
+		"decisions":       {Alias: "x", BaseURL: "https://x.example", APIPath: "/v1/decisions"},
+		"bad url scheme":  {Alias: "x", BaseURL: "ws://llm.example", APIPath: "/v1/messages"},
+		"url no host":     {Alias: "x", BaseURL: "https://", APIPath: "/v1/messages"},
+		"url userinfo":    {Alias: "x", BaseURL: "https://user:SECRET@llm.example", APIPath: "/v1/messages"},
+		"url query":       {Alias: "x", BaseURL: "https://llm.example?key=SECRET", APIPath: "/v1/messages"},
+		"url fragment":    {Alias: "x", BaseURL: "https://llm.example#SECRET", APIPath: "/v1/messages"},
+		"relative path":   {Alias: "x", BaseURL: "https://x.example", APIPath: "v1/messages"},
+		"path with query": {Alias: "x", BaseURL: "https://x.example", APIPath: "/v1/messages?key=SECRET"},
+		"path fragment":   {Alias: "x", BaseURL: "https://x.example", APIPath: "/v1/messages#SECRET"},
 	}
-	for name, c := range bad {
-		if err := Validate(c); !errors.Is(err, ErrInvalid) {
+	for name, p := range bad {
+		err := Validate(p)
+		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: got %v, want ErrInvalid", name, err)
+		} else if strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("%s: %v echoes what may be a credential", name, err)
 		}
 	}
 }
 
-// A config wrong in both base_url and api_path names both problems.
+// A Provider wrong in both base_url and api_path names both problems.
 func TestValidateReportsBothFields(t *testing.T) {
-	err := Validate(&coslv1.ProviderConfig{Alias: "x", ApiPath: "/v1/foo"})
+	err := Validate(Provider{Alias: "x", APIPath: "/v1/foo"})
 	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "base url is required") || !strings.Contains(err.Error(), `api path "/v1/foo" must end in one of`) {
 		t.Fatalf("got %v", err)
 	}
 }
 
-func TestFoldIgnoresRacesAndInvalidMessages(t *testing.T) {
-	rows := []cosl.Row{
-		rowOf(t, 1, cosl.TypeProviderCreate, anthropic("a")),
-		rowOf(t, 2, cosl.TypeProviderCreate, local("a")),                                                                           // lost the create race
-		rowOf(t, 3, cosl.TypeProviderUpdate, local("ghost")),                                                                       // nothing to supersede
-		rowOf(t, 4, cosl.TypeProviderUpdate, &coslv1.ProviderConfig{Alias: "a", BaseUrl: "https://x.example", ApiPath: "/v1/foo"}), // no shape
-		rowOf(t, 5, cosl.TypeProviderCreate, &coslv1.ProviderConfig{Alias: "x", BaseUrl: "https://x.example", ApiPath: "/v1/foo"}), // no shape
-		rowOf(t, 6, cosl.TypeProviderRemove, &coslv1.ProviderRemove{Alias: "ghost"}),
-		rowOf(t, 7, cosl.TypeProviderCreate, anthropic("Bad Alias")), // invalid
+// A Conversation's table may leave out what the Group's supplies, but what
+// it sets must be valid.
+func TestValidateOverrideChecksOnlyWhatIsSet(t *testing.T) {
+	for _, p := range []Provider{{Alias: "x"}, {Alias: "x", BaseURL: "https://x.example"}, {Alias: "x", APIPath: "/v1/responses"}} {
+		if err := ValidateOverride(p); err != nil {
+			t.Errorf("%+v: %v", p, err)
+		}
 	}
-	got, err := Fold(rows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].APIPath != "/v1/messages" || got[0].ConfigID != [32]byte{1} {
-		t.Fatalf("fold = %+v", got)
-	}
-}
-
-func TestRemovedAliasCanBeCreatedAgain(t *testing.T) {
-	got, err := Fold([]cosl.Row{
-		rowOf(t, 1, cosl.TypeProviderCreate, anthropic("a")),
-		rowOf(t, 2, cosl.TypeProviderRemove, &coslv1.ProviderRemove{Alias: "a"}),
-		rowOf(t, 3, cosl.TypeProviderCreate, local("a")),
-	})
-	if err != nil || len(got) != 1 || got[0].APIPath != "/v1/chat/completions" {
-		t.Fatalf("fold = %+v, %v", got, err)
-	}
-}
-
-// The writer refuses exactly what Fold would skip, so an operator gets an
-// error rather than a silent no-op.
-func TestCheckMirrorsTheFold(t *testing.T) {
-	live := []Provider{{Alias: "a", BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}}
-	cases := []struct {
-		name  string
-		typ   uint32
-		cfg   *coslv1.ProviderConfig
-		alias string
-		want  error
-	}{
-		{"create new", cosl.TypeProviderCreate, anthropic("b"), "b", nil},
-		{"create live", cosl.TypeProviderCreate, anthropic("a"), "a", ErrExists},
-		{"update live", cosl.TypeProviderUpdate, local("a"), "a", nil},
-		{"update absent", cosl.TypeProviderUpdate, local("b"), "b", ErrUnknown},
-		{"remove live", cosl.TypeProviderRemove, nil, "a", nil},
-		{"remove absent", cosl.TypeProviderRemove, nil, "b", ErrUnknown},
-	}
-	for _, c := range cases {
-		err := Check(live, c.typ, c.cfg, c.alias)
-		if (c.want == nil && err != nil) || (c.want != nil && !errors.Is(err, c.want)) {
-			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
+	for _, p := range []Provider{{Alias: "x", BaseURL: "https://u:p@x.example"}, {Alias: "x", APIPath: "/v1/foo"}, {Alias: "X"}} {
+		if err := ValidateOverride(p); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%+v: got %v, want ErrInvalid", p, err)
 		}
 	}
 }
 
-// An update to the config already live would only add a row, so the writer
-// refuses it.
-func TestCheckRefusesAnUnchangedUpdate(t *testing.T) {
-	live := []Provider{{Alias: "a", BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}}
-	if err := Check(live, cosl.TypeProviderUpdate, anthropic("a"), "a"); !errors.Is(err, ErrUnchanged) {
-		t.Fatalf("got %v, want %v", err, ErrUnchanged)
+func TestShapeAndURL(t *testing.T) {
+	p := Provider{Alias: "a", BaseURL: "http://127.0.0.1:8080/", APIPath: "/v1/chat/completions"}
+	if p.Shape() != agent.ChatCompletions || p.URL() != "http://127.0.0.1:8080/v1/chat/completions" {
+		t.Fatalf("shape %v, url %s", p.Shape(), p.URL())
 	}
 }
 
-// A preset is a complete row; an alias that names one uses it, and flags
-// override its fields.
+// A preset is a complete Provider; an alias that names one uses it, and
+// flags override its fields.
 func TestPresets(t *testing.T) {
 	p, ok := Preset("anthropic")
 	if !ok || p.BaseURL != "https://api.anthropic.com" || p.APIPath != "/v1/messages" {
