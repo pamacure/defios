@@ -179,6 +179,29 @@ api_key = "$ANTHROPIC_API_KEY"
 
 The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[agents.auditor.body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `[providers.<alias>]` table.
 
+Fields that every agent on a Provider shares can go in the Provider's own `body` instead. A profile's body merges over its Provider's body, so an agent with no body of its own runs on the Provider's, and one that sets a field overrides only that field. Here both agents stream, and `@auditor` uses a larger model:
+
+```toml
+[providers.anthropic]
+api_key = "$ANTHROPIC_API_KEY"
+
+[providers.anthropic.body]
+model = "claude-sonnet-5-5"
+stream = true
+max_tokens = 8192
+
+[agents.scribe]
+provider = "anthropic"
+
+[agents.auditor]
+provider = "anthropic"
+
+[agents.auditor.body]
+model = "claude-opus-5-5"
+```
+
+A Conversation's own `config.toml` can set `[providers.<alias>.body]` too, and it merges over the Group's.
+
 An agent on the `openai` preset takes the Responses API's own fields:
 
 ```toml

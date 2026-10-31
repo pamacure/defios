@@ -239,30 +239,33 @@ func TestPrunePolicyDefaultsOffAndIsGroupOnly(t *testing.T) {
 // at least 1.
 func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 	for name, body := range map[string]string{
-		"bad handle":          "[agents.Auditor]\nprovider = \"claude\"",
-		"reserved handle":     "[agents.user]\nprovider = \"claude\"",
-		"handle ending in -":  "[agents.auditor-]\nprovider = \"claude\"",
-		"handle ending in _":  "[agents.auditor_]\nprovider = \"claude\"",
-		"handle with --":      "[agents.au--di]\nprovider = \"claude\"",
-		"missing provider":    "[agents.auditor]\ndir = \"agents/auditor\"",
-		"bad provider alias":  "[agents.auditor]\nprovider = \"Claude!\"",
-		"undefined handle":    "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"trader\"]",
-		"handle listed twice": "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"auditor\", \"auditor\"]",
-		"zero max_depth":      "[agent]\nmax_depth = 0",
-		"negative max_depth":  "[agent]\nmax_depth = -1",
-		"old [agent] model":   "[agent]\nmodel = \"claude\"",
-		"old [agent] window":  "[agent]\ntoken_window = 200000",
-		"unknown profile key": "[agents.auditor]\nprovider = \"claude\"\nsoul = \"SOUL.md\"",
-		"old model key":       "[agents.auditor]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"",
-		"old max_tokens key":  "[agents.auditor]\nprovider = \"claude\"\nmax_tokens = 4000",
-		"old temperature key": "[agents.auditor]\nprovider = \"claude\"\ntemperature = 0.2",
-		"zero max_turns":      "[agents.auditor]\nprovider = \"claude\"\nmax_turns = 0",
-		"negative max_turns":  "[agents.auditor]\nprovider = \"claude\"\nmax_turns = -3",
-		"body not a table":    "[agents.auditor]\nprovider = \"claude\"\nbody = \"x\"",
-		"date-time in body":   "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nsince = 2026-01-01T00:00:00Z",
-		"local date in body":  "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body.metadata]\nday = 2026-01-01",
-		"time in an array":    "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nat = [07:32:00]",
-		"nan in body":         "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\ntemperature = nan",
+		"bad handle":                 "[agents.Auditor]\nprovider = \"claude\"",
+		"reserved handle":            "[agents.user]\nprovider = \"claude\"",
+		"handle ending in -":         "[agents.auditor-]\nprovider = \"claude\"",
+		"handle ending in _":         "[agents.auditor_]\nprovider = \"claude\"",
+		"handle with --":             "[agents.au--di]\nprovider = \"claude\"",
+		"missing provider":           "[agents.auditor]\ndir = \"agents/auditor\"",
+		"bad provider alias":         "[agents.auditor]\nprovider = \"Claude!\"",
+		"undefined handle":           "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"trader\"]",
+		"handle listed twice":        "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"auditor\", \"auditor\"]",
+		"zero max_depth":             "[agent]\nmax_depth = 0",
+		"negative max_depth":         "[agent]\nmax_depth = -1",
+		"old [agent] model":          "[agent]\nmodel = \"claude\"",
+		"old [agent] window":         "[agent]\ntoken_window = 200000",
+		"unknown profile key":        "[agents.auditor]\nprovider = \"claude\"\nsoul = \"SOUL.md\"",
+		"old model key":              "[agents.auditor]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"",
+		"old max_tokens key":         "[agents.auditor]\nprovider = \"claude\"\nmax_tokens = 4000",
+		"old temperature key":        "[agents.auditor]\nprovider = \"claude\"\ntemperature = 0.2",
+		"zero max_turns":             "[agents.auditor]\nprovider = \"claude\"\nmax_turns = 0",
+		"negative max_turns":         "[agents.auditor]\nprovider = \"claude\"\nmax_turns = -3",
+		"body not a table":           "[agents.auditor]\nprovider = \"claude\"\nbody = \"x\"",
+		"date-time in body":          "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nsince = 2026-01-01T00:00:00Z",
+		"local date in body":         "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body.metadata]\nday = 2026-01-01",
+		"time in an array":           "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nat = [07:32:00]",
+		"nan in body":                "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\ntemperature = nan",
+		"provider body not a table":  "[providers.claude]\nbody = \"x\"",
+		"date-time in provider body": "[providers.claude.body]\nsince = 2026-01-01T00:00:00Z",
+		"unknown provider key":       "[providers.claude]\nmodel = \"claude-opus-5-5\"",
 	} {
 		_, err := config.ReadFile(write(t, body))
 		if err == nil {
@@ -274,10 +277,11 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 		}
 	}
 	for name, body := range map[string]string{
-		"profile in a Conversation": "[agents.auditor]\nprovider = \"claude\"",
-		"body in a Conversation":    "[agents.auditor.body]\nmodel = \"claude-opus-5-5\"",
-		"bad handle in profiles":    "[agent]\nprofiles = [\"Auditor\"]",
-		"zero max_depth":            "[agent]\nmax_depth = 0",
+		"profile in a Conversation":  "[agents.auditor]\nprovider = \"claude\"",
+		"body in a Conversation":     "[agents.auditor.body]\nmodel = \"claude-opus-5-5\"",
+		"bad handle in profiles":     "[agent]\nprofiles = [\"Auditor\"]",
+		"zero max_depth":             "[agent]\nmax_depth = 0",
+		"date-time in provider body": "[providers.claude.body.metadata]\nday = 2026-01-01",
 	} {
 		if _, err := config.ReadWorkspace(write(t, body)); err == nil {
 			t.Errorf("Conversation %s: read without error", name)
@@ -332,6 +336,94 @@ profiles = ["auditor", "scribe"]
 	}
 	if scribe.Provider != "local" || scribe.MaxTurns != 8 || len(scribe.Body) != 0 {
 		t.Fatalf("scribe = %+v", scribe)
+	}
+}
+
+// A Provider's body is the base for every profile that runs on it: the
+// profile's body merges over it, objects key by key and anything else
+// replacing, and a Conversation's body for that Provider merges over the
+// Group's the same way.
+func TestAProfileBodyMergesOverItsProvidersBody(t *testing.T) {
+	c, err := config.ReadFile(write(t, `
+[providers.gpt]
+api_key = "$OPENAI"
+
+[providers.gpt.body]
+model = "gpt-base"
+stream = true
+store = false
+include = ["reasoning.encrypted_content"]
+
+[providers.gpt.body.reasoning]
+effort = "low"
+summary = "auto"
+
+[agents.trader]
+provider = "gpt"
+
+[agents.auditor]
+provider = "gpt"
+
+[agents.auditor.body]
+model = "gpt-big"
+include = []
+
+[agents.auditor.body.reasoning]
+effort = "high"
+
+[agents.scribe]
+provider = "claude"
+
+[agents.scribe.body]
+model = "claude-opus-5-5"
+
+[agent]
+profiles = ["trader", "auditor", "scribe"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := config.ReadWorkspace(write(t, `
+[providers.gpt.body]
+stream = false
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		conv config.Workspace
+		want []string
+	}{
+		{config.Workspace{}, []string{
+			`{"include":["reasoning.encrypted_content"],"model":"gpt-base","reasoning":{"effort":"low","summary":"auto"},"store":false,"stream":true}`,
+			`{"include":[],"model":"gpt-big","reasoning":{"effort":"high","summary":"auto"},"store":false,"stream":true}`,
+			`{"model":"claude-opus-5-5"}`,
+		}},
+		{conv, []string{
+			`{"include":["reasoning.encrypted_content"],"model":"gpt-base","reasoning":{"effort":"low","summary":"auto"},"store":false,"stream":false}`,
+			`{"include":[],"model":"gpt-big","reasoning":{"effort":"high","summary":"auto"},"store":false,"stream":false}`,
+			`{"model":"claude-opus-5-5"}`,
+		}},
+	} {
+		got, err := c.Included(tc.conv, "/r", "/h")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, p := range got.Profiles {
+			raw, err := json.Marshal(p.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(raw) != tc.want[i] {
+				t.Errorf("%s body %s\nwant        %s", p.Handle, raw, tc.want[i])
+			}
+		}
+	}
+	if c.Workspace.Providers["gpt"].Body["stream"] != true || c.Workspace.Providers["gpt"].Body["reasoning"].(map[string]any)["effort"] != "low" {
+		t.Fatalf("Included changed the Group's Provider body: %v", c.Workspace.Providers["gpt"].Body)
+	}
+	if c.Agents["auditor"].Body["reasoning"].(map[string]any)["summary"] != nil {
+		t.Fatalf("Included changed the profile's body: %v", c.Agents["auditor"].Body)
 	}
 }
 

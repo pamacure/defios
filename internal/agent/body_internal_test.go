@@ -10,7 +10,7 @@ import (
 func TestMergeBody(t *testing.T) {
 	base := map[string]any{"a": map[string]any{"x": 1, "y": map[string]any{"p": 1}}, "b": []any{1}, "c": "keep"}
 	over := map[string]any{"a": map[string]any{"y": map[string]any{"q": 2}, "z": 3}, "b": []any{2}, "c": map[string]any{"now": "object"}}
-	got := mergeBody(base, over)
+	got := MergeBody(base, over)
 	if want := "map[a:map[x:1 y:map[p:1 q:2] z:3] b:[2] c:map[now:object]]"; fmt.Sprint(got) != want {
 		t.Fatalf("merge = %v\nwant    %s", got, want)
 	}

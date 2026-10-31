@@ -322,7 +322,7 @@ func (c *conversation) add(blocks []Block, results []toolResult) {
 // in the shape's own fields, with the profile's body merged over them. It
 // fails only on a body value JSON cannot hold.
 func (c *conversation) body() ([]byte, error) {
-	body, err := json.Marshal(mergeBody(c.wire.fields(c), c.req.Body))
+	body, err := json.Marshal(MergeBody(c.wire.fields(c), c.req.Body))
 	if err != nil {
 		return nil, fmt.Errorf("agent: the profile's body: %w", err)
 	}

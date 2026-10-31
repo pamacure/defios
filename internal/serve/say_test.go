@@ -181,6 +181,45 @@ func TestProfileOptionsShapeTheRun(t *testing.T) {
 	}
 }
 
+// A profile with no body runs on its Provider's body, and one that sets a
+// field overrides only that field.
+func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "scribe")
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	cfg := readFile(t, path)
+	cfg = strings.Replace(cfg, "[agents.auditor.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n", "", 1)
+	cfg = strings.Replace(cfg, "[agents.scribe.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n", "[agents.scribe.body]\nmodel = \"claude-big\"\n", 1)
+	writeConfig(t, path, cfg+"\n[providers.claude.body]\nmodel = \"claude-base\"\nstream = true\nmax_tokens = 512\n")
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			streamSay(w, "ok")
+		} else {
+			streamText(w, "nothing")
+		}
+	})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, v.Seq)
+	var reqs []map[string]any
+	for _, line := range transcript(t, a, v.Seq) {
+		if req, ok := line["request"].(map[string]any); ok {
+			reqs = append(reqs, req)
+		}
+	}
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests, want 2", len(reqs))
+	}
+	if r := reqs[0]; r["model"] != "claude-base" || r["stream"] != true || r["max_tokens"] != float64(512) {
+		t.Fatalf("auditor's request = %v", r)
+	}
+	if r := reqs[1]; r["model"] != "claude-big" || r["stream"] != true || r["max_tokens"] != float64(512) {
+		t.Fatalf("scribe's request = %v", r)
+	}
+}
+
 // Each chain's Transcript holds one line per request, output block, usage
 // and outcome, each tagged with its step, Handle, depth and attempt, and
 // never the key.

@@ -54,9 +54,9 @@ type Profile struct {
 	// MaxTurns is how many model calls a summon may make; 0 is unset,
 	// which is agent.DefaultMaxTurns.
 	MaxTurns int `toml:"max_turns,omitzero"`
-	// Body is the request's other fields, as TOML nests them: the model id
-	// always, and whatever else the API shape takes. It merges over what
-	// DeFiOS writes. ReadFile converts it to JSON values.
+	// Body is the request's other fields, as TOML nests them: whatever the
+	// API shape takes. It merges over its Provider's body, which merges over
+	// what DeFiOS writes. ReadFile converts it to JSON values.
 	Body map[string]any `toml:"body,omitempty"`
 }
 
@@ -74,11 +74,16 @@ type Network struct {
 	RPCURLs []string `toml:"rpc_urls"`
 }
 
-// Provider is this Node's credential for a Provider: a Secret reference,
-// sent to the Provider's base_url on the log (ADR 0019). Without one no key
-// is sent.
+// Provider is this Node's settings for a Provider: its credential, a Secret
+// reference sent to the Provider's base_url on the log (ADR 0019), without
+// which no key is sent; and the base request body for every profile that
+// runs on it.
 type Provider struct {
 	APIKey string `toml:"api_key,omitempty"`
+	// Body is the request fields shared by the profiles that run on this
+	// Provider, as TOML nests them; each profile's body merges over it.
+	// Reading the config converts it to JSON values.
+	Body map[string]any `toml:"body,omitempty"`
 }
 
 // Agent is which agents may answer in Group-level talk, or in that
@@ -148,9 +153,10 @@ func decode(path string, into any) (toml.MetaData, error) {
 	_, isGroup := into.(*Config)
 	var keys []string
 	for _, k := range md.Undecoded() {
-		// A profile's body is free-form: whatever it holds is decoded into
-		// it, though the decoder does not mark nested keys as such.
-		if isGroup && len(k) > 3 && k[0] == "agents" && k[2] == "body" {
+		// A profile's or Provider's body is free-form: whatever it holds is
+		// decoded into it, though the decoder does not mark nested keys as
+		// such.
+		if len(k) > 3 && k[2] == "body" && (k[0] == "providers" || isGroup && k[0] == "agents") {
 			continue
 		}
 		keys = append(keys, k.String())
@@ -181,6 +187,17 @@ func (w Workspace) validate(md toml.MetaData) error {
 			if _, err := secret.ParseRef(p.APIKey); err != nil {
 				return fmt.Errorf("[providers.%s] api_key: %w", alias, err)
 			}
+		}
+		if t := md.Type("providers", alias, "body"); t != "" && t != "Hash" {
+			return fmt.Errorf("[providers.%s] body must be a table", alias)
+		}
+		body, err := jsonValue(p.Body)
+		if err != nil {
+			return fmt.Errorf("[providers.%s.body]%w", alias, err)
+		}
+		if p.Body != nil {
+			p.Body = body.(map[string]any)
+			w.Providers[alias] = p
 		}
 	}
 	listed := map[string]bool{}
@@ -252,7 +269,8 @@ func ValidateHandle(h string) error {
 // Merge is w with over laid on it table by table: a Network's rpc_urls, a
 // Provider's api_key, an [agent] profiles list (even an empty
 // one), or a max_depth that over sets wins, and everything over leaves unset
-// comes from w. Neither input is changed.
+// comes from w. A Provider's body in over merges over w's as a profile's
+// body does. Neither input is changed.
 func (w Workspace) Merge(over Workspace) Workspace {
 	out := Workspace{Agent: w.Agent}
 	if len(w.Networks)+len(over.Networks) > 0 {
@@ -274,6 +292,9 @@ func (w Workspace) Merge(over Workspace) Workspace {
 			if p.APIKey != "" {
 				cur.APIKey = p.APIKey
 			}
+			if p.Body != nil {
+				cur.Body = agent.MergeBody(cur.Body, p.Body)
+			}
 			out.Providers[name] = cur
 		}
 	}
@@ -294,14 +315,14 @@ type Included struct {
 	MaxDepth int
 }
 
-// ResolvedProfile is an included Agent Profile with its directory resolved
-// and max_turns defaulted.
+// ResolvedProfile is an included Agent Profile with its directory resolved,
+// max_turns defaulted, and its body merged over its Provider's.
 type ResolvedProfile struct {
 	Handle   string
 	Dir      string // absolute
 	Provider string // a Provider alias
 	MaxTurns int
-	Body     map[string]any // JSON values; nil when unset
+	Body     map[string]any // JSON values; nil when neither body is set
 }
 
 // Included resolves the profiles and depth for talk whose Workspace is conv,
@@ -309,7 +330,8 @@ type ResolvedProfile struct {
 // profile directory is under root, the config directory, and "~" is home.
 // Whether the directory exists is for whoever summons it to find out.
 func (c Config) Included(conv Workspace, root, home string) (Included, error) {
-	a := c.Workspace.Merge(conv).Agent
+	ws := c.Workspace.Merge(conv)
+	a := ws.Agent
 	out := Included{MaxDepth: a.MaxDepth}
 	if out.MaxDepth == 0 {
 		out.MaxDepth = 1
@@ -321,6 +343,9 @@ func (c Config) Included(conv Workspace, root, home string) (Included, error) {
 		}
 		r := ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Provider: p.Provider,
 			MaxTurns: p.MaxTurns, Body: p.Body}
+		if base := ws.Providers[p.Provider].Body; base != nil {
+			r.Body = agent.MergeBody(base, p.Body)
+		}
 		if r.MaxTurns == 0 {
 			r.MaxTurns = agent.DefaultMaxTurns
 		}

@@ -75,6 +75,9 @@ and [ADR 0018](0018-an-agent-says-one-message.md).
   to a Secret as before, and it may be left out (for a local server, for
   example). The key goes to the Provider's `base_url` from the log. The
   local `base_url` override is gone.
+  *Amended by [ADR 0020](0020-a-provider-has-a-base-body.md):
+  `[providers.<alias>]` also takes a `body`, the base request body for
+  every profile on that Provider.*
 - **Agent Profile.** `[agents.<handle>]` keys are `dir`, `provider` (a
   Provider alias, resolved at summon; an unknown alias fails the summon
   there) and `max_turns` (model calls per summon, default 8). The typed
@@ -88,6 +91,9 @@ and [ADR 0018](0018-an-agent-says-one-message.md).
   merges over that: an object merges key by key, and any other value
   replaces what is there. Nothing is reserved, and no key can be removed. A
   body the API rejects is a 400 at summon time, and it is not retried.
+  *Amended by [ADR 0020](0020-a-provider-has-a-base-body.md): the
+  Provider's body merges over what DeFiOS writes, and the profile's body
+  merges over that.*
 - **Replies, streamed or not.** Each shape has a reader for an event stream
   and a reader for one JSON reply, chosen by the reply's `Content-Type`, not
   by the body's `stream`. Both send their blocks through the same stream
