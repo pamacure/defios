@@ -116,6 +116,10 @@ _Avoid_: chain config, blockchain configuration, RPC, endpoint
 An LLM API a Group's agents may call, described by a config the Group maintains on its COSL and recalled by its alias, as a Network is: a base URL and an API path, whose path also fixes the shape of request it speaks. The alias is the Provider; there is no separate provider name behind it. Credentials for it never ride the COSL: each Node names a Secret for them in its own config.
 _Avoid_: Model (a Provider names no model), endpoint, LLM config
 
+**API Shape**:
+The wire format a Provider speaks — Anthropic Messages, OpenAI Chat Completions, or OpenAI Responses — fixing how an agent's request is written, how its reply is read, and how its key is sent. Picked by the suffix of the Provider's API path (`/messages`, `/chat/completions`, `/responses`) and by nothing else; one LLM API serving two shapes is two Providers.
+_Avoid_: provider type, format, flavour, protocol
+
 **Model ID**:
 The provider's own name for one of the models a Provider serves (e.g. `claude-opus-5-5`), which an Agent Profile writes into the request it sends its Provider. Not a config, not on the COSL, and not checked against anything until the call.
 _Avoid_: Model, model alias

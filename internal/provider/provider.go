@@ -2,8 +2,9 @@
 // COSL replica (docs/adr/0019-providers-replace-models-on-the-cosl.md). As
 // with Networks (docs/adr/0008-networks-on-cosl.md) there is no providers
 // table: the current set is the fold of provider.create / update / remove
-// rows by alias. A Provider is an endpoint and nothing more; the suffix of
-// its api_path picks the API shape. Credentials never replicate.
+// rows by alias. A Provider is an LLM API's base URL and API path and nothing
+// more; the suffix of its api_path picks the API Shape. Credentials never
+// replicate.
 package provider
 
 import (

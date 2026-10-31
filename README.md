@@ -203,6 +203,13 @@ Each call resends the whole conversation, and the model's reasoning from earlier
 
 `stream = true` shows the agent's reply as it is written. Without it, the API sends the reply whole and it shows all at once when the call ends; either way the Transcript is the same.
 
+A streamed Chat Completions call (a Provider whose API path ends in `/chat/completions`) reports token usage only when the body asks for it; without this, the Transcript records no usage for its calls:
+
+```toml
+[agents.auditor.body.stream_options]
+include_usage = true
+```
+
 Mention the agent to have it answer:
 
 ```bash

@@ -19,7 +19,7 @@ type providerFlags struct {
 }
 
 func (f *providerFlags) bind(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.baseURL, "base-url", "", "http(s) endpoint, e.g. https://api.anthropic.com; replicated to every Node, so no credentials")
+	cmd.Flags().StringVar(&f.baseURL, "base-url", "", "http(s) base URL, e.g. https://api.anthropic.com; replicated to every Node, so no credentials")
 	cmd.Flags().StringVar(&f.apiPath, "api-path", "", "API path; its suffix picks the shape: .../messages, .../chat/completions or .../responses")
 }
 
@@ -28,7 +28,7 @@ func providerCommand(g *globals) *cobra.Command {
 		Use:   "provider",
 		Short: "Define the Providers this Group's agents may call",
 		Long: `Providers live on the Group's COSL, identical on every Node, and are named by a local alias.
-A Provider is an endpoint: a base URL and an API path, whose suffix picks the API shape
+A Provider is an LLM API, named by a base URL and an API path whose suffix picks the API Shape
 (/messages, /chat/completions or /responses). The model and every other request option are set per
 agent, in [agents.<handle>.body]. Credentials never replicate: each Node names its key for a
 Provider in its own config.toml, as [providers.<alias>] api_key = "$NAME", a Secret (see secret).`,
