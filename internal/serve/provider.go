@@ -44,7 +44,7 @@ func (s *server) providerWrite(ctx context.Context, typ uint32, cfg *coslv1.Prov
 	if err != nil {
 		return SendView{}, err
 	}
-	if err := provider.Check(providers, typ, alias); err != nil {
+	if err := provider.Check(providers, typ, cfg, alias); err != nil {
 		return SendView{}, err
 	}
 	author := cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}

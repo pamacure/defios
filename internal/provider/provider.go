@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 
+	"google.golang.org/protobuf/proto"
+
 	"defios.com/internal/agent"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
@@ -27,6 +29,8 @@ var (
 	ErrExists = errors.New("provider: alias already exists")
 	// ErrUnknown is an edit, remove, or lookup of an alias that is not live.
 	ErrUnknown = errors.New("provider: no such provider")
+	// ErrUnchanged is an edit that would leave the live config as it is.
+	ErrUnchanged = errors.New("provider: nothing to change")
 )
 
 // Provider is one live Provider config in the folded state.
@@ -205,17 +209,26 @@ func Get(providers []Provider, alias string) (Provider, error) {
 	return Provider{}, fmt.Errorf("%w: %q", ErrUnknown, alias)
 }
 
-// Check is the writer's precondition for authoring typ for alias against
-// the live set; Fold would skip a message that fails it.
-func Check(providers []Provider, typ uint32, alias string) error {
-	_, err := Get(providers, alias)
+// Check is the writer's precondition for authoring typ for cfg (or removing
+// alias) against the live set; Fold would skip a message that fails it. An
+// update that changes nothing is refused too, though Fold would apply it:
+// it would only add a row.
+func Check(providers []Provider, typ uint32, cfg *coslv1.ProviderConfig, alias string) error {
+	cur, err := Get(providers, alias)
 	exists := err == nil
 	switch typ {
 	case cosl.TypeProviderCreate:
 		if exists {
 			return fmt.Errorf("%w: %q", ErrExists, alias)
 		}
-	case cosl.TypeProviderUpdate, cosl.TypeProviderRemove:
+	case cosl.TypeProviderUpdate:
+		if !exists {
+			return err
+		}
+		if proto.Equal(cur.Config(), cfg) {
+			return fmt.Errorf("%w: %q", ErrUnchanged, alias)
+		}
+	case cosl.TypeProviderRemove:
 		if !exists {
 			return err
 		}

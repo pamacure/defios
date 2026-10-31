@@ -116,6 +116,34 @@ func TestRemovedAliasCanBeCreatedAgain(t *testing.T) {
 	}
 }
 
+// The writer refuses what Fold would skip, and an update to the config
+// already live, which would only add a row.
+func TestCheck(t *testing.T) {
+	live := []Network{fromConfig(eth("a", 1, "https://rpc.example"), [32]byte{1})}
+	cases := []struct {
+		name  string
+		typ   uint32
+		cfg   *coslv1.NetworkConfig
+		alias string
+		want  error
+	}{
+		{"create new", cosl.TypeNetworkCreate, eth("b", 1), "b", nil},
+		{"create live", cosl.TypeNetworkCreate, eth("a", 1), "a", ErrExists},
+		{"update live", cosl.TypeNetworkUpdate, eth("a", 1, "https://other.example"), "a", nil},
+		{"update unchanged", cosl.TypeNetworkUpdate, eth("a", 1, "https://rpc.example"), "a", ErrUnchanged},
+		{"update type", cosl.TypeNetworkUpdate, &coslv1.NetworkConfig{Alias: "a", Type: "bitcoin", Network: "mainnet"}, "a", ErrInvalid},
+		{"update absent", cosl.TypeNetworkUpdate, eth("b", 1), "b", ErrUnknown},
+		{"remove live", cosl.TypeNetworkRemove, nil, "a", nil},
+		{"remove absent", cosl.TypeNetworkRemove, nil, "b", ErrUnknown},
+	}
+	for _, c := range cases {
+		err := Check(live, c.typ, c.cfg, c.alias)
+		if (c.want == nil && err != nil) || (c.want != nil && !errors.Is(err, c.want)) {
+			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
 func TestOverrideBeatsLogRPC(t *testing.T) {
 	ov := Overrides{"ethereum-mainnet": {"https://key.example/SECRET"}}
 	n := Network{Alias: "ethereum-mainnet", RPCURLs: []string{"https://public.example"}}

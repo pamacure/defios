@@ -133,7 +133,7 @@ A Conversation's config.toml may override them again for its Key's broadcasts.`,
 func networkWritten(g *globals, what string, v serve.SendView, err error) error {
 	if err != nil {
 		switch {
-		case errors.Is(err, network.ErrInvalid), errors.Is(err, network.ErrExists), errors.Is(err, network.ErrUnknown):
+		case errors.Is(err, network.ErrInvalid), errors.Is(err, network.ErrExists), errors.Is(err, network.ErrUnknown), errors.Is(err, network.ErrUnchanged):
 			return exitUsagef("%w", err)
 		}
 		return sendError(err)

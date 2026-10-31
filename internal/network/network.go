@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"sort"
 
+	"google.golang.org/protobuf/proto"
+
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -22,6 +24,8 @@ var (
 	ErrExists = errors.New("network: alias already exists")
 	// ErrUnknown is an edit, remove, or lookup of an alias that is not live.
 	ErrUnknown = errors.New("network: no such network")
+	// ErrUnchanged is an edit that would leave the live config as it is.
+	ErrUnchanged = errors.New("network: nothing to change")
 )
 
 // Network types, each of which fixes the curve a signing Key must use.
@@ -222,7 +226,9 @@ func Get(nets []Network, alias string) (Network, error) {
 }
 
 // Check is the writer's precondition for authoring typ for cfg (or removing
-// alias) against the live set; Fold would skip a message that fails it.
+// alias) against the live set; Fold would skip a message that fails it. An
+// update that changes nothing is refused too, though Fold would apply it:
+// it would only add a row, and a new ConfigID for Sign Requests to pin.
 func Check(nets []Network, typ uint32, cfg *coslv1.NetworkConfig, alias string) error {
 	cur, err := Get(nets, alias)
 	exists := err == nil
@@ -237,6 +243,9 @@ func Check(nets []Network, typ uint32, cfg *coslv1.NetworkConfig, alias string) 
 		}
 		if cur.Type != cfg.Type {
 			return invalidf("a Network's type cannot change (%s is %s); remove it and add it again", alias, cur.Type)
+		}
+		if proto.Equal(cur.Config(), cfg) {
+			return fmt.Errorf("%w: %q", ErrUnchanged, alias)
 		}
 	case cosl.TypeNetworkRemove:
 		if !exists {

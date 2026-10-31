@@ -13,9 +13,9 @@ import (
 )
 
 // Provider configs written on one Node fold identically on both; a write
-// the fold would skip is refused with the provider sentinel over the
-// socket, an edit may change both fields, and a removed alias may be added
-// again.
+// the fold would skip, or an edit that changes nothing, is refused with the
+// provider sentinel over the socket, an edit may change both fields, and a
+// removed alias may be added again.
 func TestProviderAddEditRemove(t *testing.T) {
 	a, b := pair(t)
 	gid := formValid(t, a, b)
@@ -40,6 +40,9 @@ func TestProviderAddEditRemove(t *testing.T) {
 	}
 	if _, err := b.client().ProviderRemove(ctx, "ghost"); !errors.Is(err, provider.ErrUnknown) {
 		t.Fatalf("remove of absent alias: %v", err)
+	}
+	if _, err := b.client().ProviderEdit(ctx, anth); !errors.Is(err, provider.ErrUnchanged) {
+		t.Fatalf("edit to the live config: %v", err)
 	}
 
 	edited := &coslv1.ProviderConfig{Alias: "agent", BaseUrl: "http://127.0.0.1:8080", ApiPath: "/v1/chat/completions"}

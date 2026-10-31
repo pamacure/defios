@@ -127,7 +127,7 @@ Provider in its own config.toml, as [providers.<alias>] api_key = "$NAME", a Sec
 func providerWritten(g *globals, what string, v serve.SendView, err error) error {
 	if err != nil {
 		switch {
-		case errors.Is(err, provider.ErrInvalid), errors.Is(err, provider.ErrExists), errors.Is(err, provider.ErrUnknown):
+		case errors.Is(err, provider.ErrInvalid), errors.Is(err, provider.ErrExists), errors.Is(err, provider.ErrUnknown), errors.Is(err, provider.ErrUnchanged):
 			return exitUsagef("%w", err)
 		}
 		return sendError(err)

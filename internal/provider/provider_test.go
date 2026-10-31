@@ -136,21 +136,31 @@ func TestCheckMirrorsTheFold(t *testing.T) {
 	cases := []struct {
 		name  string
 		typ   uint32
+		cfg   *coslv1.ProviderConfig
 		alias string
 		want  error
 	}{
-		{"create new", cosl.TypeProviderCreate, "b", nil},
-		{"create live", cosl.TypeProviderCreate, "a", ErrExists},
-		{"update live", cosl.TypeProviderUpdate, "a", nil},
-		{"update absent", cosl.TypeProviderUpdate, "b", ErrUnknown},
-		{"remove live", cosl.TypeProviderRemove, "a", nil},
-		{"remove absent", cosl.TypeProviderRemove, "b", ErrUnknown},
+		{"create new", cosl.TypeProviderCreate, anthropic("b"), "b", nil},
+		{"create live", cosl.TypeProviderCreate, anthropic("a"), "a", ErrExists},
+		{"update live", cosl.TypeProviderUpdate, local("a"), "a", nil},
+		{"update absent", cosl.TypeProviderUpdate, local("b"), "b", ErrUnknown},
+		{"remove live", cosl.TypeProviderRemove, nil, "a", nil},
+		{"remove absent", cosl.TypeProviderRemove, nil, "b", ErrUnknown},
 	}
 	for _, c := range cases {
-		err := Check(live, c.typ, c.alias)
+		err := Check(live, c.typ, c.cfg, c.alias)
 		if (c.want == nil && err != nil) || (c.want != nil && !errors.Is(err, c.want)) {
 			t.Errorf("%s: got %v, want %v", c.name, err, c.want)
 		}
+	}
+}
+
+// An update to the config already live would only add a row, so the writer
+// refuses it.
+func TestCheckRefusesAnUnchangedUpdate(t *testing.T) {
+	live := []Provider{{Alias: "a", BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}}
+	if err := Check(live, cosl.TypeProviderUpdate, anthropic("a"), "a"); !errors.Is(err, ErrUnchanged) {
+		t.Fatalf("got %v, want %v", err, ErrUnchanged)
 	}
 }
 
