@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -93,7 +92,7 @@ func (s *server) unfinished(conv []byte, seq uint64, handles []string, runs map[
 // latestUnfinished is the seq of the latest chain in conv whose Transcript
 // shows it unfinished, or 0.
 func (s *server) latestUnfinished(store *cosl.Store, conv []byte) (uint64, error) {
-	dir := filepath.Join(s.opts.Paths.TranscriptsDir(s.opts.Alias), transcriptName(conv))
+	dir := s.opts.Paths.TranscriptsDir(s.opts.Alias, transcriptName(conv))
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil

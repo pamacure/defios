@@ -144,7 +144,7 @@ type chain struct {
 	dry bool
 }
 
-// transcriptName is conv's directory under transcripts/: its hex
+// transcriptName is conv's directory under conversations/: its hex
 // Conversation ID, or "group" for Group-level talk.
 func transcriptName(conv []byte) string {
 	if conv == nil {
