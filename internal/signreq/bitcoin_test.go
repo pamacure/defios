@@ -9,7 +9,6 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
-	"defios.com/internal/network"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -158,18 +157,19 @@ func TestAssembleBitcoinRefusesWhatCannotBeSigned(t *testing.T) {
 // A request mixing Ethereum and Bitcoin (both secp256k1) signs one Digest for
 // the first and one per input for the second, so Signed wants three signatures.
 func TestSignedCountsADigestPerBitcoinInput(t *testing.T) {
-	btc := &coslv1.SignTransaction{NetworkConfigId: btcID[:], Intent: &coslv1.SignTransaction_Bitcoin{Bitcoin: btcIntent()}}
+	in := btcIntent()
+	in.Network = "mainnet"
+	btc := &coslv1.SignTransaction{Intent: &coslv1.SignTransaction_Bitcoin{Bitcoin: in}}
 	r := rowOf(t, 1, 0xa1, time.Unix(10_000, 0), make([]byte, 32), req(ethTx(), btc))
-	history := map[[32]byte]network.Network{ethID: nets[0], btcID: nets[1]}
 	sig := make([]byte, 65)
 	for _, n := range []int{2, 4} {
-		_, err := Signed([]cosl.Row{r}, r.MsgID, make([][]byte, n), history)
+		_, err := Signed([]cosl.Row{r}, r.MsgID, make([][]byte, n))
 		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "3 digests") {
 			t.Errorf("%d signatures: %v", n, err)
 		}
 	}
 	// Three is the right count: the Key is then looked up, and this log has none.
-	if _, err := Signed([]cosl.Row{r}, r.MsgID, [][]byte{sig, sig, sig}, history); !errors.Is(err, key.ErrUnknown) {
+	if _, err := Signed([]cosl.Row{r}, r.MsgID, [][]byte{sig, sig, sig}); !errors.Is(err, key.ErrUnknown) {
 		t.Errorf("three signatures: %v", err)
 	}
 }

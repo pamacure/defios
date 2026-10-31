@@ -68,8 +68,9 @@ func invalidf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
-// TxSpec is one transaction as a proposer writes it: a Network by alias and
-// exactly one intent as protojson.
+// TxSpec is one transaction as a proposer writes it: one of the proposing
+// Node's Networks by alias, and exactly one intent as protojson. The alias
+// stays on that Node: the request carries its chain's identity.
 type TxSpec struct {
 	Network  string  `json:"network"`
 	Ethereum rawJSON `json:"ethereum,omitempty"`
@@ -86,8 +87,10 @@ type Spec struct {
 
 type rawJSON = json.RawMessage
 
-// Build resolves a Spec's Network aliases against the live Networks into a
-// SignRequest, defaulting the deadline. It does not validate the request.
+// Build resolves a Spec's Network aliases against this Node's Networks into
+// a SignRequest whose intents name their chains, defaulting the deadline.
+// An intent may name its chain itself, but only its alias's. It does not
+// otherwise validate the request.
 func Build(spec Spec, nets []network.Network) (*coslv1.SignRequest, error) {
 	out := &coslv1.SignRequest{Reason: spec.Reason, DeadlineSeconds: spec.DeadlineSeconds}
 	if out.DeadlineSeconds == 0 {
@@ -101,7 +104,7 @@ func Build(spec Spec, nets []network.Network) (*coslv1.SignRequest, error) {
 		if n.Type == network.Solana && spec.DeadlineSeconds == 0 {
 			out.DeadlineSeconds = min(out.DeadlineSeconds, SolanaDeadlineSeconds)
 		}
-		tx := &coslv1.SignTransaction{NetworkConfigId: n.ConfigID[:]}
+		tx := &coslv1.SignTransaction{}
 		set := 0
 		for _, in := range []struct {
 			raw rawJSON
@@ -133,16 +136,75 @@ func Build(spec Spec, nets []network.Network) (*coslv1.SignRequest, error) {
 		if set != 1 {
 			return nil, invalidf("transaction %d: give exactly one of ethereum, bitcoin, solana", i)
 		}
+		if err := name(tx, n.Chain()); err != nil {
+			return nil, invalidf("transaction %d (%s): %v", i, n.Alias, err)
+		}
 		out.Transactions = append(out.Transactions, tx)
 	}
 	return out, nil
 }
 
+// name writes c's identity into tx's intent, which must be of c's type and
+// may already name c, but no other chain.
+func name(tx *coslv1.SignTransaction, c network.Chain) error {
+	if got := ChainOf(tx); got.Type != c.Type {
+		return fmt.Errorf("a %s intent on a %s Network", got.Type, c.Type)
+	}
+	switch in := tx.Intent.(type) {
+	case *coslv1.SignTransaction_Ethereum:
+		if in.Ethereum.ChainId != 0 && in.Ethereum.ChainId != c.ChainID {
+			return fmt.Errorf("the intent names chain_id %d", in.Ethereum.ChainId)
+		}
+		in.Ethereum.ChainId = c.ChainID
+	case *coslv1.SignTransaction_Bitcoin:
+		if in.Bitcoin.Network != "" && in.Bitcoin.Network != c.BitcoinNetwork {
+			return fmt.Errorf("the intent names network %q", in.Bitcoin.Network)
+		}
+		in.Bitcoin.Network = c.BitcoinNetwork
+	case *coslv1.SignTransaction_Solana:
+		s := in.Solana
+		if s.Cluster != "" && s.Cluster != c.Cluster || s.GenesisHash != "" && c.GenesisHash != "" && s.GenesisHash != c.GenesisHash {
+			return fmt.Errorf("the intent names another cluster")
+		}
+		s.Cluster = c.Cluster
+		if s.GenesisHash == "" {
+			s.GenesisHash = c.GenesisHash
+		}
+	}
+	return nil
+}
+
+// ChainOf is the chain tx's intent names; its Type is empty for a
+// transaction with no intent. It is not validated (Chain.Validate).
+func ChainOf(tx *coslv1.SignTransaction) network.Chain {
+	switch in := tx.Intent.(type) {
+	case *coslv1.SignTransaction_Ethereum:
+		return network.Chain{Type: network.Ethereum, ChainID: in.Ethereum.ChainId}
+	case *coslv1.SignTransaction_Bitcoin:
+		return network.Chain{Type: network.Bitcoin, BitcoinNetwork: in.Bitcoin.Network}
+	case *coslv1.SignTransaction_Solana:
+		return network.Chain{Type: network.Solana, Cluster: in.Solana.Cluster, GenesisHash: in.Solana.GenesisHash}
+	}
+	return network.Chain{}
+}
+
+// CheckChains is whether this Node, with Networks nets, may accept r: a
+// Node's Networks are the chains it signs for, so every transaction's chain
+// must be one of them. The error names the first chain that is not.
+func CheckChains(r *coslv1.SignRequest, nets []network.Network) error {
+	for i, tx := range r.Transactions {
+		if _, err := network.Find(nets, ChainOf(tx)); err != nil {
+			return fmt.Errorf("transaction %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 // Validate is the writer's check at creation: shape, the reason, that every
-// Network is live and of the Key's curve, and that each intent is complete
-// for its Network type (every consensus-critical field is inside the Digest
-// and serve does no chain RPC to fill it).
-func Validate(r *coslv1.SignRequest, k key.Key, nets []network.Network) error {
+// transaction names a valid chain of the Key's curve, and that each intent
+// is complete for its chain (every consensus-critical field is inside the
+// Digest and serve does no chain RPC to fill it).
+func Validate(r *coslv1.SignRequest, k key.Key) error {
 	switch {
 	case len(r.Transactions) == 0:
 		return invalidf("at least one transaction is required")
@@ -154,44 +216,34 @@ func Validate(r *coslv1.SignRequest, k key.Key, nets []network.Network) error {
 		return invalidf("deadline must be 1–%d seconds", MaxDeadlineSeconds)
 	}
 	for i, tx := range r.Transactions {
-		n, ok := liveByID(nets, tx.NetworkConfigId)
-		if !ok {
-			return invalidf("transaction %d: network config %x is not a live Network", i, tx.NetworkConfigId)
+		if tx.Intent == nil {
+			return invalidf("transaction %d: no intent", i)
 		}
-		if n.Curve() != k.Curve {
-			return fmt.Errorf("%w: transaction %d targets %s (%s) but the key is %s", ErrCurveMismatch, i, n.Alias, n.Curve(), k.Curve)
+		c := ChainOf(tx)
+		if err := c.Validate(); err != nil {
+			return invalidf("transaction %d: %v", i, err)
+		}
+		if c.Curve() != k.Curve {
+			return fmt.Errorf("%w: transaction %d targets %s (%s) but the key is %s", ErrCurveMismatch, i, c, c.Curve(), k.Curve)
 		}
 		var err error
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
-			err = checkEthereum(n, in.Ethereum)
+			err = checkEthereum(in.Ethereum)
 		case *coslv1.SignTransaction_Bitcoin:
-			err = checkBitcoin(n, k, in.Bitcoin)
+			err = checkBitcoin(k, in.Bitcoin)
 		case *coslv1.SignTransaction_Solana:
-			err = checkSolana(n, k, in.Solana)
-		default:
-			err = errors.New("no intent")
+			err = checkSolana(k, in.Solana)
 		}
 		if err != nil {
-			return invalidf("transaction %d (%s): %v", i, n.Alias, err)
+			return invalidf("transaction %d (%s): %v", i, c, err)
 		}
 	}
 	return nil
 }
 
-func liveByID(nets []network.Network, id []byte) (network.Network, bool) {
-	for _, n := range nets {
-		if bytes.Equal(n.ConfigID[:], id) {
-			return n, true
-		}
-	}
-	return network.Network{}, false
-}
-
-func checkEthereum(n network.Network, in *coslv1.EthereumIntent) error {
+func checkEthereum(in *coslv1.EthereumIntent) error {
 	switch {
-	case n.Type != network.Ethereum:
-		return fmt.Errorf("an ethereum intent on a %s network", n.Type)
 	case len(in.To) != 20:
 		return fmt.Errorf("to must be 20 bytes, got %d", len(in.To))
 	case in.GasLimit == 0:
@@ -232,11 +284,8 @@ func amount(s string, blankOK bool) (*big.Int, error) {
 const maxSats = 21_000_000 * 100_000_000
 
 // checkBitcoin also holds every input to the Key's own P2WPKH script, the one
-// a Key signs for, and every output address to the Network's bitcoin network.
-func checkBitcoin(n network.Network, k key.Key, in *coslv1.BitcoinIntent) error {
-	if n.Type != network.Bitcoin {
-		return fmt.Errorf("a bitcoin intent on a %s network", n.Type)
-	}
+// a Key signs for, and every output address to the intent's bitcoin network.
+func checkBitcoin(k key.Key, in *coslv1.BitcoinIntent) error {
 	if len(in.Inputs) == 0 || len(in.Outputs) == 0 {
 		return errors.New("needs at least one input and one output")
 	}
@@ -266,15 +315,13 @@ func checkBitcoin(n network.Network, k key.Key, in *coslv1.BitcoinIntent) error 
 			return fmt.Errorf("input %d must spend the Key's P2WPKH output %x", i, own)
 		}
 	}
-	_, err := BitcoinDigests(n.BitcoinNetwork, in)
+	_, err := BitcoinDigests(in.Network, in)
 	return err
 }
 
-func checkSolana(n network.Network, k key.Key, in *coslv1.SolanaIntent) error {
+func checkSolana(k key.Key, in *coslv1.SolanaIntent) error {
 	payer, err := solanaKey(in.FeePayer)
 	switch {
-	case n.Type != network.Solana:
-		return fmt.Errorf("a solana intent on a %s network", n.Type)
 	case err != nil:
 		return fmt.Errorf("fee_payer: %v", err)
 	case !bytes.Equal(payer, k.PublicKey):
@@ -362,10 +409,9 @@ type Summary struct {
 
 // BroadcastedTx is one transaction a Broadcast Receipt says was submitted.
 type BroadcastedTx struct {
-	Index           uint32 `json:"index"`   // position in the request's transactions
-	Network         string `json:"network"` // alias, or unknown(<config id>)
-	NetworkConfigID string `json:"network_config_id"`
-	TxHash          string `json:"tx_hash"`
+	Index   uint32 `json:"index"`   // position in the request's transactions
+	Network string `json:"network"` // its chain, e.g. "ethereum chain 1"
+	TxHash  string `json:"tx_hash"`
 }
 
 // BroadcastReceipt is one sign.broadcast, as `sign inspect` shows it.
@@ -378,7 +424,7 @@ type BroadcastReceipt struct {
 
 // TxDetail is one decoded transaction, human-readable in Lines.
 type TxDetail struct {
-	Network string   `json:"network"`
+	Network string   `json:"network"` // its chain, e.g. "bitcoin testnet"; never an alias
 	Type    string   `json:"type"`
 	Lines   []string `json:"lines"`
 	Digests []string `json:"digests,omitempty"` // hex, one per signature the transaction needs
@@ -501,9 +547,9 @@ func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 	return out, nil
 }
 
-// Inspect decodes the one Sign Request whose msg id starts with query.
-// history resolves each transaction's Network, even if since edited.
-func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network, now time.Time) (Detail, error) {
+// Inspect decodes the one Sign Request whose msg id starts with query. Each
+// transaction shows the chain it names, as every Node sees it.
+func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 	m, err := match(rows, query)
 	if err != nil {
 		return Detail{}, err
@@ -522,27 +568,24 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 	}
 	d := Detail{Summary: summarise(rows, sessions, needed, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
 	for _, tx := range req.Transactions {
-		var id [32]byte
-		copy(id[:], tx.NetworkConfigId)
-		n, known := history[id]
-		td := TxDetail{Network: n.Alias, Type: n.Type}
-		if !known {
-			td.Network = fmt.Sprintf("unknown(%x)", tx.NetworkConfigId)
-			td.Lines = []string{"network config not found on this log; intent not decoded"}
+		c := ChainOf(tx)
+		td := TxDetail{Network: c.String(), Type: c.Type}
+		if err := c.Validate(); err != nil {
+			td.Lines = []string{"names no valid chain: " + err.Error() + "; intent not decoded"}
 			d.Details = append(d.Details, td)
 			continue
 		}
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
-			td.Lines = describeEthereum(n, in.Ethereum)
-			if _, dg, err := EthereumDigest(n.ChainID, in.Ethereum); err != nil {
+			td.Lines = describeEthereum(in.Ethereum)
+			if _, dg, err := EthereumDigest(in.Ethereum.ChainId, in.Ethereum); err != nil {
 				td.Lines = append(td.Lines, "digest unavailable: "+err.Error())
 			} else {
 				td.Digests = []string{hex.EncodeToString(dg[:])}
 			}
 		case *coslv1.SignTransaction_Bitcoin:
 			td.Lines = describeBitcoin(in.Bitcoin)
-			if dgs, err := BitcoinDigests(n.BitcoinNetwork, in.Bitcoin); err != nil {
+			if dgs, err := BitcoinDigests(in.Bitcoin.Network, in.Bitcoin); err != nil {
 				td.Lines = append(td.Lines, "digest unavailable: "+err.Error())
 			} else {
 				for _, dg := range dgs {
@@ -564,24 +607,17 @@ func Inspect(rows []cosl.Row, query string, history map[[32]byte]network.Network
 			Seq: b.row.Seq, Broadcaster: b.row.Sender.String(), At: time.Unix(0, b.row.CreatedAt).UTC().Format(time.RFC3339),
 		}
 		for _, tx := range b.msg.Transactions {
-			var id [32]byte
-			copy(id[:], tx.NetworkConfigId)
-			name, hash := fmt.Sprintf("unknown(%x)", tx.NetworkConfigId), hex.EncodeToString(tx.TxHash)
-			if n, known := history[id]; known {
-				name, hash = n.Alias, TxIDString(n, tx.TxHash)
-			}
-			rc.Transactions = append(rc.Transactions, BroadcastedTx{
-				Index: tx.TxIndex, Network: name, NetworkConfigID: hex.EncodeToString(tx.NetworkConfigId), TxHash: hash,
-			})
+			c := ChainOf(req.Transactions[tx.TxIndex])
+			rc.Transactions = append(rc.Transactions, BroadcastedTx{Index: tx.TxIndex, Network: c.String(), TxHash: TxIDString(c, tx.TxHash)})
 		}
 		d.BroadcastReceipts = append(d.BroadcastReceipts, rc)
 	}
 	return d, nil
 }
 
-// TxIDString is how a Network writes a transaction id: base58 on Solana, else hex.
-func TxIDString(n network.Network, id []byte) string {
-	if n.Type == network.Solana {
+// TxIDString is how chain c writes a transaction id: base58 on Solana, else hex.
+func TxIDString(c network.Chain, id []byte) string {
+	if c.Type == network.Solana {
 		return base58.Encode(id)
 	}
 	return hex.EncodeToString(id)
@@ -589,21 +625,23 @@ func TxIDString(n network.Network, id []byte) string {
 
 // wellFormed is a receipt covering a non-empty subset of the request's
 // transactions, each entry once, with a transaction id (32 bytes, or a 64-byte
-// Solana signature) and the Network the request names for that transaction,
-// all on one Network. Any Node may append
-// one, so readers do not trust the shape.
+// Solana signature), all on one chain. Any Node may append one, so readers do
+// not trust the shape.
 func wellFormed(b *coslv1.SignBroadcast, req *coslv1.SignRequest) bool {
 	if len(b.Transactions) == 0 {
 		return false
 	}
 	seen := map[uint32]bool{}
-	for _, t := range b.Transactions {
+	var first network.Chain
+	for i, t := range b.Transactions {
 		if (len(t.TxHash) != 32 && len(t.TxHash) != ed25519.SignatureSize) || int(t.TxIndex) >= len(req.Transactions) || seen[t.TxIndex] {
 			return false
 		}
 		seen[t.TxIndex] = true
-		want := req.Transactions[t.TxIndex].NetworkConfigId
-		if !bytes.Equal(t.NetworkConfigId, want) || !bytes.Equal(want, req.Transactions[b.Transactions[0].TxIndex].NetworkConfigId) {
+		c := ChainOf(req.Transactions[t.TxIndex])
+		if i == 0 {
+			first = c
+		} else if c != first {
 			return false
 		}
 	}
@@ -659,13 +697,13 @@ func match(rows []cosl.Row, query string) (cosl.Row, error) {
 	}
 }
 
-func describeEthereum(n network.Network, in *coslv1.EthereumIntent) []string {
+func describeEthereum(in *coslv1.EthereumIntent) []string {
 	value := in.Value
 	if value == "" {
 		value = "0"
 	}
 	lines := []string{
-		fmt.Sprintf("chain_id %d", n.ChainID),
+		fmt.Sprintf("chain_id %d", in.ChainId),
 		fmt.Sprintf("to 0x%x", in.To),
 		fmt.Sprintf("value %s wei", value),
 		fmt.Sprintf("nonce %d", in.Nonce),

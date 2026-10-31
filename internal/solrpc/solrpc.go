@@ -14,13 +14,18 @@ import (
 )
 
 // Send submits raw, whose first signature (its id) is sig, to the first of
-// urls that takes it. Only http(s) endpoints are used. A node that already has
-// the transaction is success with known set: identical bytes give an identical
+// urls that takes it. When genesis is set (a request that pins its cluster's
+// genesis hash), an endpoint whose getGenesisHash is another is skipped (ADR
+// 0023). Only http(s) endpoints are used. A node that already has the
+// transaction is success with known set: identical bytes give an identical
 // signature, so submitting twice is harmless.
-func Send(ctx context.Context, urls []string, raw, sig []byte) (known bool, err error) {
+func Send(ctx context.Context, urls []string, genesis string, raw, sig []byte) (known bool, err error) {
 	var errs []error
 	for _, u := range jsonrpc.HTTPURLs(urls) {
-		known, err := send(ctx, u, raw, sig)
+		known, err := false, serves(ctx, u, genesis)
+		if err == nil {
+			known, err = send(ctx, u, raw, sig)
+		}
 		if err == nil {
 			return known, nil
 		}
@@ -30,6 +35,22 @@ func Send(ctx context.Context, urls []string, raw, sig []byte) (known bool, err 
 		return false, errors.New("solrpc: the network has no http(s) rpc url to broadcast to")
 	}
 	return false, errors.Join(errs...)
+}
+
+// serves checks that endpoint's cluster has genesis hash genesis, when one
+// is pinned.
+func serves(ctx context.Context, endpoint, genesis string) error {
+	if genesis == "" {
+		return nil
+	}
+	var got string
+	if err := jsonrpc.Call(ctx, endpoint, "getGenesisHash", nil, &got); err != nil {
+		return err
+	}
+	if got != genesis {
+		return fmt.Errorf("serves the cluster with genesis hash %s, not %s; skipped", got, genesis)
+	}
+	return nil
 }
 
 func send(ctx context.Context, endpoint string, raw, sig []byte) (bool, error) {

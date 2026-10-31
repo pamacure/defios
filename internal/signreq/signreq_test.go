@@ -22,13 +22,11 @@ import (
 const b58 = "11111111111111111111111111111111"
 
 var (
-	ethID = [32]byte{1}
-	btcID = [32]byte{2}
-	solID = [32]byte{3}
-	nets  = []network.Network{
-		{Alias: "eth", ConfigID: ethID, Type: "ethereum", ChainID: 1},
-		{Alias: "btc", ConfigID: btcID, Type: "bitcoin", BitcoinNetwork: "mainnet"},
-		{Alias: "sol", ConfigID: solID, Type: "solana", Cluster: "devnet"},
+	// nets are a Node's local Networks; a request names their chains.
+	nets = []network.Network{
+		{Alias: "eth", Type: "ethereum", ChainID: 1},
+		{Alias: "btc", Type: "bitcoin", BitcoinNetwork: "mainnet"},
+		{Alias: "sol", Type: "solana", Cluster: "devnet"},
 	}
 	ecdsaKey = key.Key{Curve: "ecdsa", PublicKey: mustHex(btcPubkey)} // the key btcTx() spends from
 	eddsaKey = key.Key{Curve: "eddsa", PublicKey: make([]byte, 32)}   // the address b58 spells
@@ -43,22 +41,24 @@ func mustHex(s string) []byte {
 }
 
 func ethTx() *coslv1.SignTransaction {
-	return &coslv1.SignTransaction{NetworkConfigId: ethID[:], Intent: &coslv1.SignTransaction_Ethereum{Ethereum: &coslv1.EthereumIntent{
-		To: make([]byte, 20), Value: "1000", GasLimit: 21000, MaxFeePerGas: "30000000000", MaxPriorityFeePerGas: "1",
+	return &coslv1.SignTransaction{Intent: &coslv1.SignTransaction_Ethereum{Ethereum: &coslv1.EthereumIntent{
+		To: make([]byte, 20), Value: "1000", GasLimit: 21000, MaxFeePerGas: "30000000000", MaxPriorityFeePerGas: "1", ChainId: 1,
 	}}}
 }
 
 func btcTx() *coslv1.SignTransaction {
-	return &coslv1.SignTransaction{NetworkConfigId: btcID[:], Intent: &coslv1.SignTransaction_Bitcoin{Bitcoin: &coslv1.BitcoinIntent{
+	return &coslv1.SignTransaction{Intent: &coslv1.SignTransaction_Bitcoin{Bitcoin: &coslv1.BitcoinIntent{
 		Inputs:  []*coslv1.BitcoinInput{{Txid: strings.Repeat("ab", 32), AmountSats: 5000, ScriptPubkey: mustHex(btcSPK)}},
 		Outputs: []*coslv1.BitcoinOutput{{Address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", AmountSats: 4000}},
+		Network: "mainnet",
 	}}}
 }
 
 func solTx() *coslv1.SignTransaction {
-	return &coslv1.SignTransaction{NetworkConfigId: solID[:], Intent: &coslv1.SignTransaction_Solana{Solana: &coslv1.SolanaIntent{
+	return &coslv1.SignTransaction{Intent: &coslv1.SignTransaction_Solana{Solana: &coslv1.SolanaIntent{
 		FeePayer: b58, RecentBlockhash: b58,
 		Instructions: []*coslv1.SolanaInstruction{{ProgramId: b58}},
+		Cluster:      "devnet",
 	}}}
 }
 
@@ -77,7 +77,7 @@ func TestValidate(t *testing.T) {
 		{"sol", req(solTx()), eddsaKey},
 	}
 	for _, c := range good {
-		if err := Validate(c.r, c.k, nets); err != nil {
+		if err := Validate(c.r, c.k); err != nil {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
@@ -88,11 +88,17 @@ func TestValidate(t *testing.T) {
 	noDeadline.DeadlineSeconds = 0
 	badNonUTF := req(ethTx())
 	badNonUTF.Reason = "\xff"
-	unknownNet := ethTx()
-	unknownNet.NetworkConfigId = []byte{7}
-	wrongIntent := ethTx()
-	wrongIntent.Intent = btcTx().Intent
-	noIntent := &coslv1.SignTransaction{NetworkConfigId: ethID[:]}
+	noChainID := ethTx()
+	noChainID.GetEthereum().ChainId = 0
+	noBtcNetwork := btcTx()
+	noBtcNetwork.GetBitcoin().Network = ""
+	badBtcNetwork := btcTx()
+	badBtcNetwork.GetBitcoin().Network = "mainnet2"
+	noCluster := solTx()
+	noCluster.GetSolana().Cluster = ""
+	badGenesis := solTx()
+	badGenesis.GetSolana().GenesisHash = "not base58!"
+	noIntent := &coslv1.SignTransaction{}
 	badTo := ethTx()
 	badTo.GetEthereum().To = []byte{1}
 	noGas := ethTx()
@@ -135,8 +141,11 @@ func TestValidate(t *testing.T) {
 		"blank reason":      {noReason, ecdsaKey},
 		"non-utf8":          {badNonUTF, ecdsaKey},
 		"zero deadline":     {noDeadline, ecdsaKey},
-		"unknown network":   {req(unknownNet), ecdsaKey},
-		"intent mismatch":   {req(wrongIntent), ecdsaKey},
+		"no chain id":       {req(noChainID), ecdsaKey},
+		"no btc network":    {req(noBtcNetwork), ecdsaKey},
+		"bad btc network":   {req(badBtcNetwork), ecdsaKey},
+		"no sol cluster":    {req(noCluster), eddsaKey},
+		"bad genesis hash":  {req(badGenesis), eddsaKey},
 		"no intent":         {req(noIntent), ecdsaKey},
 		"bad to":            {req(badTo), ecdsaKey},
 		"no gas":            {req(noGas), ecdsaKey},
@@ -155,19 +164,19 @@ func TestValidate(t *testing.T) {
 		"deadline huge":     {longDeadline, ecdsaKey},
 	}
 	for name, c := range bad {
-		if err := Validate(c.r, c.k, nets); !errors.Is(err, ErrInvalid) {
+		if err := Validate(c.r, c.k); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
 		}
 	}
 
-	// A wrong-curve Key is rejected for any referenced Network.
-	if err := Validate(req(solTx()), ecdsaKey, nets); !errors.Is(err, ErrCurveMismatch) {
+	// A wrong-curve Key is rejected for any chain the request names.
+	if err := Validate(req(solTx()), ecdsaKey); !errors.Is(err, ErrCurveMismatch) {
 		t.Errorf("ecdsa key on solana: %v", err)
 	}
-	if err := Validate(req(ethTx(), solTx()), ecdsaKey, nets); !errors.Is(err, ErrCurveMismatch) {
+	if err := Validate(req(ethTx(), solTx()), ecdsaKey); !errors.Is(err, ErrCurveMismatch) {
 		t.Errorf("one wrong-curve tx among many: %v", err)
 	}
-	if err := Validate(req(ethTx()), eddsaKey, nets); !errors.Is(err, ErrCurveMismatch) {
+	if err := Validate(req(ethTx()), eddsaKey); !errors.Is(err, ErrCurveMismatch) {
 		t.Errorf("eddsa key on ethereum: %v", err)
 	}
 }
@@ -188,8 +197,8 @@ func TestBuildResolvesAliasesAndDefaultsDeadline(t *testing.T) {
 	if r.DeadlineSeconds != DefaultDeadlineSeconds {
 		t.Errorf("deadline = %d", r.DeadlineSeconds)
 	}
-	if string(r.Transactions[0].NetworkConfigId) != string(ethID[:]) || r.Transactions[0].GetEthereum() == nil {
-		t.Errorf("tx = %v", r.Transactions[0])
+	if r.Transactions[0].GetEthereum().GetChainId() != 1 {
+		t.Errorf("tx = %v; the alias must resolve to its chain id", r.Transactions[0])
 	}
 	if _, err := Build(Spec{Reason: "r", Transactions: []TxSpec{{Network: "nope"}}}, nets); !errors.Is(err, network.ErrUnknown) {
 		t.Errorf("unknown alias: %v", err)
@@ -201,6 +210,80 @@ func TestBuildResolvesAliasesAndDefaultsDeadline(t *testing.T) {
 	two := TxSpec{Network: "eth", Ethereum: []byte(`{}`), Bitcoin: []byte(`{}`)}
 	if _, err := Build(Spec{Reason: "r", Transactions: []TxSpec{two}}, nets); !errors.Is(err, ErrInvalid) {
 		t.Errorf("two intents: %v", err)
+	}
+	// An intent may name its chain itself, but not one other than its alias's.
+	same := TxSpec{Network: "eth", Ethereum: []byte(`{"chainId":"1"}`)}
+	if _, err := Build(Spec{Reason: "r", Transactions: []TxSpec{same}}, nets); err != nil {
+		t.Errorf("the alias's own chain: %v", err)
+	}
+	other := TxSpec{Network: "eth", Ethereum: []byte(`{"chainId":"10"}`)}
+	if _, err := Build(Spec{Reason: "r", Transactions: []TxSpec{other}}, nets); !errors.Is(err, ErrInvalid) {
+		t.Errorf("an intent naming another chain than its alias: %v", err)
+	}
+	wrongType := TxSpec{Network: "btc", Ethereum: []byte(`{}`)}
+	if _, err := Build(Spec{Reason: "r", Transactions: []TxSpec{wrongType}}, nets); !errors.Is(err, ErrInvalid) {
+		t.Errorf("an ethereum intent on a bitcoin Network: %v", err)
+	}
+}
+
+// Two Nodes that call one chain by different aliases write the same
+// request, so every Node derives the same Digest from it (ADR 0023).
+func TestBuildIsTheSameUnderAnyAlias(t *testing.T) {
+	intent := []byte(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1","gasLimit":"21000","maxFeePerGas":"2"}`)
+	mine, err := Build(Spec{Reason: "r", Transactions: []TxSpec{{Network: "eth", Ethereum: intent}}}, nets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := Build(Spec{Reason: "r", Transactions: []TxSpec{{Network: "mainnet", Ethereum: intent}}},
+		[]network.Network{{Alias: "mainnet", Type: "ethereum", ChainID: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(mine, theirs) {
+		t.Fatalf("one chain under two aliases gave two requests:\n%v\n%v", mine, theirs)
+	}
+}
+
+// A Node may accept a request only if it has a Network for every chain the
+// request names; the refusal names the chain, never an alias.
+func TestCheckChainsNamesTheMissingChain(t *testing.T) {
+	if err := CheckChains(req(ethTx(), btcTx()), nets); err != nil {
+		t.Fatalf("both chains local: %v", err)
+	}
+	other := ethTx()
+	other.GetEthereum().ChainId = 5
+	err := CheckChains(req(ethTx(), other), nets)
+	if !errors.Is(err, network.ErrNoChain) || !strings.Contains(err.Error(), "ethereum chain 5") {
+		t.Fatalf("chain 5: %v", err)
+	}
+	if err := CheckChains(req(btcTx()), nets[:1]); !errors.Is(err, network.ErrNoChain) || !strings.Contains(err.Error(), "bitcoin mainnet") {
+		t.Fatalf("no bitcoin Network: %v", err)
+	}
+}
+
+// Lookup derives every Digest from the request alone; a request with no
+// chain identity has none and is refused, as any invalid request is.
+func TestLookupDerivesDigestsFromTheRequestAlone(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	r := rowOf(t, 10, 0xa1, now, conv[:], req(ethTx()))
+	rows := append(mintedKey(t, now), r)
+	sg, err := Lookup(rows, r.MsgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "f923d8beba74c0b9fc1f63b03cab5faf4102f8c2eab0ea5ce52b75af013ab595"; len(sg.Digests) != 1 || hex.EncodeToString(sg.Digests[0]) != want {
+		t.Fatalf("digests = %x, want [%s]", sg.Digests, want)
+	}
+	for name, tx := range map[string]*coslv1.SignTransaction{
+		"no chain id":    func() *coslv1.SignTransaction { x := ethTx(); x.GetEthereum().ChainId = 0; return x }(),
+		"no btc network": func() *coslv1.SignTransaction { x := btcTx(); x.GetBitcoin().Network = ""; return x }(),
+		"bad cluster":    func() *coslv1.SignTransaction { x := solTx(); x.GetSolana().Cluster = "moon"; return x }(),
+	} {
+		bad := rowOf(t, 11, 0xb2, now, conv[:], req(tx))
+		if _, err := Lookup(append(rows, bad), bad.MsgID); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		}
 	}
 }
 
@@ -222,7 +305,6 @@ func TestListAndInspect(t *testing.T) {
 	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
 	open := rowOf(t, 1, 0xa1, now.Add(-10*time.Second), conv[:], req(ethTx()))
 	old := rowOf(t, 2, 0xb2, now.Add(-time.Hour), conv[:], req(ethTx(), btcTx()))
-	history := map[[32]byte]network.Network{ethID: nets[0], btcID: nets[1]}
 
 	list, err := List([]cosl.Row{open, old}, now)
 	if err != nil {
@@ -235,7 +317,7 @@ func TestListAndInspect(t *testing.T) {
 		t.Errorf("list[0] = %+v", list[0])
 	}
 
-	d, err := Inspect([]cosl.Row{open, old}, "b2", history, now)
+	d, err := Inspect([]cosl.Row{open, old}, "b2", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,20 +325,20 @@ func TestListAndInspect(t *testing.T) {
 		t.Fatalf("detail = %+v", d)
 	}
 	eth, btc := d.Details[0], d.Details[1]
-	if eth.Network != "eth" || eth.Type != "ethereum" || !strings.Contains(strings.Join(eth.Lines, "\n"), "value 1000 wei") {
+	if eth.Network != "ethereum chain 1" || eth.Type != "ethereum" || !strings.Contains(strings.Join(eth.Lines, "\n"), "value 1000 wei") {
 		t.Errorf("eth = %+v", eth)
 	}
 	if want := "f923d8beba74c0b9fc1f63b03cab5faf4102f8c2eab0ea5ce52b75af013ab595"; len(eth.Digests) != 1 || eth.Digests[0] != want {
 		t.Errorf("eth digests = %v, want [%s]", eth.Digests, want)
 	}
-	if !strings.Contains(strings.Join(btc.Lines, "\n"), "fee 1000 sats") {
+	if btc.Network != "bitcoin mainnet" || !strings.Contains(strings.Join(btc.Lines, "\n"), "fee 1000 sats") {
 		t.Errorf("btc = %+v", btc)
 	}
 
-	if _, err := Inspect([]cosl.Row{open}, "ff", history, now); !errors.Is(err, ErrUnknown) {
+	if _, err := Inspect([]cosl.Row{open}, "ff", now); !errors.Is(err, ErrUnknown) {
 		t.Errorf("unknown: %v", err)
 	}
-	if _, err := Inspect([]cosl.Row{open, old}, "", history, now); !errors.Is(err, ErrUnknown) {
+	if _, err := Inspect([]cosl.Row{open, old}, "", now); !errors.Is(err, ErrUnknown) {
 		t.Errorf("empty: %v", err)
 	}
 }
@@ -307,7 +389,7 @@ func TestAccepts(t *testing.T) {
 func broadcastRow(t *testing.T, seq uint64, sender byte, created time.Time, conv []byte, request [32]byte, hash byte) cosl.Row {
 	t.Helper()
 	payload, err := proto.Marshal(&coslv1.SignBroadcast{SignRequestId: request[:], Transactions: []*coslv1.BroadcastedTx{
-		{NetworkConfigId: ethID[:], TxHash: append(make([]byte, 31), hash)},
+		{TxHash: append(make([]byte, 31), hash)},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -342,7 +424,7 @@ func TestBroadcastReceipts(t *testing.T) {
 	if list[0].Broadcasts != 2 {
 		t.Errorf("list broadcasts = %d, want 2", list[0].Broadcasts)
 	}
-	d, err := Inspect(rows, "a1", map[[32]byte]network.Network{ethID: nets[0]}, now)
+	d, err := Inspect(rows, "a1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +433,7 @@ func TestBroadcastReceipts(t *testing.T) {
 	}
 	got := d.BroadcastReceipts[0]
 	if got.Broadcaster != (identity.ID{3}).String() || got.At != now.Add(time.Second).UTC().Format(time.RFC3339) ||
-		len(got.Transactions) != 1 || got.Transactions[0].Network != "eth" ||
+		len(got.Transactions) != 1 || got.Transactions[0].Network != "ethereum chain 1" ||
 		got.Transactions[0].TxHash != "0000000000000000000000000000000000000000000000000000000000000001" {
 		t.Errorf("receipt = %+v", got)
 	}
@@ -363,7 +445,7 @@ func TestBroadcastReceipts(t *testing.T) {
 func malformedBroadcast(t *testing.T, seq uint64, created time.Time, conv []byte, request [32]byte) cosl.Row {
 	t.Helper()
 	row := broadcastRow(t, seq, 7, created, conv, request, 1)
-	payload, err := proto.Marshal(&coslv1.SignBroadcast{SignRequestId: request[:], Transactions: []*coslv1.BroadcastedTx{{NetworkConfigId: ethID[:], TxHash: []byte{1}}}})
+	payload, err := proto.Marshal(&coslv1.SignBroadcast{SignRequestId: request[:], Transactions: []*coslv1.BroadcastedTx{{TxHash: []byte{1}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,27 +456,29 @@ func malformedBroadcast(t *testing.T, seq uint64, created time.Time, conv []byte
 	return row
 }
 
-// A receipt covers one Network's transactions, saying which by index. A
-// request with receipts for different Networks is fully broadcast once every
-// transaction is in some receipt; malformed receipts count for nothing.
+// A receipt covers one chain's transactions, saying which by index. A
+// request with receipts for different chains is fully broadcast once every
+// transaction is in some receipt; malformed receipts, and one that mixes
+// chains, count for nothing.
 func TestPartialBroadcastReceipts(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
-	r := rowOf(t, 1, 0xa1, now, conv[:], req(ethTx(), ethTx(), solTx()))
+	op := ethTx()
+	op.GetEthereum().ChainId = 10
+	r := rowOf(t, 1, 0xa1, now, conv[:], req(ethTx(), ethTx(), solTx(), op))
 	rcpt := func(seq uint64, txs ...*coslv1.BroadcastedTx) cosl.Row {
 		return receiptRow(t, seq, now.Add(time.Duration(seq)*time.Second), conv[:], r.MsgID, txs...)
 	}
-	tx := func(idx uint32, net [32]byte) *coslv1.BroadcastedTx {
-		return &coslv1.BroadcastedTx{NetworkConfigId: net[:], TxHash: append(make([]byte, 31), byte(idx+1)), TxIndex: idx}
+	tx := func(idx uint32) *coslv1.BroadcastedTx {
+		return &coslv1.BroadcastedTx{TxHash: append(make([]byte, 31), byte(idx+1)), TxIndex: idx}
 	}
-	history := map[[32]byte]network.Network{ethID: nets[0], solID: nets[2]}
 	status := func(rows ...cosl.Row) (Summary, Detail) {
 		rows = append([]cosl.Row{r}, rows...)
 		l, err := List(rows, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		d, err := Inspect(rows, "a1", history, now)
+		d, err := Inspect(rows, "a1", now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -404,26 +488,27 @@ func TestPartialBroadcastReceipts(t *testing.T) {
 	if s, _ := status(); s.FullyBroadcast || s.Broadcasts != 0 {
 		t.Errorf("no receipts: %+v", s)
 	}
-	s, d := status(rcpt(2, tx(0, ethID), tx(1, ethID)))
+	s, d := status(rcpt(2, tx(0), tx(1)))
 	if s.FullyBroadcast || s.Broadcasts != 1 || len(d.BroadcastReceipts[0].Transactions) != 2 || d.BroadcastReceipts[0].Transactions[1].Index != 1 {
-		t.Errorf("one Network: %+v %+v", s, d.BroadcastReceipts)
+		t.Errorf("one chain: %+v %+v", s, d.BroadcastReceipts)
 	}
-	s, d = status(rcpt(2, tx(0, ethID), tx(1, ethID)), rcpt(3, tx(2, solID)))
-	if !s.FullyBroadcast || s.Broadcasts != 2 || d.BroadcastReceipts[1].Transactions[0].Network != "sol" {
-		t.Errorf("both Networks: %+v %+v", s, d.BroadcastReceipts)
+	s, d = status(rcpt(2, tx(0), tx(1)), rcpt(3, tx(2)), rcpt(4, tx(3)))
+	if !s.FullyBroadcast || s.Broadcasts != 3 || d.BroadcastReceipts[1].Transactions[0].Network != "solana devnet" ||
+		d.BroadcastReceipts[2].Transactions[0].Network != "ethereum chain 10" {
+		t.Errorf("every chain: %+v %+v", s, d.BroadcastReceipts)
 	}
 	// A repeat of a covered subset is one more receipt, still fully broadcast.
-	if s, _ = status(rcpt(2, tx(0, ethID), tx(1, ethID)), rcpt(3, tx(2, solID)), rcpt(4, tx(2, solID))); !s.FullyBroadcast || s.Broadcasts != 3 {
+	if s, _ = status(rcpt(2, tx(0), tx(1)), rcpt(3, tx(2)), rcpt(4, tx(3)), rcpt(5, tx(2))); !s.FullyBroadcast || s.Broadcasts != 4 {
 		t.Errorf("repeat: %+v", s)
 	}
 
 	for name, bad := range map[string][]*coslv1.BroadcastedTx{
-		"empty":              nil,
-		"mixed Networks":     {tx(0, ethID), tx(2, solID)},
-		"index out of range": {tx(3, ethID)},
-		"duplicate index":    {tx(0, ethID), tx(0, ethID)},
-		"wrong Network":      {tx(2, ethID)},
-		"short hash":         {{NetworkConfigId: ethID[:], TxHash: []byte{1}, TxIndex: 0}},
+		"empty":                 nil,
+		"mixed types":           {tx(0), tx(2)},
+		"mixed ethereum chains": {tx(0), tx(3)},
+		"index out of range":    {tx(4)},
+		"duplicate index":       {tx(0), tx(0)},
+		"short hash":            {{TxHash: []byte{1}, TxIndex: 0}},
 	} {
 		if s, _ := status(rcpt(2, bad...)); s.Broadcasts != 0 {
 			t.Errorf("%s: a malformed receipt was counted", name)
@@ -545,7 +630,7 @@ func TestRequestStatus(t *testing.T) {
 			if got := list[0].Status; got != c.want {
 				t.Errorf("List status = %q, want %q", got, c.want)
 			}
-			d, err := Inspect(rows, "a1", nil, c.now)
+			d, err := Inspect(rows, "a1", c.now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -593,7 +678,7 @@ func TestListAndInspectNeedOnlyMsgTypes(t *testing.T) {
 	if got := list[0]; got.Status != "signed" || len(got.Accepted) != 2 || got.Needed != 2 || !got.KeyKnown || got.Broadcasts != 1 {
 		t.Fatalf("summary from MsgTypes rows = %+v", got)
 	}
-	d, err := Inspect(narrow, "a1", map[[32]byte]network.Network{ethID: nets[0]}, within)
+	d, err := Inspect(narrow, "a1", within)
 	if err != nil {
 		t.Fatal(err)
 	}

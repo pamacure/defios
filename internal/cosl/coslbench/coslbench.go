@@ -276,7 +276,7 @@ func (w *writer) signing(i int) {
 	req := w.commit(0, cosl.TypeSignRequest, conv, &coslv1.SignRequest{
 		Reason:          fmt.Sprintf("payment %d", i),
 		DeadlineSeconds: 3600,
-		Transactions:    []*coslv1.SignTransaction{{NetworkConfigId: seed("network", 0)}},
+		Transactions:    []*coslv1.SignTransaction{{Intent: &coslv1.SignTransaction_Ethereum{Ethereum: &coslv1.EthereumIntent{ChainId: 1}}}},
 	})
 	if w.err != nil {
 		return

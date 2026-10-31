@@ -246,3 +246,40 @@ defios conversation send "@auditor, introduce yourself"
 ```
 
 Check it: `send` prints `@auditor: ...` when the agent replies, and `defios conversation log` shows the reply on both machines.
+
+### 8. Sign a transaction
+
+A Network is one machine's own: a chain it is willing to sign for, and the endpoints it reaches that chain by. On each machine, add one to the Group's `config.toml`:
+
+```bash
+defios secret set ETH_RPC
+defios network add mainnet --type ethereum --chain-id 1 --rpc-url '$ETH_RPC'
+```
+
+The Secret holds the endpoint's full URL, with its API key or `user:pass@`. An endpoint that needs no credential can be a plain `--rpc-url https://...`; a plain URL with userinfo or a query is refused. The two machines may give the chain different aliases: a Sign Request names the chain (`ethereum chain 1`), never an alias.
+
+On A, propose that the Key sign a transaction, written to `tx.json` as:
+
+```json
+[{"network": "mainnet",
+  "ethereum": {"to": "<base64 20 bytes>", "value": "1000", "nonce": "0", "gasLimit": "21000",
+               "maxFeePerGas": "30000000000", "maxPriorityFeePerGas": "1"}}]
+```
+
+```bash
+defios sign propose --key ecdsa:<hex> --reason "pay the invoice" --transactions tx.json
+```
+
+On B, accept it using the msg id A printed. A machine with no Network for the request's chain refuses to accept:
+
+```bash
+defios sign accept <msg-id>
+```
+
+Once it is signed, either machine broadcasts it through its own endpoints, each checked first to serve the request's chain:
+
+```bash
+defios sign broadcast <msg-id>
+```
+
+Check it: `defios sign inspect <msg-id>` shows each transaction's chain and Digest on both machines, and the receipt once it is broadcast.

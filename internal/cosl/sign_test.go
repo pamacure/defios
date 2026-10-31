@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -113,5 +115,24 @@ func TestRegistryNames(t *testing.T) {
 	}
 	if _, ok := cosl.TypeByName("nope"); ok {
 		t.Error("TypeByName accepted an unknown name")
+	}
+}
+
+// The network.* ids are retired (ADR 0023): a reader meets them as it meets
+// any unknown type, and their names no longer resolve.
+func TestRetiredNetworkIDsAreUnknown(t *testing.T) {
+	for id, name := range map[uint32]string{8: "network.create", 9: "network.update", 10: "network.remove"} {
+		if got := cosl.TypeName(id); got != fmt.Sprintf("unknown(%d)", id) {
+			t.Errorf("TypeName(%d) = %q", id, got)
+		}
+		if _, ok := cosl.TypeByName(name); ok {
+			t.Errorf("TypeByName(%q) still resolves", name)
+		}
+		if _, err := cosl.DecodePayload(id, nil); !errors.Is(err, cosl.ErrUnknownType) {
+			t.Errorf("DecodePayload(%d) = %v, want ErrUnknownType", id, err)
+		}
+		if got := cosl.Summary(id, []byte{1, 2}); got != "2 bytes" {
+			t.Errorf("Summary(%d) = %q", id, got)
+		}
 	}
 }

@@ -46,7 +46,7 @@ func TestSendSubmitsTheTransactionBase64(t *testing.T) {
 		got = p[0]
 		return base58.Encode(sig), ""
 	})
-	known, err := solrpc.Send(context.Background(), []string{url}, []byte{1, 2}, sig)
+	known, err := solrpc.Send(context.Background(), []string{url}, "", []byte{1, 2}, sig)
 	if err != nil || known {
 		t.Fatalf("known=%v err=%v", known, err)
 	}
@@ -57,7 +57,7 @@ func TestSendSubmitsTheTransactionBase64(t *testing.T) {
 
 func TestSendRejectsAMismatchedSignature(t *testing.T) {
 	url := node(t, func(string, []any) (any, string) { return base58.Encode([]byte{9}), "" })
-	if _, err := solrpc.Send(context.Background(), []string{url}, []byte{1}, sig); err == nil {
+	if _, err := solrpc.Send(context.Background(), []string{url}, "", []byte{1}, sig); err == nil {
 		t.Fatal("a node returning another signature must be an error")
 	}
 }
@@ -72,11 +72,11 @@ func TestSendIsIdempotent(t *testing.T) {
 			return map[string]any{"value": []any{map[string]any{"err": errVal}}}, ""
 		})
 	}
-	if known, err := solrpc.Send(context.Background(), []string{status(nil)}, []byte{1}, sig); err != nil || !known {
+	if known, err := solrpc.Send(context.Background(), []string{status(nil)}, "", []byte{1}, sig); err != nil || !known {
 		t.Fatalf("known=%v err=%v", known, err)
 	}
 	// Landed but failed on chain: the repeat is no success to report.
-	if _, err := solrpc.Send(context.Background(), []string{status("InstructionError")}, []byte{1}, sig); err == nil {
+	if _, err := solrpc.Send(context.Background(), []string{status("InstructionError")}, "", []byte{1}, sig); err == nil {
 		t.Fatal("a transaction that failed on chain was reported as sent")
 	}
 }
@@ -88,11 +88,43 @@ func TestSendReportsRejectionWhenTheClusterDoesNotHaveIt(t *testing.T) {
 		}
 		return map[string]any{"value": []any{nil}}, ""
 	})
-	_, err := solrpc.Send(context.Background(), []string{url}, []byte{1}, sig)
+	_, err := solrpc.Send(context.Background(), []string{url}, "", []byte{1}, sig)
 	if err == nil || !strings.Contains(err.Error(), "Blockhash not found") {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := solrpc.Send(context.Background(), []string{"wss://x"}, []byte{1}, sig); err == nil {
+	if _, err := solrpc.Send(context.Background(), []string{"wss://x"}, "", []byte{1}, sig); err == nil {
 		t.Fatal("no http url must be an error")
+	}
+}
+
+// A request that pins its cluster's genesis hash goes only to an endpoint
+// whose getGenesisHash is that hash; one on another cluster is skipped with
+// an error, and the next is tried. Without a pinned hash nothing is asked.
+func TestSendChecksThePinnedGenesisHash(t *testing.T) {
+	const devnet, mainnet = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG", "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+	var calls []string
+	on := func(genesis string) string {
+		return node(t, func(m string, _ []any) (any, string) {
+			calls = append(calls, genesis+" "+m)
+			if m == "getGenesisHash" {
+				return genesis, ""
+			}
+			return base58.Encode(sig), ""
+		})
+	}
+	wrong, right := on(mainnet), on(devnet)
+	if _, err := solrpc.Send(context.Background(), []string{wrong, right}, devnet, []byte{1}, sig); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{mainnet + " getGenesisHash", devnet + " getGenesisHash", devnet + " sendTransaction"}
+	if strings.Join(calls, ",") != strings.Join(want, ",") {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	if _, err := solrpc.Send(context.Background(), []string{wrong}, devnet, []byte{1}, sig); err == nil || !strings.Contains(err.Error(), mainnet) {
+		t.Fatalf("err = %v, want one naming the endpoint's genesis hash", err)
+	}
+	calls = nil
+	if _, err := solrpc.Send(context.Background(), []string{wrong}, "", []byte{1}, sig); err != nil || len(calls) != 1 {
+		t.Fatalf("no pinned hash: calls %v, err %v", calls, err)
 	}
 }

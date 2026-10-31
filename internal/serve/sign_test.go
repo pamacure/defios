@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,8 +28,9 @@ import (
 )
 
 // A proposal lands on both replicas as one sign.request in the Key's
-// Conversation, listable and inspectable; a Network of the wrong curve is
-// rejected before anything is appended.
+// Conversation, listable and inspectable by its chain; a Network of the
+// wrong curve, or an alias the proposer has no Network for, is rejected
+// before anything is appended.
 func TestSignProposeListInspect(t *testing.T) {
 	a, b := pair(t)
 	gid := formValid(t, a, b)
@@ -54,18 +56,10 @@ func TestSignProposeListInspect(t *testing.T) {
 	commitEnvelope(t, a, b, sign(b, complete, cosl.TypeSessionComplete))
 	conv := key.ConversationID("ecdsa", pk)
 	waitMinted(t, a, gid, conv[:])
+	waitMinted(t, b, gid, conv[:]) // b proposes
 
 	ctx := context.Background()
-	if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "eth", Type: "ethereum", ChainId: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "sol", Type: "solana", Cluster: "devnet"}); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, n := range []*node{a, b} {
-		waitNetworks(t, n, 2)
-	}
+	setNetworks(t, b, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n\n[networks.sol]\ntype = \"solana\"\ncluster = \"devnet\"\n")
 
 	eth := json.RawMessage(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","gasLimit":"21000","maxFeePerGas":"30"}`)
 	spec := signreq.Spec{Reason: "pay the invoice", Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}}
@@ -74,6 +68,9 @@ func TestSignProposeListInspect(t *testing.T) {
 	wrong := signreq.Spec{Reason: "r", Transactions: []signreq.TxSpec{{Network: "sol", Solana: json.RawMessage(`{"feePayer":"p","recentBlockhash":"h","instructions":[{"programId":"x"}]}`)}}}
 	if _, err := b.client().SignPropose(ctx, keyQuery, wrong); !errors.Is(err, signreq.ErrCurveMismatch) {
 		t.Fatalf("wrong curve: %v", err)
+	}
+	if _, err := a.client().SignPropose(ctx, keyQuery, spec); !errors.Is(err, network.ErrUnknown) {
+		t.Fatalf("an alias the proposer has no Network for: %v", err)
 	}
 	noReason := spec
 	noReason.Reason = ""
@@ -103,7 +100,7 @@ func TestSignProposeListInspect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Reason != "pay the invoice" || d.DeadlineSeconds != signreq.DefaultDeadlineSeconds || len(d.Details) != 1 || d.Details[0].Network != "eth" {
+	if d.Reason != "pay the invoice" || d.DeadlineSeconds != signreq.DefaultDeadlineSeconds || len(d.Details) != 1 || d.Details[0].Network != "ethereum chain 1" {
 		t.Fatalf("inspect = %+v", d)
 	}
 	if _, err := a.client().SignInspect(ctx, "ff"); !errors.Is(err, signreq.ErrUnknown) {
@@ -113,22 +110,11 @@ func TestSignProposeListInspect(t *testing.T) {
 
 func hexOf(b []byte) string { return hex.EncodeToString(b) }
 
-// waitNetworks polls until the Node's replica folds to want live Networks.
-func waitNetworks(t *testing.T, n *node, want int) {
+// setNetworks writes body, its [networks.<alias>] tables, as n's Group
+// config.toml: the chains n signs for, by n's own aliases.
+func setNetworks(t *testing.T, n *node, body string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		store, err := cosl.Open(n.paths.CoslFile(group.ImplicitAlias))
-		if err == nil {
-			rows, err := store.Log(cosl.Query{})
-			store.Close()
-			if nets, ferr := network.Fold(rows); err == nil && ferr == nil && len(nets) >= want {
-				return
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("%s: fewer than %d Networks", n.name, want)
+	writeConfig(t, n.paths.GroupConfigFile(group.ImplicitAlias), body)
 }
 
 // signerDouble finishes at once with a signature per Digest made by the
@@ -174,7 +160,9 @@ func (d *signerDouble) Abort()                               {}
 
 // Proposing is the proposer's accept and starts nothing; once the other Node
 // runs `sign accept` a Session starts, and it completes with signatures that
-// verify against the Key.
+// verify against the Key. A Node accepts only a request for chains it has a
+// Network for, whatever it calls them: the two Nodes name Ethereum chain 1
+// differently and derive the same Digest (ADR 0023).
 func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -219,14 +207,11 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 	commitEnvelope(t, a, b, sign(b, complete, cosl.TypeSessionComplete))
 	conv := key.ConversationID("ecdsa", pk)
 	waitMinted(t, a, gid, conv[:])
+	waitMinted(t, b, gid, conv[:]) // b proposes
 
 	ctx := context.Background()
-	if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "eth", Type: "ethereum", ChainId: 1}); err != nil {
-		t.Fatal(err)
-	}
-	for _, n := range []*node{a, b} {
-		waitNetworks(t, n, 1)
-	}
+	setNetworks(t, b, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n")
+	setNetworks(t, a, "[networks.goerli]\ntype = \"ethereum\"\nchain_id = 5\n")
 
 	if err := a.client().SignAccept(ctx, "ff"); !errors.Is(err, signreq.ErrUnknown) {
 		t.Fatalf("accept of an unknown request: %v", err)
@@ -250,6 +235,11 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 		t.Fatalf("inspect before accept = %+v, %v", d, err)
 	}
 
+	err = a.client().SignAccept(ctx, v.MsgID[:8])
+	if !errors.Is(err, network.ErrNoChain) || !strings.Contains(err.Error(), "ethereum chain 1") {
+		t.Fatalf("accept with no Network for the chain = %v, want ErrNoChain naming ethereum chain 1", err)
+	}
+	setNetworks(t, a, "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\n")
 	if err := a.client().SignAccept(ctx, v.MsgID[:8]); err != nil {
 		t.Fatal(err)
 	}
