@@ -84,33 +84,54 @@ func invalidf(format string, args ...any) error {
 // Validate checks a config's alias; that base_url is an http(s) URL with a
 // host and no userinfo, query or fragment, so credentials never ride the
 // log; and that api_path is an absolute path with no query or fragment
-// ending in a shape's suffix. Both are required.
+// ending in a shape's suffix. Both are required, and a config wrong in both
+// is told of both.
 func Validate(c *coslv1.ProviderConfig) error {
 	if err := group.ValidateAlias(c.Alias); err != nil {
 		return invalidf("alias %q must be 1–64 chars matching [a-z0-9][a-z0-9_-]*", c.Alias)
 	}
-	if c.BaseUrl == "" {
-		return invalidf("base url is required")
+	var problems []string
+	if p := baseURLProblem(c.BaseUrl); p != "" {
+		problems = append(problems, p)
 	}
-	u, err := url.Parse(c.BaseUrl)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return invalidf("base url %q must be an http or https URL with a host", c.BaseUrl)
+	if p := apiPathProblem(c.ApiPath); p != "" {
+		problems = append(problems, p)
 	}
-	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(c.BaseUrl, "#") {
-		return invalidf("base url %q must not carry userinfo, a query, or a fragment", c.BaseUrl)
-	}
-	if c.ApiPath == "" {
-		return invalidf("api path is required")
-	}
-	p, err := url.Parse(c.ApiPath)
-	if err != nil || !strings.HasPrefix(c.ApiPath, "/") || strings.HasPrefix(c.ApiPath, "//") || p.Scheme != "" || p.Host != "" ||
-		strings.ContainsAny(c.ApiPath, "?#") {
-		return invalidf("api path %q must be an absolute path with no query or fragment", c.ApiPath)
-	}
-	if _, ok := agent.ShapeOf(c.ApiPath); !ok {
-		return invalidf("api path %q must end in one of %s", c.ApiPath, strings.Join(agent.ShapeSuffixes(), ", "))
+	if len(problems) > 0 {
+		return invalidf("%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// baseURLProblem is what is wrong with base, or "".
+func baseURLProblem(base string) string {
+	if base == "" {
+		return "base url is required"
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Sprintf("base url %q must be an http or https URL with a host", base)
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(base, "#") {
+		return fmt.Sprintf("base url %q must not carry userinfo, a query, or a fragment", base)
+	}
+	return ""
+}
+
+// apiPathProblem is what is wrong with path, or "".
+func apiPathProblem(path string) string {
+	if path == "" {
+		return "api path is required"
+	}
+	p, err := url.Parse(path)
+	if err != nil || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || p.Scheme != "" || p.Host != "" ||
+		strings.ContainsAny(path, "?#") {
+		return fmt.Sprintf("api path %q must be an absolute path with no query or fragment", path)
+	}
+	if _, ok := agent.ShapeOf(path); !ok {
+		return fmt.Sprintf("api path %q must end in one of %s", path, strings.Join(agent.ShapeSuffixes(), ", "))
+	}
+	return ""
 }
 
 // MsgTypes are the rows Fold reads: a reader folding Providers asks the
@@ -157,6 +178,20 @@ func Fold(rows []cosl.Row) ([]Provider, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Alias < out[j].Alias })
 	return out, nil
+}
+
+// Log is a replica's log, as Read needs it: a *cosl.Store.
+type Log interface {
+	Log(q cosl.Query) ([]cosl.Row, error)
+}
+
+// Read folds the live Providers from log, asking it for MsgTypes only.
+func Read(log Log) ([]Provider, error) {
+	rows, err := log.Log(cosl.Query{MsgTypes: MsgTypes})
+	if err != nil {
+		return nil, err
+	}
+	return Fold(rows)
 }
 
 // Get finds a live Provider by alias.

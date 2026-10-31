@@ -656,11 +656,7 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	if err != nil {
 		return agent.Request{}, inc, fmt.Errorf("@%s's profile: %w", handle, err)
 	}
-	rows, err := store.Log(cosl.Query{MsgTypes: provider.MsgTypes})
-	if err != nil {
-		return agent.Request{}, inc, err
-	}
-	providers, err := provider.Fold(rows)
+	providers, err := provider.Read(store)
 	if err != nil {
 		return agent.Request{}, inc, err
 	}

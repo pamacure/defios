@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"defios.com/internal/cosl"
 	"defios.com/internal/provider"
 	"defios.com/internal/serve"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -155,11 +154,7 @@ func foldProviders(g *globals) ([]provider.Provider, error) {
 		return nil, err
 	}
 	defer store.Close()
-	rows, err := store.Log(cosl.Query{MsgTypes: provider.MsgTypes})
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	providers, err := provider.Fold(rows)
+	providers, err := provider.Read(store)
 	if err != nil {
 		return nil, exitOperational(err)
 	}

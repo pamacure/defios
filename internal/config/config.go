@@ -368,15 +368,11 @@ func jsonValue(v any) (any, error) {
 		}
 		return out, nil
 	case []map[string]any:
-		out := make([]any, len(x))
+		a := make([]any, len(x))
 		for i, e := range x {
-			j, err := jsonValue(e)
-			if err != nil {
-				return nil, fmt.Errorf("[%d]%w", i, err)
-			}
-			out[i] = j
+			a[i] = e
 		}
-		return out, nil
+		return jsonValue(a)
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {

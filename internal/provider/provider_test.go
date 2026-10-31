@@ -2,6 +2,7 @@ package provider
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -87,6 +88,14 @@ func TestValidate(t *testing.T) {
 		if err := Validate(c); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: got %v, want ErrInvalid", name, err)
 		}
+	}
+}
+
+// A config wrong in both base_url and api_path names both problems.
+func TestValidateReportsBothFields(t *testing.T) {
+	err := Validate(&coslv1.ProviderConfig{Alias: "x", ApiPath: "/v1/foo"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "base url is required") || !strings.Contains(err.Error(), `api path "/v1/foo" must end in one of`) {
+		t.Fatalf("got %v", err)
 	}
 }
 

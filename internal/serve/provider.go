@@ -40,11 +40,7 @@ func (s *server) providerWrite(ctx context.Context, typ uint32, cfg *coslv1.Prov
 	if !running || !held {
 		return SendView{}, ErrNoReplica
 	}
-	rows, err := store.Log(cosl.Query{MsgTypes: provider.MsgTypes})
-	if err != nil {
-		return SendView{}, err
-	}
-	providers, err := provider.Fold(rows)
+	providers, err := provider.Read(store)
 	if err != nil {
 		return SendView{}, err
 	}
