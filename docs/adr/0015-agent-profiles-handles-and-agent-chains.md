@@ -118,6 +118,8 @@ stream, the CLI, retry and text only are amended there.*
   *Amended by [ADR 0018](0018-an-agent-says-one-message.md): the talk is sent as turns, the
   agent's own messages from any Node as `assistant` turns, and within a
   summon each call carries the whole output so far.*
+  *Amended by [ADR 0021](0021-an-agent-is-one-nodes-handle.md): only the
+  agent's messages from its own Node are its turns.*
 - **Stream.** The serve's local socket gains `GET /v1/conversation/stream`,
   newline-delimited JSON events: `chain.start`, `agent.start {handle,
   depth}`, `agent.delta {text}`, `agent.reset` (a retry starts the reply

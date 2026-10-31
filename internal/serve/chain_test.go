@@ -454,10 +454,10 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 	}
 }
 
-// An agent sees its own messages as assistant turns, the one bob's Node
-// wrote as @auditor included, and the rest as lean lines in user turns
-// (ADR 0018). Its preamble says so.
-func TestAnAgentSeesItsOwnMessagesAsAssistantTurns(t *testing.T) {
+// An agent sees its own messages as assistant turns and the rest as lean
+// lines in user turns (ADR 0018). Bob's @auditor is another agent, so
+// alice's sees its message as a lean line (ADR 0021). Its preamble says so.
+func TestAnAgentIsOneNodesHandle(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor")
 	agentNode(t, b, "auditor")
 	ctx := context.Background()
@@ -477,10 +477,11 @@ func TestAnAgentSeesItsOwnMessagesAsAssistantTurns(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("alice's calls = %+v", calls)
 	}
-	if want := "[user] bob: @auditor?\n[assistant] reply 1\n[user] alice: @auditor and\\nyou?\n"; calls[0].Turns != want {
+	if want := "[user] bob: @auditor?\nbob/@auditor: reply 1\nalice: @auditor and\\nyou?\n"; calls[0].Turns != want {
 		t.Fatalf("turns =\n%s\nwant\n%s", calls[0].Turns, want)
 	}
-	if !strings.Contains(calls[0].System, "your own earlier messages are your turns") {
+	if !strings.Contains(calls[0].System, "your own earlier messages are your turns") ||
+		!strings.Contains(calls[0].System, "another Node is another agent") {
 		t.Fatalf("system prompt = %q", calls[0].System)
 	}
 }

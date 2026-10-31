@@ -60,8 +60,12 @@ _Avoid_: profile, project, config dir, profile directory
 One agent persona a Node can summon into talk: a profile directory holding its system prompt, and the Provider and Model ID it runs on, that a Group's config binds to a Handle. Node-local and never replicated; one profile may serve any of the Node's Groups and Keys, but answers only in a Conversation (or Group-level talk) whose config includes its Handle.
 _Avoid_: agent (that is the running thing, not its definition), persona, bot, workspace
 
+**Agent**:
+One Node's Handle in one Group: the party that speaks in talk under that Handle from that Node, running whichever Agent Profile the Handle is bound to. The same Handle on two Nodes is two agents.
+_Avoid_: assistant, bot, the agent across Nodes
+
 **Handle**:
-The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes every message under its Handle, from any Node, as its own words.
+The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
 _Avoid_: agent name, username, alias (that is a Group's, Network's or Provider's local label)
 
 **Transcript**:

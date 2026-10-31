@@ -20,6 +20,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/errlog"
 	"defios.com/internal/group"
+	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
 	"defios.com/internal/provider"
@@ -711,8 +712,9 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 func preamble(handle string, depth uint32, inc config.Included, where string) (stable, atDepth string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
-	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone, whichever Node wrote them as @%s. "+
-		"Everything else is in the other turns, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for another agent's.\n", handle)
+	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone: those your Node wrote as @%s. "+
+		"Everything else is in the other turns, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for another agent's. "+
+		"@%s from another Node is another agent.\n", handle, handle)
 	fmt.Fprintf(&b, "This is a group chat. Only what you pass to the say tool is posted to it, as one message from @%s, and calling say ends your turn. "+
 		"Everything else you write stays private. Keep your message to a paragraph or two of plain text, like a longer group-chat message, at most %d bytes. "+
 		"If you have nothing worth saying, end your turn without calling say and you stay silent.\n", handle, agent.MaxSay)
@@ -749,7 +751,7 @@ func (s *server) talkSoFar(store *cosl.Store, conv []byte, handle string) ([]age
 		return nil, err
 	}
 	rec, _ := s.slot.Current()
-	return talkTurns(said, func(r cosl.Row) string { return displayName(rec, r) }, handle), nil
+	return talkTurns(said, func(r cosl.Row) string { return displayName(rec, r) }, s.opts.Node.NodeID, handle), nil
 }
 
 // The fixed user turns that keep the talk alternating when it opens or ends
@@ -759,14 +761,15 @@ const (
 	talkEndsWithYou  = "(You have been summoned again. Reply now.)"
 )
 
-// talkTurns is said as the agent handle sees it (ADR 0018, "Turns by
-// Handle"): every message whose Handle is handle, from any Node, is an
-// assistant turn holding its text alone; everything else is a lean line,
-// consecutive lines merged into one user turn. Consecutive messages of its
+// talkTurns is said as node's agent handle sees it (ADR 0018, "Turns by
+// Handle"; ADR 0021): every message node wrote under handle is an
+// assistant turn holding its text alone; everything else, the same Handle
+// from another Node included, is a lean line, consecutive lines merged
+// into one user turn. Consecutive messages of its
 // own merge a blank line apart. A fixed user turn goes before talk that
 // opens with its own message and after talk that ends with one, so the
 // turns alternate and start and end with user.
-func talkTurns(said []recap.Said, name func(cosl.Row) string, handle string) []agent.Turn {
+func talkTurns(said []recap.Said, name func(cosl.Row) string, node identity.ID, handle string) []agent.Turn {
 	var turns []agent.Turn
 	add := func(role, text, sep string) {
 		if n := len(turns); n > 0 && turns[n-1].Role == role {
@@ -776,7 +779,7 @@ func talkTurns(said []recap.Said, name func(cosl.Row) string, handle string) []a
 		turns = append(turns, agent.Turn{Role: role, Text: text})
 	}
 	for _, l := range said {
-		if l.Handle == handle {
+		if l.Handle == handle && l.Row.Sender == node {
 			if len(turns) == 0 {
 				add(agent.User, talkOpensWithYou, "")
 			}

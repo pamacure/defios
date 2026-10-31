@@ -24,6 +24,8 @@ whole output, and there is a retry verb.
 - **Feed an agent its own earlier Transcripts on the next summon.**
   Rejected: an agent's context would then depend on which Node runs it, and
   its cost would grow with every summon. A summon starts from the group chat.
+  *Amended by [ADR 0021](0021-an-agent-is-one-nodes-handle.md): only one
+  Node runs an agent, so only the cost reason stands.*
 - **Keep Transcripts in the Vault.** Rejected for now: they are working
   output, not secrets, and today hold no tool results. Revisit when tools that
   read sensitive state exist.
@@ -55,6 +57,10 @@ whole output, and there is a retry verb.
   are one assistant, whichever profile or Model each Node runs. If the talk
   opens with the agent's own message, or ends with it, the serve adds a fixed
   `user` turn before or after it. `conversation log --lean` is unchanged.
+  *Amended by [ADR 0021](0021-an-agent-is-one-nodes-handle.md): an agent is
+  one Node's Handle, so only the messages its own Node wrote under its
+  Handle are `assistant` turns; the same Handle from another Node is another
+  agent, in `user` content.*
 - **Caching.** For Anthropic, the system prompt is sent as blocks:
   `SYSTEM.md` and the stable preamble first, the depth and summonable
   Handles last. Cache breakpoints sit after the stable blocks and on the
