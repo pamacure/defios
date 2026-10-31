@@ -12,12 +12,11 @@ import (
 )
 
 // SignedTx is one transaction of a Sign Request, assembled and ready to
-// broadcast to its Network.
+// broadcast to its chain.
 type SignedTx struct {
-	Index           uint32 // position in the request's transactions
-	Network         network.Network
-	NetworkConfigID [32]byte
-	Raw             []byte
+	Index uint32        // position in the request's transactions
+	Chain network.Chain // the chain it names
+	Raw   []byte
 	// ID names the transaction on its Network: the keccak256 hash of an
 	// Ethereum transaction, the first signature of a Solana one, the txid of
 	// a Bitcoin one (display order).
@@ -27,8 +26,8 @@ type SignedTx struct {
 // Signed assembles every transaction of the sign.request msgID from sigs, one
 // signature per Digest, flattened across the transactions in order (as a
 // Session completes with them): one per Ethereum or Solana transaction, one
-// per input of a Bitcoin one. history resolves each transaction's Network.
-func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte]network.Network) ([]SignedTx, error) {
+// per input of a Bitcoin one. Each is bound to the chain it names.
+func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte) ([]SignedTx, error) {
 	row, err := match(rows, fmt.Sprintf("%x", msgID))
 	if err != nil {
 		return nil, err
@@ -49,16 +48,14 @@ func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte
 	for i, tx := range req.Transactions {
 		mine := sigs[next : next+digestCount(tx)]
 		next += len(mine)
-		var id [32]byte
-		copy(id[:], tx.NetworkConfigId)
-		n, known := history[id]
-		if !known {
-			return nil, invalidf("transaction %d: unknown network config", i)
+		c := ChainOf(tx)
+		if err := c.Validate(); err != nil {
+			return nil, invalidf("transaction %d: %v", i, err)
 		}
-		stx := SignedTx{Index: uint32(i), Network: n, NetworkConfigID: id}
+		stx := SignedTx{Index: uint32(i), Chain: c}
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
-			raw, hash, err := AssembleEthereum(n.ChainID, in.Ethereum, mine[0])
+			raw, hash, err := AssembleEthereum(in.Ethereum.ChainId, in.Ethereum, mine[0])
 			if err != nil {
 				return nil, invalidf("transaction %d: %v", i, err)
 			}
@@ -74,7 +71,7 @@ func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte, history map[[32]byte
 			if err != nil {
 				return nil, err
 			}
-			raw, txid, err := AssembleBitcoin(n.BitcoinNetwork, k.PublicKey, in.Bitcoin, mine)
+			raw, txid, err := AssembleBitcoin(in.Bitcoin.Network, k.PublicKey, in.Bitcoin, mine)
 			if err != nil {
 				return nil, invalidf("transaction %d: %v", i, err)
 			}

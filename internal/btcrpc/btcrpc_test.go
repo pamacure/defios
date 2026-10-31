@@ -19,9 +19,23 @@ var (
 	txidHex = hex.EncodeToString(txid[:])
 )
 
-// node is a fake Bitcoin Core JSON-RPC endpoint; handler answers per method.
+// node is a fake Bitcoin Core JSON-RPC endpoint on mainnet; handler
+// answers per method.
 func node(t *testing.T, handler func(method string, params []any) (result any, rpcErr string)) string {
 	t.Helper()
+	return nodeOn(t, "main", handler)
+}
+
+// nodeOn is node on the chain getblockchaininfo names chain.
+func nodeOn(t *testing.T, chain string, handler func(method string, params []any) (result any, rpcErr string)) string {
+	t.Helper()
+	inner := handler
+	handler = func(method string, params []any) (any, string) {
+		if method == "getblockchaininfo" {
+			return map[string]any{"chain": chain, "blocks": 1}, ""
+		}
+		return inner(method, params)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     json.RawMessage `json:"id"`
@@ -50,7 +64,7 @@ func TestSendSubmitsTheTransactionAsHex(t *testing.T) {
 		got = p[0]
 		return txidHex, ""
 	})
-	known, err := btcrpc.Send(context.Background(), []string{url}, raw, txid)
+	known, err := btcrpc.Send(context.Background(), []string{url}, "mainnet", raw, txid)
 	if err != nil || known {
 		t.Fatalf("known=%v err=%v", known, err)
 	}
@@ -61,7 +75,7 @@ func TestSendSubmitsTheTransactionAsHex(t *testing.T) {
 
 func TestSendRejectsAMismatchedTxid(t *testing.T) {
 	url := node(t, func(string, []any) (any, string) { return strings.Repeat("00", 32), "" })
-	if _, err := btcrpc.Send(context.Background(), []string{url}, raw, txid); err == nil {
+	if _, err := btcrpc.Send(context.Background(), []string{url}, "mainnet", raw, txid); err == nil {
 		t.Fatal("a node returning another txid must be an error")
 	}
 }
@@ -78,7 +92,7 @@ func TestSendIsIdempotent(t *testing.T) {
 		}
 		return nil, "unexpected " + m
 	})
-	if known, err := btcrpc.Send(context.Background(), []string{inMempool}, raw, txid); err != nil || !known {
+	if known, err := btcrpc.Send(context.Background(), []string{inMempool}, "mainnet", raw, txid); err != nil || !known {
 		t.Fatalf("mempool: known=%v err=%v", known, err)
 	}
 	// Mined, on a node with no txindex: getrawtransaction cannot find it.
@@ -88,7 +102,7 @@ func TestSendIsIdempotent(t *testing.T) {
 		}
 		return nil, "No such mempool or blockchain transaction"
 	})
-	if known, err := btcrpc.Send(context.Background(), []string{mined}, raw, txid); err != nil || !known {
+	if known, err := btcrpc.Send(context.Background(), []string{mined}, "mainnet", raw, txid); err != nil || !known {
 		t.Fatalf("mined: known=%v err=%v", known, err)
 	}
 }
@@ -100,15 +114,43 @@ func TestSendReportsRejectionAndFallsBackAcrossUrls(t *testing.T) {
 		}
 		return nil, "No such mempool or blockchain transaction"
 	})
-	_, err := btcrpc.Send(context.Background(), []string{rejecting}, raw, txid)
+	_, err := btcrpc.Send(context.Background(), []string{rejecting}, "mainnet", raw, txid)
 	if err == nil || !strings.Contains(err.Error(), "bad-txns-inputs-missingorspent") {
 		t.Fatalf("err = %v", err)
 	}
 	accepting := node(t, func(string, []any) (any, string) { return txidHex, "" })
-	if known, err := btcrpc.Send(context.Background(), []string{"wss://x", rejecting, accepting}, raw, txid); err != nil || known {
+	if known, err := btcrpc.Send(context.Background(), []string{"wss://x", rejecting, accepting}, "mainnet", raw, txid); err != nil || known {
 		t.Fatalf("known=%v err=%v", known, err)
 	}
-	if _, err := btcrpc.Send(context.Background(), []string{"wss://x"}, raw, txid); err == nil {
+	if _, err := btcrpc.Send(context.Background(), []string{"wss://x"}, "mainnet", raw, txid); err == nil {
 		t.Fatal("no http url must be an error")
+	}
+}
+
+// Send asks each node which chain it is on (getblockchaininfo's chain): a
+// node on another is skipped with an error, and the next is tried.
+func TestSendSkipsANodeOnAnotherChain(t *testing.T) {
+	sent := 0
+	accept := func(m string, _ []any) (any, string) {
+		if m == "sendrawtransaction" {
+			sent++
+		}
+		return txidHex, ""
+	}
+	testnet := nodeOn(t, "test", accept)
+	if known, err := btcrpc.Send(context.Background(), []string{testnet, node(t, accept)}, "mainnet", raw, txid); err != nil || known || sent != 1 {
+		t.Fatalf("known=%v err=%v sent=%d", known, err, sent)
+	}
+	_, err := btcrpc.Send(context.Background(), []string{testnet}, "mainnet", raw, txid)
+	if err == nil || !strings.Contains(err.Error(), "test") || sent != 1 {
+		t.Fatalf("err = %v, sent %d", err, sent)
+	}
+	for network, chain := range map[string]string{"testnet": "test", "signet": "signet", "regtest": "regtest"} {
+		if _, err := btcrpc.Send(context.Background(), []string{nodeOn(t, chain, accept)}, network, raw, txid); err != nil {
+			t.Errorf("%s on a %q node: %v", network, chain, err)
+		}
+	}
+	if _, err := btcrpc.Send(context.Background(), []string{nodeOn(t, "testnet4", accept)}, "testnet", raw, txid); err != nil {
+		t.Errorf("testnet on testnet4: %v", err)
 	}
 }

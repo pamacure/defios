@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"defios.com/internal/config"
+	"defios.com/internal/network"
 	"defios.com/internal/nodedir"
 )
 
@@ -92,9 +93,13 @@ hostname = "defios-home"
 tailnet_auth_key = "$TS_AUTHKEY"
 
 [networks.eth]
-rpc_urls = ["$ALCHEMY_ETH", "$INFURA_ETH"]
+type = "ethereum"
+chain_id = 1
+rpc_urls = ["$ALCHEMY_ETH", "https://eth.example"]
 
 [networks.btc]
+type = "bitcoin"
+network = "testnet"
 rpc_urls = ["$BTC_RPC"]
 
 [providers.anthropic]
@@ -120,9 +125,9 @@ func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Workspace{
-		Networks: map[string]config.Network{
-			"eth": {RPCURLs: []string{"$ALCHEMY_ETH", "$INFURA_ETH"}},
-			"btc": {RPCURLs: []string{"$BTC_RPC"}},
+		Networks: map[string]network.Network{
+			"eth": {Type: "ethereum", ChainID: 1, RPCURLs: []string{"$ALCHEMY_ETH", "https://eth.example"}},
+			"btc": {Type: "bitcoin", BitcoinNetwork: "testnet", RPCURLs: []string{"$BTC_RPC"}},
 		},
 		Providers: map[string]config.Provider{"anthropic": {APIKey: "$DEFIOS_ANTHROPIC"}},
 		Agent:     config.Agent{Profiles: []string{"auditor"}, MaxDepth: 2},
@@ -141,9 +146,10 @@ func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
 func TestConfigRefusesLiteralSecretsAndUnknownKeys(t *testing.T) {
 	for name, body := range map[string]string{
 		"literal tailnet_auth_key": `tailnet_auth_key = "tskey-auth-abc"`,
-		"literal rpc url":          "[networks.eth]\nrpc_urls = [\"https://eth.example/v2/KEY\"]",
+		"rpc url with userinfo":    "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"https://u:abc@eth.example\"]",
+		"rpc url with a query":     "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"https://eth.example/?key=abc\"]",
 		"literal api_key":          "[providers.anthropic]\napi_key = \"sk-ant-abc\"",
-		"interpolated reference":   "[networks.eth]\nrpc_urls = [\"https://eth.example/v2/$KEY\"]",
+		"interpolated reference":   "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$KEY/v2\"]",
 		"lowercase reference":      "[providers.openai]\napi_key = \"$openai\"",
 		"old auth_key":             `auth_key = "tskey-auth-abc"`,
 		"bad provider alias":       "[providers.Mistral]\napi_key = \"$KEY\"",
@@ -157,14 +163,70 @@ func TestConfigRefusesLiteralSecretsAndUnknownKeys(t *testing.T) {
 	}
 }
 
+// A [networks.<alias>] table is the whole Network. An rpc_urls entry is a
+// plain http(s) URL that carries no credential, or a Secret reference; a
+// plain URL with userinfo or a query, a bad identity, or two aliases for
+// one chain are refused when the file is read (ADR 0023).
+func TestNetworkTablesAreWholeNetworks(t *testing.T) {
+	const eth1 = "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n"
+	for _, urls := range []string{`["https://rpc.example"]`, `["$RPC"]`, `[]`, `["http://127.0.0.1:8545", "$RPC"]`} {
+		if _, err := config.ReadFile(write(t, eth1+"rpc_urls = "+urls)); err != nil {
+			t.Errorf("rpc_urls = %s: %v", urls, err)
+		}
+	}
+	for name, body := range map[string]string{
+		"userinfo":         eth1 + `rpc_urls = ["https://u:p@rpc.example"]`,
+		"query":            eth1 + `rpc_urls = ["https://rpc.example/?key=x"]`,
+		"websocket":        eth1 + `rpc_urls = ["wss://rpc.example"]`,
+		"no type":          "[networks.eth]\nchain_id = 1",
+		"no chain id":      "[networks.eth]\ntype = \"ethereum\"",
+		"bitcoin chain_id": "[networks.btc]\ntype = \"bitcoin\"\nnetwork = \"mainnet\"\nchain_id = 1",
+		"unknown key":      eth1 + `endpoint = "https://rpc.example"`,
+		"two aliases":      eth1 + "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1",
+		"bad solana":       "[networks.sol]\ntype = \"solana\"\ncluster = \"moon\"",
+	} {
+		if _, err := config.ReadFile(write(t, body)); err == nil {
+			t.Errorf("%s: read without error", name)
+		} else if strings.Contains(err.Error(), "u:p") || strings.Contains(err.Error(), "key=x") {
+			t.Errorf("%s: error echoes the credential: %v", name, err)
+		}
+	}
+	if _, err := config.ReadWorkspace(write(t, eth1+`rpc_urls = ["https://rpc.example/?key=x"]`)); err == nil {
+		t.Error("a Conversation's config.toml must refuse a plain URL with a query too")
+	}
+}
+
+// WriteFile writes a Network as its table, and it reads back the same.
+func TestNetworkTablesRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	in := config.Config{Hostname: "h", Workspace: config.Workspace{Networks: map[string]network.Network{
+		"eth": {Type: "ethereum", ChainID: 1, RPCURLs: []string{"$RPC"}},
+		"sol": {Type: "solana", Cluster: "devnet", GenesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"},
+	}}}
+	if err := config.WriteFile(path, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "chain_id = 0") || strings.Contains(string(raw), `network = ""`) {
+		t.Errorf("a Network writes another type's fields:\n%s", raw)
+	}
+	out, err := config.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(out, in) {
+		t.Fatalf("read %+v, want %+v", out, in)
+	}
+}
+
 // A Conversation's config.toml holds only the Workspace sections; a missing
 // one is an empty Workspace.
 func TestConversationConfigTakesOnlyTheWorkspaceSections(t *testing.T) {
 	if _, err := config.ReadWorkspace(write(t, "hostname = \"x\"\n[agent]\nprofiles = [\"auditor\"]")); err == nil {
 		t.Fatal("a top-level key in a Conversation config must be an error")
 	}
-	if _, err := config.ReadWorkspace(write(t, "[networks.eth]\nrpc_urls = [\"https://literal.example\"]")); err == nil {
-		t.Fatal("a literal rpc url in a Conversation config must be an error")
+	if _, err := config.ReadWorkspace(write(t, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"https://k@literal.example\"]")); err == nil {
+		t.Fatal("an rpc url with userinfo in a Conversation config must be an error")
 	}
 	w, err := config.ReadWorkspace(filepath.Join(t.TempDir(), "config.toml"))
 	if err != nil || !reflect.DeepEqual(w, config.Workspace{}) {
@@ -181,6 +243,8 @@ func TestConversationMergesOverTheGroupTableByTable(t *testing.T) {
 	}
 	conv, err := config.ReadWorkspace(write(t, `
 [networks.eth]
+type = "ethereum"
+chain_id = 1
 rpc_urls = ["$CONV_ETH"]
 
 [providers.anthropic]
@@ -196,9 +260,9 @@ profiles = ["trader"]
 	}
 	got := group.Workspace.Merge(conv)
 	want := config.Workspace{
-		Networks: map[string]config.Network{
-			"eth": {RPCURLs: []string{"$CONV_ETH"}},
-			"btc": {RPCURLs: []string{"$BTC_RPC"}},
+		Networks: map[string]network.Network{
+			"eth": {Type: "ethereum", ChainID: 1, RPCURLs: []string{"$CONV_ETH"}},
+			"btc": {Type: "bitcoin", BitcoinNetwork: "testnet", RPCURLs: []string{"$BTC_RPC"}},
 		},
 		Providers: map[string]config.Provider{
 			"anthropic": {APIKey: "$DEFIOS_ANTHROPIC"},

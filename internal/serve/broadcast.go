@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"defios.com/internal/btcrpc"
 	"defios.com/internal/cosl"
@@ -20,31 +21,31 @@ import (
 
 // BroadcastedTx is one transaction `sign broadcast` submitted.
 type BroadcastedTx struct {
-	Index   uint32 `json:"index"` // position in the request's transactions
-	Network string `json:"network"`
+	Index   uint32 `json:"index"`   // position in the request's transactions
+	Network string `json:"network"` // its chain, e.g. "ethereum chain 1"
 	TxHash  string `json:"tx_hash"`
-	// AlreadyKnown says the Network's node already had the transaction, so
+	// AlreadyKnown says the chain's node already had the transaction, so
 	// this was a repeat broadcast.
 	AlreadyKnown bool `json:"already_known"`
 }
 
-// NetworkBroadcast is the outcome for one Network's transactions: they all
+// NetworkBroadcast is the outcome for one chain's transactions: they all
 // went out and a receipt was committed, or Error says why none was.
 type NetworkBroadcast struct {
-	Network      string          `json:"network"`
+	Network      string          `json:"network"` // the chain, never an alias
 	Transactions []BroadcastedTx `json:"transactions"`
 	// Receipt is the committed Broadcast Receipt; nil when the group failed.
 	Receipt *SendView `json:"receipt,omitempty"`
 	Error   string    `json:"error,omitempty"`
 }
 
-// BroadcastView is the outcome of `sign broadcast`, one entry per Network in
+// BroadcastView is the outcome of `sign broadcast`, one entry per chain in
 // the order the request first names them.
 type BroadcastView struct {
 	Networks []NetworkBroadcast `json:"networks"`
 }
 
-// Failed reports whether any Network's transactions did not go out.
+// Failed reports whether any chain's transactions did not go out.
 func (v BroadcastView) Failed() bool {
 	for _, n := range v.Networks {
 		if n.Error != "" {
@@ -55,8 +56,9 @@ func (v BroadcastView) Failed() bool {
 }
 
 // signBroadcast assembles the request's signed transactions, groups them by
-// Network, submits each group, and commits one sign.broadcast receipt per
-// group that went out. Networks are independent: a group whose submission is
+// chain, submits each group through this Node's Network for that chain, and
+// commits one sign.broadcast receipt per
+// group that went out. Chains are independent: a group whose submission is
 // rejected commits no receipt and reports its error, and the others are still
 // attempted. Within a group the transactions go out in request order and a
 // failure stops the group. Any Node may do this, any number of times: identical
@@ -84,58 +86,47 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	if !ok {
 		return BroadcastView{}, signreq.ErrNotSigned
 	}
-	history, err := network.History(rows)
+	txs, err := signreq.Signed(rows, id, sigs)
 	if err != nil {
 		return BroadcastView{}, err
 	}
-	txs, err := signreq.Signed(rows, id, sigs, history)
-	if err != nil {
-		return BroadcastView{}, err
-	}
-	live, err := network.Fold(rows)
-	if err != nil {
-		return BroadcastView{}, err
-	}
-	overrides, unresolved, err := s.localOverrides(store, info.Conversation)
+	nets, err := s.localNetworks(store, info.Conversation)
 	if err != nil {
 		return BroadcastView{}, err
 	}
 
 	var groups [][]signreq.SignedTx
-	at := map[[32]byte]int{}
+	at := map[network.Chain]int{}
 	for _, tx := range txs {
-		g, seen := at[tx.NetworkConfigID]
+		g, seen := at[tx.Chain]
 		if !seen {
 			g = len(groups)
-			at[tx.NetworkConfigID] = g
+			at[tx.Chain] = g
 			groups = append(groups, nil)
 		}
 		groups[g] = append(groups[g], tx)
 	}
 
+	r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
 	view := BroadcastView{}
 	for _, group := range groups {
-		n := group[0].Network
-		// A later edit of the Network may have fixed its endpoints.
-		if cur, err := network.Get(live, n.Alias); err == nil && cur.ChainID == n.ChainID {
-			n = cur
-		}
-		out := NetworkBroadcast{Network: n.Alias, Transactions: []BroadcastedTx{}}
-		if err := unresolved[n.Alias]; err != nil {
-			out.Error = fmt.Sprintf("broadcasting to %s: %v", n.Alias, err)
+		c := group[0].Chain
+		out := NetworkBroadcast{Network: c.String(), Transactions: []BroadcastedTx{}}
+		urls, err := endpoints(r, nets, c)
+		if err != nil {
+			out.Error = fmt.Sprintf("broadcasting to %s: %v", c, err)
 			view.Networks = append(view.Networks, out)
 			continue
 		}
-		urls, _ := overrides.Effective(n)
 		receipt := &coslv1.SignBroadcast{SignRequestId: id[:]}
 		for _, tx := range group {
-			known, err := submit(ctx, n, urls, tx)
+			known, err := submit(ctx, c, urls, tx)
 			if err != nil {
-				out.Error = fmt.Sprintf("broadcasting transaction %d to %s: %v", tx.Index, n.Alias, err)
+				out.Error = fmt.Sprintf("broadcasting transaction %d to %s: %v", tx.Index, c, err)
 				break
 			}
-			receipt.Transactions = append(receipt.Transactions, &coslv1.BroadcastedTx{NetworkConfigId: tx.NetworkConfigID[:], TxHash: tx.ID, TxIndex: tx.Index})
-			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Network: n.Alias, TxHash: signreq.TxIDString(n, tx.ID), AlreadyKnown: known})
+			receipt.Transactions = append(receipt.Transactions, &coslv1.BroadcastedTx{TxHash: tx.ID, TxIndex: tx.Index})
+			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Network: c.String(), TxHash: signreq.TxIDString(c, tx.ID), AlreadyKnown: known})
 		}
 		if out.Error == "" {
 			sv, err := s.commitReceipt(ctx, replica, info.Conversation, receipt)
@@ -149,48 +140,42 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	return view, nil
 }
 
-// localOverrides is this Node's RPC endpoints for a Key's broadcasts: the Group
-// config.toml's [networks] with the Key's Conversation Workspace merged over
-// it, every reference resolved. A Network whose override does not resolve to
-// a URL is reported in unresolved, never sent to the log's endpoints instead.
-func (s *server) localOverrides(store *cosl.Store, conversation []byte) (ov network.Overrides, unresolved map[string]error, err error) {
-	cfg, conv, err := s.readConfig(store, conversation)
+// endpoints are the RPC URLs of this Node's Network for chain c, in
+// failover order, each "$NAME" resolved to the Secret's full URL. An entry
+// that does not resolve fails the chain, naming the reference: it is never
+// skipped for the next.
+func endpoints(r *secret.Resolver, nets []network.Network, c network.Chain) ([]string, error) {
+	n, err := network.Find(nets, c)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	ws := cfg.Workspace.Merge(conv)
-	r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
-	ov, unresolved = network.Overrides{}, map[string]error{}
-	for name, n := range ws.Networks {
-		var urls []string
-		for _, ref := range n.RPCURLs {
-			u, err := r.Resolve(ref)
-			if err == nil && network.ValidateRPCURL(u) != nil {
+	urls := make([]string, 0, len(n.RPCURLs))
+	for _, ref := range n.RPCURLs {
+		u := ref
+		if strings.HasPrefix(ref, "$") {
+			if u, err = r.Resolve(ref); err != nil {
+				return nil, err
+			}
+			if network.ValidateRPCURL(u) != nil {
 				// Not the URL itself: it is a Secret.
-				err = fmt.Errorf("%s does not resolve to an http, https, ws or wss URL with a host", ref)
+				return nil, fmt.Errorf("%s does not resolve to an http or https URL with a host", ref)
 			}
-			if err != nil {
-				unresolved[name] = err
-				break
-			}
-			urls = append(urls, u)
 		}
-		if len(urls) > 0 && unresolved[name] == nil {
-			ov[name] = urls
-		}
+		urls = append(urls, u)
 	}
-	return ov, unresolved, nil
+	return urls, nil
 }
 
-// submit sends tx to its Network's node; known says the node already had it.
-func submit(ctx context.Context, n network.Network, urls []string, tx signreq.SignedTx) (known bool, err error) {
-	switch n.Type {
+// submit sends tx to an endpoint of chain c that serves it; known says the
+// node already had it.
+func submit(ctx context.Context, c network.Chain, urls []string, tx signreq.SignedTx) (known bool, err error) {
+	switch c.Type {
 	case network.Solana:
-		return solrpc.Send(ctx, urls, tx.Raw, tx.ID)
+		return solrpc.Send(ctx, urls, c.GenesisHash, tx.Raw, tx.ID)
 	case network.Bitcoin:
-		return btcrpc.Send(ctx, urls, tx.Raw, [32]byte(tx.ID))
+		return btcrpc.Send(ctx, urls, c.BitcoinNetwork, tx.Raw, [32]byte(tx.ID))
 	}
-	return ethrpc.Send(ctx, urls, tx.Raw, [32]byte(tx.ID))
+	return ethrpc.Send(ctx, urls, c.ChainID, tx.Raw, [32]byte(tx.ID))
 }
 
 // commitReceipt appends a signed sign.broadcast to the Key's Conversation.

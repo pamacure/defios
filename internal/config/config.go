@@ -20,6 +20,7 @@ import (
 	"defios.com/internal/agent"
 	"defios.com/internal/group"
 	"defios.com/internal/mention"
+	"defios.com/internal/network"
 	"defios.com/internal/secret"
 )
 
@@ -62,16 +63,13 @@ type Profile struct {
 
 // Workspace is the part of a config.toml a Conversation's may override.
 type Workspace struct {
-	// Networks are this Node's local RPC endpoints, by Network alias.
-	Networks map[string]Network `toml:"networks,omitempty"`
+	// Networks are this Node's Networks, by alias: the chains it signs for
+	// and the endpoints it reaches them by (ADR 0023). ReadFile fills no
+	// Alias; network.List does.
+	Networks map[string]network.Network `toml:"networks,omitempty"`
 	// Providers hold this Node's credential for a Provider, by its alias.
 	Providers map[string]Provider `toml:"providers,omitempty"`
 	Agent     Agent               `toml:"agent,omitempty"`
-}
-
-// Network is a Network's local RPC endpoints, each a reference.
-type Network struct {
-	RPCURLs []string `toml:"rpc_urls"`
 }
 
 // Provider is this Node's settings for a Provider: its credential, a Secret
@@ -169,15 +167,8 @@ func decode(path string, into any) (toml.MetaData, error) {
 
 // validate checks w; md tells an explicit max_depth = 0 from an unset one.
 func (w Workspace) validate(md toml.MetaData) error {
-	for alias, n := range w.Networks {
-		if err := group.ValidateAlias(alias); err != nil {
-			return fmt.Errorf("[networks.%s]: %w", alias, err)
-		}
-		for _, u := range n.RPCURLs {
-			if _, err := secret.ParseRef(u); err != nil {
-				return fmt.Errorf("[networks.%s] rpc_urls: %w", alias, err)
-			}
-		}
+	if _, err := network.List(w.Networks); err != nil {
+		return fmt.Errorf("[networks]: %w", err)
 	}
 	for alias, p := range w.Providers {
 		if err := group.ValidateAlias(alias); err != nil {
@@ -266,7 +257,7 @@ func ValidateHandle(h string) error {
 	return nil
 }
 
-// Merge is w with over laid on it table by table: a Network's rpc_urls, a
+// Merge is w with over laid on it table by table: a whole Network table, a
 // Provider's api_key, an [agent] profiles list (even an empty
 // one), or a max_depth that over sets wins, and everything over leaves unset
 // comes from w. A Provider's body in over merges over w's as a profile's
@@ -274,7 +265,7 @@ func ValidateHandle(h string) error {
 func (w Workspace) Merge(over Workspace) Workspace {
 	out := Workspace{Agent: w.Agent}
 	if len(w.Networks)+len(over.Networks) > 0 {
-		out.Networks = map[string]Network{}
+		out.Networks = map[string]network.Network{}
 		for a, n := range w.Networks {
 			out.Networks[a] = n
 		}

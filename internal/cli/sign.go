@@ -30,14 +30,15 @@ func signCommand(g *globals) *cobra.Command {
 	propose := &cobra.Command{
 		Use:   "propose --key <key> --reason <text> --transactions <file>",
 		Short: "Propose that a Key sign transactions (requires serve)",
-		Long: `--transactions is a JSON file (or - for stdin) listing the transactions, each naming a Network by alias
-and exactly one intent in protobuf-JSON form:
+		Long: `--transactions is a JSON file (or - for stdin) listing the transactions, each naming one of this Node's
+Networks by alias and exactly one intent in protobuf-JSON form. The request carries the chain the alias
+names (chain id, bitcoin network or solana cluster), not the alias:
 
   [{"network": "ethereum-mainnet",
     "ethereum": {"to": "<base64 20 bytes>", "value": "1000", "nonce": "0",
                  "gasLimit": "21000", "maxFeePerGas": "30000000000", "maxPriorityFeePerGas": "1"}}]
 
-Every referenced Network must be of the Key's curve.`,
+Every chain must be of the Key's curve.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if keyQuery == "" || txFile == "" {
@@ -131,7 +132,8 @@ Every referenced Network must be of the Key's curve.`,
 		Long: `Accepting appends a sign.accept and lets this Node's engine take part in signing. The proposer's
 accept is implied by proposing. The first t Nodes to accept, in log order, are the signers: once they
 exist one of them starts the signing Session, which signs each Digest and completes as soon as a
-signature verifies against the Key. A Node that accepts after that is not a signer.`,
+signature verifies against the Key. A Node that accepts after that is not a signer. A Node accepts only
+a request for chains it has a Network for (see network); the refusal names the chain.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := (serve.Client{Socket: g.paths().Socket}).SignAccept(cmd.Context(), args[0]); err != nil {
@@ -173,12 +175,13 @@ signature verifies against the Key. A Node that accepts after that is not a sign
 	broadcast := &cobra.Command{
 		Use:   "broadcast <msg-id>",
 		Short: "Broadcast a signed request's transactions and record a receipt (requires serve)",
-		Long: `Assembles each transaction of a signed Sign Request, submits it through its Network's rpc url (this Node's
-local override first, see network), and commits a sign.broadcast receipt for each Network. Networks are
-independent: if one fails, the others are still broadcast and receipted, the failure is reported, and the
-command exits non-zero. Any Node may broadcast; the proposer goes first by convention. Broadcasting again is
-harmless: a node that already has a transaction is not an error, the repeat shows as one more receipt, and a
-failed Network is retried. Only http(s) rpc urls are used.`,
+		Long: `Assembles each transaction of a signed Sign Request, groups them by chain, submits each chain's through the
+rpc urls of this Node's Network for it (see network), and commits a sign.broadcast receipt for each chain.
+Each endpoint is first checked to serve the request's chain (eth_chainId, getblockchaininfo, or a pinned
+solana genesis hash); one that serves another is skipped and the next tried. Chains are independent: if one
+fails, the others are still broadcast and receipted, the failure is reported, and the command exits non-zero.
+Any Node may broadcast; the proposer goes first by convention. Broadcasting again is harmless: a node that
+already has a transaction is not an error, the repeat shows as one more receipt, and a failed chain is retried.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			v, err := serve.Client{Socket: g.paths().Socket}.SignBroadcast(cmd.Context(), args[0])
@@ -206,7 +209,7 @@ failed Network is retried. Only http(s) rpc urls are used.`,
 				}
 			}
 			if v.Failed() {
-				return exitOperationalf("some Networks failed to broadcast; run sign broadcast again to retry them")
+				return exitOperationalf("some chains failed to broadcast; run sign broadcast again to retry them")
 			}
 			return nil
 		},
@@ -254,7 +257,7 @@ func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {
 func signError(err error) error {
 	for _, target := range []error{
 		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrSignerSetFull, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
-		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid,
+		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid, network.ErrNoChain,
 	} {
 		if errors.Is(err, target) {
 			return exitUsagef("%w", err)

@@ -21,15 +21,16 @@ const (
 	TypeTssSession      uint32 = 5
 	TypeAppFreeform     uint32 = 6
 	TypeSignRequest     uint32 = 7
-	TypeNetworkCreate   uint32 = 8
-	TypeNetworkUpdate   uint32 = 9
-	TypeNetworkRemove   uint32 = 10
-	TypeSignAccept      uint32 = 11
-	TypeSignBroadcast   uint32 = 12
-	TypeAppRecap        uint32 = 13 // docs/adr/0012-recap-on-the-log-pruning-off-it.md
-	TypeProviderCreate  uint32 = 14 // docs/adr/0019-providers-replace-models-on-the-cosl.md
-	TypeProviderUpdate  uint32 = 15
-	TypeProviderRemove  uint32 = 16
+	// 8, 9 and 10 were network.create, network.update and network.remove,
+	// retired when Networks became Node-local config
+	// (docs/adr/0023-networks-are-node-local.md). They stay reserved and
+	// are never reused: a reader meets them as any unknown type.
+	TypeSignAccept     uint32 = 11
+	TypeSignBroadcast  uint32 = 12
+	TypeAppRecap       uint32 = 13 // docs/adr/0012-recap-on-the-log-pruning-off-it.md
+	TypeProviderCreate uint32 = 14 // docs/adr/0019-providers-replace-models-on-the-cosl.md
+	TypeProviderUpdate uint32 = 15
+	TypeProviderRemove uint32 = 16
 )
 
 // kind is one registry entry: its wire name and its payload schema.
@@ -48,9 +49,6 @@ var registry = map[uint32]kind{
 	TypeTssSession:      {"tss.session", func() proto.Message { return &coslv1.TssSession{} }},
 	TypeAppFreeform:     {"app.freeform", func() proto.Message { return &coslv1.AppFreeform{} }},
 	TypeSignRequest:     {"sign.request", func() proto.Message { return &coslv1.SignRequest{} }},
-	TypeNetworkCreate:   {"network.create", func() proto.Message { return &coslv1.NetworkConfig{} }},
-	TypeNetworkUpdate:   {"network.update", func() proto.Message { return &coslv1.NetworkConfig{} }},
-	TypeNetworkRemove:   {"network.remove", func() proto.Message { return &coslv1.NetworkRemove{} }},
 	TypeSignAccept:      {"sign.accept", func() proto.Message { return &coslv1.SignAccept{} }},
 	TypeSignBroadcast:   {"sign.broadcast", func() proto.Message { return &coslv1.SignBroadcast{} }},
 	TypeAppRecap:        {"app.recap", func() proto.Message { return &coslv1.AppRecap{} }},

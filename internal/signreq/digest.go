@@ -11,7 +11,6 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
-	"defios.com/internal/network"
 	"defios.com/internal/session"
 	coslv1 "defios.com/proto/cosl/v1"
 )
@@ -90,23 +89,24 @@ func rlpLength(n int, offset byte) []byte {
 }
 
 // LookupMsgTypes are every row Lookup reads: the sign.request and its
-// accepts, the Networks it was proposed against, and the Session rows that
-// mint its Key. A caller asks the replica for these only
-// (cosl.Query.MsgTypes), so talk and round traffic are never read to look up
-// a Sign Request (ADR 0014).
-var LookupMsgTypes = slices.Concat([]uint32{cosl.TypeSignRequest, cosl.TypeSignAccept}, network.MsgTypes, key.MsgTypes)
+// accepts, and the Session rows that mint its Key. A caller asks the replica
+// for these only (cosl.Query.MsgTypes), so talk and round traffic are never
+// read to look up a Sign Request (ADR 0014).
+var LookupMsgTypes = slices.Concat([]uint32{cosl.TypeSignRequest, cosl.TypeSignAccept}, key.MsgTypes)
 
 // MsgTypes are every row this package's readers fold (List, Inspect, Resolve,
-// Signed and Lookup) and the Session and Network folds shown beside them:
-// LookupMsgTypes and the sign.broadcast receipts. A Sign Request verb asks the
-// replica for these only, so talk and round traffic are never read (ADR 0014).
+// Signed and Lookup) and the Session fold shown beside them: LookupMsgTypes
+// and the sign.broadcast receipts. A Sign Request verb asks the replica for
+// these only, so talk and round traffic are never read (ADR 0014).
 var MsgTypes = slices.Concat(LookupMsgTypes, []uint32{cosl.TypeSignBroadcast})
 
 // Lookup reads the sign.request with msgID off rows and derives what signing
 // it needs (the Key, its Digests, the deadline, who accepted): the Digests are
 // flattened across its transactions in order, a keccak256 hash for Ethereum
 // the compiled message for Solana, and one BIP-143 sighash per input for
-// Bitcoin. Every Node reaches the same answer from the same log.
+// Bitcoin. Every Node reaches the same answer from the request alone: the
+// chain id and Bitcoin network are its intents' (ADR 0023). A transaction
+// that names no valid chain makes the request invalid.
 func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	var row *cosl.Row
 	for i := range rows {
@@ -126,22 +126,15 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	if err != nil {
 		return session.SignInfo{}, err
 	}
-	history, err := network.History(rows)
-	if err != nil {
-		return session.SignInfo{}, err
-	}
 	out := session.SignInfo{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, req)}
 	for i, tx := range req.Transactions {
-		var id [32]byte
-		copy(id[:], tx.NetworkConfigId)
-		n, known := history[id]
-		if !known {
-			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: unknown network config", ErrInvalid, i)
+		if err := ChainOf(tx).Validate(); err != nil {
+			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
 		}
 		var dgs [][]byte
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
-			_, h, err := EthereumDigest(n.ChainID, in.Ethereum)
+			_, h, err := EthereumDigest(in.Ethereum.ChainId, in.Ethereum)
 			if err != nil {
 				return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
 			}
@@ -153,7 +146,7 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 			}
 			dgs = [][]byte{msg}
 		case *coslv1.SignTransaction_Bitcoin:
-			hs, err := BitcoinDigests(n.BitcoinNetwork, in.Bitcoin)
+			hs, err := BitcoinDigests(in.Bitcoin.Network, in.Bitcoin)
 			if err != nil {
 				return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
 			}
@@ -168,6 +161,18 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	window := min(req.DeadlineSeconds, MaxDeadlineSeconds)
 	out.Deadline = time.Unix(0, row.CreatedAt).Add(time.Duration(window) * time.Second)
 	return out, nil
+}
+
+// Request is the sign.request msgID off rows, and the Conversation of the
+// Key it targets.
+func Request(rows []cosl.Row, msgID [32]byte) (*coslv1.SignRequest, []byte, error) {
+	for _, r := range rows {
+		if r.MsgType == cosl.TypeSignRequest && r.MsgID == msgID {
+			req, err := decodeRow(r)
+			return req, r.ConversationID, err
+		}
+	}
+	return nil, nil, ErrUnknown
 }
 
 // Resolve finds the one sign.request whose msg id starts with prefix.

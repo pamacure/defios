@@ -1,6 +1,8 @@
-// Package network reads a Group's blockchain Networks off its COSL replica
-// (docs/adr/0008-networks-on-cosl.md). There is no networks table: the
-// current set is the fold of network.create / update / remove rows by alias.
+// Package network is this Node's blockchain Networks: the [networks.<alias>]
+// tables of its config.toml, each a chain it is willing to sign for and the
+// endpoints it uses to reach it (docs/adr/0023-networks-are-node-local.md).
+// A Sign Request names a chain by its identity (Chain), never by alias, so
+// two Nodes may call one chain differently.
 package network
 
 import (
@@ -9,23 +11,23 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strings"
 
-	"google.golang.org/protobuf/proto"
-
-	"defios.com/internal/cosl"
 	"defios.com/internal/group"
-	coslv1 "defios.com/proto/cosl/v1"
+	"defios.com/internal/secret"
 )
 
 var (
-	// ErrInvalid is a Network config that fails validation.
+	// ErrInvalid is a Network that fails validation.
 	ErrInvalid = errors.New("network: invalid config")
-	// ErrExists is an add of an alias that is already live.
+	// ErrExists is an add of an alias that is already defined.
 	ErrExists = errors.New("network: alias already exists")
-	// ErrUnknown is an edit, remove, or lookup of an alias that is not live.
+	// ErrUnknown is an edit, remove, or lookup of an alias that is not defined.
 	ErrUnknown = errors.New("network: no such network")
-	// ErrUnchanged is an edit that would leave the live config as it is.
+	// ErrUnchanged is an edit that would leave the Network as it is.
 	ErrUnchanged = errors.New("network: nothing to change")
+	// ErrNoChain is a chain none of this Node's Networks is for.
+	ErrNoChain = errors.New("network: no Network on this Node for")
 )
 
 // Network types, each of which fixes the curve a signing Key must use.
@@ -41,69 +43,84 @@ var (
 	base58          = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 )
 
-// Network is one live Network in the folded state.
+// Network is one [networks.<alias>] table: a type, that type's identity
+// fields, and the RPC endpoints, each a plain URL or a "$NAME" Secret
+// reference, in failover order.
 type Network struct {
-	Alias          string
-	ConfigID       [32]byte // msg_id of the create/update row that defines this config
-	Type           string
-	RPCURLs        []string
-	ChainID        uint64 // ethereum
-	BitcoinNetwork string // bitcoin
-	Cluster        string // solana
-	GenesisHash    string // solana, optional
+	Alias          string   `toml:"-"`
+	Type           string   `toml:"type"`
+	ChainID        uint64   `toml:"chain_id,omitzero"`      // ethereum
+	BitcoinNetwork string   `toml:"network,omitempty"`      // bitcoin
+	Cluster        string   `toml:"cluster,omitempty"`      // solana
+	GenesisHash    string   `toml:"genesis_hash,omitempty"` // solana, optional
+	RPCURLs        []string `toml:"rpc_urls,omitempty"`
 }
 
-// Curve is the Key curve this Network's type requires, named as Key.Curve is.
-func (n Network) Curve() string {
-	if n.Type == Solana {
+// Chain is the identity of the chain n is for.
+func (n Network) Chain() Chain {
+	return Chain{Type: n.Type, ChainID: n.ChainID, BitcoinNetwork: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash}
+}
+
+// Curve is the Key curve n's type requires, named as Key.Curve is.
+func (n Network) Curve() string { return n.Chain().Curve() }
+
+// Chain is a chain's identity, as a Sign Request's transaction carries it:
+// Ethereum's chain id, Bitcoin's network, Solana's cluster and, optionally,
+// its genesis hash. Only the fields of Type are set.
+type Chain struct {
+	Type           string
+	ChainID        uint64
+	BitcoinNetwork string
+	Cluster        string
+	GenesisHash    string
+}
+
+// Curve is the Key curve c's type requires.
+func (c Chain) Curve() string {
+	if c.Type == Solana {
 		return "eddsa"
 	}
 	return "ecdsa"
 }
 
-// Config is the wire form of n.
-func (n Network) Config() *coslv1.NetworkConfig {
-	return &coslv1.NetworkConfig{
-		Alias: n.Alias, Type: n.Type, RpcUrls: n.RPCURLs, ChainId: n.ChainID,
-		Network: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash,
-	}
-}
-
-func fromConfig(c *coslv1.NetworkConfig, id [32]byte) Network {
-	return Network{
-		ConfigID: id, Alias: c.Alias, Type: c.Type, RPCURLs: c.RpcUrls, ChainID: c.ChainId,
-		BitcoinNetwork: c.Network, Cluster: c.Cluster, GenesisHash: c.GenesisHash,
-	}
-}
-
-func invalidf(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
-}
-
-// Validate checks a config's alias, that exactly its type's fields are set
-// and well-formed, and that every RPC URL is http(s) or ws(s).
-func Validate(c *coslv1.NetworkConfig) error {
-	if err := group.ValidateAlias(c.Alias); err != nil {
-		return invalidf("alias %q must be 1–64 chars matching [a-z0-9][a-z0-9_-]*", c.Alias)
-	}
-	for _, u := range c.RpcUrls {
-		if err := validURL(u); err != nil {
-			return err
-		}
-	}
+// String is how readers name c: "ethereum chain 1", "bitcoin testnet",
+// "solana devnet".
+func (c Chain) String() string {
 	switch c.Type {
 	case Ethereum:
-		if c.ChainId == 0 {
+		return fmt.Sprintf("ethereum chain %d", c.ChainID)
+	case Bitcoin:
+		return "bitcoin " + c.BitcoinNetwork
+	case Solana:
+		if c.GenesisHash != "" {
+			return "solana " + c.Cluster + " genesis " + c.GenesisHash
+		}
+		return "solana " + c.Cluster
+	}
+	return fmt.Sprintf("unknown chain type %q", c.Type)
+}
+
+// key is what makes two Networks one chain: the type and its id, network or
+// cluster. A genesis hash refines a Solana cluster but does not split it.
+func (c Chain) key() string {
+	return fmt.Sprintf("%s/%d/%s/%s", c.Type, c.ChainID, c.BitcoinNetwork, c.Cluster)
+}
+
+// Validate checks that exactly c's type's fields are set and well-formed.
+func (c Chain) Validate() error {
+	switch c.Type {
+	case Ethereum:
+		if c.ChainID == 0 {
 			return invalidf("ethereum needs a chain_id > 0")
 		}
-		if c.Network != "" || c.Cluster != "" || c.GenesisHash != "" {
+		if c.BitcoinNetwork != "" || c.Cluster != "" || c.GenesisHash != "" {
 			return invalidf("ethereum takes only chain_id")
 		}
 	case Bitcoin:
-		if !contains(bitcoinNetworks, c.Network) {
-			return invalidf("bitcoin network %q must be one of %v", c.Network, bitcoinNetworks)
+		if !contains(bitcoinNetworks, c.BitcoinNetwork) {
+			return invalidf("bitcoin network %q must be one of %v", c.BitcoinNetwork, bitcoinNetworks)
 		}
-		if c.ChainId != 0 || c.Cluster != "" || c.GenesisHash != "" {
+		if c.ChainID != 0 || c.Cluster != "" || c.GenesisHash != "" {
 			return invalidf("bitcoin takes only network")
 		}
 	case Solana:
@@ -113,7 +130,7 @@ func Validate(c *coslv1.NetworkConfig) error {
 		if c.GenesisHash != "" && !base58.MatchString(c.GenesisHash) {
 			return invalidf("solana genesis_hash %q is not a base58 hash", c.GenesisHash)
 		}
-		if c.ChainId != 0 || c.Network != "" {
+		if c.ChainID != 0 || c.BitcoinNetwork != "" {
 			return invalidf("solana takes only cluster and genesis_hash")
 		}
 	default:
@@ -122,16 +139,59 @@ func Validate(c *coslv1.NetworkConfig) error {
 	return nil
 }
 
-func validURL(s string) error {
-	u, err := url.Parse(s)
-	if err != nil || u.Host == "" {
-		return invalidf("rpc url %q is not a URL with a host", s)
+func invalidf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
+}
+
+// Validate checks n's alias, its chain, and every RPC URL: a "$NAME"
+// reference, or a plain http(s) URL with a host and no userinfo or query,
+// which is where a credential would ride (it belongs in a Secret).
+func Validate(n Network) error {
+	if err := group.ValidateAlias(n.Alias); err != nil {
+		return invalidf("alias %q must be 1–64 chars matching [a-z0-9][a-z0-9_-]*", n.Alias)
 	}
-	switch u.Scheme {
-	case "http", "https", "ws", "wss":
+	if err := n.Chain().Validate(); err != nil {
+		return fmt.Errorf("%s: %w", n.Alias, err)
+	}
+	for i, u := range n.RPCURLs {
+		if err := validRPCEntry(u); err != nil {
+			return fmt.Errorf("%s: rpc_urls[%d]: %w", n.Alias, i, err)
+		}
+	}
+	return nil
+}
+
+// validRPCEntry is one rpc_urls entry as written. Its error never quotes a
+// plain URL that carries a credential.
+func validRPCEntry(s string) error {
+	if strings.HasPrefix(s, "$") {
+		if _, err := secret.ParseRef(s); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
 		return nil
 	}
-	return invalidf("rpc url %q must be http, https, ws, or wss", s)
+	u, err := url.Parse(s)
+	switch {
+	case err != nil:
+		return invalidf("not a URL")
+	case u.User != nil || u.RawQuery != "" || u.ForceQuery:
+		return invalidf(`a plain URL may not carry userinfo or a query; put the full URL in a Secret and name it as "$NAME"`)
+	}
+	return ValidateRPCURL(s)
+}
+
+// ValidateRPCURL checks that s is an http(s) URL with a host, as every
+// endpoint must be, plain or resolved from a Secret (which may carry
+// userinfo, a query, or a key in its path).
+func ValidateRPCURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return invalidf("rpc url is not a URL with a host")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return invalidf("rpc url must be http or https, not %q", u.Scheme)
+	}
+	return nil
 }
 
 func contains(set []string, s string) bool {
@@ -143,79 +203,31 @@ func contains(set []string, s string) bool {
 	return false
 }
 
-// MsgTypes are the rows Fold and History read: a reader folding Networks
-// asks the replica for these only (cosl.Query.MsgTypes, ADR 0014).
-var MsgTypes = []uint32{cosl.TypeNetworkCreate, cosl.TypeNetworkUpdate, cosl.TypeNetworkRemove}
-
-// Fold replays rows in order into the live Networks, sorted by alias. A
-// message that does not apply to the state it meets is skipped, identically
-// on every Node: a create of a live alias (the create race), an update of an
-// absent alias, an update that changes the type, a remove of an absent alias,
-// and any invalid config. A removed alias may be created again.
-func Fold(rows []cosl.Row) ([]Network, error) {
-	live, err := replay(rows, nil)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Network, 0, len(live))
-	for _, n := range live {
+// List is the Networks of a config's [networks] tables, sorted by alias,
+// each validated. Two aliases for one chain are refused: a request names a
+// chain, which must lead to one Network.
+func List(tables map[string]Network) ([]Network, error) {
+	out := make([]Network, 0, len(tables))
+	for alias, n := range tables {
+		n.Alias = alias
 		out = append(out, n)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Alias < out[j].Alias })
-	return out, nil
-}
-
-// History is every config the fold ever applied, live or since superseded
-// or removed, by ConfigID: a Sign Request pins the exact config it was
-// proposed against, which inspect must still resolve afterwards.
-func History(rows []cosl.Row) (map[[32]byte]Network, error) {
-	out := map[[32]byte]Network{}
-	if _, err := replay(rows, func(n Network) { out[n.ConfigID] = n }); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// replay is the fold itself: the live set by alias, calling applied for each
-// config that took effect.
-func replay(rows []cosl.Row, applied func(Network)) (map[string]Network, error) {
-	live := map[string]Network{}
-	for _, r := range rows {
-		switch r.MsgType {
-		case cosl.TypeNetworkCreate, cosl.TypeNetworkUpdate, cosl.TypeNetworkRemove:
-		default:
-			continue
-		}
-		env, err := r.Decode()
-		if err != nil {
+	by := map[string]string{}
+	for _, n := range out {
+		if err := Validate(n); err != nil {
 			return nil, err
 		}
-		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("network: seq %d: %w", r.Seq, err)
+		k := n.Chain().key()
+		if other, dup := by[k]; dup {
+			return nil, invalidf("%s and %s both name %s", other, n.Alias, Chain{Type: n.Type, ChainID: n.ChainID, BitcoinNetwork: n.BitcoinNetwork, Cluster: n.Cluster})
 		}
-		switch p := msg.(type) {
-		case *coslv1.NetworkConfig:
-			if Validate(p) != nil {
-				continue
-			}
-			cur, exists := live[p.Alias]
-			if (env.MsgType == cosl.TypeNetworkCreate && !exists) ||
-				(env.MsgType == cosl.TypeNetworkUpdate && exists && cur.Type == p.Type) {
-				n := fromConfig(p, r.MsgID)
-				live[p.Alias] = n
-				if applied != nil {
-					applied(n)
-				}
-			}
-		case *coslv1.NetworkRemove:
-			delete(live, p.Alias)
-		}
+		by[k] = n.Alias
 	}
-	return live, nil
+	return out, nil
 }
 
-// Get finds a live Network by alias.
+// Get finds a Network by alias.
 func Get(nets []Network, alias string) (Network, error) {
 	for _, n := range nets {
 		if n.Alias == alias {
@@ -225,50 +237,17 @@ func Get(nets []Network, alias string) (Network, error) {
 	return Network{}, fmt.Errorf("%w: %q", ErrUnknown, alias)
 }
 
-// Check is the writer's precondition for authoring typ for cfg (or removing
-// alias) against the live set; Fold would skip a message that fails it. An
-// update that changes nothing is refused too, though Fold would apply it:
-// it would only add a row, and a new ConfigID for Sign Requests to pin.
-func Check(nets []Network, typ uint32, cfg *coslv1.NetworkConfig, alias string) error {
-	cur, err := Get(nets, alias)
-	exists := err == nil
-	switch typ {
-	case cosl.TypeNetworkCreate:
-		if exists {
-			return fmt.Errorf("%w: %q", ErrExists, alias)
+// Find is this Node's Network for chain c, whatever its alias. A Solana
+// chain that pins a genesis hash does not match a Network pinned to another.
+func Find(nets []Network, c Chain) (Network, error) {
+	for _, n := range nets {
+		if n.Chain().key() != c.key() {
+			continue
 		}
-	case cosl.TypeNetworkUpdate:
-		if !exists {
-			return err
+		if c.GenesisHash != "" && n.GenesisHash != "" && c.GenesisHash != n.GenesisHash {
+			break
 		}
-		if cur.Type != cfg.Type {
-			return invalidf("a Network's type cannot change (%s is %s); remove it and add it again", alias, cur.Type)
-		}
-		if proto.Equal(cur.Config(), cfg) {
-			return fmt.Errorf("%w: %q", ErrUnchanged, alias)
-		}
-	case cosl.TypeNetworkRemove:
-		if !exists {
-			return err
-		}
+		return n, nil
 	}
-	return nil
-}
-
-// Overrides are this Node's local RPC endpoints by Network alias, from the
-// [networks] of its config.toml. They hold secret-bearing URLs that must not
-// replicate, so they never ride the log (ADR 0008, ADR 0013).
-type Overrides map[string][]string
-
-// ValidateRPCURL checks that s is an http(s) or ws(s) URL with a host, as
-// every RPC URL must be, on the log or resolved from a local Secret.
-func ValidateRPCURL(s string) error { return validURL(s) }
-
-// Effective is the RPC endpoints a broadcast from this Node uses: its local
-// override when it has one, else the log's.
-func (o Overrides) Effective(n Network) (urls []string, overridden bool) {
-	if u, ok := o[n.Alias]; ok {
-		return u, true
-	}
-	return n.RPCURLs, false
+	return Network{}, fmt.Errorf("%w %s", ErrNoChain, c)
 }

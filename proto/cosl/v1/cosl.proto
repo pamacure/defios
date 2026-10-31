@@ -90,23 +90,6 @@ message AppRecap {
   uint64 base_seq = 2;                // the highest seq it accounts for: an app.freeform of the same Conversation
 }
 
-// NetworkConfig is the payload of network.create and network.update
-// (docs/adr/0008-networks-on-cosl.md). An update carries the whole config and
-// supersedes the alias's current one. Only the fields of `type` may be set.
-message NetworkConfig {
-  string alias = 1;                   // ^[a-z0-9][a-z0-9_-]{0,63}$
-  string type = 2;                    // bitcoin | ethereum | solana
-  repeated string rpc_urls = 3;       // failover order; a Node may override
-  uint64 chain_id = 4;                // ethereum, > 0
-  string network = 5;                 // bitcoin: mainnet | testnet | signet | regtest
-  string cluster = 6;                 // solana: mainnet-beta | devnet | testnet | localnet
-  string genesis_hash = 7;            // solana, optional, base58
-}
-
-message NetworkRemove {
-  string alias = 1;
-}
-
 // ProviderConfig is the payload of provider.create and provider.update
 // (docs/adr/0019-providers-replace-models-on-the-cosl.md): an endpoint an
 // agent may call, folded by alias exactly as NetworkConfig is. An update
@@ -149,17 +132,22 @@ message SignAccept {
 // receipts; the same transactions broadcast twice carry the same hashes.
 message SignBroadcast {
   bytes sign_request_id = 1;                  // msg_id of the sign.request; 32
-  repeated BroadcastedTx transactions = 2;    // a non-empty subset of the request's transactions, all on one Network
+  repeated BroadcastedTx transactions = 2;    // a non-empty subset of the request's transactions, all on one chain
 }
 
 message BroadcastedTx {
-  bytes network_config_id = 1;        // msg_id of the config of the Network it was sent to; 32
+  reserved 1;                         // was network_config_id (docs/adr/0023-networks-are-node-local.md)
+  reserved "network_config_id";
   bytes tx_hash = 2;                  // the transaction's id: hash (32) or Solana signature (64)
   uint32 tx_index = 3;                // position in the request's transactions[]
 }
 
+// SignTransaction is one transaction of a Sign Request. Its intent names the
+// chain it is for (docs/adr/0023-networks-are-node-local.md), so every Node
+// derives its Digests from the request alone.
 message SignTransaction {
-  bytes network_config_id = 1;        // msg_id of the network.create/update row that defines the Network
+  reserved 1;                         // was network_config_id (docs/adr/0023-networks-are-node-local.md)
+  reserved "network_config_id";
   oneof intent {
     EthereumIntent ethereum = 2;
     BitcoinIntent bitcoin = 3;
@@ -167,8 +155,8 @@ message SignTransaction {
   }
 }
 
-// EthereumIntent is an EIP-1559 transaction; the chain id is the Network's.
-// Amounts are base-10 integer strings (wei).
+// EthereumIntent is an EIP-1559 transaction on chain chain_id. Amounts are
+// base-10 integer strings (wei).
 message EthereumIntent {
   bytes to = 1;                       // 20 bytes
   string value = 2;
@@ -177,14 +165,17 @@ message EthereumIntent {
   uint64 gas_limit = 5;               // > 0
   string max_fee_per_gas = 6;         // > 0
   string max_priority_fee_per_gas = 7;
+  uint64 chain_id = 8;                // > 0, inside the Digest
 }
 
 // BitcoinIntent is a transaction signed per input; the fee is the inputs
-// minus the outputs.
+// minus the outputs. Its network is not in the sighash, but it decides how
+// the output addresses decode, so it is signed for all the same.
 message BitcoinIntent {
   repeated BitcoinInput inputs = 1;
   repeated BitcoinOutput outputs = 2;
   uint32 lock_time = 3;
+  string network = 4;                 // mainnet | testnet | signet | regtest
 }
 
 message BitcoinInput {
@@ -203,6 +194,8 @@ message SolanaIntent {
   string fee_payer = 1;               // base58
   string recent_blockhash = 2;        // base58
   repeated SolanaInstruction instructions = 3;
+  string cluster = 4;                 // mainnet-beta | devnet | testnet | localnet
+  string genesis_hash = 5;            // optional, base58: the cluster's genesis block
 }
 
 message SolanaInstruction {

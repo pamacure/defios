@@ -41,14 +41,20 @@ import (
 type chain struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
+	id     uint64            // its eth_chainId
 	raws   map[string][]byte // hash hex -> raw tx
 	sent   int               // eth_sendRawTransaction calls
 	reject bool              // answer every send with an error
+	auth   string            // the Authorization header of the last call
 }
 
-func newChain(t *testing.T) *chain {
+// newChain is a fake node of Ethereum chain 1.
+func newChain(t *testing.T) *chain { return newChainOn(t, 1) }
+
+// newChainOn is a fake node of Ethereum chain id.
+func newChainOn(t *testing.T, id uint64) *chain {
 	t.Helper()
-	c := &chain{raws: map[string][]byte{}}
+	c := &chain{id: id, raws: map[string][]byte{}}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     json.RawMessage `json:"id"`
@@ -60,8 +66,11 @@ func newChain(t *testing.T) *chain {
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		c.auth = r.Header.Get("Authorization")
 		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
 		switch req.Method {
+		case "eth_chainId":
+			resp["result"] = fmt.Sprintf("0x%x", c.id)
 		case "eth_sendRawTransaction":
 			c.sent++
 			if c.reject {
@@ -164,18 +173,28 @@ func (c *chain) sends() int {
 	return c.sent
 }
 
-// signedRequest is a two-Node Group with a Key, an Ethereum Network at rpcURL
-// and a Sign Request proposed by b, accepted by a, whose Session has completed.
-// With otherURL it is a multi-transaction request over two Networks of the same
-// curve: nonce 0 on eth, one on eth2 (chain 10) at otherURL, then nonce 1 on eth.
+func (c *chain) lastAuth() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.auth
+}
+
+// signedRequest is a two-Node Group with a Key, an Ethereum Network for chain
+// 1 at rpcURL on each Node (b calls it eth, a mainnet) and a Sign Request
+// proposed by b, accepted by a, whose Session has completed. With otherURL it
+// is a multi-transaction request over two chains of the same curve: nonce 0
+// on chain 1, one on chain 10 (eth2 to b, optimism to a) at otherURL, then
+// nonce 1 on chain 1.
 func signedRequest(t *testing.T, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
 	t.Helper()
 	return signedRequestOn(t, "ethereum", rpcURL, otherURL...)
 }
 
 // signedRequestOn is signedRequest on the Network type kind: an EdDSA Key and
-// one Solana transfer paid by the Key's address for "solana", or one
-// two-input Bitcoin transaction spending the Key's P2WPKH outputs for "bitcoin".
+// one Solana transfer paid by the Key's address for "solana", one two-input
+// Bitcoin transaction spending the Key's P2WPKH outputs for "bitcoin", or,
+// for "ethereum+bitcoin", an Ethereum transaction at rpcURL and that Bitcoin
+// one at otherURL. Each Node's Networks are its Group config.toml's.
 func signedRequestOn(t *testing.T, kind string, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
 	t.Helper()
 	solana := kind == "solana"
@@ -234,30 +253,36 @@ func signedRequestOn(t *testing.T, kind string, rpcURL string, otherURL ...strin
 	c := key.ConversationID(curve, pk)
 	conv = c[:]
 	waitMinted(t, a, gid, conv)
+	waitMinted(t, b, gid, conv) // b proposes
 
 	ctx := context.Background()
-	cfg := &coslv1.NetworkConfig{Alias: "eth", Type: "ethereum", ChainId: 1, RpcUrls: []string{rpcURL}}
+	table := func(alias, identity, url string) string {
+		return fmt.Sprintf("[networks.%s]\n%s\nrpc_urls = [%q]\n\n", alias, identity, url)
+	}
+	const eth1, eth10, btc = `type = "ethereum"` + "\nchain_id = 1", `type = "ethereum"` + "\nchain_id = 10", `type = "bitcoin"` + "\nnetwork = \"mainnet\""
+	mine, theirs := table("eth", eth1, rpcURL), table("mainnet", eth1, rpcURL)
 	txs := []signreq.TxSpec{{Network: "eth", Ethereum: ethIntent(0)}}
 	switch kind {
 	case "solana":
-		cfg = &coslv1.NetworkConfig{Alias: "eth", Type: "solana", Cluster: "devnet", RpcUrls: []string{rpcURL}}
+		sol := `type = "solana"` + "\ncluster = \"devnet\""
+		mine, theirs = table("eth", sol, rpcURL), table("devnet", sol, rpcURL)
 		txs = []signreq.TxSpec{{Network: "eth", Solana: solanaIntent(pk)}}
 	case "bitcoin":
-		cfg = &coslv1.NetworkConfig{Alias: "eth", Type: "bitcoin", Network: "mainnet", RpcUrls: []string{rpcURL}}
+		mine, theirs = table("eth", btc, rpcURL), table("btc", btc, rpcURL)
 		txs = []signreq.TxSpec{{Network: "eth", Bitcoin: bitcoinIntent(pk)}}
-	}
-	if _, err := a.client().NetworkAdd(ctx, cfg); err != nil {
-		t.Fatal(err)
-	}
-	if len(otherURL) > 0 {
-		if _, err := a.client().NetworkAdd(ctx, &coslv1.NetworkConfig{Alias: "eth2", Type: "ethereum", ChainId: 10, RpcUrls: otherURL}); err != nil {
-			t.Fatal(err)
+	case "ethereum+bitcoin":
+		mine += table("btc", btc, otherURL[0])
+		theirs += table("bitcoin", btc, otherURL[0])
+		txs = append(txs, signreq.TxSpec{Network: "btc", Bitcoin: bitcoinIntent(pk)})
+	default:
+		if len(otherURL) > 0 {
+			mine += table("eth2", eth10, otherURL[0])
+			theirs += table("optimism", eth10, otherURL[0])
+			txs = append(txs, signreq.TxSpec{Network: "eth2", Ethereum: ethIntent(0)}, signreq.TxSpec{Network: "eth", Ethereum: ethIntent(1)})
 		}
-		txs = append(txs, signreq.TxSpec{Network: "eth2", Ethereum: ethIntent(0)}, signreq.TxSpec{Network: "eth", Ethereum: ethIntent(1)})
 	}
-	for _, n := range []*node{a, b} {
-		waitNetworks(t, n, 1+len(otherURL))
-	}
+	setNetworks(t, b, mine)
+	setNetworks(t, a, theirs)
 	v, err := b.client().SignPropose(ctx, curve+":"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: txs})
 	if err != nil {
 		t.Fatal(err)
@@ -399,6 +424,8 @@ func newBitcoinChain(t *testing.T) *bitcoinChain {
 				c.txs[id] = tx
 				resp["result"] = id
 			}
+		case "getblockchaininfo":
+			resp["result"] = map[string]any{"chain": "main"}
 		case "getrawtransaction":
 			if _, ok := c.txs[req.Params[0]]; ok {
 				resp["result"] = "00"
@@ -524,7 +551,7 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Network != "eth" || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil || ch.sends() != 1 {
+	if len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Network != "ethereum chain 1" || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil || ch.sends() != 1 {
 		t.Fatalf("first = %+v, sends %d", first, ch.sends())
 	}
 	firstTx := first.Networks[0].Transactions[0]
@@ -550,7 +577,7 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 			if len(d.BroadcastReceipts) == 2 {
 				r := d.BroadcastReceipts[0]
 				if r.Broadcaster != a.id.NodeID.String() || d.BroadcastReceipts[1].Broadcaster != b.id.NodeID.String() ||
-					len(r.Transactions) != 1 || r.Transactions[0].TxHash != firstTx.TxHash || r.Transactions[0].Network != "eth" || r.At == "" {
+					len(r.Transactions) != 1 || r.Transactions[0].TxHash != firstTx.TxHash || r.Transactions[0].Network != "ethereum chain 1" || r.At == "" {
 					t.Fatalf("%s receipts = %+v", n.name, d.BroadcastReceipts)
 				}
 				if d.Broadcasts != 2 {
@@ -576,11 +603,11 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 	}
 }
 
-// A multi-transaction request over two Networks of one curve signs every
-// Digest under one Session and broadcasts each Network's transactions to its
-// own endpoint, one receipt per Network, each saying which transactions it covers.
+// A multi-transaction request over two chains of one curve signs every
+// Digest under one Session and broadcasts each chain's transactions to its
+// own endpoint, one receipt per chain, each saying which transactions it covers.
 func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
-	one, other := newChain(t), newChain(t)
+	one, other := newChain(t), newChainOn(t, 10)
 	a, _, _, msgID, _ := signedRequest(t, one.srv.URL, other.srv.URL)
 	ctx := context.Background()
 
@@ -588,7 +615,7 @@ func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Failed() || len(v.Networks) != 2 || v.Networks[0].Network != "eth" || v.Networks[1].Network != "eth2" ||
+	if v.Failed() || len(v.Networks) != 2 || v.Networks[0].Network != "ethereum chain 1" || v.Networks[1].Network != "ethereum chain 10" ||
 		len(v.Networks[0].Transactions) != 2 || len(v.Networks[1].Transactions) != 1 ||
 		v.Networks[0].Transactions[1].Index != 2 || v.Networks[1].Transactions[0].Index != 1 {
 		t.Fatalf("view = %+v", v)
@@ -610,7 +637,7 @@ func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(d.BroadcastReceipts) != 2 || len(d.BroadcastReceipts[0].Transactions) != 2 || len(d.BroadcastReceipts[1].Transactions) != 1 ||
-		d.BroadcastReceipts[1].Transactions[0].Network != "eth2" || d.BroadcastReceipts[1].Transactions[0].Index != 1 || !d.FullyBroadcast {
+		d.BroadcastReceipts[1].Transactions[0].Network != "ethereum chain 10" || d.BroadcastReceipts[1].Transactions[0].Index != 1 || !d.FullyBroadcast {
 		t.Fatalf("receipts = %+v, fully %v", d.BroadcastReceipts, d.FullyBroadcast)
 	}
 }
@@ -619,7 +646,7 @@ func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
 // receipted, the failing one reports its error and commits nothing, and a
 // re-run repeats the receipted Network (already known) and retries the failed one.
 func TestSignBroadcastFailsPerNetwork(t *testing.T) {
-	good, bad := newChain(t), newChain(t)
+	good, bad := newChain(t), newChainOn(t, 10)
 	bad.setReject(true)
 	a, _, _, msgID, _ := signedRequest(t, good.srv.URL, bad.srv.URL)
 	ctx := context.Background()
@@ -638,7 +665,7 @@ func TestSignBroadcastFailsPerNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.BroadcastReceipts) != 1 || d.BroadcastReceipts[0].Transactions[0].Network != "eth" || d.FullyBroadcast {
+	if len(d.BroadcastReceipts) != 1 || d.BroadcastReceipts[0].Transactions[0].Network != "ethereum chain 1" || d.FullyBroadcast {
 		t.Fatalf("receipts = %+v, fully %v", d.BroadcastReceipts, d.FullyBroadcast)
 	}
 
@@ -667,27 +694,32 @@ func writeConfig(t *testing.T, path, body string) {
 	}
 }
 
-// A Node's local override, a Secret named in its Group config.toml, beats
-// the log's rpc urls, and a rejected broadcast commits no receipt.
-func TestSignBroadcastUsesTheLocalOverrideAndFailsLoudly(t *testing.T) {
-	onLog, local := newChain(t), newChain(t)
-	a, b, _, msgID, _ := signedRequest(t, onLog.srv.URL)
+// An rpc_urls entry may name a Secret holding the full URL, basic auth
+// included: the broadcast uses it, and it is never written down. A rejected
+// broadcast commits no receipt.
+func TestSignBroadcastResolvesASecretURLAndFailsLoudly(t *testing.T) {
+	plain, secret := newChain(t), newChain(t)
+	a, b, _, msgID, _ := signedRequest(t, plain.srv.URL)
 	ctx := context.Background()
 
-	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), "[networks.eth]\nrpc_urls = [\"$LOCAL_ETH\"]\n")
-	a.secrets["LOCAL_ETH"] = local.srv.URL
+	setNetworks(t, a, "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$LOCAL_ETH\"]\n")
+	withAuth := strings.Replace(secret.srv.URL, "http://", "http://alice:s3cret@", 1)
+	a.secrets["LOCAL_ETH"] = withAuth
 	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || v.Failed() {
 		t.Fatalf("%+v, %v", v, err)
 	}
-	if local.sends() != 1 || onLog.sends() != 0 {
-		t.Fatalf("override sends %d, log sends %d", local.sends(), onLog.sends())
+	if secret.sends() != 1 || plain.sends() != 0 {
+		t.Fatalf("Secret URL sends %d, plain URL sends %d", secret.sends(), plain.sends())
 	}
-	if hit := fileContaining(t, a.paths.Config, local.srv.URL); hit != "" {
+	if want := "Basic " + base64.StdEncoding.EncodeToString([]byte("alice:s3cret")); secret.lastAuth() != want {
+		t.Fatalf("Authorization = %q, want %q", secret.lastAuth(), want)
+	}
+	if hit := fileContaining(t, a.paths.Config, "s3cret"); hit != "" {
 		t.Fatalf("the resolved URL is in the clear in %s", hit)
 	}
 
 	waitReceipts(t, b, msgID, 1)
-	onLog.srv.Close() // b has no override and the log's endpoint is down
+	plain.srv.Close() // b's only endpoint is down
 	if v, err := b.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || v.Networks[0].Receipt != nil || v.Networks[0].Error == "" {
 		t.Fatalf("broadcast to a dead endpoint must report a failed Network and no receipt: %+v, %v", v, err)
 	}
@@ -698,30 +730,87 @@ func TestSignBroadcastUsesTheLocalOverrideAndFailsLoudly(t *testing.T) {
 }
 
 // A Sign Request is Key-scoped, so its broadcast takes its Key's
-// Conversation Workspace over the Group's; a reference that resolves
-// nowhere fails that Network, naming the reference, and sends nothing.
+// Conversation Workspace over the Group's, table by table; a reference that
+// resolves nowhere fails that chain, naming the reference, and sends nothing.
 func TestSignBroadcastUsesTheKeysConversationWorkspace(t *testing.T) {
-	onLog, groupWide, perKey := newChain(t), newChain(t), newChain(t)
-	a, b, _, msgID, _ := signedRequest(t, onLog.srv.URL)
+	first, groupWide, perKey := newChain(t), newChain(t), newChain(t)
+	a, b, _, msgID, _ := signedRequest(t, first.srv.URL)
 	ctx := context.Background()
 
-	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), "[networks.eth]\nrpc_urls = [\"$GROUP_ETH\"]\n")
-	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, workspaceOf(t, a)), "[networks.eth]\nrpc_urls = [\"$KEY_ETH\"]\n")
+	setNetworks(t, a, "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$GROUP_ETH\"]\n")
+	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, workspaceOf(t, a)), "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$KEY_ETH\"]\n")
 	a.secrets["GROUP_ETH"], a.secrets["KEY_ETH"] = groupWide.srv.URL, perKey.srv.URL
 	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || v.Failed() {
 		t.Fatalf("%+v, %v", v, err)
 	}
-	if perKey.sends() != 1 || groupWide.sends() != 0 || onLog.sends() != 0 {
-		t.Fatalf("per-Key sends %d, Group sends %d, log sends %d", perKey.sends(), groupWide.sends(), onLog.sends())
+	if perKey.sends() != 1 || groupWide.sends() != 0 || first.sends() != 0 {
+		t.Fatalf("per-Key sends %d, Group sends %d, first sends %d", perKey.sends(), groupWide.sends(), first.sends())
 	}
 
-	writeConfig(t, b.paths.GroupConfigFile(group.ImplicitAlias), "[networks.eth]\nrpc_urls = [\"$NOWHERE_ETH\"]\n")
+	setNetworks(t, b, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$NOWHERE_ETH\"]\n")
 	v, err := b.client().SignBroadcast(ctx, msgID[:8])
 	if err != nil || !v.Failed() || v.Networks[0].Receipt != nil || !strings.Contains(v.Networks[0].Error, "$NOWHERE_ETH") {
-		t.Fatalf("an unresolved reference must fail its Network by name: %+v, %v", v, err)
+		t.Fatalf("an unresolved reference must fail its chain by name: %+v, %v", v, err)
 	}
-	if onLog.sends() != 0 {
-		t.Fatal("an unresolved local override fell back to the log's endpoint")
+	if first.sends() != 0 {
+		t.Fatal("an unresolved reference fell back to another endpoint")
+	}
+}
+
+// Before submitting, a broadcast asks each endpoint which chain it serves:
+// one whose eth_chainId is not the request's chain_id is skipped and the
+// next used. A Node with no Network for the chain fails that chain by name.
+func TestSignBroadcastSkipsAnEndpointOnAnotherChain(t *testing.T) {
+	right := newChain(t)
+	a, b, _, msgID, _ := signedRequest(t, right.srv.URL)
+	wrong := newChainOn(t, 5)
+	ctx := context.Background()
+
+	setNetworks(t, a, fmt.Sprintf("[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [%q, %q]\n", wrong.srv.URL, right.srv.URL))
+	v, err := a.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil || v.Failed() || v.Networks[0].Receipt == nil {
+		t.Fatalf("%+v, %v", v, err)
+	}
+	if wrong.sends() != 0 || right.sends() != 1 {
+		t.Fatalf("chain 5 sends %d, chain 1 sends %d", wrong.sends(), right.sends())
+	}
+
+	setNetworks(t, a, fmt.Sprintf("[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [%q]\n", wrong.srv.URL))
+	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || !strings.Contains(v.Networks[0].Error, "chain 5") || wrong.sends() != 0 {
+		t.Fatalf("only an endpoint on chain 5: %+v, %v", v, err)
+	}
+
+	setNetworks(t, b, "[networks.goerli]\ntype = \"ethereum\"\nchain_id = 5\n")
+	if v, err := b.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || !strings.Contains(v.Networks[0].Error, "ethereum chain 1") {
+		t.Fatalf("no Network for the chain: %+v, %v", v, err)
+	}
+}
+
+// A request mixing Ethereum and Bitcoin signs under one Session and
+// broadcasts each chain's transaction to its own endpoint, with one receipt
+// per chain, each naming its chain.
+func TestSignBroadcastEthereumAndBitcoin(t *testing.T) {
+	eth, btc := newChain(t), newBitcoinChain(t)
+	a, _, _, msgID, _ := signedRequestOn(t, "ethereum+bitcoin", eth.srv.URL, btc.srv.URL)
+	btc.spendKey(keyOf(t, a))
+	ctx := context.Background()
+
+	v, err := a.client().SignBroadcast(ctx, msgID[:8])
+	if err != nil || v.Failed() || len(v.Networks) != 2 || v.Networks[0].Network != "ethereum chain 1" || v.Networks[1].Network != "bitcoin mainnet" ||
+		v.Networks[0].Receipt == nil || v.Networks[1].Receipt == nil {
+		t.Fatalf("view = %+v, %v", v, err)
+	}
+	if eth.sends() != 1 || btc.get(v.Networks[1].Transactions[0].TxHash) == nil {
+		t.Fatalf("eth sends %d; bitcoin tx %s never accepted", eth.sends(), v.Networks[1].Transactions[0].TxHash)
+	}
+	waitReceipts(t, a, msgID, 2)
+	d, err := a.client().SignInspect(ctx, msgID[:8])
+	if err != nil || len(d.BroadcastReceipts) != 2 || !d.FullyBroadcast ||
+		d.BroadcastReceipts[0].Transactions[0].Network != "ethereum chain 1" || d.BroadcastReceipts[1].Transactions[0].Network != "bitcoin mainnet" {
+		t.Fatalf("receipts = %+v, %v", d.BroadcastReceipts, err)
+	}
+	if d.Details[0].Network != "ethereum chain 1" || d.Details[1].Network != "bitcoin mainnet" {
+		t.Fatalf("details = %+v", d.Details)
 	}
 }
 

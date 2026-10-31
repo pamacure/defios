@@ -123,10 +123,6 @@ func Summary(msgType uint32, payload []byte) string {
 		return fmt.Sprintf("sign_request=%s", short(p.SignRequestId))
 	case *coslv1.SignBroadcast:
 		return fmt.Sprintf("sign_request=%s txs=%d", short(p.SignRequestId), len(p.Transactions))
-	case *coslv1.NetworkConfig:
-		return fmt.Sprintf("alias=%s type=%s", oneLine(p.Alias), oneLine(p.Type))
-	case *coslv1.NetworkRemove:
-		return fmt.Sprintf("alias=%s", oneLine(p.Alias))
 	case *coslv1.ProviderConfig:
 		return fmt.Sprintf("alias=%s base_url=%s api_path=%s", oneLine(p.Alias), oneLine(p.BaseUrl), oneLine(p.ApiPath))
 	case *coslv1.ProviderRemove:
