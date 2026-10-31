@@ -32,9 +32,10 @@ type Config struct {
 	// writes "$TS_AUTHKEY".
 	TailnetAuthKey string `toml:"tailnet_auth_key,omitempty"`
 	// Prune is this Node's prune policy for the Group: when set, serve
-	// destroys the payload of all talk a live Recap accounts for, again
-	// after every Recap and snapshot restore (ADR 0012). Off by default.
-	Prune bool `toml:"prune,omitempty"`
+	// destroys the payload of all talk older than it on start, after every
+	// snapshot restore and once a day (ADR 0024). Unset, the Node is
+	// archival.
+	Prune Age `toml:"prune,omitzero"`
 	// Agents are this Node's Agent Profiles for the Group, by Handle (ADR
 	// 0015). Only the Group's config.toml may define them; a Workspace's
 	// [agent] profiles includes them by Handle.

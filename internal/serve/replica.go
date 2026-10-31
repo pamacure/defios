@@ -62,7 +62,7 @@ func (s *server) startReplica() {
 
 // startWatchers runs what follows the replica on this Node's behalf: the
 // Conversation Workspaces, the prune policy, which follows config.toml
-// and does nothing while it is off, and the agents a mention summons. The
+// and does nothing while there is none, and the agents a mention summons. The
 // mentions follower takes the replica as it is now before any send can
 // commit, so it misses none of this serve's and replays none before it.
 func (s *server) startWatchers(store *cosl.Store) {

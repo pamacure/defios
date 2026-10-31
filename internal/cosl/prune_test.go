@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/internal/cosl"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -75,8 +77,66 @@ func TestPruneDestroysOnlyCoveredTalk(t *testing.T) {
 	sameRows(t, archive.rows(), f.rows())
 }
 
+// Pruning by age destroys the app.freeform payloads whose envelope
+// created_at is older than the cutoff, in one Conversation or in every one,
+// and nothing else: not newer talk, not another message type (ADR 0024).
+func TestPruneOlderThanDestroysOnlyOlderTalk(t *testing.T) {
+	f := newFixture(t)
+	conv := bytes.Repeat([]byte{7}, 32)
+	day := int64(24 * time.Hour)
+	at := func(age int64, conv []byte, typ uint32, text string) []byte {
+		env := f.envelope(0, typ, freeform(text))
+		env.ConversationId = conv
+		env.CreatedAt = 1700000000_000000000 - age*day
+		return f.signed(0, env)
+	}
+	f.apply(1, 1, at(40, nil, cosl.TypeAppFreeform, "old"))
+	f.apply(2, 1, at(40, conv, cosl.TypeAppFreeform, "old scoped"))
+	f.apply(3, 1, at(40, nil, cosl.TypeSignRequest, "not talk"))
+	f.apply(4, 1, at(10, nil, cosl.TypeAppFreeform, "recent"))
+	f.apply(5, 1, at(35, conv, cosl.TypeAppFreeform, "older scoped"))
+	cutoff := time.Unix(0, 1700000000_000000000-30*day)
+
+	if n, err := f.store.PruneOlderThan(nil, cutoff); err != nil || n != 1 {
+		t.Fatalf("PruneOlderThan(Group-level) = %d, %v; want 1", n, err)
+	}
+	if got := prunedSeqs(f); !slices.Equal(got, []uint64{1}) {
+		t.Fatalf("pruned seqs = %v, want [1]", got)
+	}
+	got, err := f.store.PruneAllOlderThan(cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []cosl.Pruned{{ConversationID: conv, Messages: 2}}; !slices.EqualFunc(got, want, samePruned) {
+		t.Fatalf("PruneAllOlderThan = %+v, want %+v", got, want)
+	}
+	if got := prunedSeqs(f); !slices.Equal(got, []uint64{1, 2, 5}) {
+		t.Fatalf("pruned seqs = %v, want [1 2 5]", got)
+	}
+	if got, err := f.store.PruneAllOlderThan(cutoff); err != nil || len(got) != 0 {
+		t.Fatalf("second PruneAllOlderThan = %+v, %v; want nothing", got, err)
+	}
+	if err := f.sibling().store.Restore(f.snapshotOf()); err != nil {
+		t.Fatalf("restore of pruned snapshot: %v", err)
+	}
+}
+
+func prunedSeqs(f *fixture) []uint64 {
+	var out []uint64
+	for _, r := range f.rows() {
+		if r.Pruned() {
+			out = append(out, r.Seq)
+		}
+	}
+	return out
+}
+
+func samePruned(a, b cosl.Pruned) bool {
+	return bytes.Equal(a.ConversationID, b.ConversationID) && a.Messages == b.Messages
+}
+
 // Pruning while the FSM appends never fails an append: the prune policy
-// prunes as soon as a Recap commits, while the rows after it are still
+// prunes on start and after a restore, while the rows after it are still
 // being applied, and an entry the FSM fails to apply is a row this Node
 // never holds.
 func TestPruneAlongsideAppendsFailsNone(t *testing.T) {

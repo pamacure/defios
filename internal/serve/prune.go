@@ -12,26 +12,28 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/errlog"
 	"defios.com/internal/key"
-	"defios.com/internal/recap"
 )
 
-// keepPruned is the prune policy (ADR 0012): with `prune = true` in this
-// Node's Group config.toml, it destroys the payload of all talk a live
-// Recap accounts for, on startup, whenever a Recap commits, and after a
-// snapshot restore, until ctx ends. Each prune is logged with what it
-// dropped. It wakes when the replica changes, or at the fallback tick,
-// where it also rereads config.toml if the file changed, so turning
-// `prune` on or off needs no restart (ADR 0014). While the policy is off
-// it does not touch the replica.
+// pruneEvery is how often the prune policy runs between restores.
+const pruneEvery = 24 * time.Hour
+
+// keepPruned is the prune policy (ADR 0024): with an age as `prune` in
+// this Node's Group config.toml, it destroys the payload of all talk older
+// than that age, in every Conversation, on startup, after a snapshot
+// restore, and once a day, until ctx ends. Each run is logged with what it
+// dropped. It wakes when the replica changes, to catch a restore, or at the
+// fallback tick, where it also rereads config.toml if the file changed, so
+// setting or removing `prune` needs no restart (ADR 0014). While there is
+// no policy it does not touch the replica.
 func (s *server) keepPruned(ctx context.Context, store *cosl.Store) {
 	p := s.newPrunePolicy(store)
 	tick := time.NewTicker(cosl.FallbackTick)
 	defer tick.Stop()
 	p.wake()
 	for {
-		var changes <-chan struct{} // nil while off: only the tick wakes it
-		if p.on {
-			changes = p.follow.Changes()
+		var changes <-chan struct{} // nil with no policy: only the tick wakes it
+		if p.age != 0 {
+			changes = store.Changed()
 		}
 		select {
 		case <-ctx.Done():
@@ -48,10 +50,11 @@ func (s *server) keepPruned(ctx context.Context, store *cosl.Store) {
 type prunePolicy struct {
 	s          *server
 	store      *cosl.Store
-	on         bool
+	age        config.Age
 	mtime      time.Time // config.toml's as last read; zero while it is missing
-	follow     *cosl.Follower
-	keeper     *recap.Keeper
+	now        func() time.Time
+	ran        time.Time // when it last pruned; zero until it has
+	restores   uint64    // the Store's restore count as of that run
 	errs       *errlog.Reporter
 	configErrs *errlog.Reporter
 }
@@ -61,26 +64,15 @@ func (s *server) newPrunePolicy(store *cosl.Store) *prunePolicy {
 	p := &prunePolicy{
 		s:          s,
 		store:      store,
+		age:        s.opts.Config.Prune,
+		now:        time.Now,
 		errs:       errlog.New(s.opts.Logf, "serve: prune policy"),
 		configErrs: errlog.New(s.opts.Logf, "serve: prune policy: reading config.toml"),
 	}
 	if info, err := os.Stat(s.opts.Paths.GroupConfigFile(s.opts.Alias)); err == nil {
 		p.mtime = info.ModTime()
 	}
-	p.set(s.opts.Config.Prune)
 	return p
-}
-
-// set turns the policy on or off. Turned on, its next wake prunes
-// everything covered, as on startup.
-func (p *prunePolicy) set(on bool) {
-	p.on = on
-	if on {
-		p.follow = p.store.Follow(cosl.FallbackTick)
-		p.keeper = recap.NewKeeper(p.store)
-	} else {
-		p.follow, p.keeper = nil, nil
-	}
 }
 
 // fallback is one fallback tick: reread config.toml, then wake.
@@ -92,7 +84,7 @@ func (p *prunePolicy) fallback() {
 // reread takes up config.toml's `prune` if the file's modification time
 // changed since it was last read. A file that does not parse is reported,
 // and the policy keeps its last setting; a missing file is the default,
-// off.
+// no policy. A changed age prunes at the next wake, as on startup.
 func (p *prunePolicy) reread() {
 	path := p.s.opts.Paths.GroupConfigFile(p.s.opts.Alias)
 	var mtime time.Time
@@ -116,38 +108,47 @@ func (p *prunePolicy) reread() {
 		}
 	}
 	p.configErrs.Report(nil)
-	if cfg.Prune == p.on {
+	if cfg.Prune == p.age {
 		return
 	}
-	p.set(cfg.Prune)
-	state := "off"
-	if cfg.Prune {
-		state = "on"
+	p.age, p.ran = cfg.Prune, time.Time{}
+	if p.age == 0 {
+		p.s.opts.Logf("serve: prune policy: none, as config.toml now says")
+		return
 	}
-	p.s.opts.Logf("serve: prune policy: %s, as config.toml now says", state)
+	p.s.opts.Logf("serve: prune policy: older than %s, as config.toml now says", p.age)
 }
 
-// wake is one turn of the loop. With the policy off it does nothing. With
-// nothing new on the replica it reads only the replica's Mark; otherwise
-// the Keeper's gate reads one row, and prunes only after a Recap or a
-// restore.
+// wake is one turn of the loop. With no policy it does nothing. Otherwise
+// it prunes if it never has, if the replica has been restored since it
+// last did, or if that was a day ago; else it reads only the clock and the
+// Store's restore count.
 func (p *prunePolicy) wake() {
-	if !p.on {
+	if p.age == 0 {
 		return
 	}
-	p.errs.Report(p.follow.Act(p.prune))
+	restores, now := p.store.Restores(), p.now()
+	if !p.ran.IsZero() && restores == p.restores && now.Sub(p.ran) < pruneEvery {
+		return
+	}
+	p.errs.Report(p.prune(now, restores))
 }
 
-// prune lets the Keeper prune what a Recap or a restore uncovered, and logs
-// what it dropped.
-func (p *prunePolicy) prune(cosl.Wake) error {
-	pruned, err := p.keeper.Step()
-	if err != nil || len(pruned) == 0 {
+// prune destroys the payload of the talk older than the policy's age as of
+// now, and logs what it dropped. The restore count is read before it, so a
+// restore landing mid-prune is pruned at the next wake.
+func (p *prunePolicy) prune(now time.Time, restores uint64) error {
+	pruned, err := p.store.PruneAllOlderThan(now.Add(-time.Duration(p.age)))
+	if err != nil {
 		return err
+	}
+	p.ran, p.restores = now, restores
+	if len(pruned) == 0 {
+		return nil
 	}
 	names := conversationNames(p.store)
 	for _, r := range pruned {
-		p.s.opts.Logf("serve: prune policy: pruned %d messages of %s up to seq %d", r.Messages, names(r.ConversationID), r.BaseSeq)
+		p.s.opts.Logf("serve: prune policy: pruned %d messages of %s older than %s", r.Messages, names(r.ConversationID), p.age)
 	}
 	return nil
 }

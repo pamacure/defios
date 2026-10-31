@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/internal/config"
 	"defios.com/internal/nodedir"
@@ -214,22 +215,48 @@ profiles = ["trader"]
 	}
 }
 
-// prune is this Node's policy for the Group, off unless set, and only the
+// prune is this Node's policy for the Group, an age: whole days or a Go
+// duration (ADR 0024). Unset is an archival Node, a boolean or anything
+// that is not a positive age is an error, it survives a write, and only the
 // Group's config.toml may set it.
-func TestPrunePolicyDefaultsOffAndIsGroupOnly(t *testing.T) {
+func TestPrunePolicyIsAnAge(t *testing.T) {
 	c, err := config.ReadFile(write(t, groupConfig))
-	if err != nil || c.Prune {
-		t.Fatalf("prune unset = %v, %v; want off", c.Prune, err)
+	if err != nil || c.Prune != 0 {
+		t.Fatalf("prune unset = %v, %v; want 0, an archival Node", c.Prune, err)
 	}
-	c, err = config.ReadFile(write(t, "prune = true\n"+groupConfig))
-	if err != nil || !c.Prune {
-		t.Fatalf("prune = true read as %v, %v", c.Prune, err)
+	for body, want := range map[string]time.Duration{
+		`prune = "90d"`: 90 * 24 * time.Hour,
+		`prune = "36h"`: 36 * time.Hour,
+	} {
+		c, err := config.ReadFile(write(t, body+"\n"+groupConfig))
+		if err != nil || time.Duration(c.Prune) != want {
+			t.Errorf("%s read as %v, %v; want %v", body, time.Duration(c.Prune), err, want)
+		}
 	}
-	if _, err := config.ReadFile(write(t, `prune = "on"`)); err == nil {
-		t.Fatal(`prune = "on" must be an error: the policy is a boolean`)
+	for _, body := range []string{`prune = true`, `prune = false`, `prune = "on"`, `prune = 90`, `prune = "0d"`, `prune = "-1h"`, `prune = "1.5d"`, `prune = "d"`} {
+		if _, err := config.ReadFile(write(t, body)); err == nil || !strings.Contains(err.Error(), "prune") {
+			t.Errorf("%s: err = %v, want an error naming prune", body, err)
+		}
 	}
-	if _, err := config.ReadWorkspace(write(t, "prune = true")); err == nil {
+	if _, err := config.ReadWorkspace(write(t, `prune = "1d"`)); err == nil {
 		t.Fatal("prune in a Conversation config must be an error")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	in := config.Config{DisplayName: "laptop", Hostname: "defios-home", Prune: config.Age(90 * 24 * time.Hour)}
+	if err := config.WriteFile(path, in); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), `prune = "90d"`) {
+		t.Errorf("written config.toml:\n%s\nwant prune = \"90d\"", b)
+	}
+	if out, err := config.ReadFile(path); err != nil || out.Prune != in.Prune {
+		t.Fatalf("round trip = %v, %v; want %v", out.Prune, err, in.Prune)
+	}
+	for age, want := range map[time.Duration]string{36 * time.Hour: "36h", 90 * time.Minute: "1h30m", 90 * time.Second: "1m30s"} {
+		if got := config.Age(age).String(); got != want {
+			t.Errorf("Age(%v) = %q, want %q", age, got, want)
+		}
 	}
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/cosl/coslbench"
 	"defios.com/internal/group"
@@ -41,8 +43,8 @@ func BenchmarkWorkspaceIdleWake(b *testing.B) {
 	}
 }
 
-// One wake of the prune policy, on, while nothing has changed: the covered
-// talk is already pruned. Since ADR 0014 an idle serve wakes it only at the
+// One wake of the prune policy, set, while nothing has changed and no day
+// has passed: the talk old enough is already pruned. Since ADR 0014 an idle serve wakes it only at the
 // fallback tick; this is that wake less the stat of config.toml.
 func BenchmarkPrunePolicyIdleWake(b *testing.B) {
 	for _, shape := range coslbench.Shapes {
@@ -63,7 +65,7 @@ func BenchmarkPrunePolicyIdleWake(b *testing.B) {
 					}
 				},
 			}, ctx: context.Background()}
-			s.opts.Config.Prune = true
+			s.opts.Config.Prune = config.Age(time.Hour)
 			p := s.newPrunePolicy(store)
 			p.wake()
 			pruned = true

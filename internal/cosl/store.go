@@ -1,6 +1,7 @@
 package cosl
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
@@ -8,9 +9,11 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite" // pure-Go sqlite driver
@@ -294,17 +297,28 @@ func (s *Store) VacuumInto(path string) error {
 // below seq through (nil conversationID is Group-level talk), keeping each
 // row, its envelope_hash and so its place in the chain (ADR 0012). It is
 // Node-local and appends nothing; a row already pruned is skipped. It
-// reports how many payloads it destroyed. Which seq is safe to prune
-// through is the caller's: the live Recap's base_seq.
+// reports how many payloads it destroyed.
 func (s *Store) Prune(conversationID []byte, through uint64) (int, error) {
+	return s.prune(conversationID, "seq <= ?", through)
+}
+
+// PruneOlderThan is Prune of the rows whose envelope created_at, as their
+// sender claims it, is before cutoff (ADR 0024).
+func (s *Store) PruneOlderThan(conversationID []byte, cutoff time.Time) (int, error) {
+	return s.prune(conversationID, "created_at < ?", cutoff.UnixNano())
+}
+
+// prune is Pruning's one UPDATE, over the talk of one Conversation that
+// cut, given bound, selects.
+func (s *Store) prune(conversationID []byte, cut string, bound any) (int, error) {
 	conv := "conversation_id IS NULL"
-	args := []any{TypeAppFreeform, through}
+	args := []any{TypeAppFreeform, bound}
 	if conversationID != nil {
 		conv = "conversation_id = ?"
 		args = append(args, conversationID)
 	}
 	res, err := s.db.Exec(`UPDATE cosl SET envelope = NULL
-		WHERE msg_type = ? AND seq <= ? AND envelope IS NOT NULL AND `+conv, args...)
+		WHERE msg_type = ? AND `+cut+` AND envelope IS NOT NULL AND `+conv, args...)
 	if err != nil {
 		return 0, fmt.Errorf("cosl: prune: %w", err)
 	}
@@ -313,6 +327,64 @@ func (s *Store) Prune(conversationID []byte, through uint64) (int, error) {
 		return 0, fmt.Errorf("cosl: prune: %w", err)
 	}
 	return int(n), nil
+}
+
+// Pruned is how many payloads one prune destroyed in one Conversation (nil
+// ConversationID is Group-level talk).
+type Pruned struct {
+	ConversationID []byte
+	Messages       int
+}
+
+// PruneAllOlderThan is PruneOlderThan across every Conversation, Group-level
+// talk included, in one UPDATE: the prune policy (ADR 0024). It reports
+// each Conversation where it destroyed a payload, in the order of the
+// first one it destroyed there.
+func (s *Store) PruneAllOlderThan(cutoff time.Time) ([]Pruned, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("cosl: prune: %w", err)
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`UPDATE cosl SET envelope = NULL
+		WHERE msg_type = ? AND created_at < ? AND envelope IS NOT NULL
+		RETURNING seq, conversation_id`, TypeAppFreeform, cutoff.UnixNano())
+	if err != nil {
+		return nil, fmt.Errorf("cosl: prune: %w", err)
+	}
+	type tally struct {
+		first uint64
+		p     Pruned
+	}
+	byConv := map[string]*tally{} // "" for Group-level: never a 32-byte ID
+	for rows.Next() {
+		var seq uint64
+		var conv []byte
+		if err := rows.Scan(&seq, &conv); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("cosl: prune: %w", err)
+		}
+		t := byConv[string(conv)]
+		if t == nil {
+			t = &tally{first: seq, p: Pruned{ConversationID: conv}}
+			byConv[string(conv)] = t
+		}
+		t.first = min(t.first, seq)
+		t.p.Messages++
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("cosl: prune: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("cosl: prune: %w", err)
+	}
+	tallies := slices.SortedFunc(maps.Values(byConv), func(a, b *tally) int { return cmp.Compare(a.first, b.first) })
+	out := make([]Pruned, len(tallies))
+	for i, t := range tallies {
+		out[i] = t.p
+	}
+	return out, nil
 }
 
 // Counts is how many rows a replica holds and how many of those this Node

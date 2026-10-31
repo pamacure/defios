@@ -106,13 +106,18 @@ func conversationCommand(g *globals) *cobra.Command {
 	recapCmd.MarkFlagRequired("base-seq")
 	recapCmd.MarkFlagRequired("text")
 	root.AddCommand(recapCmd)
+	var cut pruneCut
 	prune := &cobra.Command{
-		Use:   "prune",
-		Short: "Destroy, on this Node only, the payloads of the talk the live Recap covers. --key scopes it to that Key",
+		Use:   "prune --before <seq> | --older-than <age>",
+		Short: "Destroy, on this Node only, the payloads of the talk at or below a seq, or older than an age. --key scopes it to that Key",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runConversationPrune(g, keyQuery) },
+		RunE:  func(*cobra.Command, []string) error { return runConversationPrune(g, keyQuery, cut) },
 	}
 	prune.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	prune.Flags().Uint64Var(&cut.before, "before", 0, "prune the talk at or below this seq")
+	prune.Flags().StringVar(&cut.olderThan, "older-than", "", "prune the talk its sender wrote longer ago than this: whole days like 30d, or a Go duration like 36h")
+	prune.MarkFlagsOneRequired("before", "older-than")
+	prune.MarkFlagsMutuallyExclusive("before", "older-than")
 	bindGroupFlag(g, prune)
 	root.AddCommand(prune)
 	return root
@@ -477,17 +482,32 @@ func runConversationRecap(cmd *cobra.Command, g *globals, keyQuery string, baseS
 	return nil
 }
 
+// pruneCut is which talk `conversation prune` destroys: at or below seq
+// before, or older than olderThan; exactly one is set.
+type pruneCut struct {
+	before    uint64
+	olderThan string
+}
+
 // pruneLine is `conversation prune`'s result: how many messages it pruned
-// now, up to which seq.
+// now, and which cut it pruned by.
 type pruneLine struct {
-	BaseSeq  uint64 `json:"base_seq"`
-	Messages int    `json:"messages"`
+	Before    uint64 `json:"before,omitempty"`
+	OlderThan string `json:"older_than,omitempty"`
+	Messages  int    `json:"messages"`
 }
 
 // runConversationPrune writes this Node's replica directly: Pruning is
 // Node-local, appends nothing and tells no other Node, so it needs no serve
-// (ADR 0012).
-func runConversationPrune(g *globals, keyQuery string) error {
+// (ADR 0012, ADR 0024).
+func runConversationPrune(g *globals, keyQuery string, cut pruneCut) error {
+	var age config.Age
+	if cut.olderThan != "" {
+		var err error
+		if age, err = config.ParseAge(cut.olderThan); err != nil {
+			return exitUsagef("--older-than: %w", err)
+		}
+	}
 	store, err := openReplica(g)
 	if err != nil {
 		return err
@@ -503,36 +523,46 @@ func runConversationPrune(g *globals, keyQuery string) error {
 			return err
 		}
 	}
-	baseSeq, n, err := recap.Prune(store, conv)
-	if errors.Is(err, recap.ErrNoRecap) {
-		return exitUsagef("%w; account for it first with `conversation recap`", err)
+	var n int
+	if age != 0 {
+		n, err = store.PruneOlderThan(conv, time.Now().Add(-time.Duration(age)))
+	} else {
+		n, err = store.Prune(conv, cut.before)
 	}
 	if err != nil {
 		return exitOperational(err)
 	}
-	if !policy {
-		fmt.Fprintln(g.app.Stderr, paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:")+" this Node's prune policy is off, so a later snapshot restore from a Node that kept this talk brings it back; set `prune = true` in this Group's config.toml to keep it pruned")
+	if policy == 0 {
+		fmt.Fprintln(g.app.Stderr, paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:")+` this Node has no prune policy, so a later snapshot restore from a Node that kept this talk brings it back; set an age, such as prune = "90d", in this Group's config.toml to keep it pruned`)
 	}
 	if g.json {
-		return g.emitJSON(pruneLine{BaseSeq: baseSeq, Messages: n})
+		line := pruneLine{Before: cut.before, Messages: n}
+		if age != 0 {
+			line = pruneLine{OlderThan: age.String(), Messages: n}
+		}
+		return g.emitJSON(line)
 	}
-	fmt.Fprintf(g.app.Stdout, "pruned %d messages up to seq %d\n", n, baseSeq)
+	if age != 0 {
+		fmt.Fprintf(g.app.Stdout, "pruned %d messages older than %s\n", n, age)
+	} else {
+		fmt.Fprintf(g.app.Stdout, "pruned %d messages up to seq %d\n", n, cut.before)
+	}
 	return nil
 }
 
-// prunePolicy is whether this Node's config.toml for the Current Group sets
-// `prune = true`. A Node with no config.toml has the default, off.
-func prunePolicy(g *globals) (bool, error) {
+// prunePolicy is the age this Node's config.toml for the Current Group sets
+// as `prune`. A Node with no config.toml has none: it is archival.
+func prunePolicy(g *globals) (config.Age, error) {
 	alias, err := g.resolveAlias()
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return 0, nil
 	}
 	if err != nil {
-		return false, exitOperational(err)
+		return 0, exitOperational(err)
 	}
 	return cfg.Prune, nil
 }

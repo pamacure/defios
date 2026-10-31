@@ -8,15 +8,19 @@ import (
 	"testing"
 	"time"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/cosl/coslbench"
 	"defios.com/internal/group"
 	"defios.com/internal/nodedir"
+	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// policyOn is a prune policy over an empty replica, starting as on says
-// and logging to lines.
-func policyOn(t *testing.T, on bool, lines *[]string) (*server, *cosl.Store, *prunePolicy) {
+const day = 24 * time.Hour
+
+// policyOn is a prune policy over an empty replica, starting with age as
+// its policy (0: none), logging to lines, and reading the time from clock.
+func policyOn(t *testing.T, age time.Duration, lines *[]string, clock *time.Time) (*server, *cosl.Store, *prunePolicy) {
 	t.Helper()
 	store, err := cosl.Open(filepath.Join(t.TempDir(), "cosl.sqlite"))
 	if err != nil {
@@ -28,8 +32,10 @@ func policyOn(t *testing.T, on bool, lines *[]string) (*server, *cosl.Store, *pr
 		Alias: group.ImplicitAlias,
 		Logf:  func(format string, args ...any) { *lines = append(*lines, fmt.Sprintf(format, args...)) },
 	}}
-	s.opts.Config.Prune = on
-	return s, store, s.newPrunePolicy(store)
+	s.opts.Config.Prune = config.Age(age)
+	p := s.newPrunePolicy(store)
+	p.now = func() time.Time { return *clock }
+	return s, store, p
 }
 
 // setPrune writes the Group's config.toml with body, stamped at a time of
@@ -48,12 +54,47 @@ func setPrune(t *testing.T, s *server, body string, at time.Time) {
 	}
 }
 
-// restoreTalk rebuilds the replica from one that kept all its talk.
-func restoreTalk(t *testing.T, store *cosl.Store) {
+// restoreTalk rebuilds the replica from one that kept all its talk, plus
+// further more messages after it, so that each call with a larger further
+// is a snapshot the replica restores from. It reports when the oldest talk
+// was written: a cached replica's talk may be days old.
+func restoreTalk(t *testing.T, store *cosl.Store, further int) time.Time {
 	t.Helper()
-	if err := store.Restore(coslbench.Build(t, coslbench.Shapes[0]).Path); err != nil {
+	r := coslbench.Build(t, coslbench.Shapes[0])
+	if further > 0 {
+		snap, err := cosl.Open(r.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta, err := snap.Meta()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fsm := cosl.NewFSM(snap, r.Roster)
+		author := cosl.Author{Node: r.Nodes[0], GroupID: r.Roster.GroupID()}
+		for i := range further {
+			s, err := author.Sign(cosl.TypeAppFreeform, nil, &coslv1.AppFreeform{Text: "further"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res, err := fsm.Apply(meta.LastAppliedSeq+uint64(i)+1, 1, s.Bytes); err != nil || !res.Inserted {
+				t.Fatalf("apply: %+v %v", res, err)
+			}
+		}
+		snap.Close()
+	}
+	if err := store.Restore(r.Path); err != nil {
 		t.Fatal(err)
 	}
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}})
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("talk: %d rows, %v", len(rows), err)
+	}
+	oldest := rows[0].CreatedAt
+	for _, r := range rows {
+		oldest = min(oldest, r.CreatedAt)
+	}
+	return time.Unix(0, oldest)
 }
 
 func prunedCount(t *testing.T, store *cosl.Store) int {
@@ -81,53 +122,108 @@ func matching(lines []string, substr string) []string {
 	return out
 }
 
+// With an age set, the policy prunes the talk older than it as serve
+// starts and again as soon as a snapshot restore brings that talk back,
+// logging what each run dropped.
+func TestPrunePolicyPrunesOnStartAndAfterARestore(t *testing.T) {
+	var lines []string
+	clock := time.Now()
+	_, store, p := policyOn(t, day, &lines, &clock)
+	clock = restoreTalk(t, store, 0).Add(2 * day)
+	p.wake()
+	n := prunedCount(t, store)
+	if n == 0 {
+		t.Fatal("on start, nothing older than a day pruned")
+	}
+	if got := matching(lines, "older than 1d"); len(got) == 0 {
+		t.Fatalf("logged %q, want what was pruned", lines)
+	}
+
+	logged := len(lines)
+	p.wake()
+	if len(lines) != logged {
+		t.Fatalf("a wake with nothing new logged %q", lines[logged:])
+	}
+	restoreTalk(t, store, 1)
+	if prunedCount(t, store) != 0 {
+		t.Fatal("the restore did not bring the talk back")
+	}
+	p.wake()
+	if got := prunedCount(t, store); got < n {
+		t.Fatalf("after a restore, %d rows pruned, want the %d old ones again", got, n)
+	}
+}
+
+// Between restores the policy runs once a day, so talk that comes of age
+// is pruned within a day of it.
+func TestPrunePolicyRunsOnceADay(t *testing.T) {
+	var lines []string
+	clock := time.Now()
+	_, store, p := policyOn(t, day, &lines, &clock)
+	written := restoreTalk(t, store, 0)
+	clock = written.Add(23 * time.Hour)
+	p.wake()
+	clock = written.Add(25 * time.Hour)
+	p.wake() // the talk is of age, but the policy ran two hours ago
+	if n := prunedCount(t, store); n != 0 {
+		t.Fatalf("%d rows pruned less than a day after the last run", n)
+	}
+	clock = written.Add(23*time.Hour + day)
+	p.wake()
+	if n := prunedCount(t, store); n == 0 {
+		t.Fatal("a day after the last run, nothing pruned")
+	}
+}
+
 // Setting `prune` in config.toml while serve runs takes effect at the next
-// fallback tick: on, the policy prunes what is covered; off again, it
+// fallback tick: set, the policy prunes what is old enough; removed, it
 // destroys nothing, even after a restore brings the talk back.
 func TestPrunePolicyFollowsConfigWithoutARestart(t *testing.T) {
 	var lines []string
-	s, store, p := policyOn(t, false, &lines)
-	restoreTalk(t, store)
+	clock := time.Now()
+	s, store, p := policyOn(t, 0, &lines, &clock)
+	clock = restoreTalk(t, store, 0).Add(2 * day)
 	p.wake()
 	if n := prunedCount(t, store); n != 0 {
-		t.Fatalf("with prune off, %d rows pruned", n)
+		t.Fatalf("with no policy, %d rows pruned", n)
 	}
 
 	t0 := time.Now().Add(-time.Hour)
-	setPrune(t, s, "prune = true\n", t0)
+	setPrune(t, s, "prune = \"1d\"\n", t0)
 	p.wake() // a wake alone does not reread config.toml
 	if n := prunedCount(t, store); n != 0 {
 		t.Fatalf("before the fallback tick, %d rows pruned", n)
 	}
 	p.fallback()
 	if n := prunedCount(t, store); n == 0 {
-		t.Fatal("after turning prune on and a fallback tick, nothing pruned")
+		t.Fatal("after setting prune and a fallback tick, nothing pruned")
 	}
-	if got := matching(lines, "pruned "); len(got) != 1 {
-		t.Fatalf("logged %q, want one line saying what was pruned", lines)
+	if got := matching(lines, "pruned "); len(got) != 2 {
+		t.Fatalf("logged %q, want a line for each Conversation it pruned", lines)
 	}
 
-	// Turned off on a fresh Node, the policy leaves the talk a restore
-	// brings alone.
-	s, store, p = policyOn(t, true, &lines)
+	// Removed on a fresh Node, the policy leaves the talk a restore brings
+	// alone.
+	s, store, p = policyOn(t, day, &lines, &clock)
 	p.wake()
-	setPrune(t, s, "prune = false\n", t0)
+	setPrune(t, s, "", t0)
 	p.fallback()
-	restoreTalk(t, store)
+	restoreTalk(t, store, 0)
 	p.wake()
 	p.fallback()
 	if n := prunedCount(t, store); n != 0 {
-		t.Fatalf("after turning prune off and a restore, %d rows pruned", n)
+		t.Fatalf("after removing prune and a restore, %d rows pruned", n)
 	}
 }
 
-// A config.toml that does not parse is logged once, and the policy keeps
-// the setting it last read.
+// A config.toml that does not parse, such as a boolean prune, is logged
+// once, and the policy keeps the setting it last read.
 func TestPrunePolicyKeepsItsLastSettingOverAMalformedConfig(t *testing.T) {
 	var lines []string
-	s, store, p := policyOn(t, true, &lines)
+	clock := time.Now()
+	s, store, p := policyOn(t, day, &lines, &clock)
 	t0 := time.Now().Add(-time.Hour)
-	setPrune(t, s, "prune = \n", t0)
+	setPrune(t, s, "prune = true\n", t0)
 	for range 3 {
 		p.fallback()
 	}
@@ -135,24 +231,25 @@ func TestPrunePolicyKeepsItsLastSettingOverAMalformedConfig(t *testing.T) {
 		t.Fatalf("after three ticks over a malformed config.toml logged %q, want one line", lines)
 	}
 
-	restoreTalk(t, store)
+	clock = restoreTalk(t, store, 0).Add(2 * day)
 	p.wake()
 	if n := prunedCount(t, store); n == 0 {
 		t.Fatal("the policy dropped its last setting over a malformed config.toml")
 	}
 
-	setPrune(t, s, "prune = true\n", t0.Add(time.Minute))
+	setPrune(t, s, "prune = \"1d\"\n", t0.Add(time.Minute))
 	p.fallback()
 	if got := matching(lines, "ok again"); len(got) != 1 {
 		t.Fatalf("after fixing config.toml logged %q, want it cleared once", lines)
 	}
 }
 
-// A prune that fails the same way on every wake is logged once. With the
-// policy off, a wake does not touch the replica at all.
+// A prune that fails the same way on every wake is logged once. With no
+// policy, a wake does not touch the replica at all.
 func TestPrunePolicyLogsAPersistentErrorOnce(t *testing.T) {
 	var lines []string
-	_, store, p := policyOn(t, true, &lines)
+	clock := time.Now()
+	_, store, p := policyOn(t, day, &lines, &clock)
 	store.Close()
 	for range 3 {
 		p.wake()
@@ -162,11 +259,11 @@ func TestPrunePolicyLogsAPersistentErrorOnce(t *testing.T) {
 	}
 
 	lines = nil
-	_, store, p = policyOn(t, false, &lines)
+	_, store, p = policyOn(t, 0, &lines, &clock)
 	store.Close()
 	p.wake()
 	p.fallback()
 	if len(lines) != 0 {
-		t.Fatalf("with prune off, a wake over a closed replica logged %q", lines)
+		t.Fatalf("with no policy, a wake over a closed replica logged %q", lines)
 	}
 }
