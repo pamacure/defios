@@ -53,9 +53,13 @@ to a deployed Node, so nothing is migrated.
     local RPC endpoints, replacing `networks.toml` (ADR 0008). Every entry is
     a reference: an endpoint without a key belongs on the Network config on
     the COSL, where the whole Group shares it.
+    *Amended by [ADR 0023](0023-networks-are-node-local.md): there is no
+    Network on the COSL; this table is the whole Network.*
   - `[providers.<provider>]` `api_key = "$NAME"` and optionally `base_url`:
     the credential for every Model of that provider, and an endpoint this Node
     trusts with it.
+    *Superseded by [ADR 0022](0022-members-are-trusted-for-their-own-messages.md):
+    this table is the whole Provider.*
   - `[agent]` `model = "<model-alias>"`, `token_window = <n>`: what the agent
     for Group-level talk, or for that Conversation, runs on. Nothing reads it
     yet.
@@ -78,6 +82,8 @@ to a deployed Node, so nothing is migrated.
   `[A-Z_][A-Z0-9_]*`. A literal is refused when the file is read, so a
   plaintext secret in a config is an error, not a convention. No other field
   is ever expanded, so a `$` elsewhere needs no escaping.
+  *Amended by [ADR 0023](0023-networks-are-node-local.md): an `rpc_urls`
+  entry may also be a plain URL with no userinfo or query.*
 - **Resolution** of `$NAME`: the environment of the process reading the
   config (the serve, or a CLI verb) when the variable is set and non-empty,
   else the Group's Vault. A generic name already set for some other tool, such

@@ -132,6 +132,8 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
   are otherwise indistinguishable) and all on one `network_config_id`. Readers drop a
   receipt that is empty, repeats or overruns an index, names a Network other than the
   request's for that index, or mixes Networks.
+  *Amended by [ADR 0023](0023-networks-are-node-local.md): a `BroadcastedTx`
+  has no `network_config_id`; its `tx_index` names the transaction and its chain.*
 - `sign broadcast <msg-id>` (any Node, any number of times) takes the signatures of the
   request's completed Session (`session.Signatures`: the first complete that verifies),
   assembles each transaction (`signreq.AssembleEthereum`: the unsigned EIP-1559 field list

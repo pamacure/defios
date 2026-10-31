@@ -17,6 +17,10 @@ for credentials of
 profile keys of [ADR 0015](0015-agent-profiles-handles-and-agent-chains.md)
 and [ADR 0018](0018-an-agent-says-one-message.md).
 
+*Superseded in part by [ADR 0022](0022-members-are-trusted-for-their-own-messages.md):
+Providers are Node-local config, and a credential goes only to an endpoint
+this Node configured. The API Shapes, the body and the profile keys stand.*
+
 ## Considered options
 
 - **An explicit `api` field on the Model** (`messages | chat_completions |

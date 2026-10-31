@@ -105,19 +105,19 @@ A Conversation's 32-byte identity, derived as SHA-256("defios-conversation-id-v1
 _Avoid_: chat id, channel id, thread id
 
 **Recap**:
-A COSL message (`app.recap`) carrying one Node's account of a Conversation's talk up to a stated seq, which stands in place of that talk for readers. The newest Recap for a Conversation is the live one; earlier Recaps stay on the log and keep their text.
+One Node's own account of a Conversation's talk up to a stated seq, kept on that Node as `RECAP.md` and never on the COSL, which stands in place of that talk for its agents. Writing a new Recap replaces the old one.
 _Avoid_: summary (that is the one-line payload line `cosl log` prints), digest, compaction, checkpoint
 
 **Pruning**:
-One Node's destruction of the `app.freeform` payloads a Recap has already accounted for, keeping each row, its hash, and its place in the chain. Node-local and written nowhere on the COSL, so two replicas of one Group legitimately hold different amounts of talk. A Node's **prune policy** (`prune = true` in its Group `config.toml`) has `serve` prune again whenever a Recap commits or a restore brings talk back; a Node with it off is an archival Node.
+One Node's destruction of old `app.freeform` payloads in its own replica, by age or seq, keeping each row, its hash, and its place in the chain. Node-local and written nowhere on the COSL, so two replicas of one Group legitimately hold different amounts of talk. Independent of the Recap. A Node's **prune policy** (an age, such as `prune = "90d"`, in its Group `config.toml`) has `serve` prune on its own; a Node without one is an archival Node.
 _Avoid_: tombstone (that is a Network removal marker, which destroys nothing), delete, compaction, garbage collection
 
 **Network**:
-A blockchain a Group may broadcast a signed transaction to, described by a config the Group maintains on its COSL and recalls by a local alias (e.g. `ethereum-mainnet`). Each Network is of one type — Bitcoin, Ethereum, or Solana — which fixes the curve a signing Key must use for it.
+A blockchain one Node is willing to sign for and broadcast to, configured in that Node's own config under a local alias (e.g. `ethereum-mainnet`) and never on the COSL. Each Network is of one type — Bitcoin, Ethereum, or Solana — which fixes the curve a signing Key must use for it, and has an identity that names the chain to every Node: its chain id, Bitcoin network, or Solana cluster.
 _Avoid_: chain config, blockchain configuration, RPC, endpoint
 
 **Provider**:
-An LLM API a Group's agents may call, described by a config the Group maintains on its COSL and recalled by its alias, as a Network is: a base URL and an API path, whose path also fixes the shape of request it speaks. The alias is the Provider; there is no separate provider name behind it. Credentials for it never ride the COSL: each Node names a Secret for them in its own config.
+An LLM API one Node's agents may call, configured in that Node's own config under an alias and never on the COSL: a base URL and an API path, whose path also fixes the shape of request it speaks, with the Secret for its credential. The alias is the Provider; there is no separate provider name behind it.
 _Avoid_: Model (a Provider names no model), endpoint, LLM config
 
 **API Shape**:
@@ -129,7 +129,7 @@ The provider's own name for one of the models a Provider serves (e.g. `claude-op
 _Avoid_: Model, model alias
 
 **Sign Request**:
-One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several Networks of the Key's curve, but each signed transaction is broadcastable on exactly one Network. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `aborted` or `expired`.
+One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several chains of the Key's curve, each naming its chain's identity, but each signed transaction is broadcastable on exactly one chain. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `aborted` or `expired`.
 _Avoid_: transaction request, signing job, order
 
 **Sign Accept**:

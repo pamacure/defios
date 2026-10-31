@@ -90,6 +90,8 @@ whole output, and there is a retry verb.
   at a time per Conversation, so a file has one writer. Transcripts are
   plaintext, outside the Vault, and survive a replica wipe or restore;
   Pruning does not touch them, and nothing yet deletes them.
+  *Amended by [ADR 0024](0024-a-recap-is-a-local-file.md): Transcripts move
+  to `group/<alias>/conversations/<conversation>/transcripts/<chain>.jsonl`.*
 - **Stream.** The stream is for whoever follows the whole output. It carries
   every block as it is generated, `agent.delta {kind, text}` with `kind`
   `thinking`, `text` or `tool` (a `say` streams as a `tool` like any other),

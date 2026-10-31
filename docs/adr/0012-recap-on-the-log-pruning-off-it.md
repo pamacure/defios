@@ -7,6 +7,11 @@ destruction of the `app.freeform` payloads a Recap has already accounted for.
 Recap is consensus and reversible; Pruning is Node-local and is not. Both are
 operator verbs; neither fires on a timer. Tickets to follow.
 
+*Superseded in part by [ADR 0024](0024-a-recap-is-a-local-file.md): a Recap
+is a Node-local `RECAP.md`, `app.recap` is retired, and Pruning no longer
+depends on a Recap. The `envelope_hash` chain and Pruning's single UPDATE
+stand.*
+
 Measured first: 500k tokens of talk is 1.91 MB of text but 2.3–26 MB of
 replica, depending entirely on message count — the per-row floor is ~219 bytes
 of envelope and ~514 bytes of sqlite row, so text is a minority of the bytes

@@ -10,6 +10,10 @@ Every Node in the Group therefore agrees, by Raft order, on exactly what
 [Signing Design doc](https://claude.ai/artifact/1hHd6qfr2nUpq1Evp3jnBz);
 tickets to follow.
 
+*Superseded by [ADR 0023](0023-networks-are-node-local.md): Networks are
+Node-local config, a Sign Request names each transaction's chain, and the
+`network.*` ids are retired.*
+
 ## Considered options
 
 - **Local-only config (per-Node JSON / CLI)** — rejected: a Network determines

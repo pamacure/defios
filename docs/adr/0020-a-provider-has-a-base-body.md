@@ -26,6 +26,8 @@ body for that Provider, the same way a profile's body merges over the
 Provider's. The body is local config, like the key. It is not on the COSL:
 the Provider row stays `{alias, base_url, api_path}`, and each Node decides
 what its own agents send.
+*Amended by [ADR 0022](0022-members-are-trusted-for-their-own-messages.md):
+there is no Provider row; `[providers.<alias>]` is the whole Provider.*
 
 ## Considered options
 

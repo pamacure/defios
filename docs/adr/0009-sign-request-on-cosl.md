@@ -62,6 +62,8 @@ tickets to follow.
   row that defines the Network's config, so a request pins the exact config it
   was proposed against; inspect still resolves it after the alias is edited.
   A new request must reference a *live* config.
+  *Superseded by [ADR 0023](0023-networks-are-node-local.md): a transaction
+  carries its chain's identity in its intent instead of a `network_config_id`.*
 - `deadline` is stored as `deadline_seconds`, a window after the envelope's
   `created_at` (the proposer's default of 300 is written into the payload, so
   every Node reads the same value). Status was `open` or
