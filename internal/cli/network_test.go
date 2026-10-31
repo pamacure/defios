@@ -2,11 +2,15 @@ package cli_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"defios.com/internal/group"
 	"defios.com/internal/network"
+	"defios.com/internal/nodedir"
 )
 
 // network add writes a whole [networks.<alias>] table to the Group's
@@ -113,5 +117,98 @@ func TestNetworkEditAndRemove(t *testing.T) {
 	}
 	if r := run(t, nil, "", "--dir", dir, "network", "remove", "eth"); r.code != 1 {
 		t.Fatalf("remove of an unknown alias exit %d: %s", r.code, r.stderr)
+	}
+}
+
+// --group points add, edit and remove at a Group other than the Current
+// one, as it does provider's.
+func TestNetworkWriteVerbsTakeGroup(t *testing.T) {
+	dir := secretNode(t)
+	if r := run(t, nil, "", "--dir", dir, "group", "new", "other", "--headscale", "https://hs.example"); r.code != 0 {
+		t.Fatalf("group new other: %s", r.stderr)
+	}
+	for _, args := range [][]string{
+		{"add", "eth", "--type", "ethereum", "--chain-id", "1"},
+		{"add", "op", "--type", "ethereum", "--chain-id", "10"},
+		{"edit", "eth", "--rpc-url", "https://a.example"},
+		{"remove", "op"},
+	} {
+		if r := run(t, nil, "", append([]string{"--dir", dir, "network"}, append(args, "--group", group.ImplicitAlias)...)...); r.code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, r.code, r.stderr)
+		}
+	}
+	want := map[string]network.Network{"eth": {Type: "ethereum", ChainID: 1, RPCURLs: []string{"https://a.example"}}}
+	if got := groupConfig(t, dir).Networks; !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s networks = %+v, want %+v", group.ImplicitAlias, got, want)
+	}
+	if r := run(t, nil, "", "--dir", dir, "network", "list"); r.code != 0 || r.stdout != "" {
+		t.Fatalf("the Current Group's list: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+}
+
+// network list and show read the Group's config, or with --key that Key's
+// Conversation config.toml merged over it, a table replacing the Group's
+// whole.
+func TestNetworkListAndShowReadTheMergedConfig(t *testing.T) {
+	dir := t.TempDir()
+	groupWithKeys(t, dir)
+	p := nodedir.Resolve(nodedir.Lookup{Dir: dir})
+	if err := os.MkdirAll(p.GroupConfigDir(group.ImplicitAlias), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.GroupConfigFile(group.ImplicitAlias), []byte(`
+[networks.eth]
+type = "ethereum"
+chain_id = 1
+rpc_urls = ["https://a.example"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conv := p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111")
+	if err := os.MkdirAll(filepath.Dir(conv), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(conv, []byte(`
+[networks.eth]
+type = "ethereum"
+chain_id = 1
+rpc_urls = ["$RPC"]
+
+[networks.btc]
+type = "bitcoin"
+network = "testnet"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if r := run(t, nil, "", "--dir", dir, "network", "list"); r.code != 0 || r.stdout != "eth  ethereum  ethereum chain 1\n" {
+		t.Fatalf("list: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	want := "btc  bitcoin  bitcoin testnet\neth  ethereum  ethereum chain 1\n"
+	if r := run(t, nil, "", "--dir", dir, "network", "list", "--key", "ab11"); r.code != 0 || r.stdout != want {
+		t.Fatalf("list --key: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
+	}
+	r := run(t, nil, "", "--dir", dir, "network", "show", "eth", "--key", "ab11")
+	if r.code != 0 || !strings.Contains(r.stdout, "rpc_url $RPC\n") || strings.Contains(r.stdout, "a.example") {
+		t.Fatalf("show --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", dir, "network", "show", "btc"); r.code != 1 {
+		t.Fatalf("show btc without --key: exit %d, stdout %q", r.code, r.stdout)
+	}
+}
+
+// A Group with no config.toml has no Networks: list shows none, and add
+// writes the file, as provider add does.
+func TestNetworkAddWithNoConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	groupWithKeys(t, dir)
+	if r := run(t, nil, "", "--dir", dir, "network", "list"); r.code != 0 || r.stdout != "" {
+		t.Fatalf("list exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", dir, "network", "add", "eth", "--type", "ethereum", "--chain-id", "1"); r.code != 0 {
+		t.Fatalf("add exit %d: %s", r.code, r.stderr)
+	}
+	if n := groupConfig(t, dir).Networks["eth"]; n.ChainID != 1 {
+		t.Fatalf("after add = %+v", n)
 	}
 }

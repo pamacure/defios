@@ -53,7 +53,8 @@ func Read(path string) (*Recap, error) {
 
 // parse reads RECAP.md: a front matter fenced by "---" lines giving
 // base_seq and nothing else, then the text. Line ends may be CRLF, as an
-// editor may leave them, and blank lines around the text are not part of it.
+// editor may leave them; blank lines in the front matter are skipped, and
+// those around the text are not part of it.
 func parse(b []byte) (Recap, error) {
 	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
 	if len(lines) == 0 || lines[0] != fence {
@@ -71,6 +72,9 @@ func parse(b []byte) (Recap, error) {
 	}
 	var r Recap
 	for _, l := range lines[1:end] {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
 		k, v, _ := strings.Cut(l, ":")
 		if k = strings.TrimSpace(k); k != "base_seq" {
 			return Recap{}, fmt.Errorf("its front matter may give only base_seq, not %q", k)

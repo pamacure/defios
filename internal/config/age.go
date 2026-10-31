@@ -32,7 +32,7 @@ func ParseAge(s string) (Age, error) {
 	return Age(d), nil
 }
 
-// String is a in whole days if it is that, otherwise as a Go duration
+// String is a written in whole days, "7d", if it is that, otherwise as a Go duration
 // without its trailing zero units: "36h", not "36h0m0s".
 func (a Age) String() string {
 	d := time.Duration(a)

@@ -409,9 +409,9 @@ type Summary struct {
 
 // BroadcastedTx is one transaction a Broadcast Receipt says was submitted.
 type BroadcastedTx struct {
-	Index   uint32 `json:"index"`   // position in the request's transactions
-	Network string `json:"network"` // its chain, e.g. "ethereum chain 1"
-	TxHash  string `json:"tx_hash"`
+	Index  uint32 `json:"index"` // position in the request's transactions
+	Chain  string `json:"chain"` // e.g. "ethereum chain 1"
+	TxHash string `json:"tx_hash"`
 }
 
 // BroadcastReceipt is one sign.broadcast, as `sign inspect` shows it.
@@ -424,7 +424,7 @@ type BroadcastReceipt struct {
 
 // TxDetail is one decoded transaction, human-readable in Lines.
 type TxDetail struct {
-	Network string   `json:"network"` // its chain, e.g. "bitcoin testnet"; never an alias
+	Chain   string   `json:"chain"` // e.g. "bitcoin testnet"; never an alias
 	Type    string   `json:"type"`
 	Lines   []string `json:"lines"`
 	Digests []string `json:"digests,omitempty"` // hex, one per signature the transaction needs
@@ -569,7 +569,7 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 	d := Detail{Summary: summarise(rows, sessions, needed, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
 	for _, tx := range req.Transactions {
 		c := ChainOf(tx)
-		td := TxDetail{Network: c.String(), Type: c.Type}
+		td := TxDetail{Chain: c.String(), Type: c.Type}
 		if err := c.Validate(); err != nil {
 			td.Lines = []string{"names no valid chain: " + err.Error() + "; intent not decoded"}
 			d.Details = append(d.Details, td)
@@ -608,7 +608,7 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 		}
 		for _, tx := range b.msg.Transactions {
 			c := ChainOf(req.Transactions[tx.TxIndex])
-			rc.Transactions = append(rc.Transactions, BroadcastedTx{Index: tx.TxIndex, Network: c.String(), TxHash: TxIDString(c, tx.TxHash)})
+			rc.Transactions = append(rc.Transactions, BroadcastedTx{Index: tx.TxIndex, Chain: c.String(), TxHash: TxIDString(c, tx.TxHash)})
 		}
 		d.BroadcastReceipts = append(d.BroadcastReceipts, rc)
 	}

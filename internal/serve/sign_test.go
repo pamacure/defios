@@ -100,7 +100,7 @@ func TestSignProposeListInspect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Reason != "pay the invoice" || d.DeadlineSeconds != signreq.DefaultDeadlineSeconds || len(d.Details) != 1 || d.Details[0].Network != "ethereum chain 1" {
+	if d.Reason != "pay the invoice" || d.DeadlineSeconds != signreq.DefaultDeadlineSeconds || len(d.Details) != 1 || d.Details[0].Chain != "ethereum chain 1" {
 		t.Fatalf("inspect = %+v", d)
 	}
 	if _, err := a.client().SignInspect(ctx, "ff"); !errors.Is(err, signreq.ErrUnknown) {

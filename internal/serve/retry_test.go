@@ -1,6 +1,7 @@
 package serve_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"defios.com/internal/group"
+	"defios.com/internal/key"
 	"defios.com/internal/serve"
 )
 
@@ -303,5 +305,40 @@ func TestRetryRunsAStepAStopCameBefore(t *testing.T) {
 	}
 	if _, err := a.client().ConversationRetry(context.Background(), nil, 0); !errors.Is(err, serve.ErrNothingToRetry) {
 		t.Fatalf("retry after it = %v, want ErrNothingToRetry", err)
+	}
+}
+
+// In a Key's Conversation a retry without a chain finds the latest
+// unfinished one from that Conversation's Transcripts (ADR 0024).
+func TestRetryInAKeysConversationFindsTheLatestUnfinished(t *testing.T) {
+	a, b, gid, provider := agentPair(t, "auditor")
+	var fail atomic.Bool
+	fail.Store(true)
+	answerAs(provider, map[string]string{"auditor": "checked"}, map[string]*atomic.Bool{"auditor": &fail})
+	waitWorkspace(t, a, mintKey(t, a, b, gid))
+	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
+	ctx := context.Background()
+	s, err := a.client().ConversationStream(ctx, id[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	v, err := a.client().ConversationSend(ctx, "@auditor", id[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "error:@auditor end") {
+		t.Fatalf("first run = %s", got)
+	}
+	if _, err := a.client().ConversationRetry(ctx, nil, 0); !errors.Is(err, serve.ErrNothingToRetry) {
+		t.Fatalf("Group-level retry = %v, want ErrNothingToRetry", err)
+	}
+	fail.Store(false)
+	r, err := a.client().ConversationRetry(ctx, id[:], 0)
+	if err != nil || r.Chain != v.Seq {
+		t.Fatalf("retry = %+v, %v; want chain %d", r, err, v.Seq)
+	}
+	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit:checked end") {
+		t.Fatalf("retry = %s", got)
 	}
 }

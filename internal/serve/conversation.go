@@ -146,7 +146,11 @@ func (s *server) included(store *cosl.Store, conversation []byte) (config.Config
 		}
 		return config.Config{}, config.Workspace{}, config.Included{}, err
 	}
-	return cfg, cfg.Workspace.Merge(conv), inc, nil
+	ws, err := cfg.Workspace.Merge(conv)
+	if err != nil {
+		return config.Config{}, config.Workspace{}, config.Included{}, err
+	}
+	return cfg, ws, inc, nil
 }
 
 func includes(inc config.Included, handle string) bool {

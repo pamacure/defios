@@ -7,6 +7,10 @@ before/after record: each change made under that ADR adds its run beside
 [`before.txt`](cosl-polling/before.txt), named for its ticket
 (`after-54.txt`), and a subsection under **After**.
 
+> **Note.** [ADR 0024](../adr/0024-a-recap-is-a-local-file.md) since
+> retired the `app.recap` row and its Keeper: a Recap is each Node's own
+> `RECAP.md`. Where this record names them, it describes the code measured.
+
 ## The question
 
 A live `serve` can sit idle for days. Three loops read the COSL on a timer.

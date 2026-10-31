@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
-	"defios.com/internal/key"
 	"defios.com/internal/provider"
 )
 
@@ -26,11 +23,6 @@ type providerFlags struct {
 func (f *providerFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.baseURL, "base-url", "", "http(s) base URL, e.g. https://api.anthropic.com, with no userinfo, query or fragment")
 	cmd.Flags().StringVar(&f.apiPath, "api-path", "", "API path; its suffix picks the shape: .../messages, .../chat/completions or .../responses")
-}
-
-// bindWriteGroupFlag lets a writing verb target a Group by alias.
-func bindWriteGroupFlag(g *globals, cmd *cobra.Command) {
-	cmd.Flags().StringVar(&g.group, "group", "", "write this Group's config.toml instead of the Current Group's")
 }
 
 func providerCommand(g *globals) *cobra.Command {
@@ -145,7 +137,6 @@ option are set there or per agent, in [agents.<handle>.body]. These commands nee
 	bindWriteGroupFlag(g, removeCmd)
 
 	var keyQuery string
-	keyHelp := "read with this Key's Conversation config.toml merged over the Group's: curve:hex, a unique public-key prefix, or the Conversation ID"
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List the Providers: alias, URL, shape",
@@ -153,7 +144,7 @@ option are set there or per agent, in [agents.<handle>.body]. These commands nee
 		RunE:  func(*cobra.Command, []string) error { return runProviderList(g, keyQuery) },
 	}
 	bindGroupFlag(g, listCmd)
-	listCmd.Flags().StringVar(&keyQuery, "key", "", keyHelp)
+	listCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
 	showCmd := &cobra.Command{
 		Use:   "show <alias>",
 		Short: "Show one Provider",
@@ -161,49 +152,27 @@ option are set there or per agent, in [agents.<handle>.body]. These commands nee
 		RunE:  func(_ *cobra.Command, args []string) error { return runProviderShow(g, keyQuery, args[0]) },
 	}
 	bindGroupFlag(g, showCmd)
-	showCmd.Flags().StringVar(&keyQuery, "key", "", keyHelp)
+	showCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
 
 	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd)
 	return root
 }
 
 // writeProviders applies change to the Providers of the targeted Group's
-// config.toml, an absent one being empty, and writes it back if the result
-// reads as a valid config; it returns the file's path. A change refused,
-// or a Provider left invalid, is a usage error and writes nothing.
+// config.toml and writes it back if every Provider is then valid; it
+// returns the file's path.
 func writeProviders(g *globals, change func(map[string]config.Provider) error) (string, error) {
-	alias, err := g.resolveAlias()
-	if err != nil {
-		return "", err
-	}
-	path := g.paths().GroupConfigFile(alias)
-	cfg, err := config.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", exitOperational(err)
-	}
-	ps := map[string]config.Provider{}
-	for a, p := range cfg.Providers {
-		ps[a] = p
-	}
-	if err := change(ps); err != nil {
-		return "", exitUsagef("%w", err)
-	}
-	for a, p := range ps {
-		if err := provider.Validate(p.Endpoint(a)); err != nil {
-			return "", exitUsagef("[providers.%s]: %w", a, err)
+	return writeGroupConfig(g, func(ws *config.Workspace) error {
+		if err := change(ws.Providers); err != nil {
+			return err
 		}
-	}
-	cfg.Providers = ps
-	if len(ps) == 0 {
-		cfg.Providers = nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", exitOperational(err)
-	}
-	if err := config.WriteFile(path, cfg); err != nil {
-		return "", exitOperational(err)
-	}
-	return path, nil
+		for a, p := range ws.Providers {
+			if err := provider.Validate(p.Endpoint(a)); err != nil {
+				return fmt.Errorf("[providers.%s]: %w", a, err)
+			}
+		}
+		return nil
+	})
 }
 
 func providerWritten(g *globals, v any, what string) error {
@@ -232,45 +201,8 @@ func providerViewOf(alias string, p config.Provider) providerView {
 		APIKey: p.APIKey, Body: p.Body, url: at.URL()}
 }
 
-// readProviders is the targeted Group's Workspace, an absent config.toml
-// being empty, with the Conversation of the Key keyQuery names merged over
-// it when one is named.
-func readProviders(g *globals, keyQuery string) (config.Workspace, error) {
-	alias, err := g.resolveAlias()
-	if err != nil {
-		return config.Workspace{}, err
-	}
-	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config.Workspace{}, exitOperational(err)
-	}
-	if keyQuery == "" {
-		return cfg.Workspace, nil
-	}
-	store, err := openReplica(g)
-	if err != nil {
-		return config.Workspace{}, err
-	}
-	defer store.Close()
-	conv, err := conversationID(store, keyQuery)
-	if err != nil {
-		return config.Workspace{}, err
-	}
-	keys, err := key.Read(store)
-	if err != nil {
-		return config.Workspace{}, exitOperational(err)
-	}
-	var id [32]byte
-	copy(id[:], conv)
-	over, err := config.ReadWorkspace(g.paths().ConversationConfigFile(alias, key.WorkspaceNames(keys)[id]))
-	if err != nil {
-		return config.Workspace{}, exitOperational(err)
-	}
-	return cfg.Workspace.Merge(over), nil
-}
-
 func runProviderList(g *globals, keyQuery string) error {
-	ws, err := readProviders(g, keyQuery)
+	ws, err := readWorkspace(g, keyQuery)
 	if err != nil {
 		return err
 	}
@@ -298,7 +230,7 @@ func runProviderList(g *globals, keyQuery string) error {
 }
 
 func runProviderShow(g *globals, keyQuery, alias string) error {
-	ws, err := readProviders(g, keyQuery)
+	ws, err := readWorkspace(g, keyQuery)
 	if err != nil {
 		return err
 	}

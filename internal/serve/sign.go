@@ -111,7 +111,11 @@ func (s *server) localNetworks(store *cosl.Store, conversation []byte) ([]networ
 	if err != nil {
 		return nil, err
 	}
-	return network.List(cfg.Workspace.Merge(conv).Networks)
+	ws, err := cfg.Workspace.Merge(conv)
+	if err != nil {
+		return nil, err
+	}
+	return network.List(ws.Networks)
 }
 
 // acceptSign is this Node's accept of a Sign Request, which it gives only

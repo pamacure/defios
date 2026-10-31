@@ -41,9 +41,9 @@ func TestNoRECAPmdIsNoRecap(t *testing.T) {
 	}
 }
 
-// A RECAP.md an operator may have edited reads with a CRLF or extra blank
-// lines around its text, but one that does not parse is an error naming
-// the file and what is wrong, never silently ignored.
+// A RECAP.md an operator may have edited reads with a CRLF or blank lines
+// in its front matter or around its text, but one that does not parse is
+// an error naming the file and what is wrong, never silently ignored.
 func TestARECAPmdThatDoesNotParseIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "RECAP.md")
@@ -66,7 +66,7 @@ func TestARECAPmdThatDoesNotParseIsAnError(t *testing.T) {
 			t.Errorf("%q: read = %+v, %v; want an error naming %s and %q", body, got, err, path, want)
 		}
 	}
-	if err := os.WriteFile(path, []byte("---\r\nbase_seq: 7\r\n---\r\n\r\nedited by hand\r\n\r\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("---\r\n\r\nbase_seq: 7\r\n  \r\n---\r\n\r\nedited by hand\r\n\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := recap.Read(path); err != nil || got == nil || *got != (recap.Recap{BaseSeq: 7, Text: "edited by hand"}) {

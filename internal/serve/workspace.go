@@ -15,7 +15,8 @@ import (
 // readConfig is this Node's Group config.toml, the defaults when there is
 // none, and the Workspace of the Conversation, empty for Group-level talk
 // (a nil conversation) or a Key with no Workspace config.toml. Both are read
-// at each use, so an edit needs no restart.
+// at each use, so an edit needs no restart. A Conversation's that, merged
+// over the Group's, names one chain twice is refused here (ADR 0023).
 func (s *server) readConfig(store *cosl.Store, conversation []byte) (config.Config, config.Workspace, error) {
 	cfg, conv, _, err := s.readConfigFrom(store, conversation)
 	return cfg, conv, err
@@ -46,6 +47,9 @@ func (s *server) readConfigFrom(store *cosl.Store, conversation []byte) (config.
 	conv, err := config.ReadWorkspace(path)
 	if err != nil {
 		return config.Config{}, config.Workspace{}, "", err
+	}
+	if _, err := cfg.Workspace.Merge(conv); err != nil {
+		return config.Config{}, config.Workspace{}, "", fmt.Errorf("config: %s over %s: %w", path, p.GroupConfigFile(alias), err)
 	}
 	return cfg, conv, path, nil
 }

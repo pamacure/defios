@@ -110,11 +110,11 @@ Every chain must be of the Key's curve.`,
 			for _, b := range d.BroadcastReceipts {
 				fmt.Fprintf(out, "broadcast by %s at %s %s\n", b.Broadcaster, p.dim(b.At), p.dim(fmt.Sprintf("(seq %d)", b.Seq)))
 				for _, t := range b.Transactions {
-					fmt.Fprintf(out, "  tx %d  %s  %s\n", t.Index, t.Network, t.TxHash)
+					fmt.Fprintf(out, "  tx %d  %s  %s\n", t.Index, t.Chain, t.TxHash)
 				}
 			}
 			for i, t := range d.Details {
-				fmt.Fprintf(out, "\n%s %s\n", p.primary(fmt.Sprintf("transaction %d: %s", i, t.Network)), p.dim("("+t.Type+")"))
+				fmt.Fprintf(out, "\n%s %s\n", p.primary(fmt.Sprintf("transaction %d: %s", i, t.Chain)), p.dim("("+t.Type+")"))
 				for _, l := range t.Lines {
 					fmt.Fprintf(out, "  %s\n", l)
 				}
@@ -193,18 +193,18 @@ already has a transaction is not an error, the repeat shows as one more receipt,
 					return err
 				}
 			} else {
-				for _, n := range v.Networks {
+				for _, n := range v.Chains {
 					for _, t := range n.Transactions {
 						repeat := ""
 						if t.AlreadyKnown {
 							repeat = " (already known to the network)"
 						}
-						fmt.Fprintf(g.app.Stdout, "%s  tx %d  %s%s\n", n.Network, t.Index, t.TxHash, repeat)
+						fmt.Fprintf(g.app.Stdout, "%s  tx %d  %s%s\n", n.Chain, t.Index, t.TxHash, repeat)
 					}
 					if n.Receipt != nil {
-						fmt.Fprintf(g.app.Stdout, "%s: receipt recorded as seq %d (msg_id %s)\n", n.Network, n.Receipt.Seq, n.Receipt.MsgID)
+						fmt.Fprintf(g.app.Stdout, "%s: receipt recorded as seq %d (msg_id %s)\n", n.Chain, n.Receipt.Seq, n.Receipt.MsgID)
 					} else {
-						fmt.Fprintf(g.app.Stdout, "%s: %s %s\n", n.Network, g.out().concern("FAILED, no receipt recorded:"), n.Error)
+						fmt.Fprintf(g.app.Stdout, "%s: %s %s\n", n.Chain, g.out().concern("FAILED, no receipt recorded:"), n.Error)
 					}
 				}
 			}
