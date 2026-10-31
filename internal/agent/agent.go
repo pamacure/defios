@@ -288,6 +288,7 @@ type toolResult struct{ id, text string }
 // result's Anthropic cache breakpoint moves to the newest one.
 type conversation struct {
 	req    Request
+	wire   *wire
 	system []any // Anthropic's system blocks
 	msgs   []any
 	// latest is the Anthropic tool result holding the moving cache
@@ -298,48 +299,88 @@ type conversation struct {
 // ephemeral is an Anthropic cache breakpoint.
 var ephemeral = map[string]any{"type": "ephemeral"}
 
+// newConversation starts req's conversation in its shape; a Request with no
+// known shape fails here, before any call.
 func newConversation(req Request) (*conversation, error) {
-	c := &conversation{req: req}
-	switch req.Shape {
-	case Messages:
-		if req.System != "" {
-			c.system = append(c.system, map[string]any{"type": "text", "text": req.System, "cache_control": ephemeral})
-		}
-		if req.SystemDepth != "" {
-			c.system = append(c.system, map[string]any{"type": "text", "text": req.SystemDepth})
-		}
-	case ChatCompletions, Responses:
-		if system := req.System + req.SystemDepth; system != "" {
-			c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
-		}
-	default:
+	if req.Shape.wire == nil {
 		return nil, fmt.Errorf("agent: no API shape for this call; an api_path must end in one of %s", strings.Join(ShapeSuffixes(), ", "))
 	}
-	for i, t := range req.Turns {
-		var content any = t.Text
-		if req.Shape == Messages && i == len(req.Turns)-1 {
-			content = []any{map[string]any{"type": "text", "text": t.Text, "cache_control": ephemeral}}
-		}
-		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": content})
-	}
+	c := &conversation{req: req, wire: req.Shape.wire}
+	c.wire.open(c)
 	return c, nil
 }
 
 // add appends a call's output and the answers to its tool calls.
 func (c *conversation) add(blocks []Block, results []toolResult) {
-	switch c.req.Shape {
-	case Messages:
-		c.addMessages(blocks, results)
-	case Responses:
-		c.addResponses(blocks, results)
-	default:
-		c.addChatCompletions(blocks, results)
+	c.wire.add(c, blocks, results)
+}
+
+// body is the next call's request body: the conversation and the say tool
+// in the shape's own fields, with the profile's body merged over them. It
+// fails only on a body value JSON cannot hold.
+func (c *conversation) body() ([]byte, error) {
+	body, err := json.Marshal(mergeBody(c.wire.fields(c), c.req.Body))
+	if err != nil {
+		return nil, fmt.Errorf("agent: the profile's body: %w", err)
+	}
+	return body, nil
+}
+
+// openMessages starts a Messages conversation: the system prompt as two
+// blocks with a cache breakpoint between, and one on the last turn.
+func openMessages(c *conversation) {
+	if c.req.System != "" {
+		c.system = append(c.system, map[string]any{"type": "text", "text": c.req.System, "cache_control": ephemeral})
+	}
+	if c.req.SystemDepth != "" {
+		c.system = append(c.system, map[string]any{"type": "text", "text": c.req.SystemDepth})
+	}
+	for i, t := range c.req.Turns {
+		var content any = t.Text
+		if i == len(c.req.Turns)-1 {
+			content = []any{map[string]any{"type": "text", "text": t.Text, "cache_control": ephemeral}}
+		}
+		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": content})
+	}
+}
+
+// openOpenAI starts a Chat Completions or Responses conversation: the
+// system prompt as one system message, then the turns.
+func openOpenAI(c *conversation) {
+	if system := c.req.System + c.req.SystemDepth; system != "" {
+		c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
+	}
+	for _, t := range c.req.Turns {
+		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": t.Text})
+	}
+}
+
+func messagesFields(c *conversation) map[string]any {
+	v := map[string]any{"messages": c.msgs}
+	if len(c.system) > 0 {
+		v["system"] = c.system
+	}
+	v["tools"] = []any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}
+	return v
+}
+
+func chatCompletionsFields(c *conversation) map[string]any {
+	return map[string]any{
+		"messages": c.msgs,
+		"tools":    []any{map[string]any{"type": "function", "function": map[string]any{"name": sayTool, "description": sayDescription, "parameters": saySchema}}},
+	}
+}
+
+func responsesFields(c *conversation) map[string]any {
+	return map[string]any{
+		"input": c.msgs,
+		"tools": []any{map[string]any{"type": "function", "name": sayTool, "description": sayDescription, "parameters": saySchema}},
 	}
 }
 
 // addResponses appends each output item as it came back, then the answers
 // to its function calls.
-func (c *conversation) addResponses(blocks []Block, results []toolResult) {
+func addResponses(c *conversation, blocks []Block, results []toolResult) {
 	for _, b := range blocks {
 		switch {
 		case b.Item != nil:
@@ -364,7 +405,7 @@ func toolArguments(input json.RawMessage) string {
 	return string(input)
 }
 
-func (c *conversation) addMessages(blocks []Block, results []toolResult) {
+func addMessages(c *conversation, blocks []Block, results []toolResult) {
 	content := make([]any, 0, len(blocks))
 	for _, b := range blocks {
 		switch b.Type {
@@ -392,7 +433,7 @@ func (c *conversation) addMessages(blocks []Block, results []toolResult) {
 		map[string]any{"role": "user", "content": answers})
 }
 
-func (c *conversation) addChatCompletions(blocks []Block, results []toolResult) {
+func addChatCompletions(c *conversation, blocks []Block, results []toolResult) {
 	var text strings.Builder
 	var calls []any
 	for _, b := range blocks {
@@ -411,30 +452,6 @@ func (c *conversation) addChatCompletions(blocks []Block, results []toolResult) 
 	for _, r := range results {
 		c.msgs = append(c.msgs, map[string]any{"role": "tool", "tool_call_id": r.id, "content": r.text})
 	}
-}
-
-// body is the next call's request body: the conversation and the say tool
-// in the shape's own fields, with the profile's body merged over them. It
-// fails only on a body value JSON cannot hold.
-func (c *conversation) body() ([]byte, error) {
-	v := map[string]any{"messages": c.msgs}
-	switch c.req.Shape {
-	case Messages:
-		if len(c.system) > 0 {
-			v["system"] = c.system
-		}
-		v["tools"] = []any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}
-	case Responses:
-		v = map[string]any{"input": c.msgs}
-		v["tools"] = []any{map[string]any{"type": "function", "name": sayTool, "description": sayDescription, "parameters": saySchema}}
-	default:
-		v["tools"] = []any{map[string]any{"type": "function", "function": map[string]any{"name": sayTool, "description": sayDescription, "parameters": saySchema}}}
-	}
-	body, err := json.Marshal(mergeBody(v, c.req.Body))
-	if err != nil {
-		return nil, fmt.Errorf("agent: the profile's body: %w", err)
-	}
-	return body, nil
 }
 
 // call makes one model call with body, retrying what is worth retrying; a
@@ -531,15 +548,7 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 		}
 		return call{}, err
 	}
-	var p parser
-	switch req.Shape {
-	case Messages:
-		p = &anthropicParser{st: st}
-	case Responses:
-		p = &responsesParser{st: st}
-	default:
-		p = &openaiParser{st: st}
-	}
+	p := req.Shape.wire.parser(st)
 	// The reply's type picks its reader, whatever the body's stream says.
 	switch mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt {
 	case "text/event-stream":

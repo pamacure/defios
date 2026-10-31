@@ -773,6 +773,14 @@ func TestATruncatedJSONReplyIsRetried(t *testing.T) {
 	}
 }
 
+// A Request with no known shape fails before any call.
+func TestARunWithNoShapeMakesNoCall(t *testing.T) {
+	s := newScript(t, anthropicSays("hmm", "hi"))
+	if _, err := run(s, agent.Shape{}, agent.Events{}); err == nil || !strings.Contains(err.Error(), "no API shape") || s.calls() != 0 {
+		t.Fatalf("err %v after %d calls", err, s.calls())
+	}
+}
+
 // A JSON reply over the size the agent reads is an error of its own, not
 // one cut off: it is not retried.
 func TestAnOversizedJSONReplyIsNotRetried(t *testing.T) {
