@@ -103,6 +103,22 @@ func TestFilePaths(t *testing.T) {
 	}
 }
 
+// Each Conversation has one data directory, named by its hex Conversation
+// ID or "group" for Group-level talk, and its Transcripts live in it
+// (ADR 0024).
+func TestTranscriptsLiveInTheConversationDir(t *testing.T) {
+	p := nodedir.Resolve(nodedir.Lookup{Dir: "/tmp/n1", Getenv: envOf(nil), Home: "/h"})
+	if got := p.ConversationDir("home", "ab12"); got != "/tmp/n1/group/home/conversations/ab12" {
+		t.Fatalf("conversation dir %q", got)
+	}
+	if got := p.TranscriptsDir("home", "group"); got != "/tmp/n1/group/home/conversations/group/transcripts" {
+		t.Fatalf("transcripts dir %q", got)
+	}
+	if got := p.TranscriptFile("home", "ab12", 7); got != "/tmp/n1/group/home/conversations/ab12/transcripts/7.jsonl" {
+		t.Fatalf("transcript file %q", got)
+	}
+}
+
 // Under XDG, a Group's config lives under the config tree and its data under
 // the data tree, both at group/<alias>/.
 func TestAliasPathsSplitConfigAndData(t *testing.T) {

@@ -829,6 +829,43 @@ func TestMentionInAKeysConversation(t *testing.T) {
 	}
 }
 
+// A chain's Transcript is in its Conversation's data directory: the hex
+// Conversation ID for a Key's, "group" for Group-level talk (ADR 0024).
+// Nothing is written to the Group's old transcripts/.
+func TestTranscriptsAreInTheConversationDir(t *testing.T) {
+	a, b, gid, provider := agentPair(t, "auditor", "scribe")
+	answerAs(provider, map[string]string{"auditor": "checked"}, nil)
+	waitWorkspace(t, a, mintKey(t, a, b, gid))
+	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
+	ctx := context.Background()
+	gdir := a.paths.GroupDir(group.ImplicitAlias)
+	for _, c := range []struct {
+		conv []byte
+		dir  string
+	}{
+		{id[:], fmt.Sprintf("%x", id[:])},
+		{nil, "group"},
+	} {
+		s, err := a.client().ConversationStream(ctx, c.conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := a.client().ConversationSend(ctx, "@auditor", c.conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		untilEnd(t, s, v.Seq)
+		s.Close()
+		path := filepath.Join(gdir, "conversations", c.dir, "transcripts", fmt.Sprintf("%d.jsonl", v.Seq))
+		if !strings.Contains(readFile(t, path), `"kind":"outcome"`) {
+			t.Errorf("%s has no outcome", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(gdir, "transcripts")); !os.IsNotExist(err) {
+		t.Fatalf("old transcripts dir: %v", err)
+	}
+}
+
 // A watcher that joins mid-chain is shown the chain from the agent now
 // answering: its start and its reply so far, then the rest live.
 func TestALateWatcherSeesTheCurrentAgent(t *testing.T) {

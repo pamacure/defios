@@ -132,18 +132,24 @@ func (p Paths) TsnetDir(alias string) string {
 	return filepath.Join(p.GroupDir(alias), "tsnet")
 }
 
-// TranscriptsDir is group/<alias>/transcripts/: what this Node's agents
+// ConversationDir is group/<alias>/conversations/<conversation>/: this
+// Node's data for one Conversation, conversation being its hex Conversation
+// ID, or "group" for Group-level talk (ADR 0024).
+func (p Paths) ConversationDir(alias, conversation string) string {
+	return filepath.Join(p.GroupDir(alias), "conversations", conversation)
+}
+
+// TranscriptsDir is a Conversation's transcripts/: what this Node's agents
 // generated, never replicated and outside the Vault (ADR 0018). A replica
 // wipe, a restore and Pruning leave it alone.
-func (p Paths) TranscriptsDir(alias string) string {
-	return filepath.Join(p.GroupDir(alias), "transcripts")
+func (p Paths) TranscriptsDir(alias, conversation string) string {
+	return filepath.Join(p.ConversationDir(alias, conversation), "transcripts")
 }
 
 // TranscriptFile is the Transcript of the chain started by seq chain in a
-// Conversation: conversation is its hex Conversation ID, or "group" for
-// Group-level talk.
+// Conversation.
 func (p Paths) TranscriptFile(alias, conversation string, chain uint64) string {
-	return filepath.Join(p.TranscriptsDir(alias), conversation, strconv.FormatUint(chain, 10)+".jsonl")
+	return filepath.Join(p.TranscriptsDir(alias, conversation), strconv.FormatUint(chain, 10)+".jsonl")
 }
 
 // ConversationWorkspace is config/group/<alias>/<name>/, name being the
