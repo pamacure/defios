@@ -21,18 +21,18 @@ import (
 
 // BroadcastedTx is one transaction `sign broadcast` submitted.
 type BroadcastedTx struct {
-	Index   uint32 `json:"index"`   // position in the request's transactions
-	Network string `json:"network"` // its chain, e.g. "ethereum chain 1"
-	TxHash  string `json:"tx_hash"`
+	Index  uint32 `json:"index"` // position in the request's transactions
+	Chain  string `json:"chain"` // e.g. "ethereum chain 1"
+	TxHash string `json:"tx_hash"`
 	// AlreadyKnown says the chain's node already had the transaction, so
 	// this was a repeat broadcast.
 	AlreadyKnown bool `json:"already_known"`
 }
 
-// NetworkBroadcast is the outcome for one chain's transactions: they all
+// ChainBroadcast is the outcome for one chain's transactions: they all
 // went out and a receipt was committed, or Error says why none was.
-type NetworkBroadcast struct {
-	Network      string          `json:"network"` // the chain, never an alias
+type ChainBroadcast struct {
+	Chain        string          `json:"chain"` // never an alias
 	Transactions []BroadcastedTx `json:"transactions"`
 	// Receipt is the committed Broadcast Receipt; nil when the group failed.
 	Receipt *SendView `json:"receipt,omitempty"`
@@ -42,12 +42,12 @@ type NetworkBroadcast struct {
 // BroadcastView is the outcome of `sign broadcast`, one entry per chain in
 // the order the request first names them.
 type BroadcastView struct {
-	Networks []NetworkBroadcast `json:"networks"`
+	Chains []ChainBroadcast `json:"chains"`
 }
 
 // Failed reports whether any chain's transactions did not go out.
 func (v BroadcastView) Failed() bool {
-	for _, n := range v.Networks {
+	for _, n := range v.Chains {
 		if n.Error != "" {
 			return true
 		}
@@ -111,11 +111,11 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	view := BroadcastView{}
 	for _, group := range groups {
 		c := group[0].Chain
-		out := NetworkBroadcast{Network: c.String(), Transactions: []BroadcastedTx{}}
+		out := ChainBroadcast{Chain: c.String(), Transactions: []BroadcastedTx{}}
 		urls, err := endpoints(r, nets, c)
 		if err != nil {
 			out.Error = fmt.Sprintf("broadcasting to %s: %v", c, err)
-			view.Networks = append(view.Networks, out)
+			view.Chains = append(view.Chains, out)
 			continue
 		}
 		receipt := &coslv1.SignBroadcast{SignRequestId: id[:]}
@@ -126,7 +126,7 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 				break
 			}
 			receipt.Transactions = append(receipt.Transactions, &coslv1.BroadcastedTx{TxHash: tx.ID, TxIndex: tx.Index})
-			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Network: c.String(), TxHash: signreq.TxIDString(c, tx.ID), AlreadyKnown: known})
+			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Chain: c.String(), TxHash: signreq.TxIDString(c, tx.ID), AlreadyKnown: known})
 		}
 		if out.Error == "" {
 			sv, err := s.commitReceipt(ctx, replica, info.Conversation, receipt)
@@ -135,7 +135,7 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 			}
 			out.Receipt = &sv
 		}
-		view.Networks = append(view.Networks, out)
+		view.Chains = append(view.Chains, out)
 	}
 	return view, nil
 }

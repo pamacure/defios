@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 
@@ -83,6 +82,7 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 		},
 	}
 	add.bind(addCmd)
+	bindWriteGroupFlag(g, addCmd)
 
 	var edit networkFlags
 	editCmd := &cobra.Command{
@@ -107,6 +107,7 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 		},
 	}
 	edit.bind(editCmd)
+	bindWriteGroupFlag(g, editCmd)
 
 	removeCmd := &cobra.Command{
 		Use:   "remove <alias>",
@@ -122,54 +123,43 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 			})
 		},
 	}
+	bindWriteGroupFlag(g, removeCmd)
 
+	var keyQuery string
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List this Node's Networks: alias, type, chain",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runNetworkList(g) },
+		RunE:  func(*cobra.Command, []string) error { return runNetworkList(g, keyQuery) },
 	}
 	bindGroupFlag(g, listCmd)
+	listCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
 	showCmd := &cobra.Command{
 		Use:   "show <alias>",
 		Short: "Show one Network, with the RPC endpoints this Node uses",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, args []string) error { return runNetworkShow(g, args[0]) },
+		RunE:  func(_ *cobra.Command, args []string) error { return runNetworkShow(g, keyQuery, args[0]) },
 	}
 	bindGroupFlag(g, showCmd)
+	showCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
 
 	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd)
 	return root
 }
 
-// editNetworks applies change to the [networks] of the Group's config.toml
-// and writes it back, if what results is a config the file may hold. It
-// needs no serve: a Network is this Node's alone (ADR 0023).
+// editNetworks applies change to the Networks of the targeted Group's
+// config.toml and writes it back if they are then valid (ADR 0023).
 func editNetworks(g *globals, change func(map[string]network.Network) (string, error)) error {
-	alias, err := g.resolveAlias()
+	var what string
+	_, err := writeGroupConfig(g, func(ws *config.Workspace) (err error) {
+		if what, err = change(ws.Networks); err != nil {
+			return err
+		}
+		_, err = network.List(ws.Networks)
+		return err
+	})
 	if err != nil {
 		return err
-	}
-	path := g.paths().GroupConfigFile(alias)
-	cfg, err := config.ReadFile(path)
-	if err != nil {
-		return exitOperational(err)
-	}
-	if cfg.Networks == nil {
-		cfg.Networks = map[string]network.Network{}
-	}
-	what, err := change(cfg.Networks)
-	if err == nil {
-		_, err = network.List(cfg.Networks)
-	}
-	if err != nil {
-		return networkError(err)
-	}
-	if len(cfg.Networks) == 0 {
-		cfg.Networks = nil
-	}
-	if err := config.WriteFile(path, cfg); err != nil {
-		return exitOperational(err)
 	}
 	if g.json {
 		return g.emitJSON(struct {
@@ -178,14 +168,6 @@ func editNetworks(g *globals, change func(map[string]network.Network) (string, e
 	}
 	fmt.Fprintln(g.app.Stdout, what)
 	return nil
-}
-
-func networkError(err error) error {
-	switch {
-	case errors.Is(err, network.ErrInvalid), errors.Is(err, network.ErrExists), errors.Is(err, network.ErrUnknown), errors.Is(err, network.ErrUnchanged):
-		return exitUsagef("%w", err)
-	}
-	return exitOperational(err)
 }
 
 // networkView is one Network, human or JSON. RPCURLs are as written: a
@@ -202,18 +184,15 @@ type networkView struct {
 	RPCURLs     []string `json:"rpc_urls"`
 }
 
-// readNetworks is the Networks of the targeted Group's config.toml. A Group
-// with no config.toml has none.
-func readNetworks(g *globals) ([]networkView, error) {
-	alias, err := g.resolveAlias()
+// readNetworks is the Networks of the targeted Group's config.toml, with
+// the Conversation of the Key keyQuery names merged over it when one is
+// named. A Group with no config.toml has none.
+func readNetworks(g *globals, keyQuery string) ([]networkView, error) {
+	ws, err := readWorkspace(g, keyQuery)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	nets, err := network.List(cfg.Networks)
+	nets, err := network.List(ws.Networks)
 	if err != nil {
 		return nil, exitOperational(err)
 	}
@@ -231,8 +210,8 @@ func readNetworks(g *globals) ([]networkView, error) {
 	return views, nil
 }
 
-func runNetworkList(g *globals) error {
-	views, err := readNetworks(g)
+func runNetworkList(g *globals, keyQuery string) error {
+	views, err := readNetworks(g, keyQuery)
 	if err != nil {
 		return err
 	}
@@ -246,8 +225,8 @@ func runNetworkList(g *globals) error {
 	return nil
 }
 
-func runNetworkShow(g *globals, alias string) error {
-	views, err := readNetworks(g)
+func runNetworkShow(g *globals, keyQuery, alias string) error {
+	views, err := readNetworks(g, keyQuery)
 	if err != nil {
 		return err
 	}

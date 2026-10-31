@@ -266,7 +266,10 @@ profiles = ["trader"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := group.Workspace.Merge(conv)
+	got, err := group.Workspace.Merge(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := config.Workspace{
 		Networks: map[string]network.Network{
 			"eth": {Type: "ethereum", ChainID: 1, RPCURLs: []string{"$CONV_ETH"}},
@@ -283,6 +286,23 @@ profiles = ["trader"]
 	}
 	if len(group.Workspace.Networks["eth"].RPCURLs) != 2 {
 		t.Fatal("Merge changed the Group's Workspace")
+	}
+}
+
+// Two aliases for one chain are refused in the merged Workspace too, though
+// each file alone passes: one in the Group's config, one in a
+// Conversation's (ADR 0023).
+func TestAMergeRefusesTwoAliasesForOneChain(t *testing.T) {
+	group, err := config.ReadFile(write(t, groupConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := config.ReadWorkspace(write(t, "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := group.Workspace.Merge(conv); !errors.Is(err, network.ErrInvalid) || !strings.Contains(err.Error(), "eth and mainnet both name ethereum chain 1") {
+		t.Fatalf("merge = %v; want the two aliases refused", err)
 	}
 }
 
@@ -308,7 +328,10 @@ stream = true
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws := group.Workspace.Merge(conv)
+	ws, err := group.Workspace.Merge(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := ws.Provider("x")
 	want := config.Provider{BaseURL: "http://127.0.0.1:8080", APIPath: "/v1/messages", APIKey: "$X_KEY", Body: map[string]any{"model": "m", "stream": true}}
 	if err != nil || !reflect.DeepEqual(got, want) {

@@ -294,8 +294,10 @@ func ValidateHandle(h string) error {
 // Provider's base_url, api_path or api_key, an [agent] profiles list (even
 // an empty one), or a max_depth that over sets wins, and everything over
 // leaves unset comes from w. A Provider's body in over merges over w's as a
-// profile's body does. Neither input is changed.
-func (w Workspace) Merge(over Workspace) Workspace {
+// profile's body does. Neither input is changed. Merged Networks that name
+// one chain twice, an alias from each, are refused as either file's would
+// be (ADR 0023).
+func (w Workspace) Merge(over Workspace) (Workspace, error) {
 	out := Workspace{Agent: w.Agent}
 	if len(w.Networks)+len(over.Networks) > 0 {
 		out.Networks = map[string]network.Network{}
@@ -334,7 +336,10 @@ func (w Workspace) Merge(over Workspace) Workspace {
 	if over.Agent.MaxDepth != 0 {
 		out.Agent.MaxDepth = over.Agent.MaxDepth
 	}
-	return out
+	if _, err := network.List(out.Networks); err != nil {
+		return Workspace{}, fmt.Errorf("[networks]: %w", err)
+	}
+	return out, nil
 }
 
 // Included is what may answer in one place, Group-level talk or one
@@ -360,7 +365,10 @@ type ResolvedProfile struct {
 // profile directory is under root, the config directory, and "~" is home.
 // Whether the directory exists is for whoever summons it to find out.
 func (c Config) Included(conv Workspace, root, home string) (Included, error) {
-	ws := c.Workspace.Merge(conv)
+	ws, err := c.Workspace.Merge(conv)
+	if err != nil {
+		return Included{}, fmt.Errorf("config: %w", err)
+	}
 	a := ws.Agent
 	out := Included{MaxDepth: a.MaxDepth}
 	if out.MaxDepth == 0 {

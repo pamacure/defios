@@ -485,10 +485,10 @@ func TestSignBroadcastBitcoin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Failed() || len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil {
+	if first.Failed() || len(first.Chains) != 1 || len(first.Chains[0].Transactions) != 1 || first.Chains[0].Transactions[0].AlreadyKnown || first.Chains[0].Receipt == nil {
 		t.Fatalf("first = %+v", first)
 	}
-	id := first.Networks[0].Transactions[0].TxHash
+	id := first.Chains[0].Transactions[0].TxHash
 	tx := ch.get(id)
 	if tx == nil {
 		t.Fatalf("the node never accepted a transaction with txid %s", id)
@@ -498,7 +498,7 @@ func TestSignBroadcastBitcoin(t *testing.T) {
 	}
 
 	second, err := b.client().SignBroadcast(ctx, msgID[:8])
-	if err != nil || second.Failed() || !second.Networks[0].Transactions[0].AlreadyKnown || second.Networks[0].Transactions[0].TxHash != id {
+	if err != nil || second.Failed() || !second.Chains[0].Transactions[0].AlreadyKnown || second.Chains[0].Transactions[0].TxHash != id {
 		t.Fatalf("second = %+v, %v", second, err)
 	}
 	waitReceipts(t, a, msgID, 2)
@@ -516,10 +516,10 @@ func TestSignBroadcastSolana(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Failed() || len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil {
+	if first.Failed() || len(first.Chains) != 1 || len(first.Chains[0].Transactions) != 1 || first.Chains[0].Transactions[0].AlreadyKnown || first.Chains[0].Receipt == nil {
 		t.Fatalf("first = %+v", first)
 	}
-	id := first.Networks[0].Transactions[0].TxHash
+	id := first.Chains[0].Transactions[0].TxHash
 	if !ch.has(id) {
 		t.Fatalf("the cluster never got a transaction with signature %s", id)
 	}
@@ -534,7 +534,7 @@ func TestSignBroadcastSolana(t *testing.T) {
 	}
 
 	second, err := b.client().SignBroadcast(ctx, msgID[:8])
-	if err != nil || second.Failed() || !second.Networks[0].Transactions[0].AlreadyKnown || second.Networks[0].Transactions[0].TxHash != id {
+	if err != nil || second.Failed() || !second.Chains[0].Transactions[0].AlreadyKnown || second.Chains[0].Transactions[0].TxHash != id {
 		t.Fatalf("second = %+v, %v", second, err)
 	}
 }
@@ -551,10 +551,10 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Networks) != 1 || len(first.Networks[0].Transactions) != 1 || first.Networks[0].Network != "ethereum chain 1" || first.Networks[0].Transactions[0].AlreadyKnown || first.Networks[0].Receipt == nil || ch.sends() != 1 {
+	if len(first.Chains) != 1 || len(first.Chains[0].Transactions) != 1 || first.Chains[0].Chain != "ethereum chain 1" || first.Chains[0].Transactions[0].AlreadyKnown || first.Chains[0].Receipt == nil || ch.sends() != 1 {
 		t.Fatalf("first = %+v, sends %d", first, ch.sends())
 	}
-	firstTx := first.Networks[0].Transactions[0]
+	firstTx := first.Chains[0].Transactions[0]
 	if !ch.has("0x" + firstTx.TxHash) {
 		t.Fatalf("the chain never got a transaction with hash %s", firstTx.TxHash)
 	}
@@ -563,7 +563,7 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a repeat broadcast must succeed: %v", err)
 	}
-	if second.Failed() || !second.Networks[0].Transactions[0].AlreadyKnown || second.Networks[0].Transactions[0].TxHash != firstTx.TxHash {
+	if second.Failed() || !second.Chains[0].Transactions[0].AlreadyKnown || second.Chains[0].Transactions[0].TxHash != firstTx.TxHash {
 		t.Fatalf("second = %+v", second)
 	}
 
@@ -577,7 +577,7 @@ func TestSignBroadcastSubmitsAndRecordsAReceipt(t *testing.T) {
 			if len(d.BroadcastReceipts) == 2 {
 				r := d.BroadcastReceipts[0]
 				if r.Broadcaster != a.id.NodeID.String() || d.BroadcastReceipts[1].Broadcaster != b.id.NodeID.String() ||
-					len(r.Transactions) != 1 || r.Transactions[0].TxHash != firstTx.TxHash || r.Transactions[0].Network != "ethereum chain 1" || r.At == "" {
+					len(r.Transactions) != 1 || r.Transactions[0].TxHash != firstTx.TxHash || r.Transactions[0].Chain != "ethereum chain 1" || r.At == "" {
 					t.Fatalf("%s receipts = %+v", n.name, d.BroadcastReceipts)
 				}
 				if d.Broadcasts != 2 {
@@ -615,20 +615,20 @@ func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Failed() || len(v.Networks) != 2 || v.Networks[0].Network != "ethereum chain 1" || v.Networks[1].Network != "ethereum chain 10" ||
-		len(v.Networks[0].Transactions) != 2 || len(v.Networks[1].Transactions) != 1 ||
-		v.Networks[0].Transactions[1].Index != 2 || v.Networks[1].Transactions[0].Index != 1 {
+	if v.Failed() || len(v.Chains) != 2 || v.Chains[0].Chain != "ethereum chain 1" || v.Chains[1].Chain != "ethereum chain 10" ||
+		len(v.Chains[0].Transactions) != 2 || len(v.Chains[1].Transactions) != 1 ||
+		v.Chains[0].Transactions[1].Index != 2 || v.Chains[1].Transactions[0].Index != 1 {
 		t.Fatalf("view = %+v", v)
 	}
 	if one.sends() != 2 || other.sends() != 1 {
 		t.Fatalf("sends: eth %d, eth2 %d", one.sends(), other.sends())
 	}
-	for _, tx := range v.Networks[0].Transactions {
+	for _, tx := range v.Chains[0].Transactions {
 		if !one.has("0x" + tx.TxHash) {
 			t.Errorf("transaction %d never reached eth", tx.Index)
 		}
 	}
-	if !other.has("0x" + v.Networks[1].Transactions[0].TxHash) {
+	if !other.has("0x" + v.Chains[1].Transactions[0].TxHash) {
 		t.Error("the eth2 transaction never reached eth2")
 	}
 	waitReceipts(t, a, msgID, 2)
@@ -637,7 +637,7 @@ func TestSignBroadcastMultiTransactionAcrossNetworks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(d.BroadcastReceipts) != 2 || len(d.BroadcastReceipts[0].Transactions) != 2 || len(d.BroadcastReceipts[1].Transactions) != 1 ||
-		d.BroadcastReceipts[1].Transactions[0].Network != "ethereum chain 10" || d.BroadcastReceipts[1].Transactions[0].Index != 1 || !d.FullyBroadcast {
+		d.BroadcastReceipts[1].Transactions[0].Chain != "ethereum chain 10" || d.BroadcastReceipts[1].Transactions[0].Index != 1 || !d.FullyBroadcast {
 		t.Fatalf("receipts = %+v, fully %v", d.BroadcastReceipts, d.FullyBroadcast)
 	}
 }
@@ -655,8 +655,8 @@ func TestSignBroadcastFailsPerNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !v.Failed() || len(v.Networks) != 2 || v.Networks[0].Receipt == nil || v.Networks[0].Error != "" ||
-		v.Networks[1].Receipt != nil || v.Networks[1].Error == "" || len(v.Networks[1].Transactions) != 0 {
+	if !v.Failed() || len(v.Chains) != 2 || v.Chains[0].Receipt == nil || v.Chains[0].Error != "" ||
+		v.Chains[1].Receipt != nil || v.Chains[1].Error == "" || len(v.Chains[1].Transactions) != 0 {
 		t.Fatalf("view = %+v", v)
 	}
 	waitReceipts(t, a, msgID, 1)
@@ -665,7 +665,7 @@ func TestSignBroadcastFailsPerNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.BroadcastReceipts) != 1 || d.BroadcastReceipts[0].Transactions[0].Network != "ethereum chain 1" || d.FullyBroadcast {
+	if len(d.BroadcastReceipts) != 1 || d.BroadcastReceipts[0].Transactions[0].Chain != "ethereum chain 1" || d.FullyBroadcast {
 		t.Fatalf("receipts = %+v, fully %v", d.BroadcastReceipts, d.FullyBroadcast)
 	}
 
@@ -674,7 +674,7 @@ func TestSignBroadcastFailsPerNetwork(t *testing.T) {
 	if err != nil || v.Failed() {
 		t.Fatalf("retry = %+v, %v", v, err)
 	}
-	if !v.Networks[0].Transactions[0].AlreadyKnown || v.Networks[1].Transactions[0].AlreadyKnown {
+	if !v.Chains[0].Transactions[0].AlreadyKnown || v.Chains[1].Transactions[0].AlreadyKnown {
 		t.Fatalf("retry = %+v", v)
 	}
 	waitReceipts(t, a, msgID, 3)
@@ -720,7 +720,7 @@ func TestSignBroadcastResolvesASecretURLAndFailsLoudly(t *testing.T) {
 
 	waitReceipts(t, b, msgID, 1)
 	plain.srv.Close() // b's only endpoint is down
-	if v, err := b.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || v.Networks[0].Receipt != nil || v.Networks[0].Error == "" {
+	if v, err := b.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || v.Chains[0].Receipt != nil || v.Chains[0].Error == "" {
 		t.Fatalf("broadcast to a dead endpoint must report a failed Network and no receipt: %+v, %v", v, err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -749,7 +749,7 @@ func TestSignBroadcastUsesTheKeysConversationWorkspace(t *testing.T) {
 
 	setNetworks(t, b, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$NOWHERE_ETH\"]\n")
 	v, err := b.client().SignBroadcast(ctx, msgID[:8])
-	if err != nil || !v.Failed() || v.Networks[0].Receipt != nil || !strings.Contains(v.Networks[0].Error, "$NOWHERE_ETH") {
+	if err != nil || !v.Failed() || v.Chains[0].Receipt != nil || !strings.Contains(v.Chains[0].Error, "$NOWHERE_ETH") {
 		t.Fatalf("an unresolved reference must fail its chain by name: %+v, %v", v, err)
 	}
 	if first.sends() != 0 {
@@ -768,7 +768,7 @@ func TestSignBroadcastSkipsAnEndpointOnAnotherChain(t *testing.T) {
 
 	setNetworks(t, a, fmt.Sprintf("[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [%q, %q]\n", wrong.srv.URL, right.srv.URL))
 	v, err := a.client().SignBroadcast(ctx, msgID[:8])
-	if err != nil || v.Failed() || v.Networks[0].Receipt == nil {
+	if err != nil || v.Failed() || v.Chains[0].Receipt == nil {
 		t.Fatalf("%+v, %v", v, err)
 	}
 	if wrong.sends() != 0 || right.sends() != 1 {
@@ -776,12 +776,12 @@ func TestSignBroadcastSkipsAnEndpointOnAnotherChain(t *testing.T) {
 	}
 
 	setNetworks(t, a, fmt.Sprintf("[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [%q]\n", wrong.srv.URL))
-	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || !strings.Contains(v.Networks[0].Error, "chain 5") || wrong.sends() != 0 {
+	if v, err := a.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || !strings.Contains(v.Chains[0].Error, "chain 5") || wrong.sends() != 0 {
 		t.Fatalf("only an endpoint on chain 5: %+v, %v", v, err)
 	}
 
 	setNetworks(t, b, "[networks.goerli]\ntype = \"ethereum\"\nchain_id = 5\n")
-	if v, err := b.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || !strings.Contains(v.Networks[0].Error, "ethereum chain 1") {
+	if v, err := b.client().SignBroadcast(ctx, msgID[:8]); err != nil || !v.Failed() || !strings.Contains(v.Chains[0].Error, "ethereum chain 1") {
 		t.Fatalf("no Network for the chain: %+v, %v", v, err)
 	}
 }
@@ -796,20 +796,20 @@ func TestSignBroadcastEthereumAndBitcoin(t *testing.T) {
 	ctx := context.Background()
 
 	v, err := a.client().SignBroadcast(ctx, msgID[:8])
-	if err != nil || v.Failed() || len(v.Networks) != 2 || v.Networks[0].Network != "ethereum chain 1" || v.Networks[1].Network != "bitcoin mainnet" ||
-		v.Networks[0].Receipt == nil || v.Networks[1].Receipt == nil {
+	if err != nil || v.Failed() || len(v.Chains) != 2 || v.Chains[0].Chain != "ethereum chain 1" || v.Chains[1].Chain != "bitcoin mainnet" ||
+		v.Chains[0].Receipt == nil || v.Chains[1].Receipt == nil {
 		t.Fatalf("view = %+v, %v", v, err)
 	}
-	if eth.sends() != 1 || btc.get(v.Networks[1].Transactions[0].TxHash) == nil {
-		t.Fatalf("eth sends %d; bitcoin tx %s never accepted", eth.sends(), v.Networks[1].Transactions[0].TxHash)
+	if eth.sends() != 1 || btc.get(v.Chains[1].Transactions[0].TxHash) == nil {
+		t.Fatalf("eth sends %d; bitcoin tx %s never accepted", eth.sends(), v.Chains[1].Transactions[0].TxHash)
 	}
 	waitReceipts(t, a, msgID, 2)
 	d, err := a.client().SignInspect(ctx, msgID[:8])
 	if err != nil || len(d.BroadcastReceipts) != 2 || !d.FullyBroadcast ||
-		d.BroadcastReceipts[0].Transactions[0].Network != "ethereum chain 1" || d.BroadcastReceipts[1].Transactions[0].Network != "bitcoin mainnet" {
+		d.BroadcastReceipts[0].Transactions[0].Chain != "ethereum chain 1" || d.BroadcastReceipts[1].Transactions[0].Chain != "bitcoin mainnet" {
 		t.Fatalf("receipts = %+v, %v", d.BroadcastReceipts, err)
 	}
-	if d.Details[0].Network != "ethereum chain 1" || d.Details[1].Network != "bitcoin mainnet" {
+	if d.Details[0].Chain != "ethereum chain 1" || d.Details[1].Chain != "bitcoin mainnet" {
 		t.Fatalf("details = %+v", d.Details)
 	}
 }

@@ -325,13 +325,13 @@ func TestListAndInspect(t *testing.T) {
 		t.Fatalf("detail = %+v", d)
 	}
 	eth, btc := d.Details[0], d.Details[1]
-	if eth.Network != "ethereum chain 1" || eth.Type != "ethereum" || !strings.Contains(strings.Join(eth.Lines, "\n"), "value 1000 wei") {
+	if eth.Chain != "ethereum chain 1" || eth.Type != "ethereum" || !strings.Contains(strings.Join(eth.Lines, "\n"), "value 1000 wei") {
 		t.Errorf("eth = %+v", eth)
 	}
 	if want := "f923d8beba74c0b9fc1f63b03cab5faf4102f8c2eab0ea5ce52b75af013ab595"; len(eth.Digests) != 1 || eth.Digests[0] != want {
 		t.Errorf("eth digests = %v, want [%s]", eth.Digests, want)
 	}
-	if btc.Network != "bitcoin mainnet" || !strings.Contains(strings.Join(btc.Lines, "\n"), "fee 1000 sats") {
+	if btc.Chain != "bitcoin mainnet" || !strings.Contains(strings.Join(btc.Lines, "\n"), "fee 1000 sats") {
 		t.Errorf("btc = %+v", btc)
 	}
 
@@ -433,7 +433,7 @@ func TestBroadcastReceipts(t *testing.T) {
 	}
 	got := d.BroadcastReceipts[0]
 	if got.Broadcaster != (identity.ID{3}).String() || got.At != now.Add(time.Second).UTC().Format(time.RFC3339) ||
-		len(got.Transactions) != 1 || got.Transactions[0].Network != "ethereum chain 1" ||
+		len(got.Transactions) != 1 || got.Transactions[0].Chain != "ethereum chain 1" ||
 		got.Transactions[0].TxHash != "0000000000000000000000000000000000000000000000000000000000000001" {
 		t.Errorf("receipt = %+v", got)
 	}
@@ -493,8 +493,8 @@ func TestPartialBroadcastReceipts(t *testing.T) {
 		t.Errorf("one chain: %+v %+v", s, d.BroadcastReceipts)
 	}
 	s, d = status(rcpt(2, tx(0), tx(1)), rcpt(3, tx(2)), rcpt(4, tx(3)))
-	if !s.FullyBroadcast || s.Broadcasts != 3 || d.BroadcastReceipts[1].Transactions[0].Network != "solana devnet" ||
-		d.BroadcastReceipts[2].Transactions[0].Network != "ethereum chain 10" {
+	if !s.FullyBroadcast || s.Broadcasts != 3 || d.BroadcastReceipts[1].Transactions[0].Chain != "solana devnet" ||
+		d.BroadcastReceipts[2].Transactions[0].Chain != "ethereum chain 10" {
 		t.Errorf("every chain: %+v %+v", s, d.BroadcastReceipts)
 	}
 	// A repeat of a covered subset is one more receipt, still fully broadcast.

@@ -110,7 +110,7 @@ _Avoid_: summary (that is the one-line payload line `cosl log` prints), digest, 
 
 **Pruning**:
 One Node's destruction of old `app.freeform` payloads in its own replica, by age or seq, keeping each row, its hash, and its place in the chain. Node-local and written nowhere on the COSL, so two replicas of one Group legitimately hold different amounts of talk. Independent of the Recap. A Node's **prune policy** (an age, such as `prune = "90d"`, in its Group `config.toml`) has `serve` prune on its own; a Node without one is an archival Node.
-_Avoid_: tombstone (that is a Network removal marker, which destroys nothing), delete, compaction, garbage collection
+_Avoid_: tombstone, delete, compaction, garbage collection
 
 **Network**:
 A blockchain one Node is willing to sign for and broadcast to, configured in that Node's own config under a local alias (e.g. `ethereum-mainnet`) and never on the COSL. Each Network is of one type — Bitcoin, Ethereum, or Solana — which fixes the curve a signing Key must use for it, and has an identity that names the chain to every Node: its chain id, Bitcoin network, or Solana cluster.
@@ -141,5 +141,5 @@ The exact bytes a Key signs for one transaction — one per Bitcoin input, one p
 _Avoid_: hash, message, sighash
 
 **Broadcast Receipt**:
-A Node's record on the COSL that it submitted signed transactions to one Network, carrying the resulting transaction hash and request position of each (`sign.broadcast`); a request spanning several Networks gets one receipt per Network that went out, and is fully broadcast once every transaction appears in some receipt; its sender is the broadcaster and its timestamp the broadcast time, so broadcasting is provable and visible to the Group. Any Node may broadcast and record one; a repeat broadcast is harmless and simply records another.
+A Node's record on the COSL that it submitted signed transactions to one chain, carrying the resulting transaction hash and request position of each (`sign.broadcast`); a request spanning several chains gets one receipt per chain that went out, and is fully broadcast once every transaction appears in some receipt; its sender is the broadcaster and its timestamp the broadcast time, so broadcasting is provable and visible to the Group. Any Node may broadcast and record one; a repeat broadcast is harmless and simply records another.
 _Avoid_: confirmation, txid record, acknowledgement
