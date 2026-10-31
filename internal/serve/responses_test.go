@@ -15,7 +15,6 @@ import (
 
 	"defios.com/internal/group"
 	"defios.com/internal/serve"
-	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // responsesEvent writes one Responses stream event of typ with fields.
@@ -48,8 +47,8 @@ func responsesReply(w http.ResponseWriter, text, said, incomplete string) {
 	responsesEvent(w, "response.completed", `"response":{"status":"completed",`+responsesUsage+`}`)
 }
 
-// openaiAgent puts the Provider "openai" on the log with a fake Responses
-// API answering the nth call with reply(n), and configures a's Handle
+// openaiAgent configures a's Provider "openai" at a fake Responses API
+// answering the nth call with reply(n), and configures a's Handle
 // auditor to run on it with a streamed body that keeps reasoning off
 // OpenAI's servers. It returns how many calls the fake has had.
 func openaiAgent(t *testing.T, a *node, reply func(n int, w http.ResponseWriter)) func() int {
@@ -68,11 +67,6 @@ func openaiAgent(t *testing.T, a *node, reply func(n int, w http.ResponseWriter)
 		reply(n, w)
 	}))
 	t.Cleanup(srv.Close)
-	v, err := a.client().ProviderAdd(context.Background(), &coslv1.ProviderConfig{Alias: "openai", BaseUrl: srv.URL, ApiPath: "/v1/responses"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.applied(t, v.Seq)
 	dir := filepath.Join(t.TempDir(), "auditor")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -94,8 +88,10 @@ include = ["reasoning.encrypted_content"]
 profiles = ["auditor"]
 
 [providers.openai]
+base_url = %q
+api_path = "/v1/responses"
 api_key = "$OPENAI_KEY"
-`, dir))
+`, dir, srv.URL))
 	a.secrets["OPENAI_KEY"] = "sk-openai"
 	return func() int { mu.Lock(); defer mu.Unlock(); return calls }
 }

@@ -14,10 +14,9 @@ import (
 
 	"defios.com/internal/group"
 	"defios.com/internal/serve"
-	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// bothWays puts the Provider "p" on a's log with a fake API at apiPath, and
+// bothWays configures a's Provider "p" at a fake API's apiPath, and
 // configures two Handles on it: @streamed, whose body sets stream = true,
 // and @whole, whose body has no stream. The fake answers the nth call with
 // reply(n, streamed), streamed being what the request's body asked for, as
@@ -38,12 +37,8 @@ func bothWays(t *testing.T, a *node, apiPath string, reply func(n int, w http.Re
 		reply(n, w, body.Stream)
 	}))
 	t.Cleanup(srv.Close)
-	v, err := a.client().ProviderAdd(context.Background(), &coslv1.ProviderConfig{Alias: "p", BaseUrl: srv.URL, ApiPath: apiPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.applied(t, v.Seq)
 	var cfg strings.Builder
+	fmt.Fprintf(&cfg, "[providers.p]\nbase_url = %q\napi_path = %q\n\n", srv.URL, apiPath)
 	for _, h := range []string{"streamed", "whole"} {
 		dir := filepath.Join(t.TempDir(), h)
 		if err := os.MkdirAll(dir, 0o700); err != nil {

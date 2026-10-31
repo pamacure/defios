@@ -1,6 +1,8 @@
 package cli_test
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -618,30 +621,73 @@ func TestConversationSendExitCodesFromServe(t *testing.T) {
 	}
 }
 
-// conversation prune with no Recap destroys nothing and points at
-// `conversation recap`: no talk has been accounted for.
-func TestConversationPruneWithoutRecap(t *testing.T) {
+// conversation prune takes exactly one of --before and --older-than, and
+// with neither, both or an age it cannot read, destroys nothing.
+func TestConversationPruneNeedsExactlyOneBound(t *testing.T) {
 	dir := t.TempDir()
 	groupWithTalk(t, dir)
-	r := run(t, nil, "", "--dir", dir, "conversation", "prune")
-	if r.code != 1 || !strings.Contains(r.stderr, "conversation recap") {
-		t.Fatalf("exit %d, stderr %q; want 1 pointing at conversation recap", r.code, r.stderr)
+	for _, args := range [][]string{
+		{},
+		{"--before", "4", "--older-than", "1h"},
+		{"--older-than", "soon"},
+		{"--older-than", "0d"},
+	} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "prune"}, args...)...)
+		if r.code != 1 {
+			t.Errorf("prune %q: exit %d, stderr %q; want 1", args, r.code, r.stderr)
+		}
 	}
-	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
 	if strings.Contains(r.stdout, "[pruned]") {
-		t.Fatalf("pruned without a Recap:\n%s", r.stdout)
+		t.Fatalf("a refused prune destroyed talk:\n%s", r.stdout)
 	}
 }
 
-// conversation prune destroys the talk the live Recap covers, appends
-// nothing, warns that a restore undoes it while the prune policy is off,
-// and is harmless run again.
-func TestConversationPrune(t *testing.T) {
+// prunedReplicaSeqs is the seqs whose payload the replica under dir has
+// destroyed. It checks that the replica still verifies from genesis, as a
+// snapshot restored onto a fresh replica must.
+func prunedReplicaSeqs(t *testing.T, dir string) []uint64 {
+	t.Helper()
+	store, err := cosl.Open(filepath.Join(dir, "group", group.ImplicitAlias, "cosl.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	snap := filepath.Join(t.TempDir(), "snap.sqlite")
+	if err := store.VacuumInto(snap); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := cosl.Open(filepath.Join(t.TempDir(), "cosl.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if err := fresh.Restore(snap); err != nil {
+		t.Fatalf("the pruned replica does not verify: %v", err)
+	}
+	rows, err := store.Log(cosl.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []uint64
+	for _, r := range rows {
+		if r.Pruned() {
+			out = append(out, r.Seq)
+		}
+	}
+	return out
+}
+
+// conversation prune --before destroys the payloads of that Conversation's
+// talk at or below the seq and nothing else, appends nothing, leaves the
+// replica verifying, warns that a restore undoes it while the prune policy
+// is off, and is harmless run again.
+func TestConversationPruneBefore(t *testing.T) {
 	dir := t.TempDir()
-	groupWithRecap(t, dir)
+	groupWithTalk(t, dir) // Group-level talk at 2, 4, 5; a Key's at 3
 	before := run(t, nil, "", "--dir", dir, "cosl", "log", "--json").stdout
 
-	r := run(t, nil, "", "--dir", dir, "conversation", "prune")
+	r := run(t, nil, "", "--dir", dir, "conversation", "prune", "--before", "4")
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
@@ -654,34 +700,100 @@ func TestConversationPrune(t *testing.T) {
 	if after := run(t, nil, "", "--dir", dir, "cosl", "log", "--json").stdout; strings.Count(after, `"seq"`) != strings.Count(before, `"seq"`) {
 		t.Errorf("cosl log changed row count:\n%s\n%s", before, after)
 	}
-
-	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--full")
-	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(lines) != 5 || !strings.HasSuffix(lines[0], " alice  [pruned]") || !strings.HasSuffix(lines[1], " bob  [pruned]") ||
-		!strings.HasSuffix(lines[2], ` alice user  two\nlines`) || !strings.HasSuffix(lines[3], "hello and hi") {
-		t.Errorf("log --full after prune:\n%s", r.stdout)
+	if got := prunedReplicaSeqs(t, dir); !slices.Equal(got, []uint64{2, 4}) {
+		t.Errorf("pruned seqs = %v, want [2 4]", got)
 	}
 
-	r = run(t, nil, "", "--dir", dir, "conversation", "prune", "--json")
+	r = run(t, nil, "", "--dir", dir, "conversation", "prune", "--before", "4", "--json")
 	var got map[string]any
 	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil || r.code != 0 {
 		t.Fatalf("second prune: exit %d %v\n%s", r.code, err, r.stdout)
 	}
-	if got["base_seq"] != float64(4) || got["messages"] != float64(0) {
-		t.Errorf("second prune = %v, want base_seq 4, messages 0", got)
+	if got["before"] != float64(4) || got["messages"] != float64(0) {
+		t.Errorf("second prune = %v, want before 4, messages 0", got)
 	}
 }
 
-// With this Node's prune policy on, a restore cannot undo conversation
+// agedAppender commits app.freeform rows after seq whose envelope says they
+// were written age ago, signed by whichever Roster Node is passed.
+func agedAppender(t *testing.T, dir string, holder *identity.Node, seq uint64) func(n *identity.Node, conv []byte, text string, age time.Duration) {
+	t.Helper()
+	store, err := cosl.Open(filepath.Join(dir, "group", group.ImplicitAlias, "cosl.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	rec, err := group.OpenSlot(filepath.Join(dir, "group"), group.ImplicitAlias, holder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, _ := rec.Current()
+	fsm := cosl.NewFSM(store, held.Roster())
+	gid := held.GroupID()
+	return func(n *identity.Node, conv []byte, text string, age time.Duration) {
+		t.Helper()
+		seq++
+		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(&coslv1.AppFreeform{Text: text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgID := make([]byte, 32)
+		rand.Read(msgID)
+		b, err := cosl.Sign(&coslv1.Envelope{
+			Version: 1, GroupId: gid[:], MsgType: cosl.TypeAppFreeform, Sender: n.NodeID[:], MsgId: msgID,
+			ConversationId: conv, CreatedAt: time.Now().Add(-age).UnixNano(), Payload: payload,
+		}, ed25519.NewKeyFromSeed(n.AuthSeed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := fsm.Apply(seq, 1, b); err != nil || !res.Inserted {
+			t.Fatalf("apply %d: %v %+v", seq, err, res)
+		}
+	}
+}
+
+// conversation prune --older-than destroys only the payloads of that
+// Conversation's talk whose created_at is older than the age.
+func TestConversationPruneOlderThan(t *testing.T) {
+	dir := t.TempDir()
+	alice, bob := groupWithTalk(t, dir) // 1..5, written now
+	add := agedAppender(t, dir, alice, 5)
+	const day = 24 * time.Hour
+	add(alice, nil, "long ago", 40*day)                // 6
+	add(bob, make([]byte, 32), "long ago too", 40*day) // 7, a Key's Conversation
+	add(bob, nil, "last week", 7*day)                  // 8
+	add(alice, nil, "two months ago", 60*day)          // 9
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "prune", "--older-than", "30d", "--json")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil {
+		t.Fatalf("%v\n%s", err, r.stdout)
+	}
+	if got["older_than"] != "30d" || got["messages"] != float64(2) {
+		t.Errorf("prune = %v, want older_than 30d, messages 2", got)
+	}
+	if got := prunedReplicaSeqs(t, dir); !slices.Equal(got, []uint64{6, 9}) {
+		t.Errorf("pruned seqs = %v, want [6 9]", got)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "prune", "--older-than", "36h")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "pruned 1 messages older than 36h" {
+		t.Errorf("exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+}
+
+// With a prune policy on this Node, a restore cannot undo conversation
 // prune, so it does not warn that one would.
 func TestConversationPruneWithPolicyOnDoesNotWarn(t *testing.T) {
 	dir := t.TempDir()
-	groupWithRecap(t, dir)
+	groupWithTalk(t, dir)
 	path := nodedir.Resolve(nodedir.Lookup{Dir: dir}).GroupConfigFile(group.ImplicitAlias)
-	if err := config.WriteFile(path, config.Config{DisplayName: "alice", Hostname: "defios-alice", Prune: true}); err != nil {
+	if err := config.WriteFile(path, config.Config{DisplayName: "alice", Hostname: "defios-alice", Prune: config.Age(90 * 24 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	r := run(t, nil, "", "--dir", dir, "conversation", "prune")
+	r := run(t, nil, "", "--dir", dir, "conversation", "prune", "--before", "4")
 	if r.code != 0 || strings.TrimSpace(r.stdout) != "pruned 2 messages up to seq 4" {
 		t.Fatalf("exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}

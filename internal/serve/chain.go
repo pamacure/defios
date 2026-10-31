@@ -23,7 +23,6 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
-	"defios.com/internal/provider"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/secret"
@@ -144,7 +143,7 @@ type chain struct {
 	dry bool
 }
 
-// transcriptName is conv's directory under transcripts/: its hex
+// transcriptName is conv's directory under conversations/: its hex
 // Conversation ID, or "group" for Group-level talk.
 func transcriptName(conv []byte) string {
 	if conv == nil {
@@ -641,8 +640,8 @@ func waitApplied(ctx context.Context, store *cosl.Store, seq uint64) error {
 
 // agentRequest is the call to the Provider that answers as handle: its
 // SYSTEM.md and the serve's preamble, then the talk so far as turns by
-// Handle (ADR 0018), sent to the Provider on the log with this Node's key
-// for it (ADR 0019).
+// Handle (ADR 0018), sent with this Node's key to the Provider as this
+// Node's merged Workspace configures it, and nowhere else (ADR 0022).
 func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
 	_, ws, inc, err := s.included(store, conv)
 	if err != nil {
@@ -657,19 +656,16 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	if err != nil {
 		return agent.Request{}, inc, fmt.Errorf("@%s's profile: %w", handle, err)
 	}
-	providers, err := provider.Read(store)
-	if err != nil {
-		return agent.Request{}, inc, err
-	}
-	prov, err := provider.Get(providers, p.Provider)
+	prov, err := ws.Provider(p.Provider)
 	if err != nil {
 		return agent.Request{}, inc, fmt.Errorf("@%s runs on %w", handle, err)
 	}
-	req := agent.Request{Shape: prov.Shape(), URL: prov.URL(), Body: p.Body, MaxTurns: p.MaxTurns}
-	if key := ws.Providers[prov.Alias].APIKey; key != "" {
+	at := prov.Endpoint(p.Provider)
+	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns}
+	if prov.APIKey != "" {
 		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
-		if req.APIKey, err = r.Resolve(key); err != nil {
-			return agent.Request{}, inc, fmt.Errorf("[providers.%s] api_key: %w", prov.Alias, err)
+		if req.APIKey, err = r.Resolve(prov.APIKey); err != nil {
+			return agent.Request{}, inc, fmt.Errorf("[providers.%s] api_key: %w", p.Provider, err)
 		}
 	}
 	where, err := s.whereSaid(store, conv)

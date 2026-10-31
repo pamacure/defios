@@ -90,21 +90,6 @@ message AppRecap {
   uint64 base_seq = 2;                // the highest seq it accounts for: an app.freeform of the same Conversation
 }
 
-// ProviderConfig is the payload of provider.create and provider.update
-// (docs/adr/0019-providers-replace-models-on-the-cosl.md): an endpoint an
-// agent may call, folded by alias exactly as NetworkConfig is. An update
-// carries the whole config and supersedes the alias's current one; the
-// suffix of api_path picks the API shape. Credentials never ride the log.
-message ProviderConfig {
-  string alias = 1;                   // ^[a-z0-9][a-z0-9_-]{0,63}$
-  string base_url = 2;                // http(s), no userinfo, query or fragment
-  string api_path = 3;                // absolute, e.g. /v1/messages; its suffix picks the shape
-}
-
-message ProviderRemove {
-  string alias = 1;
-}
-
 // SignRequest is the payload of sign.request (docs/adr/0009-sign-request-on-cosl.md).
 // The envelope's conversation_id is the target Key's Conversation ID. Every
 // consensus-critical field is carried here, so each Node derives the same

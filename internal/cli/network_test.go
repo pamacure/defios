@@ -6,21 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"defios.com/internal/config"
-	"defios.com/internal/group"
 	"defios.com/internal/network"
-	"defios.com/internal/nodedir"
 )
-
-// groupConfig reads the Group's config.toml under dir.
-func groupConfig(t *testing.T, dir string) config.Config {
-	t.Helper()
-	c, err := config.ReadFile(nodedir.Resolve(nodedir.Lookup{Dir: dir}).GroupConfigFile(group.ImplicitAlias))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return c
-}
 
 // network add writes a whole [networks.<alias>] table to the Group's
 // config.toml, with no serve running, and keeps the rest of the file

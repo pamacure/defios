@@ -2,15 +2,18 @@ package config_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/internal/config"
 	"defios.com/internal/network"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/provider"
 )
 
 func TestWriteUsesSpecKeysAndReadsBack(t *testing.T) {
@@ -103,6 +106,8 @@ network = "testnet"
 rpc_urls = ["$BTC_RPC"]
 
 [providers.anthropic]
+base_url = "https://api.anthropic.com"
+api_path = "/v1/messages"
 api_key = "$DEFIOS_ANTHROPIC"
 
 [agents.auditor]
@@ -117,6 +122,10 @@ profiles = ["auditor"]
 max_depth = 2
 `
 
+// endpoint is a valid base_url and api_path, for a [providers.<alias>]
+// table under test for something else.
+const endpoint = "base_url = \"https://x.example\"\napi_path = \"/v1/messages\"\n"
+
 // The Group config.toml holds this Node's tailnet presence, its Agent
 // Profiles and the three Workspace sections, every secret as a reference.
 func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
@@ -129,7 +138,7 @@ func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
 			"eth": {Type: "ethereum", ChainID: 1, RPCURLs: []string{"$ALCHEMY_ETH", "https://eth.example"}},
 			"btc": {Type: "bitcoin", BitcoinNetwork: "testnet", RPCURLs: []string{"$BTC_RPC"}},
 		},
-		Providers: map[string]config.Provider{"anthropic": {APIKey: "$DEFIOS_ANTHROPIC"}},
+		Providers: map[string]config.Provider{"anthropic": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", APIKey: "$DEFIOS_ANTHROPIC"}},
 		Agent:     config.Agent{Profiles: []string{"auditor"}, MaxDepth: 2},
 	}
 	if !reflect.DeepEqual(c.Workspace, want) || c.TailnetAuthKey != "$TS_AUTHKEY" {
@@ -148,12 +157,11 @@ func TestConfigRefusesLiteralSecretsAndUnknownKeys(t *testing.T) {
 		"literal tailnet_auth_key": `tailnet_auth_key = "tskey-auth-abc"`,
 		"rpc url with userinfo":    "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"https://u:abc@eth.example\"]",
 		"rpc url with a query":     "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"https://eth.example/?key=abc\"]",
-		"literal api_key":          "[providers.anthropic]\napi_key = \"sk-ant-abc\"",
+		"literal api_key":          "[providers.anthropic]\n" + endpoint + "api_key = \"sk-ant-abc\"",
 		"interpolated reference":   "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$KEY/v2\"]",
-		"lowercase reference":      "[providers.openai]\napi_key = \"$openai\"",
+		"lowercase reference":      "[providers.openai]\n" + endpoint + "api_key = \"$openai\"",
 		"old auth_key":             `auth_key = "tskey-auth-abc"`,
-		"bad provider alias":       "[providers.Mistral]\napi_key = \"$KEY\"",
-		"old local base_url":       "[providers.openai]\nbase_url = \"https://proxy.example\"",
+		"bad provider alias":       "[providers.Mistral]\n" + endpoint + "api_key = \"$KEY\"",
 	} {
 		if _, err := config.ReadFile(write(t, body)); err == nil {
 			t.Errorf("%s: read without error", name)
@@ -265,7 +273,7 @@ profiles = ["trader"]
 			"btc": {Type: "bitcoin", BitcoinNetwork: "testnet", RPCURLs: []string{"$BTC_RPC"}},
 		},
 		Providers: map[string]config.Provider{
-			"anthropic": {APIKey: "$DEFIOS_ANTHROPIC"},
+			"anthropic": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", APIKey: "$DEFIOS_ANTHROPIC"},
 			"openai":    {APIKey: "$DEFIOS_OPENAI"},
 		},
 		Agent: config.Agent{Profiles: []string{"trader"}, MaxDepth: 2},
@@ -278,22 +286,98 @@ profiles = ["trader"]
 	}
 }
 
-// prune is this Node's policy for the Group, off unless set, and only the
+// A Conversation's [providers.<alias>] overrides the Group's key by key: one
+// that sets only base_url keeps the Group's api_path, api_key and body. Its
+// own keys are checked when it is read; whether the merged Provider is
+// whole is checked where it is used.
+func TestAConversationOverridesAProviderKeyByKey(t *testing.T) {
+	group, err := config.ReadFile(write(t, `
+[providers.x]
+base_url = "https://api.anthropic.com"
+api_path = "/v1/messages"
+api_key = "$X_KEY"
+
+[providers.x.body]
+model = "m"
+stream = true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := config.ReadWorkspace(write(t, "[providers.x]\nbase_url = \"http://127.0.0.1:8080\"\n\n[providers.y]\napi_path = \"/v1/responses\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := group.Workspace.Merge(conv)
+	got, err := ws.Provider("x")
+	want := config.Provider{BaseURL: "http://127.0.0.1:8080", APIPath: "/v1/messages", APIKey: "$X_KEY", Body: map[string]any{"model": "m", "stream": true}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("x = %+v, %v\nwant %+v", got, err, want)
+	}
+	if got.Endpoint("x").URL() != "http://127.0.0.1:8080/v1/messages" {
+		t.Fatalf("x is called at %s", got.Endpoint("x").URL())
+	}
+	if group.Providers["x"].BaseURL != "https://api.anthropic.com" {
+		t.Fatal("Merge changed the Group's Provider")
+	}
+	if _, err := ws.Provider("y"); !errors.Is(err, provider.ErrInvalid) || !strings.Contains(err.Error(), "[providers.y]") {
+		t.Fatalf("y, a Conversation's table the Group lacks, with no base_url = %v; want it invalid", err)
+	}
+	if _, err := ws.Provider("z"); !errors.Is(err, provider.ErrUnknown) {
+		t.Fatalf("z = %v; want it unknown", err)
+	}
+	for name, body := range map[string]string{
+		"base_url userinfo": "[providers.x]\nbase_url = \"https://u:SECRET@x.example\"",
+		"unknown shape":     "[providers.x]\napi_path = \"/v1/foo\"",
+	} {
+		if _, err := config.ReadWorkspace(write(t, body)); err == nil {
+			t.Errorf("Conversation %s: read without error", name)
+		}
+	}
+}
+
+// prune is this Node's policy for the Group, an age: whole days or a Go
+// duration (ADR 0024). Unset is an archival Node, a boolean or anything
+// that is not a positive age is an error, it survives a write, and only the
 // Group's config.toml may set it.
-func TestPrunePolicyDefaultsOffAndIsGroupOnly(t *testing.T) {
+func TestPrunePolicyIsAnAge(t *testing.T) {
 	c, err := config.ReadFile(write(t, groupConfig))
-	if err != nil || c.Prune {
-		t.Fatalf("prune unset = %v, %v; want off", c.Prune, err)
+	if err != nil || c.Prune != 0 {
+		t.Fatalf("prune unset = %v, %v; want 0, an archival Node", c.Prune, err)
 	}
-	c, err = config.ReadFile(write(t, "prune = true\n"+groupConfig))
-	if err != nil || !c.Prune {
-		t.Fatalf("prune = true read as %v, %v", c.Prune, err)
+	for body, want := range map[string]time.Duration{
+		`prune = "90d"`: 90 * 24 * time.Hour,
+		`prune = "36h"`: 36 * time.Hour,
+	} {
+		c, err := config.ReadFile(write(t, body+"\n"+groupConfig))
+		if err != nil || time.Duration(c.Prune) != want {
+			t.Errorf("%s read as %v, %v; want %v", body, time.Duration(c.Prune), err, want)
+		}
 	}
-	if _, err := config.ReadFile(write(t, `prune = "on"`)); err == nil {
-		t.Fatal(`prune = "on" must be an error: the policy is a boolean`)
+	for _, body := range []string{`prune = true`, `prune = false`, `prune = "on"`, `prune = 90`, `prune = "0d"`, `prune = "-1h"`, `prune = "1.5d"`, `prune = "d"`} {
+		if _, err := config.ReadFile(write(t, body)); err == nil || !strings.Contains(err.Error(), "prune") {
+			t.Errorf("%s: err = %v, want an error naming prune", body, err)
+		}
 	}
-	if _, err := config.ReadWorkspace(write(t, "prune = true")); err == nil {
+	if _, err := config.ReadWorkspace(write(t, `prune = "1d"`)); err == nil {
 		t.Fatal("prune in a Conversation config must be an error")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	in := config.Config{DisplayName: "laptop", Hostname: "defios-home", Prune: config.Age(90 * 24 * time.Hour)}
+	if err := config.WriteFile(path, in); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), `prune = "90d"`) {
+		t.Errorf("written config.toml:\n%s\nwant prune = \"90d\"", b)
+	}
+	if out, err := config.ReadFile(path); err != nil || out.Prune != in.Prune {
+		t.Fatalf("round trip = %v, %v; want %v", out.Prune, err, in.Prune)
+	}
+	for age, want := range map[time.Duration]string{36 * time.Hour: "36h", 90 * time.Minute: "1h30m", 90 * time.Second: "1m30s"} {
+		if got := config.Age(age).String(); got != want {
+			t.Errorf("Age(%v) = %q, want %q", age, got, want)
+		}
 	}
 }
 
@@ -327,9 +411,9 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 		"local date in body":         "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body.metadata]\nday = 2026-01-01",
 		"time in an array":           "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nat = [07:32:00]",
 		"nan in body":                "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\ntemperature = nan",
-		"provider body not a table":  "[providers.claude]\nbody = \"x\"",
-		"date-time in provider body": "[providers.claude.body]\nsince = 2026-01-01T00:00:00Z",
-		"unknown provider key":       "[providers.claude]\nmodel = \"claude-opus-5-5\"",
+		"provider body not a table":  "[providers.claude]\n" + endpoint + "body = \"x\"",
+		"date-time in provider body": "[providers.claude]\n" + endpoint + "[providers.claude.body]\nsince = 2026-01-01T00:00:00Z",
+		"unknown provider key":       "[providers.claude]\n" + endpoint + "model = \"claude-opus-5-5\"",
 	} {
 		_, err := config.ReadFile(write(t, body))
 		if err == nil {
@@ -410,6 +494,8 @@ profiles = ["auditor", "scribe"]
 func TestAProfileBodyMergesOverItsProvidersBody(t *testing.T) {
 	c, err := config.ReadFile(write(t, `
 [providers.gpt]
+base_url = "https://api.openai.com"
+api_path = "/v1/responses"
 api_key = "$OPENAI"
 
 [providers.gpt.body]
@@ -558,5 +644,47 @@ max_depth = 3
 	none, err := config.Config{}.Included(config.Workspace{}, root, home)
 	if err != nil || len(none.Profiles) != 0 || none.MaxDepth != 1 {
 		t.Fatalf("no agents configured = %+v, %v; want none, depth 1", none, err)
+	}
+}
+
+// A Provider is wholly this Node's config (ADR 0022): [providers.<alias>]
+// holds its base_url and api_path, both required with ADR 0019's rules, and
+// a bad one is refused when the config is read.
+func TestAProviderIsItsLocalTable(t *testing.T) {
+	c, err := config.ReadFile(write(t, `
+[providers.claude]
+base_url = "https://api.anthropic.com"
+api_path = "/v1/messages"
+api_key = "$ANTHROPIC"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := config.Provider{BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", APIKey: "$ANTHROPIC"}
+	if got := c.Providers["claude"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("read %+v, want %+v", got, want)
+	}
+	for name, body := range map[string]string{
+		"missing api_path":   "[providers.x]\nbase_url = \"https://x.example\"",
+		"missing base_url":   "[providers.x]\napi_path = \"/v1/messages\"",
+		"only a key":         "[providers.x]\napi_key = \"$KEY\"",
+		"unknown shape":      "[providers.x]\nbase_url = \"https://x.example\"\napi_path = \"/v1/foo\"",
+		"base_url userinfo":  "[providers.x]\nbase_url = \"https://user:SECRET@x.example\"\napi_path = \"/v1/messages\"",
+		"base_url query":     "[providers.x]\nbase_url = \"https://x.example?key=SECRET\"\napi_path = \"/v1/messages\"",
+		"base_url fragment":  "[providers.x]\nbase_url = \"https://x.example#SECRET\"\napi_path = \"/v1/messages\"",
+		"base_url scheme":    "[providers.x]\nbase_url = \"ws://x.example\"\napi_path = \"/v1/messages\"",
+		"relative api_path":  "[providers.x]\nbase_url = \"https://x.example\"\napi_path = \"v1/messages\"",
+		"api_path query":     "[providers.x]\nbase_url = \"https://x.example\"\napi_path = \"/v1/messages?key=SECRET\"",
+		"api_path fragment":  "[providers.x]\nbase_url = \"https://x.example\"\napi_path = \"/v1/messages#x\"",
+		"decisions api_path": "[providers.x]\nbase_url = \"https://x.example\"\napi_path = \"/v1/decisions\"",
+	} {
+		_, err := config.ReadFile(write(t, body))
+		if err == nil {
+			t.Errorf("%s: read without error", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "[providers.x]") || strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("%s: %v, want it to name [providers.x] and not echo a secret", name, err)
+		}
 	}
 }

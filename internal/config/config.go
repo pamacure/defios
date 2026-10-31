@@ -21,6 +21,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/mention"
 	"defios.com/internal/network"
+	"defios.com/internal/provider"
 	"defios.com/internal/secret"
 )
 
@@ -33,9 +34,10 @@ type Config struct {
 	// writes "$TS_AUTHKEY".
 	TailnetAuthKey string `toml:"tailnet_auth_key,omitempty"`
 	// Prune is this Node's prune policy for the Group: when set, serve
-	// destroys the payload of all talk a live Recap accounts for, again
-	// after every Recap and snapshot restore (ADR 0012). Off by default.
-	Prune bool `toml:"prune,omitempty"`
+	// destroys the payload of all talk older than it on start, after every
+	// snapshot restore and once a day (ADR 0024). Unset, the Node is
+	// archival.
+	Prune Age `toml:"prune,omitzero"`
 	// Agents are this Node's Agent Profiles for the Group, by Handle (ADR
 	// 0015). Only the Group's config.toml may define them; a Workspace's
 	// [agent] profiles includes them by Handle.
@@ -67,21 +69,45 @@ type Workspace struct {
 	// and the endpoints it reaches them by (ADR 0023). ReadFile fills no
 	// Alias; network.List does.
 	Networks map[string]network.Network `toml:"networks,omitempty"`
-	// Providers hold this Node's credential for a Provider, by its alias.
+	// Providers are the LLM APIs this Node's agents may call, by alias.
 	Providers map[string]Provider `toml:"providers,omitempty"`
 	Agent     Agent               `toml:"agent,omitempty"`
 }
 
-// Provider is this Node's settings for a Provider: its credential, a Secret
-// reference sent to the Provider's base_url on the log (ADR 0019), without
-// which no key is sent; and the base request body for every profile that
-// runs on it.
+// Provider is the whole of a Provider, this Node's own (ADR 0022): where it
+// is called, whose api_path also picks its API Shape (ADR 0019); its
+// credential, a Secret reference sent only to that base_url, without which
+// no key is sent; and the base request body for every profile that runs on
+// it (ADR 0020). A Group's table sets base_url and api_path; a
+// Conversation's may override any key of it.
 type Provider struct {
-	APIKey string `toml:"api_key,omitempty"`
+	BaseURL string `toml:"base_url,omitempty"`
+	APIPath string `toml:"api_path,omitempty"`
+	APIKey  string `toml:"api_key,omitempty"`
 	// Body is the request fields shared by the profiles that run on this
 	// Provider, as TOML nests them; each profile's body merges over it.
 	// Reading the config converts it to JSON values.
 	Body map[string]any `toml:"body,omitempty"`
+}
+
+// Endpoint is where p is called, as the Provider alias.
+func (p Provider) Endpoint(alias string) provider.Provider {
+	return provider.Provider{Alias: alias, BaseURL: p.BaseURL, APIPath: p.APIPath}
+}
+
+// Provider is the Provider alias names in w, a Group's Workspace with any
+// Conversation's merged over it: provider.ErrUnknown if w has none, and
+// provider.ErrInvalid if a Conversation's table for an alias the Group
+// lacks left it incomplete.
+func (w Workspace) Provider(alias string) (Provider, error) {
+	p, ok := w.Providers[alias]
+	if !ok {
+		return Provider{}, fmt.Errorf("%w: %q", provider.ErrUnknown, alias)
+	}
+	if err := provider.Validate(p.Endpoint(alias)); err != nil {
+		return Provider{}, fmt.Errorf("[providers.%s]: %w", alias, err)
+	}
+	return p, nil
 }
 
 // Agent is which agents may answer in Group-level talk, or in that
@@ -116,7 +142,7 @@ func ReadFile(path string) (Config, error) {
 			return Config{}, fmt.Errorf("config: %s: tailnet_auth_key: %w", path, err)
 		}
 	}
-	if err := c.Workspace.validate(md); err != nil {
+	if err := c.Workspace.validate(md, true); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	if err := c.validateAgents(md); err != nil {
@@ -135,7 +161,7 @@ func ReadWorkspace(path string) (Workspace, error) {
 	} else if err != nil {
 		return Workspace{}, err
 	}
-	if err := w.validate(md); err != nil {
+	if err := w.validate(md, false); err != nil {
 		return Workspace{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return w, nil
@@ -166,12 +192,19 @@ func decode(path string, into any) (toml.MetaData, error) {
 }
 
 // validate checks w; md tells an explicit max_depth = 0 from an unset one.
-func (w Workspace) validate(md toml.MetaData) error {
+// A Group's Workspace is complete: each Provider sets its base_url and
+// api_path. A Conversation's need not be, for its tables override the
+// Group's key by key. A Network table is always whole.
+func (w Workspace) validate(md toml.MetaData, complete bool) error {
 	if _, err := network.List(w.Networks); err != nil {
 		return fmt.Errorf("[networks]: %w", err)
 	}
 	for alias, p := range w.Providers {
-		if err := group.ValidateAlias(alias); err != nil {
+		check := provider.ValidateOverride
+		if complete {
+			check = provider.Validate
+		}
+		if err := check(p.Endpoint(alias)); err != nil {
 			return fmt.Errorf("[providers.%s]: %w", alias, err)
 		}
 		if p.APIKey != "" {
@@ -258,10 +291,10 @@ func ValidateHandle(h string) error {
 }
 
 // Merge is w with over laid on it table by table: a whole Network table, a
-// Provider's api_key, an [agent] profiles list (even an empty
-// one), or a max_depth that over sets wins, and everything over leaves unset
-// comes from w. A Provider's body in over merges over w's as a profile's
-// body does. Neither input is changed.
+// Provider's base_url, api_path or api_key, an [agent] profiles list (even
+// an empty one), or a max_depth that over sets wins, and everything over
+// leaves unset comes from w. A Provider's body in over merges over w's as a
+// profile's body does. Neither input is changed.
 func (w Workspace) Merge(over Workspace) Workspace {
 	out := Workspace{Agent: w.Agent}
 	if len(w.Networks)+len(over.Networks) > 0 {
@@ -280,6 +313,12 @@ func (w Workspace) Merge(over Workspace) Workspace {
 		}
 		for name, p := range over.Providers {
 			cur := out.Providers[name]
+			if p.BaseURL != "" {
+				cur.BaseURL = p.BaseURL
+			}
+			if p.APIPath != "" {
+				cur.APIPath = p.APIPath
+			}
 			if p.APIKey != "" {
 				cur.APIKey = p.APIKey
 			}

@@ -25,12 +25,13 @@ const (
 	// retired when Networks became Node-local config
 	// (docs/adr/0023-networks-are-node-local.md). They stay reserved and
 	// are never reused: a reader meets them as any unknown type.
-	TypeSignAccept     uint32 = 11
-	TypeSignBroadcast  uint32 = 12
-	TypeAppRecap       uint32 = 13 // docs/adr/0012-recap-on-the-log-pruning-off-it.md
-	TypeProviderCreate uint32 = 14 // docs/adr/0019-providers-replace-models-on-the-cosl.md
-	TypeProviderUpdate uint32 = 15
-	TypeProviderRemove uint32 = 16
+	TypeSignAccept    uint32 = 11
+	TypeSignBroadcast uint32 = 12
+	TypeAppRecap      uint32 = 13 // docs/adr/0012-recap-on-the-log-pruning-off-it.md
+	// 14, 15 and 16 were provider.create, provider.update and
+	// provider.remove. They are reserved and never reused: a Provider is
+	// Node-local config (docs/adr/0022-members-are-trusted-for-their-own-messages.md),
+	// and a reader treats a row under a retired id like any unknown type.
 )
 
 // kind is one registry entry: its wire name and its payload schema.
@@ -52,9 +53,6 @@ var registry = map[uint32]kind{
 	TypeSignAccept:      {"sign.accept", func() proto.Message { return &coslv1.SignAccept{} }},
 	TypeSignBroadcast:   {"sign.broadcast", func() proto.Message { return &coslv1.SignBroadcast{} }},
 	TypeAppRecap:        {"app.recap", func() proto.Message { return &coslv1.AppRecap{} }},
-	TypeProviderCreate:  {"provider.create", func() proto.Message { return &coslv1.ProviderConfig{} }},
-	TypeProviderUpdate:  {"provider.update", func() proto.Message { return &coslv1.ProviderConfig{} }},
-	TypeProviderRemove:  {"provider.remove", func() proto.Message { return &coslv1.ProviderRemove{} }},
 }
 
 // ErrUnknownType is returned by DecodePayload for ids outside the registry.
