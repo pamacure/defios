@@ -1,7 +1,7 @@
 // Package agent runs a summoned agent against a Provider (docs/adr/0015-
 // agent-profiles-handles-and-agent-chains.md, docs/adr/0018-an-agent-says-
 // one-message.md, docs/adr/0019-providers-replace-models-on-the-cosl.md). A
-// run is a loop of streamed model calls in one API Shape, offering one
+// run is a loop of model calls in one API Shape, streamed or not, offering one
 // tool, say: an accepted say is the run's result and ends it; a turn that
 // ends without one is silence. Each call is retried when a provider says it
 // is worth it.
@@ -512,7 +512,7 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 		return call{}, fmt.Errorf("agent: %w", err)
 	}
 	hreq.Header.Set("Content-Type", "application/json")
-	hreq.Header.Set("Accept", "text/event-stream")
+	hreq.Header.Set("Accept", "text/event-stream, application/json")
 	req.Shape.auth.set(hreq.Header, req.APIKey)
 	client := c.HTTP
 	if client == nil {
@@ -531,9 +531,6 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 		}
 		return call{}, err
 	}
-	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt != "text/event-stream" {
-		return call{}, fmt.Errorf("agent: the reply is %q, not an event stream; set stream = true in the profile's body", mt)
-	}
 	var p parser
 	switch req.Shape {
 	case Messages:
@@ -543,10 +540,35 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 	default:
 		p = &openaiParser{st: st}
 	}
-	if err := readEvents(resp.Body, p.event); err != nil {
+	// The reply's type picks its reader, whatever the body's stream says.
+	switch mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt {
+	case "text/event-stream":
+		err = readEvents(resp.Body, p.event)
+	case "application/json":
+		err = readJSON(resp.Body, p.reply)
+	default:
+		err = fmt.Errorf("agent: the reply is %q, neither an event stream nor JSON", mt)
+	}
+	if err != nil {
 		return call{}, err
 	}
 	return p.result(), nil
+}
+
+// maxReply bounds a reply that is not streamed.
+const maxReply = 16 << 20
+
+// readJSON hands a reply that is not streamed to fn whole. A body that
+// does not parse was cut off, like a stream that ends too soon.
+func readJSON(r io.Reader, fn func(body []byte) error) error {
+	body, err := io.ReadAll(io.LimitReader(r, maxReply))
+	if err != nil {
+		return retry(fmt.Errorf("agent: reading the reply: %w", err))
+	}
+	if !json.Valid(body) {
+		return retry(errors.New("agent: the reply was cut off"))
+	}
+	return fn(body)
 }
 
 // readEvents hands each server-sent event's data to fn until fn says the
@@ -578,9 +600,12 @@ func readEvents(r io.Reader, fn func(data string) (done bool, err error)) error 
 	return retry(errors.New("agent: the reply was cut off"))
 }
 
-// parser assembles one call's stream into blocks.
+// parser assembles one call's reply into blocks: a stream event by event,
+// or a reply that is not streamed whole, which streams its blocks as it is
+// read so that both look the same to Events.
 type parser interface {
 	event(data string) (done bool, err error)
+	reply(body []byte) error
 	result() call
 }
 
@@ -673,6 +698,52 @@ func (p *anthropicParser) event(data string) (bool, error) {
 		return false, err
 	}
 	return false, nil
+}
+
+// reply reads a Messages reply that is not streamed.
+func (p *anthropicParser) reply(body []byte) error {
+	var m struct {
+		Type       string         `json:"type"`
+		Content    []Block        `json:"content"`
+		StopReason string         `json:"stop_reason"`
+		Usage      map[string]any `json:"usage"`
+		Error      struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return fmt.Errorf("agent: bad reply: %w", err)
+	}
+	if m.Type == "error" {
+		err := fmt.Errorf("agent: %s: %s", m.Error.Type, m.Error.Message)
+		if retryEvents[m.Error.Type] {
+			err = retry(err)
+		}
+		return err
+	}
+	for _, b := range m.Content {
+		var input strings.Builder
+		switch b.Type {
+		case "text":
+			p.st.block(KindText, b.Text)
+		case "thinking":
+			p.st.block(KindThinking, b.Thinking)
+		case "tool_use":
+			var compact bytes.Buffer
+			if json.Compact(&compact, b.Input) == nil {
+				input.Write(compact.Bytes())
+			}
+			p.st.block(KindTool, b.Name+" ")
+			p.st.more(KindTool, input.String())
+		}
+		b.Input = nil
+		p.blocks = append(p.blocks, b)
+		p.inputs = append(p.inputs, input)
+	}
+	p.out.stop = m.StopReason
+	p.mergeUsage(m.Usage)
+	return nil
 }
 
 func (p *anthropicParser) mergeUsage(u map[string]any) {
@@ -777,6 +848,50 @@ func (p *openaiParser) event(data string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// reply reads a Chat Completions reply that is not streamed.
+func (p *openaiParser) reply(body []byte) error {
+	var r struct {
+		Choices []struct {
+			Message struct {
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage map[string]any `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return fmt.Errorf("agent: bad reply: %w", err)
+	}
+	if len(r.Usage) > 0 {
+		p.out.usage = r.Usage
+	}
+	for _, c := range r.Choices {
+		if c.Message.Content != "" {
+			p.st.block(KindText, c.Message.Content)
+			p.text.WriteString(c.Message.Content)
+		}
+		for _, tc := range c.Message.ToolCalls {
+			p.st.block(KindTool, tc.Function.Name+" ")
+			p.st.more(KindTool, tc.Function.Arguments)
+			var args strings.Builder
+			args.WriteString(tc.Function.Arguments)
+			p.calls = append(p.calls, Block{Type: "tool_use", ID: tc.ID, Name: tc.Function.Name})
+			p.args = append(p.args, args)
+		}
+		if c.FinishReason != "" {
+			p.out.stop = c.FinishReason
+		}
+	}
+	return nil
 }
 
 func (p *openaiParser) result() call {

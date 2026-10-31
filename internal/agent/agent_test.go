@@ -181,6 +181,36 @@ func responsesText(parts ...string) []string {
 	return append(responsesMessage(0, parts...), responsesEnd())
 }
 
+// jsonMark marks a script reply as one JSON body, not an event stream.
+const jsonMark = "json:"
+
+// asJSON is a script reply of body as a JSON reply that is not streamed.
+func asJSON(body string) []string { return []string{jsonMark + body} }
+
+// jsonSays is each shape's JSON reply that thinks thought, writes text,
+// then says said: the same blocks as the streamed fakes, all at once.
+var jsonSays = map[agent.Shape]func(thought, text, said string) []string{
+	agent.Messages: func(thought, text, said string) []string {
+		return asJSON(`{"id":"m","type":"message","role":"assistant","content":[` +
+			`{"type":"thinking","thinking":` + jsonString(thought) + `,"signature":"sig"},` +
+			`{"type":"text","text":` + jsonString(text) + `},` +
+			`{"type":"tool_use","id":"toolu_1","name":"say","input":` + sayInput(said) + `}],` +
+			`"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`)
+	},
+	agent.ChatCompletions: func(thought, text, said string) []string {
+		return asJSON(`{"id":"c","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":` + jsonString(text) + `,` +
+			`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"say","arguments":` + jsonString(sayInput(said)) + `}}]},` +
+			`"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
+	},
+	agent.Responses: func(thought, text, said string) []string {
+		return asJSON(`{"id":"resp_1","object":"response","status":"completed","output":[` +
+			`{"id":"rs_0","type":"reasoning","summary":[{"type":"summary_text","text":` + jsonString(thought) + `}],"encrypted_content":"gAAAA-enc"},` +
+			`{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":` + jsonString(text) + `,"annotations":[]}]},` +
+			`{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_1","name":"say","arguments":` + jsonString(sayInput(said)) + `}],` +
+			responsesUsage + `}`)
+	},
+}
+
 // says is each shape's fake for a run that thinks thought and says text.
 var says = map[agent.Shape]func(thought, text string) []string{
 	agent.Messages: anthropicSays, agent.ChatCompletions: openaiSays, agent.Responses: responsesSays,
@@ -254,7 +284,13 @@ func newScript(t *testing.T, replies ...[]string) *script {
 		s.headers = append(s.headers, r.Header.Clone())
 		n := len(s.bodies)
 		s.mu.Unlock()
-		sse(w, replies[min(n, len(replies))-1]...)
+		reply := replies[min(n, len(replies))-1]
+		if len(reply) == 1 && strings.HasPrefix(reply[0], jsonMark) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, strings.TrimPrefix(reply[0], jsonMark))
+			return
+		}
+		sse(w, reply...)
 	}))
 	t.Cleanup(s.Close)
 	return s
@@ -668,16 +704,107 @@ func TestTheProfileBodyMergesOverTheRequest(t *testing.T) {
 	}
 }
 
-// A reply that is not an event stream is an error, not retried, until
-// non-streamed replies are read (#78).
-func TestAReplyThatIsNotStreamedIsAnError(t *testing.T) {
+// A reply that is neither an event stream nor JSON is an error, not
+// retried.
+func TestAReplyOfAnotherTypeIsAnError(t *testing.T) {
 	srv, calls := failing(t, func(_ int, w http.ResponseWriter) bool {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"type":"message","content":[]}`))
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html>hello</html>`))
 		return true
 	})
-	if _, err := generate(srv, agent.Events{}); err == nil || *calls != 1 || !strings.Contains(err.Error(), "stream") {
-		t.Fatalf("err %v after %d calls, want one error naming stream", err, *calls)
+	if _, err := generate(srv, agent.Events{}); err == nil || *calls != 1 || !strings.Contains(err.Error(), "text/html") {
+		t.Fatalf("err %v after %d calls, want one error naming text/html", err, *calls)
+	}
+}
+
+// A reply that is not streamed is read whole, picked by its Content-Type
+// whatever the body's stream says: its blocks stream as the streamed reader
+// streams them, in one go once the call ends, and the run records the same
+// blocks and usage. The next call carries them like a streamed call's.
+// Every shape; Chat Completions has no thinking.
+func TestANonStreamedReplyIsRead(t *testing.T) {
+	for p, says := range jsonSays {
+		s := newScript(t, says("hmm", "let me see", ""), says("ok", "now", "all good"))
+		var rec recorder
+		res, err := run(s, p, rec.events())
+		if err != nil || res.Silent || res.Said != "all good" || s.calls() != 2 {
+			t.Fatalf("%s: result %+v, err %v after %d calls", p, res, err, s.calls())
+		}
+		want := `thinking:hmm text:let me see tool:say {"text":""} thinking:ok text:now tool:say {"text":"all good"}`
+		blocks := "block block block"
+		if p == agent.ChatCompletions {
+			want = `text:let me see tool:say {"text":""} text:now tool:say {"text":"all good"}`
+			blocks = "block block"
+		}
+		if rec.String() != want {
+			t.Errorf("%s: events %s\nwant   %s", p, &rec, want)
+		}
+		if got, want := rec.kinds(), "request "+blocks+" usage request "+blocks+" usage"; got != want {
+			t.Errorf("%s: records = %s, want %s", p, got, want)
+		}
+		second := fmt.Sprint(messages(s.body(2)))
+		if !strings.Contains(second, "let me see") || !strings.Contains(second, "empty") {
+			t.Errorf("%s: the second call does not carry the first: %s", p, second)
+		}
+		if p == agent.Responses && !strings.Contains(second, "gAAAA-enc") {
+			t.Errorf("%s: the reasoning item is not replayed: %s", p, second)
+		}
+		if p == agent.Messages && !strings.Contains(second, "signature:sig") {
+			t.Errorf("%s: the thinking block is not replayed: %s", p, second)
+		}
+	}
+}
+
+// A JSON reply cut off before its end is retried like a stream that was
+// cut off. Every shape.
+func TestATruncatedJSONReplyIsRetried(t *testing.T) {
+	for p, says := range jsonSays {
+		whole := strings.TrimPrefix(says("hmm", "partial", "x")[0], jsonMark)
+		cut := asJSON(whole[:len(whole)/2])
+		s := newScript(t, cut, cut, says("hmm", "ok", "fine"))
+		res, err := run(s, p, agent.Events{})
+		if err != nil || res.Said != "fine" || s.calls() != 3 {
+			t.Fatalf("%s: result %+v, err %v after %d calls", p, res, err, s.calls())
+		}
+		s = newScript(t, cut)
+		if _, err := run(s, p, agent.Events{}); err == nil || !strings.Contains(err.Error(), "cut off") || s.calls() != 4 {
+			t.Fatalf("%s: err %v after %d calls, want cut off after 4", p, err, s.calls())
+		}
+	}
+}
+
+// A JSON reply that stopped at its token bound is an error, read from the
+// stop reason it carries, with its blocks and usage recorded. Every shape.
+func TestAJSONReplyAtItsTokenBoundIsAnError(t *testing.T) {
+	for p, reply := range map[agent.Shape]string{
+		agent.Messages:        `{"type":"message","content":[{"type":"text","text":"on and on"}],"stop_reason":"max_tokens","usage":{"input_tokens":10,"output_tokens":5}}`,
+		agent.ChatCompletions: `{"choices":[{"index":0,"message":{"role":"assistant","content":"on and on"},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
+		agent.Responses: `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[` +
+			`{"id":"msg_0","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"on and on"}]}],` + responsesUsage + `}`,
+	} {
+		s := newScript(t, asJSON(reply))
+		var rec recorder
+		_, err := run(s, p, rec.events())
+		if err == nil || !strings.Contains(err.Error(), "token bound") || s.calls() != 1 {
+			t.Fatalf("%s: err %v after %d calls", p, err, s.calls())
+		}
+		if rec.String() != "text:on and on" || rec.kinds() != "request block usage" {
+			t.Errorf("%s: events %s, records %s", p, &rec, rec.kinds())
+		}
+	}
+}
+
+// A JSON reply that says it failed is an error: a Responses server error
+// is retried, an Anthropic invalid request is not.
+func TestAFailedJSONReplyIsAnError(t *testing.T) {
+	failed := asJSON(`{"id":"resp_1","status":"failed","output":[],"error":{"code":"server_error","message":"boom"}}`)
+	s := newScript(t, failed, jsonSays[agent.Responses]("a", "b", "fine"))
+	if res, err := run(s, agent.Responses, agent.Events{}); err != nil || res.Said != "fine" || s.calls() != 2 {
+		t.Fatalf("responses: result %+v err %v after %d calls", res, err, s.calls())
+	}
+	s = newScript(t, asJSON(`{"type":"error","error":{"type":"invalid_request_error","message":"no way"}}`))
+	if _, err := run(s, agent.Messages, agent.Events{}); err == nil || !strings.Contains(err.Error(), "no way") || s.calls() != 1 {
+		t.Fatalf("messages: err %v after %d calls", err, s.calls())
 	}
 }
 

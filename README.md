@@ -201,6 +201,8 @@ api_key = "$OPENAI_API_KEY"
 
 Each call resends the whole conversation, and the model's reasoning from earlier calls of the same turn goes back with it. With `store = false`, OpenAI keeps nothing, so ask for `reasoning.encrypted_content` to carry that reasoning across calls.
 
+`stream = true` shows the agent's reply as it is written. Without it, the API sends the reply whole and it shows all at once when the call ends; either way the Transcript is the same.
+
 Mention the agent to have it answer:
 
 ```bash

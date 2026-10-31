@@ -197,6 +197,48 @@ func (p *responsesParser) done(index int, raw json.RawMessage) error {
 	return nil
 }
 
+// reply reads a Responses reply that is not streamed: the Response object,
+// each output item taken as the stream takes it when done.
+func (p *responsesParser) reply(body []byte) error {
+	var r struct {
+		Status            string            `json:"status"`
+		Output            []json.RawMessage `json:"output"`
+		Usage             map[string]any    `json:"usage"`
+		Error             *responsesError   `json:"error"`
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return fmt.Errorf("agent: bad reply: %w", err)
+	}
+	if r.Status == "failed" {
+		if r.Error != nil {
+			return r.Error.err()
+		}
+		return fmt.Errorf("agent: the response failed")
+	}
+	for i, raw := range r.Output {
+		if err := p.done(i, raw); err != nil {
+			return err
+		}
+		switch b := p.blocks[i]; b.Type {
+		case "text":
+			p.stream(i, KindText, b.Text)
+		case "reasoning":
+			p.stream(i, KindThinking, b.Thinking)
+		case "tool_use":
+			p.st.block(KindTool, b.Name+" ")
+			p.st.more(KindTool, p.args[i].String())
+		}
+	}
+	p.out.usage = r.Usage
+	if r.Status == "incomplete" {
+		p.out.stop, p.out.incomplete = r.IncompleteDetails.Reason, true
+	}
+	return nil
+}
+
 func (p *responsesParser) result() call {
 	for i := range p.blocks {
 		if p.blocks[i].Type == "tool_use" {
