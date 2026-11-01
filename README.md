@@ -255,6 +255,15 @@ defios conversation recap --base-seq <seq> --text "<what was said up to it>"
 
 It is `RECAP.md` in the Conversation's data directory on this machine only; nothing reaches the other one. Writing a Recap replaces the last. `defios conversation log --lean` prints what this machine's agents read.
 
+To drop old talk from this machine, prune it. Pruning destroys the text of the talk at or below a seq, or older than an age, on this machine only. The log still verifies, and the other machine keeps its copy:
+
+```bash
+defios conversation prune --before <seq>
+defios conversation prune --older-than 30d
+```
+
+To prune on a schedule, set `prune` at the top of the Group's `config.toml` to an age: whole days like `"90d"`, or a Go duration like `"36h"`. `serve` then prunes every Conversation on start, after a snapshot restore, and once a day. Leave it out on a machine that keeps everything. A restore can bring pruned talk back, so a manual prune warns when no `prune` is set. Either way, pruning warns when it destroys talk your Recap doesn't cover, since this machine's agents then lose it.
+
 ### 8. Sign a transaction
 
 A Network is one machine's own: a chain it is willing to sign for, and the endpoints it reaches that chain by. On each machine, add one to the Group's `config.toml`:
