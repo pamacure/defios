@@ -11,6 +11,11 @@ agent says is what matters. This amends
 longer has no tools, its context is split into turns, the stream carries the
 whole output, and there is a retry verb.
 
+*Amended by [ADR 0025](0025-an-outbox-holds-what-a-node-writes-without-a-quorum.md):
+a chain and its Transcript are named by the msg_id of the message that
+starts it, not its seq; `said` and `agent.commit` carry the said message's
+msg_id, and its seq once it has one; a say may be queued, not committed.*
+
 ## Considered options
 
 - **Commit the reply as generated, capped to fit an `app.freeform`.**

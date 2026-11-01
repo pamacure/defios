@@ -96,6 +96,10 @@ _Avoid_: execution id, ceremony id, run id
 The canonically-ordered signature log: the shared, append-only message history every Node maintains a local replica of. Message data is signed by the sender's auth keypair.
 _Avoid_: log, ledger, history, message list
 
+**Outbox**:
+One Node's own queue of messages it has signed for a Group's COSL while no majority of the Roster was reachable to commit them. A queued message is not on the COSL: it gets its place in the log only when a majority returns and it commits, after whatever others committed meanwhile, in the order this Node wrote it. Until then it is part of this Node's own view of the talk, which its agents read and answer, but no other Node sees it. Only talk and Sign Request messages may wait there; a Session's messages never do. Never replicated and never held for another Node. There is no Inbox: a Node that was away catches up from the COSL itself.
+_Avoid_: queue, pending log, mailbox, inbox
+
 **Conversation**:
 A Key-scoped discussion among a Group's Nodes, carried as COSL messages whose conversation id is that Key's. One Conversation per Key; membership is the Roster. Exists iff the Key exists.
 _Avoid_: chat, channel, room, thread

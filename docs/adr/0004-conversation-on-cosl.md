@@ -6,6 +6,10 @@ only by `conversation_id`. Histories match because they are the replica;
 catch-up is Raft. Decided in
 [defios#7](https://github.com/pamacure/defios/issues/7).
 
+*Amended by [ADR 0025](0025-an-outbox-holds-what-a-node-writes-without-a-quorum.md):
+a Node without a quorum queues its talk in its Outbox, which commits when a
+majority returns, so a 2-Node Group can now leave mail.*
+
 ## Considered options
 
 - **Direct tsnet fan-out, never on the COSL** (the map's original transport

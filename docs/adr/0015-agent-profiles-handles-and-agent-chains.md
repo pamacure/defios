@@ -18,6 +18,11 @@ only what it passes to its one tool, `say`, and everything else it generates
 stays in a Node-local Transcript. The bullets on what an agent sees, the
 stream, the CLI, retry and text only are amended there.*
 
+*Amended by [ADR 0025](0025-an-outbox-holds-what-a-node-writes-without-a-quorum.md):
+a reply is written, committed or queued in this Node's Outbox, and the next
+agent reads it from this Node's view at once; a chain starts on a queued
+message too, and is named by msg_id, not seq.*
+
 ## Considered options
 
 - **Profiles defined per Group, with their markdown inside the Group
