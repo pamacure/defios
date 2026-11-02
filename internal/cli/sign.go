@@ -12,7 +12,6 @@ import (
 
 	"defios.com/internal/key"
 	"defios.com/internal/network"
-	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -52,9 +51,6 @@ Every chain must be of the Key's curve.`,
 			}
 			spec := signreq.Spec{Reason: reason, DeadlineSeconds: deadline, Transactions: txs}
 			v, err := serve.Client{Socket: g.paths().Socket}.SignPropose(cmd.Context(), keyQuery, spec)
-			if errors.Is(err, raftx.ErrNoLeader) {
-				return exitOperationalf("%w; a Sign Request is queued without a leader unless it has a Solana transaction, whose recent_blockhash would expire before a majority is back", err)
-			}
 			if err != nil {
 				return signError(err)
 			}

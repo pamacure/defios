@@ -200,20 +200,14 @@ func TestQueuedSurvivesReopen(t *testing.T) {
 	}
 }
 
-// Session traffic and a Sign Request with a Solana transaction, whose
-// recent_blockhash would expire in the queue, never queue: they fail with
-// no-leader as before, and do not hold up what comes after them.
+// Session traffic never queues: it fails with no-leader as before, and does
+// not hold up what comes after it.
 func TestUnqueueableFailsFast(t *testing.T) {
 	f := newFixture(t)
 	o := f.open()
-	solana := &coslv1.SignRequest{Reason: "pay", DeadlineSeconds: 60, Transactions: []*coslv1.SignTransaction{
-		{Intent: &coslv1.SignTransaction_Ethereum{Ethereum: &coslv1.EthereumIntent{}}},
-		{Intent: &coslv1.SignTransaction_Solana{Solana: &coslv1.SolanaIntent{}}},
-	}}
 	for name, s := range map[string]cosl.Signed{
-		"session.abort":       f.sign(cosl.TypeSessionAbort, &coslv1.SessionAbort{Reason: "x"}),
-		"tss.session":         f.sign(cosl.TypeTssSession, &coslv1.TssSession{}),
-		"solana sign.request": f.sign(cosl.TypeSignRequest, solana),
+		"session.abort": f.sign(cosl.TypeSessionAbort, &coslv1.SessionAbort{Reason: "x"}),
+		"tss.session":   f.sign(cosl.TypeTssSession, &coslv1.TssSession{}),
 	} {
 		if _, err := o.Write(context.Background(), s); !errors.Is(err, raftx.ErrNoLeader) {
 			t.Errorf("%s: Write err = %v, want ErrNoLeader", name, err)
@@ -227,6 +221,24 @@ func TestUnqueueableFailsFast(t *testing.T) {
 	}
 	if n := len(o.Entries()); n != 1 {
 		t.Fatalf("Outbox holds %d, want only the talk", n)
+	}
+}
+
+// A Sign Request with a Solana transaction queues like any other: if a
+// majority returns before its deadline, the drain commits it.
+func TestSolanaSignRequestQueues(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	req := f.sign(cosl.TypeSignRequest, &coslv1.SignRequest{Reason: "pay", DeadlineSeconds: 60, Transactions: []*coslv1.SignTransaction{
+		{Intent: &coslv1.SignTransaction_Solana{Solana: &coslv1.SolanaIntent{}}},
+	}})
+	if res := f.write(o, req); !res.Queued {
+		t.Fatalf("Write = %+v, want queued", res)
+	}
+	f.raft.setLeader(true)
+	o.Drain(context.Background())
+	if got := f.raft.log(); !slices.Equal(got, ids(req)) {
+		t.Fatalf("committed %x, want the queued request", got)
 	}
 }
 

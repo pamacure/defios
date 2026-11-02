@@ -35,8 +35,9 @@ pre-release, so nothing is migrated.
   so a Sign Request's deadline would count from when a quorum returned rather
   than from the request itself; `serve` would rewrite a transaction, and its
   Digests, after its operator approved it; and the returning Nodes would still
-  have the same 60–90 seconds to accept and sign. Durable nonces are the
-  Solana answer, and are their own ticket.
+  have the same 60–90 seconds to accept and sign. Durable nonces would be the
+  Solana answer, and are out of scope
+  ([`.out-of-scope/solana-durable-nonces.md`](../../.out-of-scope/solana-durable-nonces.md)).
 - **Transcripts as the agents' source of truth.** Rejected: a Transcript holds
   only this Node's agents' output, never another Node's talk, and feeding it
   back would put thinking and tool calls into later turns, a separate decision
@@ -46,8 +47,10 @@ pre-release, so nothing is migrated.
 
 - **What may queue.** `app.freeform`, `sign.request`, `sign.accept` and
   `sign.broadcast`. Every other type, Session traffic above all, fails fast
-  with `no-leader` as before. A `sign.request` with a Solana transaction that
-  uses `recent_blockhash` never queues.
+  with `no-leader` as before. A `sign.request` queues whatever its chains,
+  but one with a Solana transaction commits only if a majority returns
+  before its deadline (60 seconds by default, about as long as its
+  `recent_blockhash` lives); otherwise it is dropped as expired unsent.
 - **Queueing is automatic.** When a queueable write finds no leader, `serve`
   queues it and answers `queued`, with an exit code distinct from a commit's;
   nothing reports a queued message as committed. While the Outbox is not

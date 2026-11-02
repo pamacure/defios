@@ -191,27 +191,15 @@ func (o *Outbox) Run(ctx context.Context, leaderKnown <-chan struct{}) {
 }
 
 // Queueable reports whether s may wait in the Outbox: talk and the Sign
-// Request lifecycle may, Session traffic may not. Nor may a sign.request
-// with a Solana transaction: its recent_blockhash expires in 60 to 90
-// seconds, so it would reach the log already dead.
+// Request lifecycle may, Session traffic may not, whatever chains a Sign
+// Request's transactions are on.
 func Queueable(s cosl.Signed) bool {
 	env, err := cosl.Unmarshal(s.Bytes)
 	if err != nil {
 		return false
 	}
 	switch env.MsgType {
-	case cosl.TypeAppFreeform, cosl.TypeSignAccept, cosl.TypeSignBroadcast:
-		return true
-	case cosl.TypeSignRequest:
-		req, err := signRequest(env)
-		if err != nil {
-			return false
-		}
-		for _, tx := range req.Transactions {
-			if tx.GetSolana() != nil {
-				return false
-			}
-		}
+	case cosl.TypeAppFreeform, cosl.TypeSignRequest, cosl.TypeSignAccept, cosl.TypeSignBroadcast:
 		return true
 	}
 	return false
