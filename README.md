@@ -155,15 +155,23 @@ Check it: `defios provider list` shows the Providers this machine has, and `defi
 
 ### 7. Create an agent
 
-Write the agent's system prompt into its profile directory:
+Add an agent with the Handle `@auditor`, on the `anthropic` Provider:
 
 ```bash
-mkdir -p ~/.config/defios/agents/auditor
+defios agent add auditor --provider anthropic --model claude-opus-5-5 \
+  --body '{"stream": true, "max_tokens": 8192}'
+```
+
+`--body` is the rest of the request as a JSON object; `--body @body.json` reads it from a file and `--body -` from stdin. `agent add` writes the `[agents.auditor]` table to the Group's `config.toml` and a placeholder system prompt to `~/.config/defios/agents/auditor/SYSTEM.md`, the agent's profile directory. Replace it with the agent's own:
+
+```bash
 echo "You review proposed transactions and point out anything risky." \
   > ~/.config/defios/agents/auditor/SYSTEM.md
 ```
 
-Then edit `~/.config/defios/group/personal/config.toml` to include the agent in Group talk under the existing `[agent]` table, bind it to the Handle `@auditor` on the `anthropic` Provider, and give that Provider the API key in the `[providers.anthropic]` table `provider add` wrote:
+The profile directory is named by the Handle, so every Group on this machine that defines `@auditor` shares its prompt; each Group's `config.toml` still gives it its own Provider and body.
+
+An agent answers only where it is included. Edit `~/.config/defios/group/personal/config.toml` to include it in Group talk under the existing `[agent]` table, and give the Provider the API key in the `[providers.anthropic]` table `provider add` wrote. The file then reads:
 
 ```toml
 [agent]
@@ -182,6 +190,10 @@ base_url = "https://api.anthropic.com"
 api_path = "/v1/messages"
 api_key = "$ANTHROPIC_API_KEY"
 ```
+
+Check it: `defios agent list` shows each agent with its Provider and model, and marks the included ones; `--key <key>` asks about that Key's Conversation instead. `defios agent show auditor` shows every field and the profile directory.
+
+`defios agent edit auditor` changes only what it is given: `--provider`, `--max-turns`, `--model`, or `--body`, which replaces the body whole. `defios agent remove auditor` deletes its table and takes `@auditor` out of the Group's `[agent] profiles` and every Conversation's, keeping its profile directory. `defios agent delete auditor` also deletes the directory, and refuses while another Group on this machine defines `@auditor`.
 
 The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[agents.auditor.body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `api_key`.
 

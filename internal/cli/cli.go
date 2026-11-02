@@ -98,6 +98,7 @@ func (a App) rootCommand(g *globals) *cobra.Command {
 	root.AddCommand(conversationCommand(g))
 	root.AddCommand(networkCommand(g))
 	root.AddCommand(providerCommand(g))
+	root.AddCommand(agentCommand(g))
 	root.AddCommand(secretCommand(g))
 	root.AddCommand(signCommand(g))
 	root.AddCommand(sessionCommand(g))

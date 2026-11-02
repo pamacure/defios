@@ -599,6 +599,31 @@ stream = false
 	}
 }
 
+// WriteWorkspace writes a Conversation's config.toml so it reads back as it
+// was: an [agent] profiles list set empty stays set, for it replaces the
+// Group's list with none where an absent one keeps the Group's.
+func TestWriteWorkspaceKeepsAnEmptyProfilesList(t *testing.T) {
+	for name, w := range map[string]config.Workspace{
+		"empty":        {Agent: config.Agent{Profiles: []string{}}},
+		"empty, depth": {Agent: config.Agent{Profiles: []string{}, MaxDepth: 2}},
+		"unset":        {Agent: config.Agent{MaxDepth: 3}},
+		"listed":       {Agent: config.Agent{Profiles: []string{"auditor"}}},
+		"with a provider": {
+			Providers: map[string]config.Provider{"claude": {BaseURL: "https://gateway.example"}},
+			Agent:     config.Agent{Profiles: []string{}},
+		},
+	} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := config.WriteWorkspace(path, w); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got, err := config.ReadWorkspace(path)
+		if err != nil || !reflect.DeepEqual(got, w) {
+			t.Errorf("%s: read back %#v, %v\nwant %#v", name, got, err, w)
+		}
+	}
+}
+
 // A profile's directory is named by its Handle (ADR 0026): a Group config
 // that still sets [agents.<handle>] dir is refused as an unknown key.
 func TestConfigRefusesAProfileDir(t *testing.T) {

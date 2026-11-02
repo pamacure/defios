@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -125,6 +126,24 @@ func WriteFile(path string, c Config) error {
 		return fmt.Errorf("config: %w", err)
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+// agentHeader is the [agent] table's header as the encoder writes it.
+var agentHeader = regexp.MustCompile(`(?m)^\[agent\]\n`)
+
+// WriteWorkspace writes a Conversation's config.toml, mode 0600. The encoder
+// drops an empty list, so an [agent] profiles set empty, which replaces the
+// Group's list with none, is written under the [agent] header by hand.
+func WriteWorkspace(path string, w Workspace) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(w); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	out := buf.Bytes()
+	if w.Agent.Profiles != nil && len(w.Agent.Profiles) == 0 {
+		out = agentHeader.ReplaceAll(out, []byte("[agent]\nprofiles = []\n"))
+	}
+	return os.WriteFile(path, out, 0o600)
 }
 
 // ReadFile parses and validates a Group's config.toml.

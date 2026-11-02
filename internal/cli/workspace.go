@@ -18,12 +18,18 @@ func bindWriteGroupFlag(g *globals, cmd *cobra.Command) {
 }
 
 // writeGroupConfig applies change to the Workspace of the targeted Group's
-// config.toml, an absent one being empty, and writes the file back; it
-// returns the file's path. change sees non-nil Network and Provider maps
-// and checks what it leaves. A change refused is a usage error and writes
-// nothing. It needs no serve: the config is this Node's alone (ADR 0022,
-// ADR 0023).
+// config.toml, as writeGroup does.
 func writeGroupConfig(g *globals, change func(*config.Workspace) error) (string, error) {
+	return writeGroup(g, func(c *config.Config) error { return change(&c.Workspace) })
+}
+
+// writeGroup applies change to the targeted Group's config.toml, an absent
+// one being empty, and writes the file back; it returns the file's path.
+// change sees non-nil Network, Provider and Agent Profile maps and checks
+// what it leaves. A change refused is a usage error, unless it says
+// otherwise, and writes nothing. It
+// needs no serve: the config is this Node's alone (ADR 0022, ADR 0023).
+func writeGroup(g *globals, change func(*config.Config) error) (string, error) {
 	alias, err := g.resolveAlias()
 	if err != nil {
 		return "", err
@@ -33,21 +39,30 @@ func writeGroupConfig(g *globals, change func(*config.Workspace) error) (string,
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", exitOperational(err)
 	}
-	ws := &cfg.Workspace
-	if ws.Networks == nil {
-		ws.Networks = map[string]network.Network{}
+	if cfg.Networks == nil {
+		cfg.Networks = map[string]network.Network{}
 	}
-	if ws.Providers == nil {
-		ws.Providers = map[string]config.Provider{}
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]config.Provider{}
 	}
-	if err := change(ws); err != nil {
+	if cfg.Agents == nil {
+		cfg.Agents = map[string]config.Profile{}
+	}
+	if err := change(&cfg); err != nil {
+		var exit *ExitError
+		if errors.As(err, &exit) {
+			return "", err
+		}
 		return "", exitUsagef("%w", err)
 	}
-	if len(ws.Networks) == 0 {
-		ws.Networks = nil
+	if len(cfg.Networks) == 0 {
+		cfg.Networks = nil
 	}
-	if len(ws.Providers) == 0 {
-		ws.Providers = nil
+	if len(cfg.Providers) == 0 {
+		cfg.Providers = nil
+	}
+	if len(cfg.Agents) == 0 {
+		cfg.Agents = nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", exitOperational(err)
@@ -62,42 +77,49 @@ func writeGroupConfig(g *globals, change func(*config.Workspace) error) (string,
 // being empty, with the Conversation of the Key keyQuery names merged over
 // it when one is named.
 func readWorkspace(g *globals, keyQuery string) (config.Workspace, error) {
+	cfg, err := readConfig(g, keyQuery)
+	return cfg.Workspace, err
+}
+
+// readConfig is the targeted Group's config.toml, an absent one being
+// empty, its Workspace merged as readWorkspace's is.
+func readConfig(g *globals, keyQuery string) (config.Config, error) {
 	alias, err := g.resolveAlias()
 	if err != nil {
-		return config.Workspace{}, err
+		return config.Config{}, err
 	}
 	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config.Workspace{}, exitOperational(err)
+		return config.Config{}, exitOperational(err)
 	}
 	if keyQuery == "" {
-		return cfg.Workspace, nil
+		return cfg, nil
 	}
 	store, err := openReplica(g)
 	if err != nil {
-		return config.Workspace{}, err
+		return config.Config{}, err
 	}
 	defer store.Close()
 	conv, err := conversationID(store, keyQuery)
 	if err != nil {
-		return config.Workspace{}, err
+		return config.Config{}, err
 	}
 	keys, err := key.Read(store)
 	if err != nil {
-		return config.Workspace{}, exitOperational(err)
+		return config.Config{}, exitOperational(err)
 	}
 	var id [32]byte
 	copy(id[:], conv)
 	path := g.paths().ConversationConfigFile(alias, key.WorkspaceNames(keys)[id])
 	over, err := config.ReadWorkspace(path)
 	if err != nil {
-		return config.Workspace{}, exitOperational(err)
+		return config.Config{}, exitOperational(err)
 	}
-	ws, err := cfg.Workspace.Merge(over)
+	cfg.Workspace, err = cfg.Workspace.Merge(over)
 	if err != nil {
-		return config.Workspace{}, exitOperationalf("config: %s over the Group's: %v", path, err)
+		return config.Config{}, exitOperationalf("config: %s over the Group's: %v", path, err)
 	}
-	return ws, nil
+	return cfg, nil
 }
 
 // keyFlagHelp is --key on a read verb of a Workspace section.
