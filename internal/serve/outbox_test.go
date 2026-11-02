@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,5 +179,43 @@ func TestAChainRunsWithNoLeader(t *testing.T) {
 	untilEnd(t, s, v.MsgID)
 	if n := len(provider.seen()); n != 3 {
 		t.Fatalf("provider called %d times, want 3: a chain ran again when its messages committed", n)
+	}
+}
+
+// outbox drop through a running serve erases exactly one queued message;
+// when the other Node returns the rest commit in write order, and dropping
+// one of them then says it committed (ADR 0025).
+func TestOutboxDropThroughServe(t *testing.T) {
+	a, b := pair(t)
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	b.stop()
+	a.waitLeaderless(t)
+	ctx := context.Background()
+	var sent []string
+	for _, text := range []string{"one", "two", "three"} {
+		v, err := a.client().ConversationSend(ctx, text, nil)
+		if err != nil || !v.Queued {
+			t.Fatalf("send %q = %+v, %v; want queued", text, v, err)
+		}
+		sent = append(sent, v.MsgID)
+	}
+	v, err := a.client().OutboxDrop(ctx, sent[1][:10])
+	if err != nil || v.MsgID != sent[1] {
+		t.Fatalf("drop = %+v, %v; want %s", v, err, sent[1])
+	}
+	if _, err := a.client().OutboxDrop(ctx, sent[1]); !errors.Is(err, outbox.ErrNotQueued) {
+		t.Fatalf("second drop = %v, want ErrNotQueued", err)
+	}
+
+	b.restart(t)
+	rows := waitWritten(t, a, 2)
+	if got := []string{hexOf(rows[0].MsgID[:]), hexOf(rows[1].MsgID[:])}; got[0] != sent[0] || got[1] != sent[2] || len(rows) != 2 {
+		t.Fatalf("committed %v, want %s then %s", got, sent[0], sent[2])
+	}
+	waitEmptyOutbox(t, a)
+	if _, err := a.client().OutboxDrop(ctx, sent[0]); !errors.Is(err, outbox.ErrCommitted) || !strings.Contains(err.Error(), "committed at seq") {
+		t.Fatalf("drop of a committed message = %v, want ErrCommitted with its seq", err)
 	}
 }

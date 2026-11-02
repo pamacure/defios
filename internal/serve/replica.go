@@ -55,6 +55,15 @@ func (s *server) startReplica() {
 		s.opts.Logf("serve: starting Raft: %v", err)
 		return
 	}
+	// The Outbox is this serve's while the replica runs: `outbox drop`
+	// edits the file only while it holds this lock, and asks serve otherwise.
+	unlock, err := outbox.Lock(s.opts.Paths.OutboxFile(s.opts.Alias), true)
+	if err != nil {
+		replica.Close()
+		store.Close()
+		s.opts.Logf("serve: locking the Outbox: %v", err)
+		return
+	}
 	ob, err := outbox.Open(outbox.Config{
 		Path: s.opts.Paths.OutboxFile(s.opts.Alias),
 		Append: func(ctx context.Context, signed cosl.Signed) (raftx.Position, error) {
@@ -72,12 +81,13 @@ func (s *server) startReplica() {
 		Logf: s.opts.Logf,
 	})
 	if err != nil {
+		unlock()
 		replica.Close()
 		store.Close()
 		s.opts.Logf("serve: opening the Outbox: %v", err)
 		return
 	}
-	s.replica, s.store, s.outbox = replica, store, ob
+	s.replica, s.store, s.outbox, s.outboxUnlock = replica, store, ob, unlock
 	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(s.opts.Alias))
 	s.startOutbox(replica, ob)
 	s.startSessions(store, ob, rec.Roster())
@@ -166,6 +176,7 @@ func (s *server) stopReplica() {
 	<-s.watchDone
 	s.outboxCancel()
 	<-s.outboxDone
+	s.outboxUnlock()
 	if err := s.replica.Close(); err != nil {
 		s.opts.Logf("serve: stopping Raft: %v", err)
 	}

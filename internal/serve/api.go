@@ -20,6 +20,7 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
+	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -176,6 +177,7 @@ func (s *server) localHandler() http.Handler {
 	s.sessionRoutes(mux)
 	s.snapshotRoutes(mux)
 	s.usageRoutes(mux)
+	s.outboxRoutes(mux)
 	return mux
 }
 
@@ -242,6 +244,11 @@ var errorKinds = []struct {
 	{session.ErrSignerSetFull, "signer-set-full", http.StatusConflict},
 	{session.ErrUnsupported, "signing-unsupported", http.StatusUnprocessableEntity},
 	{session.ErrClosedSession, "closed-session", http.StatusConflict},
+	{outbox.ErrBadMsgID, "bad-msg-id", http.StatusBadRequest},
+	{outbox.ErrNotQueued, "not-queued", http.StatusNotFound},
+	{outbox.ErrAmbiguous, "ambiguous-msg-id", http.StatusConflict},
+	{outbox.ErrCommitted, "committed", http.StatusConflict},
+	{outbox.ErrInFlight, "in-flight", http.StatusConflict},
 	{raftx.ErrNoLeader, "no-leader", http.StatusServiceUnavailable},
 	{raftx.ErrNotInserted, "not-inserted", http.StatusUnprocessableEntity},
 }

@@ -37,8 +37,11 @@ var (
 // ChainPrefix is prefix, a hex prefix of a chain's msg_id, in lower case;
 // "" names no chain.
 func ChainPrefix(prefix string) (string, error) {
-	p := strings.ToLower(prefix)
-	if len(p) > 64 || strings.Trim(p, "0123456789abcdef") != "" {
+	if prefix == "" {
+		return "", nil
+	}
+	p, err := outbox.MsgIDPrefix(prefix)
+	if err != nil {
 		return "", &requestError{fmt.Sprintf("serve: chain %q is not a hex msg_id prefix", prefix)}
 	}
 	return p, nil

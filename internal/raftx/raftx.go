@@ -58,6 +58,9 @@ var (
 	ErrNotInserted = errors.New("raftx: committed but not inserted")
 	// ErrClosed is returned after Close.
 	ErrClosed = errors.New("raftx: replica is closed")
+	// ErrMaybeCommitted joins ErrNoLeader when an attempt reached a leader
+	// or was proposed before ctx ended: the entry may yet commit.
+	ErrMaybeCommitted = errors.New("raftx: the entry may yet commit")
 )
 
 // Transport is the slice of the tailnet Raft needs: a listener for the
@@ -245,21 +248,31 @@ func (r *Replica) LeaderKnown() <-chan struct{} { return r.leaderKnown }
 // follower forwards it over :4633. The same msg_id is never proposed
 // twice: committed returns its Position, in flight waits for it.
 func (r *Replica) Append(ctx context.Context, s cosl.Signed) (Position, error) {
+	sent := false // an attempt may have left the entry in a log
 	for {
 		pos, err := r.appendOnce(ctx, s)
 		if !errors.Is(err, errRetry) {
 			return pos, err
 		}
+		sent = sent || errors.Is(err, errRetrySent)
 		select {
 		case <-ctx.Done():
+			if sent {
+				return Position{}, fmt.Errorf("%w: %w", ErrNoLeader, ErrMaybeCommitted)
+			}
 			return Position{}, ErrNoLeader
 		case <-time.After(heartbeatTimeout):
 		}
 	}
 }
 
-// errRetry means leadership is not settled; try again until ctx ends.
-var errRetry = errors.New("raftx: leadership unsettled")
+var (
+	// errRetry means leadership is not settled; try again until ctx ends.
+	errRetry = errors.New("raftx: leadership unsettled")
+	// errRetrySent is errRetry after an attempt that reached a leader or
+	// was proposed, so the entry may yet commit.
+	errRetrySent = fmt.Errorf("%w; the entry may have been proposed", errRetry)
+)
 
 func (r *Replica) appendOnce(ctx context.Context, s cosl.Signed) (Position, error) {
 	r.mu.Lock()
@@ -280,8 +293,8 @@ func (r *Replica) appendOnce(ctx context.Context, s cosl.Signed) (Position, erro
 		return Position{}, fmt.Errorf("raftx: leader %s is not on the Roster", leaderID)
 	}
 	pos, err := r.forward.send(ctx, leader, s)
-	if errors.Is(err, errRetry) || errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
-		return Position{}, errRetry
+	if errors.Is(err, errRetry) {
+		return Position{}, err
 	}
 	return pos, err
 }
@@ -317,8 +330,10 @@ func (r *Replica) apply(ctx context.Context, s cosl.Signed) (Position, error) {
 	f := r.raft.Apply(s.Bytes, ApplyTimeout)
 	if err := f.Error(); err != nil {
 		switch {
-		case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrLeadershipLost), errors.Is(err, raft.ErrEnqueueTimeout):
+		case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrEnqueueTimeout):
 			p.err = errRetry
+		case errors.Is(err, raft.ErrLeadershipLost):
+			p.err = errRetrySent
 		case errors.Is(err, raft.ErrRaftShutdown):
 			p.err = ErrClosed
 		default:

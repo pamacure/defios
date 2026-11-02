@@ -383,3 +383,180 @@ func TestReadIsWhatIsQueued(t *testing.T) {
 		t.Fatalf("Read of no file = %v, %v; want empty", got, err)
 	}
 }
+
+// Drop erases exactly the queued message a msg_id prefix names, nothing
+// after it, and the drain then commits the rest in order.
+func TestDropErasesOneQueuedMessage(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	a, b, c := f.talk("a"), f.talk("b"), f.talk("c")
+	for _, s := range []cosl.Signed{a, b, c} {
+		f.write(o, s)
+	}
+	got, err := o.Drop(fmt.Sprintf("%X", b.MsgID[:5])[:9])
+	if err != nil || got.MsgID != b.MsgID {
+		t.Fatalf("Drop = %x, %v; want b", got.MsgID, err)
+	}
+	if on, _ := outbox.Read(f.path); !slices.Equal(ids(on...), ids(a, c)) {
+		t.Fatalf("on disk after the drop: %x, want a and c", ids(on...))
+	}
+	f.raft.setLeader(true)
+	o.Drain(context.Background())
+	if got := f.raft.log(); !slices.Equal(got, ids(a, c)) {
+		t.Fatalf("committed %x, want a then c", got)
+	}
+}
+
+// A prefix that names no queued message, or more than one, or is not hex,
+// drops nothing.
+func TestDropRefusesWhatItCannotName(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	for i := range 40 {
+		f.write(o, f.talk(fmt.Sprint(i)))
+	}
+	for prefix, want := range map[string]error{
+		"":                      outbox.ErrBadMsgID,
+		"xyz":                   outbox.ErrBadMsgID,
+		strings.Repeat("0", 65): outbox.ErrBadMsgID,
+	} {
+		if _, err := o.Drop(prefix); !errors.Is(err, want) {
+			t.Errorf("Drop(%q) = %v, want %v", prefix, err, want)
+		}
+	}
+	// 40 messages over 16 first hex digits: some digit starts two of them.
+	byDigit := map[byte]int{}
+	for _, s := range o.Entries() {
+		byDigit[fmt.Sprintf("%x", s.MsgID[:1])[0]]++
+	}
+	for d, n := range byDigit {
+		if n > 1 {
+			if _, err := o.Drop(string(d)); !errors.Is(err, outbox.ErrAmbiguous) {
+				t.Errorf("Drop(%q) = %v, want ErrAmbiguous", d, err)
+			}
+			break
+		}
+	}
+	if _, err := o.Drop(strings.Repeat("0", 64)); !errors.Is(err, outbox.ErrNotQueued) {
+		t.Errorf("Drop(zeros) = %v, want ErrNotQueued", err)
+	}
+	if n := len(o.Entries()); n != 40 {
+		t.Fatalf("%d left, want all 40", n)
+	}
+}
+
+// A message that has committed is on the log: Drop says so, with its seq,
+// and erases nothing.
+func TestDropOfACommittedMessageSaysItCommitted(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	a := f.talk("a")
+	f.write(o, a)
+	f.raft.setLeader(true)
+	o.Drain(context.Background())
+	_, err := o.Drop(fmt.Sprintf("%x", a.MsgID))
+	var committed *outbox.CommittedError
+	if !errors.As(err, &committed) || committed.Seq != 1 || !errors.Is(err, outbox.ErrCommitted) {
+		t.Fatalf("Drop = %v, want committed at seq 1", err)
+	}
+}
+
+// blockingRaft holds each append until released, so a test can drop a
+// message while the drain is committing it.
+type blockingRaft struct {
+	raft
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingRaft) append(ctx context.Context, s cosl.Signed) (raftx.Position, error) {
+	r.started <- struct{}{}
+	<-r.release
+	return r.raft.append(ctx, s)
+}
+
+// Dropping the message the drain is committing right now waits for that
+// commit, then reports that it committed: it is never both dropped and
+// committed.
+func TestDropDuringItsCommitReportsTheCommit(t *testing.T) {
+	f := newFixture(t)
+	br := &blockingRaft{raft: raft{leader: true, reject: map[[32]byte]bool{}}, started: make(chan struct{}), release: make(chan struct{})}
+	a := f.talk("a")
+	f.write(f.open(), a) // no leader: queued on disk
+	o, err := outbox.Open(outbox.Config{Path: f.path, Append: br.append})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drained := make(chan struct{})
+	go func() { o.Drain(context.Background()); close(drained) }()
+	<-br.started
+	dropped := make(chan error)
+	go func() { _, err := o.Drop(fmt.Sprintf("%x", a.MsgID[:4])); dropped <- err }()
+	time.Sleep(50 * time.Millisecond)
+	close(br.release)
+	<-drained
+	if err := <-dropped; !errors.Is(err, outbox.ErrCommitted) {
+		t.Fatalf("Drop during the commit = %v, want ErrCommitted", err)
+	}
+	if got := br.log(); !slices.Equal(got, ids(a)) {
+		t.Fatalf("committed %x, want a", got)
+	}
+}
+
+// A message an append of which ended with no clear outcome may yet commit:
+// Drop refuses it until a later attempt settles it, then reports how.
+func TestDropRefusesAMessageThatMayYetCommit(t *testing.T) {
+	f := newFixture(t)
+	a := f.talk("a")
+	f.write(f.open(), a) // no leader: queued on disk
+	maybe := true
+	o, err := outbox.Open(outbox.Config{Path: f.path, Append: func(ctx context.Context, s cosl.Signed) (raftx.Position, error) {
+		if maybe {
+			return raftx.Position{}, fmt.Errorf("%w: %w", raftx.ErrNoLeader, raftx.ErrMaybeCommitted)
+		}
+		return f.raft.append(ctx, s)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Drain(context.Background())
+	if _, err := o.Drop(fmt.Sprintf("%x", a.MsgID)); !errors.Is(err, outbox.ErrInFlight) {
+		t.Fatalf("Drop = %v, want ErrInFlight", err)
+	}
+	maybe = false
+	f.raft.setLeader(true)
+	o.Drain(context.Background())
+	if _, err := o.Drop(fmt.Sprintf("%x", a.MsgID)); !errors.Is(err, outbox.ErrCommitted) {
+		t.Fatalf("Drop after the drain = %v, want ErrCommitted", err)
+	}
+}
+
+// A plain no-leader append never reached a log: the message may be dropped.
+func TestDropAfterAPlainNoLeader(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	a := f.talk("a")
+	f.write(o, a)
+	o.Drain(context.Background())
+	if _, err := o.Drop(fmt.Sprintf("%x", a.MsgID)); err != nil {
+		t.Fatalf("Drop = %v", err)
+	}
+}
+
+// Lock is exclusive: while one holder has it, a try fails with ErrBusy.
+func TestLockIsExclusive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	unlock, err := outbox.Lock(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := outbox.Lock(path, false); !errors.Is(err, outbox.ErrBusy) {
+		t.Fatalf("second Lock = %v, want ErrBusy", err)
+	}
+	unlock()
+	again, err := outbox.Lock(path, false)
+	if err != nil {
+		t.Fatalf("Lock after unlock = %v", err)
+	}
+	again()
+}

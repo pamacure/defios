@@ -8,13 +8,16 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"defios.com/internal/cosl"
@@ -51,11 +54,16 @@ type Result struct {
 type Outbox struct {
 	cfg Config
 
-	sendMu sync.Mutex // one Write's direct append at a time, so none overtakes a queued one
+	sendMu  sync.Mutex // one Write's direct append at a time, so none overtakes a queued one
+	drainMu sync.Mutex // one envelope's commit by the drain, or one Drop, at a time
 
 	mu      sync.Mutex
 	entries []cosl.Signed
 	sent    []Entry // committed, perhaps not yet applied by the replica, by seq
+	// inFlight are queued envelopes an append of which ended with no clear
+	// outcome: Raft may still commit them, so Drop refuses them until the
+	// drain settles each one.
+	inFlight map[[32]byte]bool
 
 	queued chan struct{} // signalled by each push, for Run
 }
@@ -75,7 +83,7 @@ func Open(cfg Config) (*Outbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Outbox{cfg: cfg, entries: entries, queued: make(chan struct{}, 1)}, nil
+	return &Outbox{cfg: cfg, entries: entries, inFlight: map[[32]byte]bool{}, queued: make(chan struct{}, 1)}, nil
 }
 
 // Read is the envelopes queued in the Outbox at path, oldest first; none if
@@ -102,6 +110,32 @@ func Read(path string) ([]cosl.Signed, error) {
 		out = append(out, cosl.Signed{MsgID: [32]byte(env.MsgId), Bytes: e})
 	}
 	return out, nil
+}
+
+// Lock takes the lock on the Outbox at path, which whoever writes that
+// Outbox holds: a running serve's replica for as long as it runs, or
+// `outbox drop` while it edits the file. With wait it blocks until the lock
+// is free; without, a held lock is ErrBusy. unlock releases it.
+func Lock(path string, wait bool) (unlock func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("outbox: %w", err)
+	}
+	f, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: %w", err)
+	}
+	how := syscall.LOCK_EX
+	if !wait {
+		how |= syscall.LOCK_NB
+	}
+	if err := syscall.Flock(int(f.Fd()), how); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrBusy
+		}
+		return nil, fmt.Errorf("outbox: locking %s: %w", path, err)
+	}
+	return func() { f.Close() }, nil // closing the file releases the lock
 }
 
 // fileV1 is the Outbox on disk: the signed envelopes in queue order.
@@ -197,38 +231,187 @@ func signRequest(env *coslv1.Envelope) (*coslv1.SignRequest, error) {
 // sign.request past its deadline, are logged and dropped, and the drain
 // goes on.
 func (o *Outbox) Drain(ctx context.Context) {
-	for {
-		s, ok := o.head()
-		if !ok {
-			return
-		}
-		if d, ok := o.deadline(s); ok && o.cfg.Now().After(d) {
-			o.cfg.Logf("outbox: sign.request %x expired unsent: its deadline passed at %s", s.MsgID[:8], d.Format(time.RFC3339))
-			if err := o.remove(s, 0); err != nil {
-				o.cfg.Logf("outbox: %v", err)
-				return
-			}
-			continue
-		}
-		pos, err := o.cfg.Append(ctx, s)
-		var seq uint64 // what it committed at, 0 if it did not
-		switch {
-		case err == nil:
-			seq = pos.Index
-			o.cfg.Logf("outbox: %x committed at seq %d", s.MsgID[:8], pos.Index)
-		case errors.Is(err, raftx.ErrNotInserted):
-			o.cfg.Logf("outbox: %x rejected by the log, dropped: %v", s.MsgID[:8], err)
-		case errors.Is(err, raftx.ErrNoLeader), errors.Is(err, raftx.ErrClosed), ctx.Err() != nil:
-			return
-		default:
-			o.cfg.Logf("outbox: %x not committed, will retry: %v", s.MsgID[:8], err)
-			return
-		}
-		if err := o.remove(s, seq); err != nil {
+	for o.drainHead(ctx) {
+	}
+}
+
+// drainHead commits, or drops, the oldest queued envelope, and reports
+// whether the drain should go on. A Drop waits for it.
+func (o *Outbox) drainHead(ctx context.Context) bool {
+	o.drainMu.Lock()
+	defer o.drainMu.Unlock()
+	s, ok := o.head()
+	if !ok {
+		return false
+	}
+	if d, ok := o.deadline(s); ok && o.cfg.Now().After(d) {
+		o.cfg.Logf("outbox: sign.request %x expired unsent: its deadline passed at %s", s.MsgID[:8], d.Format(time.RFC3339))
+		if err := o.remove(s, 0); err != nil {
 			o.cfg.Logf("outbox: %v", err)
-			return
+			return false
+		}
+		return true
+	}
+	pos, err := o.cfg.Append(ctx, s)
+	var seq uint64 // what it committed at, 0 if it did not
+	switch {
+	case err == nil:
+		seq = pos.Index
+		o.cfg.Logf("outbox: %x committed at seq %d", s.MsgID[:8], pos.Index)
+	case errors.Is(err, raftx.ErrNotInserted):
+		o.cfg.Logf("outbox: %x rejected by the log, dropped: %v", s.MsgID[:8], err)
+	case errors.Is(err, raftx.ErrNoLeader) && !errors.Is(err, raftx.ErrMaybeCommitted):
+		return false
+	case errors.Is(err, raftx.ErrNoLeader), errors.Is(err, raftx.ErrClosed), ctx.Err() != nil:
+		o.setInFlight(s.MsgID)
+		return false
+	default:
+		o.setInFlight(s.MsgID)
+		o.cfg.Logf("outbox: %x not committed, will retry: %v", s.MsgID[:8], err)
+		return false
+	}
+	if err := o.remove(s, seq); err != nil {
+		o.cfg.Logf("outbox: %v", err)
+		return false
+	}
+	return true
+}
+
+// setInFlight marks the queued envelope with msgID as perhaps committing.
+func (o *Outbox) setInFlight(msgID [32]byte) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.inFlight[msgID] = true
+}
+
+var (
+	// ErrBadMsgID means a msg_id prefix is not 1 to 64 hex digits.
+	ErrBadMsgID = errors.New("outbox: a msg_id prefix is 1 to 64 hex digits")
+	// ErrNotQueued means no queued message's msg_id starts with the prefix.
+	ErrNotQueued = errors.New("outbox: no queued message has that msg_id")
+	// ErrAmbiguous means more than one queued message's msg_id starts with
+	// the prefix.
+	ErrAmbiguous = errors.New("outbox: that msg_id prefix names more than one queued message")
+	// ErrCommitted means the message is on the log: it can no longer be
+	// dropped.
+	ErrCommitted = errors.New("outbox: that message has committed")
+	// ErrInFlight means an attempt to commit the message ended with no
+	// clear outcome, so it may yet commit: it cannot be dropped until the
+	// drain's next attempt settles it.
+	ErrInFlight = errors.New("outbox: that message may be committing; the drain's next attempt settles it, try again after")
+	// ErrBusy means another process holds the Outbox's lock: a running
+	// serve's replica, which owns the Outbox.
+	ErrBusy = errors.New("outbox: another process holds the Outbox")
+)
+
+// CommittedError is ErrCommitted for the message with MsgID, committed at
+// Seq.
+type CommittedError struct {
+	MsgID [32]byte
+	Seq   uint64
+}
+
+func (e *CommittedError) Error() string {
+	return fmt.Sprintf("outbox: message %x committed at seq %d; it is on the log and cannot be dropped", e.MsgID[:8], e.Seq)
+}
+
+func (e *CommittedError) Unwrap() error { return ErrCommitted }
+
+// MsgIDPrefix is prefix, a hex msg_id prefix, in lower case, or
+// ErrBadMsgID.
+func MsgIDPrefix(prefix string) (string, error) {
+	p := strings.ToLower(prefix)
+	if p == "" || len(p) > 64 || strings.Trim(p, "0123456789abcdef") != "" {
+		return "", fmt.Errorf("%w: %q", ErrBadMsgID, prefix)
+	}
+	return p, nil
+}
+
+// Drop erases the queued envelope whose hex msg_id starts with prefix, and
+// nothing else (ADR 0025). It was never on the log, so this is a real
+// delete. If the drain is committing it, Drop waits, and then reports it
+// committed: a message is never both dropped and committed. One this
+// Outbox committed and the replica has not applied yet is a
+// CommittedError; one the replica has applied is ErrNotQueued here, and the
+// caller looks for it on the log.
+func (o *Outbox) Drop(prefix string) (cosl.Signed, error) {
+	p, err := MsgIDPrefix(prefix)
+	if err != nil {
+		return cosl.Signed{}, err
+	}
+	return o.drop(p)
+}
+
+// drop is Drop of p, a MsgIDPrefix.
+func (o *Outbox) drop(p string) (cosl.Signed, error) {
+	o.drainMu.Lock()
+	defer o.drainMu.Unlock()
+	o.mu.Lock()
+	var matches []cosl.Signed
+	for _, s := range o.entries {
+		if strings.HasPrefix(hex.EncodeToString(s.MsgID[:]), p) {
+			matches = append(matches, s)
 		}
 	}
+	o.forget()
+	sent := slices.Clone(o.sent)
+	inFlight := len(matches) == 1 && o.inFlight[matches[0].MsgID]
+	o.mu.Unlock()
+	switch len(matches) {
+	case 0:
+		for _, e := range sent {
+			if strings.HasPrefix(hex.EncodeToString(e.MsgID[:]), p) {
+				return cosl.Signed{}, &CommittedError{MsgID: e.MsgID, Seq: e.Seq}
+			}
+		}
+		return cosl.Signed{}, fmt.Errorf("%w: none starts with %s", ErrNotQueued, p)
+	case 1:
+		if inFlight {
+			return cosl.Signed{}, fmt.Errorf("%w: %x", ErrInFlight, matches[0].MsgID[:8])
+		}
+		if err := o.remove(matches[0], 0); err != nil {
+			return cosl.Signed{}, err
+		}
+		return matches[0], nil
+	}
+	return cosl.Signed{}, fmt.Errorf("%w: %s matches %d", ErrAmbiguous, p, len(matches))
+}
+
+// Withdraw is `outbox drop`: o.Drop, and when nothing queued or remembered
+// matches, a CommittedError if the replica store holds the message.
+func Withdraw(o *Outbox, store *cosl.Store, prefix string) (cosl.Signed, error) {
+	p, err := MsgIDPrefix(prefix)
+	if err != nil {
+		return cosl.Signed{}, err
+	}
+	s, err := o.drop(p)
+	if !errors.Is(err, ErrNotQueued) {
+		return s, err
+	}
+	if lerr := onLog(store, p); lerr != nil {
+		return cosl.Signed{}, lerr
+	}
+	return cosl.Signed{}, err
+}
+
+// onLog is a CommittedError if the one row of store whose hex msg_id
+// starts with prefix, a MsgIDPrefix, is on the log; nil if none is, or
+// more than one may be.
+func onLog(store *cosl.Store, prefix string) error {
+	// The store matches whole bytes: look up the prefix's whole bytes, then
+	// check an odd last hex digit against what that finds.
+	whole, _ := hex.DecodeString(prefix[:len(prefix)&^1])
+	r, err := store.ByMsgIDPrefix(whole)
+	if errors.Is(err, cosl.ErrNotFound) || errors.Is(err, cosl.ErrAmbiguous) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("outbox: %w", err)
+	}
+	if !strings.HasPrefix(hex.EncodeToString(r.MsgID[:]), prefix) {
+		return nil
+	}
+	return &CommittedError{MsgID: r.MsgID, Seq: r.Seq}
 }
 
 // deadline is when s lapses, if it is a sign.request.
@@ -292,6 +475,7 @@ func (o *Outbox) remove(s cosl.Signed, seq uint64) error {
 		return err
 	}
 	o.entries = next
+	delete(o.inFlight, s.MsgID)
 	if seq != 0 {
 		o.remember(s, seq)
 	}

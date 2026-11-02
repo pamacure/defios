@@ -171,6 +171,7 @@ type server struct {
 
 	outboxCancel context.CancelFunc
 	outboxDone   chan struct{}
+	outboxUnlock func() // releases the Outbox's lock once the replica stops
 
 	sessions      *session.Service
 	sessionCancel context.CancelFunc

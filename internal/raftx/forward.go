@@ -31,8 +31,9 @@ const (
 )
 
 // statusNotLeader tells the forwarder to look the leader up again;
-// statusTransient tells it the leader could not apply right now (queue
-// full, shutting down). Both mean retry. Only a committed-but-rejected
+// statusTransient tells it the leader could not settle the entry right now
+// (leadership lost after proposing it, shutting down), so it may yet
+// commit. Both mean retry. Only a committed-but-rejected
 // outcome (ErrNotInserted) travels in the response body.
 const (
 	statusNotLeader = http.StatusConflict
@@ -65,7 +66,11 @@ func newForwardGate(r *Replica) (*forwardGate, error) {
 		Timeout: forwardTimeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return r.opts.Transport.Dial(ctx, network, addr)
+				conn, err := r.opts.Transport.Dial(ctx, network, addr)
+				if err != nil {
+					return nil, &dialError{err}
+				}
+				return conn, nil
 			},
 		},
 	}
@@ -104,6 +109,9 @@ func (g *forwardGate) handle(w http.ResponseWriter, r *http.Request) {
 	pos, err := g.replica.apply(r.Context(), cosl.Signed{MsgID: msgID, Bytes: req.Envelope})
 	switch {
 	case err == nil:
+	case errors.Is(err, errRetrySent):
+		http.Error(w, err.Error(), statusTransient)
+		return
 	case errors.Is(err, errRetry):
 		http.Error(w, raft.ErrNotLeader.Error(), statusNotLeader)
 		return
@@ -125,6 +133,12 @@ func (g *forwardGate) handle(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
+// dialError is a failure to reach the leader at all: nothing was sent.
+type dialError struct{ err error }
+
+func (e *dialError) Error() string { return e.err.Error() }
+func (e *dialError) Unwrap() error { return e.err }
+
 // send is the follower's side: deliver s to the leader's gate.
 func (g *forwardGate) send(ctx context.Context, leader group.RosterNode, s cosl.Signed) (Position, error) {
 	body, err := proto.Marshal(&raftv1.ForwardRequest{Envelope: s.Bytes})
@@ -139,8 +153,16 @@ func (g *forwardGate) send(ctx context.Context, leader group.RosterNode, s cosl.
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	httpResp, err := g.client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
+		// Only a failed dial surely left the leader without the entry.
+		var de *dialError
+		dialed := !errors.As(err, &de)
+		switch {
+		case ctx.Err() != nil && dialed:
+			return Position{}, fmt.Errorf("%w: %w", ErrNoLeader, ErrMaybeCommitted)
+		case ctx.Err() != nil:
 			return Position{}, ErrNoLeader
+		case dialed:
+			return Position{}, errRetrySent
 		}
 		return Position{}, errRetry // leader unreachable right now
 	}
@@ -148,8 +170,10 @@ func (g *forwardGate) send(ctx context.Context, leader group.RosterNode, s cosl.
 	raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 4<<10))
 	switch httpResp.StatusCode {
 	case http.StatusOK:
-	case statusNotLeader, statusTransient:
+	case statusNotLeader:
 		return Position{}, errRetry
+	case statusTransient: // the leader may have proposed it
+		return Position{}, errRetrySent
 	default:
 		return Position{}, fmt.Errorf("raftx: forward: %s: %s", httpResp.Status, bytes.TrimSpace(raw))
 	}

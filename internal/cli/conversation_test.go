@@ -1007,6 +1007,16 @@ func TestConversationSendDepthOverflowExitsUsage(t *testing.T) {
 // in the Outbox under dir, as a serve with no leader would.
 func queueTalk(t *testing.T, dir string, n *identity.Node, text string) {
 	t.Helper()
+	for _, conv := range [][]byte{nil, make([]byte, 32)} {
+		ff, _ := cosl.Freeform(text)
+		queueSigned(t, dir, n, conv, cosl.TypeAppFreeform, ff)
+	}
+}
+
+// queueSigned puts n's message of typ in conv in the Outbox under dir, as a
+// serve with no leader would.
+func queueSigned(t *testing.T, dir string, n *identity.Node, conv []byte, typ uint32, payload proto.Message) {
+	t.Helper()
 	gdir := filepath.Join(dir, "group", group.ImplicitAlias)
 	store, err := cosl.Open(filepath.Join(gdir, "cosl.sqlite"))
 	if err != nil {
@@ -1029,15 +1039,12 @@ func queueTalk(t *testing.T, dir string, n *identity.Node, text string) {
 		t.Fatal(err)
 	}
 	author := cosl.Author{Node: n, GroupID: group.ID(env.GroupId)}
-	for _, conv := range [][]byte{nil, make([]byte, 32)} {
-		ff, _ := cosl.Freeform(text)
-		s, err := author.Sign(cosl.TypeAppFreeform, conv, ff)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res, err := ob.Write(context.Background(), s); err != nil || !res.Queued {
-			t.Fatalf("queue: %+v, %v", res, err)
-		}
+	s, err := author.Sign(typ, conv, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := ob.Write(context.Background(), s); err != nil || !res.Queued {
+		t.Fatalf("queue: %+v, %v", res, err)
 	}
 }
 
