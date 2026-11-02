@@ -390,3 +390,131 @@ func TestAgentDeleteRefusesASharedHandle(t *testing.T) {
 		t.Fatalf("delete left the profile directory: %v", err)
 	}
 }
+
+// agent include and exclude without --key edit the Group's [agent] profiles
+// and print the Handles mentionable there, one per line or as a JSON array.
+// Including an included Handle or excluding an absent one changes nothing
+// and is not an error; excluding the last leaves profiles = [], never no
+// key. An unknown Handle is refused.
+func TestAgentIncludeExcludeEditTheGroupsList(t *testing.T) {
+	p := agentsWithKeys(t)
+	path := p.GroupConfigFile(group.ImplicitAlias)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"include", "scribe"}, "auditor\nscribe\n"},
+		{[]string{"include", "scribe"}, "auditor\nscribe\n"},
+		{[]string{"exclude", "auditor"}, "scribe\n"},
+		{[]string{"exclude", "auditor"}, "scribe\n"},
+		{[]string{"exclude", "scribe"}, ""},
+	} {
+		r := run(t, nil, "", append([]string{"--dir", p.Config, "agent"}, c.args...)...)
+		if r.code != 0 || r.stdout != c.want {
+			t.Fatalf("%v: exit %d, stdout %q, stderr %q; want %q", c.args, r.code, r.stdout, r.stderr, c.want)
+		}
+	}
+	if got := readFile(t, path); !strings.Contains(got, "profiles = []") {
+		t.Fatalf("excluding the last Handle dropped the key:\n%s", got)
+	}
+	c, err := config.ReadFile(path)
+	if err != nil || c.Agent.Profiles == nil || len(c.Agent.Profiles) != 0 || len(c.Agents) != 2 {
+		t.Fatalf("Group config: profiles %#v, agents %v, %v", c.Agent.Profiles, c.Agents, err)
+	}
+
+	r := run(t, nil, "", "--dir", p.Config, "agent", "include", "auditor", "--json")
+	var got []string
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil || !reflect.DeepEqual(got, []string{"auditor"}) {
+		t.Fatalf("include --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", p.Config, "agent", "exclude", "auditor", "--json")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "[]" {
+		t.Fatalf("exclude --json of the last: exit %d, stdout %q; want []", r.code, r.stdout)
+	}
+
+	before := readFile(t, path)
+	for _, verb := range []string{"include", "exclude"} {
+		if r := run(t, nil, "", "--dir", p.Config, "agent", verb, "ghost"); r.code != 1 || !strings.Contains(r.stderr, "ghost") {
+			t.Errorf("%s ghost: exit %d, stderr %q; want 1 naming ghost", verb, r.code, r.stderr)
+		}
+	}
+	if after := readFile(t, path); after != before {
+		t.Fatal("a refused include or exclude changed the config")
+	}
+}
+
+// With --key, agent include and exclude edit that Conversation's
+// config.toml, keeping its other sections, and print its list.
+func TestAgentIncludeExcludeEditAConversationsList(t *testing.T) {
+	p := agentsWithKeys(t)
+	path := p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111")
+	writeFile(t, path, "[providers.claude]\nbase_url = \"https://gateway.example\"\n\n[agent]\nprofiles = [\"scribe\"]\nmax_depth = 2\n")
+	groupBefore := readFile(t, p.GroupConfigFile(group.ImplicitAlias))
+
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"include", "auditor"}, "scribe\nauditor\n"},
+		{[]string{"include", "auditor"}, "scribe\nauditor\n"},
+		{[]string{"exclude", "scribe"}, "auditor\n"},
+		{[]string{"exclude", "scribe"}, "auditor\n"},
+		{[]string{"exclude", "auditor"}, ""},
+	} {
+		r := run(t, nil, "", append([]string{"--dir", p.Config, "agent"}, append(c.args, "--key", "ab11")...)...)
+		if r.code != 0 || r.stdout != c.want || r.stderr != "" {
+			t.Fatalf("%v --key: exit %d, stdout %q, stderr %q; want %q", c.args, r.code, r.stdout, r.stderr, c.want)
+		}
+	}
+	w, err := config.ReadWorkspace(path)
+	want := config.Workspace{
+		Providers: map[string]config.Provider{"claude": {BaseURL: "https://gateway.example"}},
+		Agent:     config.Agent{Profiles: []string{}, MaxDepth: 2},
+	}
+	if err != nil || !reflect.DeepEqual(w, want) {
+		t.Fatalf("Conversation config = %#v, %v\nwant %#v", w, err, want)
+	}
+	if readFile(t, p.GroupConfigFile(group.ImplicitAlias)) != groupBefore {
+		t.Fatal("--key changed the Group's config.toml")
+	}
+}
+
+// On a Conversation with no list of its own, include --key writes only
+// that Handle, not the Group's list, and warns that it no longer follows
+// the Group's; exclude --key refuses and writes nothing.
+func TestAgentIncludeExcludeOnAConversationFollowingTheGroup(t *testing.T) {
+	p := agentsWithKeys(t)
+	path := p.ConversationConfigFile(group.ImplicitAlias, "eddsa-ab2222222222")
+	writeFile(t, path, "[agent]\nmax_depth = 3\n")
+
+	r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "auditor", "--key", "ab22")
+	if r.code != 1 || !strings.Contains(r.stderr, "ab22 follows the Group's list; exclude it there, or give ab22 its own list with include --key") {
+		t.Fatalf("exclude --key on a list-less Conversation: exit %d, stderr %q", r.code, r.stderr)
+	}
+	if got := readFile(t, path); got != "[agent]\nmax_depth = 3\n" {
+		t.Fatalf("a refused exclude wrote %q", got)
+	}
+
+	r = run(t, nil, "", "--dir", p.Config, "agent", "include", "scribe", "--key", "ab22")
+	if r.code != 0 || r.stdout != "scribe\n" || !strings.Contains(r.stderr, "no longer follows the Group's") {
+		t.Fatalf("include --key on a list-less Conversation: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	w, err := config.ReadWorkspace(path)
+	if err != nil || !reflect.DeepEqual(w.Agent, config.Agent{Profiles: []string{"scribe"}, MaxDepth: 3}) {
+		t.Fatalf("Conversation [agent] = %#v, %v", w.Agent, err)
+	}
+
+	fresh := p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111")
+	if err := os.Remove(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "auditor", "--key", "ab11"); r.code != 0 || r.stdout != "auditor\n" {
+		t.Fatalf("include --key with no config.toml: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if w, err := config.ReadWorkspace(fresh); err != nil || !reflect.DeepEqual(w.Agent.Profiles, []string{"auditor"}) {
+		t.Fatalf("new Conversation config: %#v, %v", w, err)
+	}
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "ghost", "--key", "ab11"); r.code != 1 || !strings.Contains(r.stderr, "ghost") {
+		t.Fatalf("include ghost --key: exit %d, stderr %q", r.code, r.stderr)
+	}
+}

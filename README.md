@@ -171,7 +171,13 @@ echo "You review proposed transactions and point out anything risky." \
 
 The profile directory is named by the Handle, so every Group on this machine that defines `@auditor` shares its prompt; each Group's `config.toml` still gives it its own Provider and body.
 
-An agent answers only where it is included. Edit `~/.config/defios/group/personal/config.toml` to include it in Group talk under the existing `[agent]` table, and give the Provider the API key in the `[providers.anthropic]` table `provider add` wrote. The file then reads:
+An agent answers only where it is included. Include it in Group talk:
+
+```bash
+defios agent include auditor
+```
+
+It prints the Handles now mentionable there. Give the Provider the API key by editing the `[providers.anthropic]` table `provider add` wrote in `~/.config/defios/group/personal/config.toml`. The file then reads:
 
 ```toml
 [agent]
@@ -192,6 +198,8 @@ api_key = "$ANTHROPIC_API_KEY"
 ```
 
 Check it: `defios agent list` shows each agent with its Provider and model, and marks the included ones; `--key <key>` asks about that Key's Conversation instead. `defios agent show auditor` shows every field and the profile directory.
+
+`defios agent include auditor --key ecdsa:<hex>` includes it in that Key's Conversation instead, writing the Conversation's own `config.toml`. A Conversation with no `profiles` of its own follows the Group's list; including one there gives it a list of that Handle alone, and it no longer follows the Group's until you delete its `profiles` line. `defios agent exclude auditor` takes it out again, with `--key` from a Conversation that has its own list; excluding the last leaves `profiles = []`, where no agent answers.
 
 `defios agent edit auditor` changes only what it is given: `--provider`, `--max-turns`, `--model`, or `--body`, which replaces the body whole. `defios agent remove auditor` deletes its table and takes `@auditor` out of the Group's `[agent] profiles` and every Conversation's, keeping its profile directory. `defios agent delete auditor` also deletes the directory, and refuses while another Group on this machine defines `@auditor`.
 

@@ -240,8 +240,127 @@ delete refuses, changing nothing, while another Group does: remove it there firs
 	}
 	bindWriteGroupFlag(g, deleteCmd)
 
-	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd, deleteCmd)
+	includeCmd := &cobra.Command{
+		Use:   "include <handle>",
+		Short: "Include an agent in Group-level talk, or with --key in that Conversation, and print who is mentionable there",
+		Long: `Add a Handle the Group's config.toml defines to [agent] profiles: the Group's, or with --key the Conversation's.
+A Conversation with no list of its own follows the Group's; including one there gives it a list of
+that Handle alone, and it no longer follows the Group's until its profiles line is deleted by hand.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			handle, err := handleArg(args)
+			if err != nil {
+				return err
+			}
+			return runAgentInclusion(g, keyQuery, handle, true)
+		},
+	}
+	excludeCmd := &cobra.Command{
+		Use:   "exclude <handle>",
+		Short: "Exclude an agent from Group-level talk, or with --key from that Conversation, and print who is mentionable there",
+		Long: `Take a Handle out of [agent] profiles: the Group's, or with --key the Conversation's. Excluding the last
+leaves an empty list, so no agent answers there. A Conversation with no list of its own follows the
+Group's, and exclude --key refuses it.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			handle, err := handleArg(args)
+			if err != nil {
+				return err
+			}
+			return runAgentInclusion(g, keyQuery, handle, false)
+		},
+	}
+	for _, cmd := range []*cobra.Command{includeCmd, excludeCmd} {
+		bindWriteGroupFlag(g, cmd)
+		cmd.Flags().StringVar(&keyQuery, "key", "", keyEditFlagHelp)
+	}
+
+	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd, deleteCmd, includeCmd, excludeCmd)
 	return root
+}
+
+// runAgentInclusion includes handle in, or excludes it from, the Group's
+// [agent] profiles, or with keyQuery the Conversation's, and prints the
+// list that results.
+func runAgentInclusion(g *globals, keyQuery, handle string, include bool) error {
+	edit := func(list []string) []string {
+		if !include {
+			return without(list, handle)
+		}
+		if contains(list, handle) {
+			return list
+		}
+		return append(list, handle)
+	}
+	var list []string
+	var err error
+	if keyQuery == "" {
+		_, err = writeGroup(g, func(c *config.Config) error {
+			if _, ok := c.Agents[handle]; !ok {
+				return noProfile(handle)
+			}
+			c.Agent.Profiles = edit(c.Agent.Profiles)
+			list = c.Agent.Profiles
+			return nil
+		})
+	} else {
+		list, err = editConversationList(g, keyQuery, handle, include, edit)
+	}
+	if err != nil {
+		return err
+	}
+	if list == nil {
+		list = []string{}
+	}
+	if g.json {
+		return g.emitJSON(list)
+	}
+	for _, h := range list {
+		fmt.Fprintln(g.app.Stdout, h)
+	}
+	return nil
+}
+
+// editConversationList applies edit to the [agent] profiles of the
+// Conversation keyQuery names, keeping the file's other sections, and
+// returns the list. A Conversation with no list follows the Group's: an
+// include gives it its own, and warns so; an exclude is refused.
+func editConversationList(g *globals, keyQuery, handle string, include bool, edit func([]string) []string) ([]string, error) {
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := readConfig(g, "")
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := cfg.Agents[handle]; !ok {
+		return nil, exitUsagef("%w", noProfile(handle))
+	}
+	path, err := conversationConfigFile(g, alias, keyQuery)
+	if err != nil {
+		return nil, err
+	}
+	w, err := config.ReadWorkspace(path)
+	if err != nil {
+		return nil, exitOperational(err)
+	}
+	following := w.Agent.Profiles == nil
+	if following && !include {
+		return nil, exitUsagef("%s follows the Group's list; exclude it there, or give %s its own list with include --key", keyQuery, keyQuery)
+	}
+	w.Agent.Profiles = edit(w.Agent.Profiles)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, exitOperational(err)
+	}
+	if err := config.WriteWorkspace(path, w); err != nil {
+		return nil, exitOperational(err)
+	}
+	if following {
+		fmt.Fprintf(g.app.Stderr, "%s %s now has its own list of agents and no longer follows the Group's\n",
+			paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:"), keyQuery)
+	}
+	return w.Agent.Profiles, nil
 }
 
 // groupsDefining is every Group on this Node but the targeted one whose

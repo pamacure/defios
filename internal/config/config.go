@@ -119,28 +119,30 @@ type Agent struct {
 	MaxDepth int `toml:"max_depth,omitzero"`
 }
 
-// WriteFile writes config.toml, mode 0600.
+// WriteFile writes a Group's config.toml, mode 0600, keeping an [agent]
+// profiles set empty as WriteWorkspace does.
 func WriteFile(path string, c Config) error {
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	return os.WriteFile(path, buf.Bytes(), 0o600)
+	return write(path, c, c.Agent)
 }
-
-// agentHeader is the [agent] table's header as the encoder writes it.
-var agentHeader = regexp.MustCompile(`(?m)^\[agent\]\n`)
 
 // WriteWorkspace writes a Conversation's config.toml, mode 0600. The encoder
 // drops an empty list, so an [agent] profiles set empty, which replaces the
 // Group's list with none, is written under the [agent] header by hand.
 func WriteWorkspace(path string, w Workspace) error {
+	return write(path, w, w.Agent)
+}
+
+// agentHeader is the [agent] table's header as the encoder writes it.
+var agentHeader = regexp.MustCompile(`(?m)^\[agent\]\n`)
+
+// write encodes v, whose [agent] table is a, to path.
+func write(path string, v any, a Agent) error {
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(w); err != nil {
+	if err := toml.NewEncoder(&buf).Encode(v); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	out := buf.Bytes()
-	if w.Agent.Profiles != nil && len(w.Agent.Profiles) == 0 {
+	if a.Profiles != nil && len(a.Profiles) == 0 {
 		out = agentHeader.ReplaceAll(out, []byte("[agent]\nprofiles = []\n"))
 	}
 	return os.WriteFile(path, out, 0o600)

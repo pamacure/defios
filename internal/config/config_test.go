@@ -624,6 +624,24 @@ func TestWriteWorkspaceKeepsAnEmptyProfilesList(t *testing.T) {
 	}
 }
 
+// WriteFile keeps a Group's [agent] profiles set empty, as WriteWorkspace
+// does, so excluding the last Handle leaves the key; a profile named
+// agents has a table header the [agent] one must not be mistaken for.
+func TestWriteFileKeepsAnEmptyProfilesList(t *testing.T) {
+	c := config.Config{
+		Agents:    map[string]config.Profile{"agents": {Provider: "claude"}},
+		Workspace: config.Workspace{Providers: map[string]config.Provider{"claude": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}}, Agent: config.Agent{Profiles: []string{}}},
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.WriteFile(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(got, c) {
+		t.Fatalf("read back %#v, %v\nwant %#v", got, err, c)
+	}
+}
+
 // A profile's directory is named by its Handle (ADR 0026): a Group config
 // that still sets [agents.<handle>] dir is refused as an unknown key.
 func TestConfigRefusesAProfileDir(t *testing.T) {

@@ -95,22 +95,10 @@ func readConfig(g *globals, keyQuery string) (config.Config, error) {
 	if keyQuery == "" {
 		return cfg, nil
 	}
-	store, err := openReplica(g)
+	path, err := conversationConfigFile(g, alias, keyQuery)
 	if err != nil {
 		return config.Config{}, err
 	}
-	defer store.Close()
-	conv, err := conversationID(store, keyQuery)
-	if err != nil {
-		return config.Config{}, err
-	}
-	keys, err := key.Read(store)
-	if err != nil {
-		return config.Config{}, exitOperational(err)
-	}
-	var id [32]byte
-	copy(id[:], conv)
-	path := g.paths().ConversationConfigFile(alias, key.WorkspaceNames(keys)[id])
 	over, err := config.ReadWorkspace(path)
 	if err != nil {
 		return config.Config{}, exitOperational(err)
@@ -122,5 +110,29 @@ func readConfig(g *globals, keyQuery string) (config.Config, error) {
 	return cfg, nil
 }
 
+// conversationConfigFile is the path of the config.toml of the Conversation
+// of the Key keyQuery names, in the Group alias.
+func conversationConfigFile(g *globals, alias, keyQuery string) (string, error) {
+	store, err := openReplica(g)
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	conv, err := conversationID(store, keyQuery)
+	if err != nil {
+		return "", err
+	}
+	keys, err := key.Read(store)
+	if err != nil {
+		return "", exitOperational(err)
+	}
+	var id [32]byte
+	copy(id[:], conv)
+	return g.paths().ConversationConfigFile(alias, key.WorkspaceNames(keys)[id]), nil
+}
+
 // keyFlagHelp is --key on a read verb of a Workspace section.
 const keyFlagHelp = "read with this Key's Conversation config.toml merged over the Group's: curve:hex, a unique public-key prefix, or the Conversation ID"
+
+// keyEditFlagHelp is --key on a writing verb of a Workspace section.
+const keyEditFlagHelp = "edit this Key's Conversation config.toml instead of the Group's: curve:hex, a unique public-key prefix, or the Conversation ID"
