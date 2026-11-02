@@ -70,7 +70,7 @@ func requestConversation(hexID string) ([]byte, error) {
 // person's message; otherwise it is that agent's at depth, and this Node's
 // config must include the Handle there (ADR 0015). A person's message is
 // queued in the Outbox when no leader is known; an agent's is not, since
-// its chain needs its seq.
+// the next agent in its chain reads it from the replica.
 func (s *server) conversationSend(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
 	payload, err := cosl.AgentFreeform(text, handle, depth)
 	if err != nil {

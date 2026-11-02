@@ -5,7 +5,6 @@ package nodedir
 import (
 	"encoding/hex"
 	"path/filepath"
-	"strconv"
 )
 
 // Lookup is the environment the resolution reads. Every input is explicit so
@@ -168,10 +167,10 @@ func (p Paths) TranscriptsDir(alias, conversation string) string {
 	return filepath.Join(p.ConversationDir(alias, conversation), "transcripts")
 }
 
-// TranscriptFile is the Transcript of the chain started by seq chain in a
-// Conversation.
-func (p Paths) TranscriptFile(alias, conversation string, chain uint64) string {
-	return filepath.Join(p.TranscriptsDir(alias, conversation), strconv.FormatUint(chain, 10)+".jsonl")
+// TranscriptFile is the Transcript of a chain in a Conversation, named by
+// chain, the hex msg_id of the message that started it (ADR 0025).
+func (p Paths) TranscriptFile(alias, conversation, chain string) string {
+	return filepath.Join(p.TranscriptsDir(alias, conversation), chain+".jsonl")
 }
 
 // ConversationWorkspace is config/group/<alias>/<name>/, name being the

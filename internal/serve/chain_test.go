@@ -3,6 +3,7 @@ package serve_test
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -261,9 +262,9 @@ func watch(t *testing.T, n *node) *serve.ChainStream {
 	return s
 }
 
-// untilEnd reads events until the chain started by seq ends, returning
+// untilEnd reads events until the chain named by its hex msg_id ends, returning
 // that chain's events.
-func untilEnd(t *testing.T, s *serve.ChainStream, seq uint64) []serve.ChainEvent {
+func untilEnd(t *testing.T, s *serve.ChainStream, chain string) []serve.ChainEvent {
 	t.Helper()
 	var out []serve.ChainEvent
 	done := make(chan error, 1)
@@ -274,7 +275,7 @@ func untilEnd(t *testing.T, s *serve.ChainStream, seq uint64) []serve.ChainEvent
 				done <- err
 				return
 			}
-			if ev.Chain != seq {
+			if ev.Chain != chain {
 				continue
 			}
 			out = append(out, ev)
@@ -290,15 +291,15 @@ func untilEnd(t *testing.T, s *serve.ChainStream, seq uint64) []serve.ChainEvent
 			t.Fatalf("stream: %v", err)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatalf("chain %d never ended; got %+v", seq, out)
+		t.Fatalf("chain %s never ended; got %+v", chain, out)
 	}
 	return out
 }
 
-// untilStreaming reads the chain started by seq until handle has streamed
+// untilStreaming reads the chain named by its hex msg_id until handle has streamed
 // text, returning the chain's events so far: a cancel after it finds the
 // delta published.
-func untilStreaming(t *testing.T, s *serve.ChainStream, seq uint64, handle string) []serve.ChainEvent {
+func untilStreaming(t *testing.T, s *serve.ChainStream, chain string, handle string) []serve.ChainEvent {
 	t.Helper()
 	var out []serve.ChainEvent
 	done := make(chan error, 1)
@@ -310,7 +311,7 @@ func untilStreaming(t *testing.T, s *serve.ChainStream, seq uint64, handle strin
 				done <- err
 				return
 			}
-			if ev.Chain != seq {
+			if ev.Chain != chain {
 				continue
 			}
 			out = append(out, ev)
@@ -329,7 +330,7 @@ func untilStreaming(t *testing.T, s *serve.ChainStream, seq uint64, handle strin
 			t.Fatalf("stream: %v", err)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatalf("@%s never streamed in chain %d; got %+v", handle, seq, out)
+		t.Fatalf("@%s never streamed in chain %s; got %+v", handle, chain, out)
 	}
 	return out
 }
@@ -401,7 +402,7 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
 	if got := summary(events); got != `chain.start start:@auditor/1 text:thinking tool:say {"text":"reply 1"} commit:reply 1 end` {
 		t.Fatalf("events = %s", got)
 	}
@@ -410,8 +411,8 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 	if len(ffs) != 2 || ffs[1].Text != "reply 1" || ffs[1].Handle != "auditor" || ffs[1].Depth != 1 || rows[1].Sender != a.id.NodeID {
 		t.Fatalf("rows = %+v", ffs)
 	}
-	if commit := events[len(events)-2]; commit.Seq != rows[1].Seq {
-		t.Fatalf("agent.commit seq %d, row at %d", commit.Seq, rows[1].Seq)
+	if commit := events[len(events)-2]; commit.Seq != rows[1].Seq || commit.MsgID != hex.EncodeToString(rows[1].MsgID[:]) {
+		t.Fatalf("agent.commit %+v, row %d %x", commit, rows[1].Seq, rows[1].MsgID)
 	}
 	calls := provider.seen()
 	if len(calls) != 1 || calls[0].Key != "sk-"+a.name || calls[0].Prompt != "alice: @auditor is this fine?" {
@@ -431,7 +432,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
 	want := `chain.start start:@scribe/1 text:thinking tool:say {"text":"reply 1"} commit:reply 1 start:@auditor/1 text:thinking tool:say {"text":"reply 2"} commit:reply 2 end`
 	if got := summary(events); got != want {
 		t.Fatalf("events = %s", got)
@@ -461,13 +462,13 @@ func TestAnAgentIsOneNodesHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, sb, v.Seq)
+	untilEnd(t, sb, v.MsgID)
 	a.groupLevelRows(t, gid, 2)
 	sa := watch(t, a)
 	if v, err = a.client().ConversationSend(ctx, "@auditor and\nyou?", nil); err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, sa, v.Seq)
+	untilEnd(t, sa, v.MsgID)
 	calls := provider.seenWith("sk-" + a.name)
 	if len(calls) != 1 {
 		t.Fatalf("alice's calls = %+v", calls)
@@ -491,7 +492,7 @@ func TestOnlyTheMentioningNodeRunsTheAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, sb, v.Seq)); !strings.HasSuffix(got, "commit:reply 1 end") {
+	if got := summary(untilEnd(t, sb, v.MsgID)); !strings.HasSuffix(got, "commit:reply 1 end") {
 		t.Fatalf("events = %s", got)
 	}
 	a.groupLevelRows(t, gid, 2)
@@ -517,13 +518,13 @@ func TestEachNodesKeyGoesOnlyToItsOwnBaseURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, sa, v.Seq)
+	untilEnd(t, sa, v.MsgID)
 	b.groupLevelRows(t, gid, 2)
 	sb := watch(t, b)
 	if v, err = b.client().ConversationSend(ctx, "@auditor from bob", nil); err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, sb, v.Seq)
+	untilEnd(t, sb, v.MsgID)
 	if calls := alices.seen(); len(calls) != 1 || calls[0].Key != "sk-"+a.name {
 		t.Fatalf("alice's server saw %+v; want only alice's key", calls)
 	}
@@ -563,7 +564,7 @@ func TestRetryResetsAndCommitsTheFinalReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != `chain.start start:@auditor/1 text:half agent.reset text:whole tool:say {"text":"whole"} commit:whole end` {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 text:half agent.reset text:whole tool:say {"text":"whole"} commit:whole end` {
 		t.Fatalf("events = %s", got)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "whole" {
@@ -584,7 +585,7 @@ func TestNonRetryableFailureCommitsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
 	if got := summary(events); got != "chain.start start:@auditor/1 error:@auditor end" {
 		t.Fatalf("events = %s", got)
 	}
@@ -616,8 +617,9 @@ func holdProvider(provider *fakeProvider) (started chan int, release chan struct
 	return started, release
 }
 
-// The cancel endpoint ends the running agent's request, commits nothing for
-// it, drops the rest of the chain, and leaves the person's message.
+// The cancel endpoint, naming the chain by a prefix of its msg_id, ends the
+// running agent's request, commits nothing for it, drops the rest of the
+// chain, and leaves the person's message.
 func TestCancelCommitsNothing(t *testing.T) {
 	a, _, gid, provider := agentPair(t, "auditor", "scribe")
 	started, _ := holdProvider(provider)
@@ -628,11 +630,11 @@ func TestCancelCommitsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-started
-	seen := untilStreaming(t, s, v.Seq, "auditor")
-	if c, err := a.client().ConversationCancel(ctx, nil, v.Seq); err != nil || !c.Cancelled {
+	seen := untilStreaming(t, s, v.MsgID, "auditor")
+	if c, err := a.client().ConversationCancel(ctx, nil, v.MsgID[:6]); err != nil || !c.Cancelled || c.Chain != v.MsgID {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != "chain.start start:@auditor/1 text:start end:cancelled" {
+	if got := summary(append(seen, untilEnd(t, s, v.MsgID)...)); got != "chain.start start:@auditor/1 text:start end:cancelled" {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -642,7 +644,7 @@ func TestCancelCommitsNothing(t *testing.T) {
 	if n := len(provider.seen()); n != 1 {
 		t.Fatalf("provider called %d times, want 1", n)
 	}
-	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || c.Cancelled {
+	if c, err := a.client().ConversationCancel(ctx, nil, ""); err != nil || c.Cancelled {
 		t.Fatalf("cancel with nothing running = %+v, %v", c, err)
 	}
 }
@@ -668,7 +670,7 @@ func TestASecondMentionWaitsForTheRunningChain(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	close(release)
-	var order []uint64
+	var order []string
 	for len(order) < 4 {
 		ev, err := s.Next()
 		if err != nil {
@@ -678,7 +680,7 @@ func TestASecondMentionWaitsForTheRunningChain(t *testing.T) {
 			order = append(order, ev.Chain)
 		}
 	}
-	if want := []uint64{first.Seq, first.Seq, second.Seq, second.Seq}; fmt.Sprint(order) != fmt.Sprint(want) {
+	if want := []string{first.MsgID, first.MsgID, second.MsgID, second.MsgID}; fmt.Sprint(order) != fmt.Sprint(want) {
 		t.Fatalf("chain start/end order %v, want %v", order, want)
 	}
 	// The talk ends with the agent's own reply to the first, so a fixed user
@@ -703,7 +705,7 @@ func TestAProviderEditTakesEffectAtTheNextSummon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, s, v.Seq)
+	untilEnd(t, s, v.MsgID)
 
 	second := newFakeProvider(t)
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
@@ -714,7 +716,7 @@ func TestAProviderEditTakesEffectAtTheNextSummon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, s, v.Seq)
+	untilEnd(t, s, v.MsgID)
 	if calls := first.seen(); len(calls) != 1 {
 		t.Fatalf("the first endpoint saw %d calls, want 1", len(calls))
 	}
@@ -737,7 +739,7 @@ func TestSummonErrorsNameWhatToFix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		events := untilEnd(t, s, v.Seq)
+		events := untilEnd(t, s, v.MsgID)
 		return events[len(events)-2]
 	}
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
@@ -811,7 +813,7 @@ func TestMentionInAKeysConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit:reply 1 end") {
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "commit:reply 1 end") {
 		t.Fatalf("events = %s", got)
 	}
 	call := provider.seen()[0]
@@ -854,9 +856,9 @@ func TestTranscriptsAreInTheConversationDir(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		untilEnd(t, s, v.Seq)
+		untilEnd(t, s, v.MsgID)
 		s.Close()
-		path := filepath.Join(gdir, "conversations", c.dir, "transcripts", fmt.Sprintf("%d.jsonl", v.Seq))
+		path := filepath.Join(gdir, "conversations", c.dir, "transcripts", v.MsgID+".jsonl")
 		if !strings.Contains(readFile(t, path), `"kind":"outcome"`) {
 			t.Errorf("%s has no outcome", path)
 		}
@@ -896,8 +898,8 @@ func TestALateWatcherSeesTheCurrentAgent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	late := watch(t, a)
 	close(release)
-	untilEnd(t, early, v.Seq)
-	got := summary(untilEnd(t, late, v.Seq))
+	untilEnd(t, early, v.MsgID)
+	got := summary(untilEnd(t, late, v.MsgID))
 	if want := `chain.start start:@scribe/1 text:so far done tool:say {"text":"so far done"} commit:so far done end`; got != want {
 		t.Fatalf("late watcher saw %s, want %s", got, want)
 	}
@@ -934,7 +936,7 @@ func TestALateWatcherSeesTheRunSoFar(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // let the serve publish the deltas
 	late := watch(t, a)
 	close(release)
-	got := summary(untilEnd(t, late, v.Seq))
+	got := summary(untilEnd(t, late, v.MsgID))
 	want := `chain.start start:@auditor/1 text:plan tool:say {"text":""} text:so far tool:say {"text":"done"} commit:done end`
 	if got != want {
 		t.Fatalf("late watcher saw %s\nwant              %s", got, want)
@@ -961,11 +963,11 @@ func TestWatchersLeavingDoNotStopTheChain(t *testing.T) {
 	s := watch(t, a)
 	release <- struct{}{}
 	<-started // auditor's reply committed; scribe is answering
-	seen := untilStreaming(t, s, v.Seq, "scribe")
-	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
+	seen := untilStreaming(t, s, v.MsgID, "scribe")
+	if c, err := a.client().ConversationCancel(ctx, nil, ""); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); !strings.HasSuffix(got, "commit:start done start:@scribe/1 text:start end:cancelled") {
+	if got := summary(append(seen, untilEnd(t, s, v.MsgID)...)); !strings.HasSuffix(got, "commit:start done start:@scribe/1 text:start end:cancelled") {
 		t.Fatalf("events = %s", got)
 	}
 	if rows := a.groupLevelRows(t, gid, 2); len(rows) != 2 {
@@ -998,7 +1000,7 @@ func TestAnAgentsMentionAtMaxDepthIsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
 	if got := summary(events); got != `chain.start start:@auditor/1 tool:say {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe end` {
 		t.Fatalf("events = %s", got)
 	}
@@ -1031,7 +1033,7 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	want := `chain.start start:@auditor/1 tool:say {"text":"@quant, and me, @auditor"} commit:@quant, and me, @auditor ` +
 		`start:@quant/2 tool:say {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe ` +
 		`start:@scribe/1 tool:say {"text":"reply 3"} commit:reply 3 end`
-	if got := summary(untilEnd(t, s, v.Seq)); got != want {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
 	calls := provider.seen()
@@ -1066,7 +1068,7 @@ func TestAnAgentsStableSystemIsTheSameAtEveryDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `chain.start start:@auditor/1 tool:say {"text":"reply 1"} commit:reply 1 start:@scribe/1 tool:say {"text":"ask @auditor"} commit:ask @auditor start:@auditor/2 tool:say {"text":"reply 3"} commit:reply 3 end`
-	if got := summary(untilEnd(t, s, v.Seq)); got != want {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
 	calls := provider.seen()
@@ -1107,7 +1109,7 @@ func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 error:@quant end` {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 error:@quant end` {
 		t.Fatalf("events = %s", got)
 	}
 	if n := len(provider.seen()); n != 2 {
@@ -1138,11 +1140,11 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-started
-	seen := untilStreaming(t, s, v.Seq, "quant")
-	if c, err := a.client().ConversationCancel(ctx, nil, 0); err != nil || !c.Cancelled {
+	seen := untilStreaming(t, s, v.MsgID, "quant")
+	if c, err := a.client().ConversationCancel(ctx, nil, ""); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.Seq)...)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 text:start end:cancelled` {
+	if got := summary(append(seen, untilEnd(t, s, v.MsgID)...)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 text:start end:cancelled` {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)

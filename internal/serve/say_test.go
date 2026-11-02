@@ -13,10 +13,11 @@ import (
 	"defios.com/internal/serve"
 )
 
-// transcript is the Transcript lines of the Group-level chain seq on n.
-func transcript(t *testing.T, n *node, seq uint64) []map[string]any {
+// transcript is the Transcript lines of the Group-level chain on n named by
+// its hex msg_id.
+func transcript(t *testing.T, n *node, chain string) []map[string]any {
 	t.Helper()
-	path := n.paths.TranscriptFile(group.ImplicitAlias, "group", seq)
+	path := n.paths.TranscriptFile(group.ImplicitAlias, "group", chain)
 	var out []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(readFile(t, path)), "\n") {
 		var m map[string]any
@@ -58,7 +59,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != `chain.start start:@auditor/1 tool:say {"text":"`+strings.Repeat("x", 4097)+`"}`+"\n"+`say {"text":"shorter"} commit:shorter end` {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:say {"text":"`+strings.Repeat("x", 4097)+`"}`+"\n"+`say {"text":"shorter"} commit:shorter end` {
 		t.Fatalf("events = %s", got)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "shorter" {
@@ -88,7 +89,7 @@ func TestASilentAgentCommitsNothingAndTheChainGoesOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `chain.start start:@auditor/1 text:nothing for @quant silent:@auditor start:@scribe/1 tool:say {"text":"noted"} commit:noted end`
-	if got := summary(untilEnd(t, s, v.Seq)); got != want {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
 	rows := freeforms(t, b.groupLevelRows(t, gid, 2))
@@ -98,7 +99,7 @@ func TestASilentAgentCommitsNothingAndTheChainGoesOn(t *testing.T) {
 	if n := len(provider.seen()); n != 2 {
 		t.Fatalf("provider called %d times, want 2", n)
 	}
-	if got := lineWords(transcript(t, a, v.Seq)); !strings.Contains(got, "1/auditor/1/1:outcome=silent") {
+	if got := lineWords(transcript(t, a, v.MsgID)); !strings.Contains(got, "1/auditor/1/1:outcome=silent") {
 		t.Fatalf("transcript = %s", got)
 	}
 }
@@ -126,7 +127,7 @@ func TestRunBoundsAreErrors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		events := untilEnd(t, s, v.Seq)
+		events := untilEnd(t, s, v.MsgID)
 		last := events[len(events)-2]
 		if last.Type != serve.EventAgentError || !strings.Contains(last.Error, tc.want) {
 			t.Fatalf("%s: events = %s, error %q", tc.want, summary(events), last.Error)
@@ -134,7 +135,7 @@ func TestRunBoundsAreErrors(t *testing.T) {
 		if calls := len(provider.seen()) - before; calls != tc.calls {
 			t.Fatalf("%s: %d calls, want %d", tc.want, calls, tc.calls)
 		}
-		lines := transcript(t, a, v.Seq)
+		lines := transcript(t, a, v.MsgID)
 		if end := lines[len(lines)-1]; end["outcome"] != "error" || !strings.Contains(fmt.Sprint(end["error"]), tc.want) {
 			t.Fatalf("%s: last line = %v", tc.want, end)
 		}
@@ -161,14 +162,14 @@ func TestProfileOptionsShapeTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
 	if last := events[len(events)-2]; last.Type != serve.EventAgentError || !strings.Contains(last.Error, "2 model calls") {
 		t.Fatalf("events = %s, error %q", summary(events), last.Error)
 	}
 	if n := len(provider.seen()); n != 2 {
 		t.Fatalf("%d calls, want 2", n)
 	}
-	req, _ := transcript(t, a, v.Seq)[0]["request"].(map[string]any)
+	req, _ := transcript(t, a, v.MsgID)[0]["request"].(map[string]any)
 	thinking, _ := req["thinking"].(map[string]any)
 	if req["model"] != "claude-test" || req["stream"] != true || req["max_tokens"] != float64(1024) || thinking["type"] != "adaptive" {
 		t.Fatalf("request = %v", req)
@@ -202,9 +203,9 @@ func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, s, v.Seq)
+	untilEnd(t, s, v.MsgID)
 	var reqs []map[string]any
-	for _, line := range transcript(t, a, v.Seq) {
+	for _, line := range transcript(t, a, v.MsgID) {
 		if req, ok := line["request"].(map[string]any); ok {
 			reqs = append(reqs, req)
 		}
@@ -240,8 +241,8 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
-	lines := transcript(t, a, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
+	lines := transcript(t, a, v.MsgID)
 	want := "1/auditor/1/1:request 1/auditor/1/1:block 1/auditor/1/1:block 1/auditor/1/1:usage " +
 		"1/auditor/1/1:request 1/auditor/1/1:block 1/auditor/1/1:block 1/auditor/1/1:usage 1/auditor/1/1:outcome=said " +
 		"2/scribe/1/1:request 2/scribe/1/1:block 2/scribe/1/1:usage 2/scribe/1/1:outcome=silent"
@@ -254,14 +255,14 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 			commit = ev
 		}
 	}
-	if said := lines[8]["seq"]; commit.Text != "ok" || said != float64(commit.Seq) {
+	if said := lines[8]; commit.Text != "ok" || said["seq"] != float64(commit.Seq) || said["msg_id"] != commit.MsgID || commit.MsgID == "" {
 		t.Fatalf("said seq %v, agent.commit %+v", said, commit)
 	}
 	req, _ := lines[4]["request"].(map[string]any)
 	if req["model"] != "claude-test" || len(req["messages"].([]any)) != 3 {
 		t.Fatalf("second request = %v", req)
 	}
-	if raw := readFile(t, a.paths.TranscriptFile(group.ImplicitAlias, "group", v.Seq)); strings.Contains(raw, "sk-"+a.name) {
+	if raw := readFile(t, a.paths.TranscriptFile(group.ImplicitAlias, "group", v.MsgID)); strings.Contains(raw, "sk-"+a.name) {
 		t.Fatal("the Transcript holds the API key")
 	}
 }
@@ -280,8 +281,8 @@ func TestTheTranscriptRecordsCacheUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, s, v.Seq)
-	for _, l := range transcript(t, a, v.Seq) {
+	untilEnd(t, s, v.MsgID)
+	for _, l := range transcript(t, a, v.MsgID) {
 		if l["kind"] != "usage" {
 			continue
 		}
@@ -305,11 +306,11 @@ func TestCancelWritesOutcomeCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-started
-	if _, err := a.client().ConversationCancel(ctx, nil, v.Seq); err != nil {
+	if _, err := a.client().ConversationCancel(ctx, nil, v.MsgID); err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, s, v.Seq)
-	if got := lineWords(transcript(t, a, v.Seq)); got != "1/auditor/1/1:request 1/auditor/1/1:outcome=cancelled" {
+	untilEnd(t, s, v.MsgID)
+	if got := lineWords(transcript(t, a, v.MsgID)); got != "1/auditor/1/1:request 1/auditor/1/1:outcome=cancelled" {
 		t.Fatalf("transcript = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)

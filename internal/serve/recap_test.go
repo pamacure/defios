@@ -45,7 +45,7 @@ func summon(t *testing.T, n *node, text string) serve.SendView {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, s, v.Seq)
+	untilEnd(t, s, v.MsgID)
 	return v
 }
 
@@ -167,7 +167,7 @@ func TestABadRECAPmdFailsTheSummon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
 	for _, ev := range events {
 		if ev.Type == serve.EventAgentError && strings.Contains(ev.Error, path) {
 			return

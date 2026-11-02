@@ -47,16 +47,17 @@ func maxDepth2(t *testing.T, a *node) {
 	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
 }
 
-// retry retries the Group-level chain seq on n (0: the latest unfinished)
+// retry retries the Group-level chain named by msg_id prefix chain on n
+// ("": the latest unfinished)
 // and returns its chain's events.
-func retry(t *testing.T, n *node, s *serve.ChainStream, seq uint64) []serve.ChainEvent {
+func retry(t *testing.T, n *node, s *serve.ChainStream, chain string) []serve.ChainEvent {
 	t.Helper()
-	v, err := n.client().ConversationRetry(context.Background(), nil, seq)
+	v, err := n.client().ConversationRetry(context.Background(), nil, chain)
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if seq != 0 && v.Chain != seq {
-		t.Fatalf("retried chain %d, want %d", v.Chain, seq)
+	if !strings.HasPrefix(v.Chain, chain) {
+		t.Fatalf("retried chain %s, want %s", v.Chain, chain)
 	}
 	return untilEnd(t, s, v.Chain)
 }
@@ -75,11 +76,11 @@ func TestRetryRerunsOnlyTheFailedStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 tool:say {\"text\":\"ask @quant\"} commit:ask @quant start:@quant/2 tool:say {\"text\":\"noted\"} commit:noted start:@scribe/1 error:@scribe end" {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != "chain.start start:@auditor/1 tool:say {\"text\":\"ask @quant\"} commit:ask @quant start:@quant/2 tool:say {\"text\":\"noted\"} commit:noted start:@scribe/1 error:@scribe end" {
 		t.Fatalf("first run = %s", got)
 	}
 	fail.Store(false)
-	if got := summary(retry(t, a, s, 0)); got != "chain.start skipped:@auditor skipped:@quant start:@scribe/1 tool:say {\"text\":\"done\"} commit:done end" {
+	if got := summary(retry(t, a, s, "")); got != "chain.start skipped:@auditor skipped:@quant start:@scribe/1 tool:say {\"text\":\"done\"} commit:done end" {
 		t.Fatalf("retry = %s", got)
 	}
 	if n := len(provider.seen()); n != 4 {
@@ -92,11 +93,11 @@ func TestRetryRerunsOnlyTheFailedStep(t *testing.T) {
 	if got := strings.Join(texts, "|"); got != "@auditor @scribe|ask @quant|noted|done" {
 		t.Fatalf("talk = %s", got)
 	}
-	words := lineWords(transcript(t, a, v.Seq))
+	words := lineWords(transcript(t, a, v.MsgID))
 	if !strings.HasSuffix(words, "3/scribe/1/1:outcome=error 3/scribe/1/2:request 3/scribe/1/2:block 3/scribe/1/2:block 3/scribe/1/2:usage 3/scribe/1/2:outcome=said") {
 		t.Fatalf("transcript = %s", words)
 	}
-	if _, err := a.client().ConversationRetry(context.Background(), nil, 0); !errors.Is(err, serve.ErrNothingToRetry) {
+	if _, err := a.client().ConversationRetry(context.Background(), nil, ""); !errors.Is(err, serve.ErrNothingToRetry) {
 		t.Fatalf("retry after it = %v, want ErrNothingToRetry", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -129,16 +130,16 @@ func TestRetryRerunsOnlyTheFailedStepOfARepeatedHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@auditor/1 tool:say {\"text\":\"ask @quant\"} commit:ask @quant start:@quant/2 tool:say {\"text\":\"noted\"} commit:noted start:@scribe/1 tool:say {\"text\":\"ask @quant\"} commit:ask @quant start:@quant/2 error:@quant end" {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != "chain.start start:@auditor/1 tool:say {\"text\":\"ask @quant\"} commit:ask @quant start:@quant/2 tool:say {\"text\":\"noted\"} commit:noted start:@scribe/1 tool:say {\"text\":\"ask @quant\"} commit:ask @quant start:@quant/2 error:@quant end" {
 		t.Fatalf("first run = %s", got)
 	}
-	if got := summary(retry(t, a, s, v.Seq)); got != "chain.start skipped:@auditor skipped:@quant skipped:@scribe start:@quant/2 tool:say {\"text\":\"noted\"} commit:noted end" {
+	if got := summary(retry(t, a, s, v.MsgID)); got != "chain.start skipped:@auditor skipped:@quant skipped:@scribe start:@quant/2 tool:say {\"text\":\"noted\"} commit:noted end" {
 		t.Fatalf("retry = %s", got)
 	}
 	if n := len(provider.seen()); n != 5 {
 		t.Fatalf("provider called %d times, want 5", n)
 	}
-	if words := lineWords(transcript(t, a, v.Seq)); !strings.HasSuffix(words, "4/quant/2/1:outcome=error 4/quant/2/2:request 4/quant/2/2:block 4/quant/2/2:block 4/quant/2/2:usage 4/quant/2/2:outcome=said") {
+	if words := lineWords(transcript(t, a, v.MsgID)); !strings.HasSuffix(words, "4/quant/2/1:outcome=error 4/quant/2/2:request 4/quant/2/2:block 4/quant/2/2:block 4/quant/2/2:usage 4/quant/2/2:outcome=said") {
 		t.Fatalf("transcript = %s", words)
 	}
 }
@@ -154,18 +155,18 @@ func TestRetryAfterARestartRunsTheCutOffStep(t *testing.T) {
 	}
 	<-started
 	a.restart(t)
-	if got := lineWords(transcript(t, a, v.Seq)); got != "1/auditor/1/1:request" {
+	if got := lineWords(transcript(t, a, v.MsgID)); got != "1/auditor/1/1:request" {
 		t.Fatalf("transcript after the stop = %s", got)
 	}
 	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) { streamSay(w, "back") })
 	s := watch(t, a)
-	if got := summary(retry(t, a, s, 0)); got != "chain.start start:@auditor/1 tool:say {\"text\":\"back\"} commit:back end" {
+	if got := summary(retry(t, a, s, "")); got != "chain.start start:@auditor/1 tool:say {\"text\":\"back\"} commit:back end" {
 		t.Fatalf("retry = %s", got)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); len(ffs) != 2 || ffs[1].Text != "back" {
 		t.Fatalf("talk = %+v", ffs)
 	}
-	if got := lineWords(transcript(t, a, v.Seq)); !strings.HasPrefix(got, "1/auditor/1/1:request 1/auditor/1/2:request") || !strings.HasSuffix(got, "1/auditor/1/2:outcome=said") {
+	if got := lineWords(transcript(t, a, v.MsgID)); !strings.HasPrefix(got, "1/auditor/1/1:request 1/auditor/1/2:request") || !strings.HasSuffix(got, "1/auditor/1/2:outcome=said") {
 		t.Fatalf("transcript = %s", got)
 	}
 }
@@ -190,30 +191,30 @@ func TestRetryQueuedRunningAndUntranscribedChains(t *testing.T) {
 	}
 	a.applied(t, second.Seq)
 	time.Sleep(200 * time.Millisecond) // the follower queues it
-	for _, seq := range []uint64{first.Seq, second.Seq} {
-		if _, err := a.client().ConversationRetry(ctx, nil, seq); !errors.Is(err, serve.ErrChainBusy) {
-			t.Fatalf("retry of %d = %v, want ErrChainBusy", seq, err)
+	for _, chain := range []string{first.MsgID, second.MsgID} {
+		if _, err := a.client().ConversationRetry(ctx, nil, chain); !errors.Is(err, serve.ErrChainBusy) {
+			t.Fatalf("retry of %s = %v, want ErrChainBusy", chain, err)
 		}
 	}
-	if c, err := a.client().ConversationCancel(ctx, nil, second.Seq); err != nil || !c.Cancelled {
+	if c, err := a.client().ConversationCancel(ctx, nil, second.MsgID); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
 	close(release)
-	firstEvents := untilEnd(t, s, first.Seq)
-	untilEnd(t, s, second.Seq)
-	if got := summary(retry(t, a, s, second.Seq)); got != "chain.start start:@auditor/1 text:start tool:say {\"text\":\"start done\"} commit:start done end" {
+	firstEvents := untilEnd(t, s, first.MsgID)
+	untilEnd(t, s, second.MsgID)
+	if got := summary(retry(t, a, s, second.MsgID)); got != "chain.start start:@auditor/1 text:start tool:say {\"text\":\"start done\"} commit:start done end" {
 		t.Fatalf("retry = %s", got)
 	}
-	if got := lineWords(transcript(t, a, second.Seq)); !strings.HasPrefix(got, "1/auditor/1/1:request") {
+	if got := lineWords(transcript(t, a, second.MsgID)); !strings.HasPrefix(got, "1/auditor/1/1:request") {
 		t.Fatalf("transcript = %s", got)
 	}
-	if _, err := a.client().ConversationRetry(ctx, nil, first.Seq); !errors.Is(err, serve.ErrNothingToRetry) {
+	if _, err := a.client().ConversationRetry(ctx, nil, first.MsgID); !errors.Is(err, serve.ErrNothingToRetry) {
 		t.Fatalf("retry of a finished chain = %v, want ErrNothingToRetry", err)
 	}
-	if _, err := a.client().ConversationRetry(ctx, nil, 0); !errors.Is(err, serve.ErrNothingToRetry) {
+	if _, err := a.client().ConversationRetry(ctx, nil, ""); !errors.Is(err, serve.ErrNothingToRetry) {
 		t.Fatalf("retry with nothing unfinished = %v, want ErrNothingToRetry", err)
 	}
-	reply := firstEvents[len(firstEvents)-2].Seq // agent.commit
+	reply := firstEvents[len(firstEvents)-2].MsgID // agent.commit
 	if _, err := a.client().ConversationRetry(ctx, nil, reply); !errors.Is(err, serve.ErrNotAChain) {
 		t.Fatalf("retry of an agent's message = %v, want ErrNotAChain", err)
 	}
@@ -245,12 +246,12 @@ func TestRetryKeepsStepsWhenAHandleThatRanIsNowSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit:noted start:@critic/1 error:@critic end") {
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "commit:noted start:@critic/1 error:@critic end") {
 		t.Fatalf("first run = %s", got)
 	}
 	dropProfile(t, a, "scribe")
 	fail.Store(false)
-	if got := summary(retry(t, a, s, 0)); got != "chain.start skipped:@auditor skipped:@scribe skipped:@quant start:@critic/1 tool:say {\"text\":\"fine\"} commit:fine end" {
+	if got := summary(retry(t, a, s, "")); got != "chain.start skipped:@auditor skipped:@scribe skipped:@quant start:@critic/1 tool:say {\"text\":\"fine\"} commit:fine end" {
 		t.Fatalf("retry = %s", got)
 	}
 	var texts []string
@@ -260,16 +261,16 @@ func TestRetryKeepsStepsWhenAHandleThatRanIsNowSkipped(t *testing.T) {
 	if got := strings.Join(texts, "|"); got != "@auditor @quant @critic|ask @scribe|ok|noted|fine" {
 		t.Fatalf("talk = %s", got)
 	}
-	if words := lineWords(transcript(t, a, v.Seq)); !strings.HasSuffix(words, "4/critic/1/1:outcome=error 4/critic/1/2:request 4/critic/1/2:block 4/critic/1/2:block 4/critic/1/2:usage 4/critic/1/2:outcome=said") {
+	if words := lineWords(transcript(t, a, v.MsgID)); !strings.HasSuffix(words, "4/critic/1/1:outcome=error 4/critic/1/2:request 4/critic/1/2:block 4/critic/1/2:block 4/critic/1/2:usage 4/critic/1/2:outcome=said") {
 		t.Fatalf("transcript = %s", words)
 	}
 }
 
-// cutAfterStep rewrites the Transcript of a's Group-level chain seq to its
+// cutAfterStep rewrites the Transcript of a's Group-level chain to its
 // lines up to step: as if a stop came between that step and the next.
-func cutAfterStep(t *testing.T, a *node, seq uint64, step int) {
+func cutAfterStep(t *testing.T, a *node, chain string, step int) {
 	t.Helper()
-	path := a.paths.TranscriptFile(group.ImplicitAlias, "group", seq)
+	path := a.paths.TranscriptFile(group.ImplicitAlias, "group", chain)
 	var kept []string
 	for _, line := range strings.Split(strings.TrimSpace(readFile(t, path)), "\n") {
 		var l serve.TranscriptLine
@@ -296,14 +297,14 @@ func TestRetryRunsAStepAStopCameBefore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untilEnd(t, s, v.Seq)
-	for _, seq := range []uint64{0, v.Seq} {
-		cutAfterStep(t, a, v.Seq, 1)
-		if got := summary(retry(t, a, s, seq)); got != "chain.start skipped:@auditor start:@scribe/1 tool:say {\"text\":\"written\"} commit:written end" {
-			t.Fatalf("retry %d = %s", seq, got)
+	untilEnd(t, s, v.MsgID)
+	for _, chain := range []string{"", v.MsgID[:8]} {
+		cutAfterStep(t, a, v.MsgID, 1)
+		if got := summary(retry(t, a, s, chain)); got != "chain.start skipped:@auditor start:@scribe/1 tool:say {\"text\":\"written\"} commit:written end" {
+			t.Fatalf("retry %q = %s", chain, got)
 		}
 	}
-	if _, err := a.client().ConversationRetry(context.Background(), nil, 0); !errors.Is(err, serve.ErrNothingToRetry) {
+	if _, err := a.client().ConversationRetry(context.Background(), nil, ""); !errors.Is(err, serve.ErrNothingToRetry) {
 		t.Fatalf("retry after it = %v, want ErrNothingToRetry", err)
 	}
 }
@@ -327,18 +328,18 @@ func TestRetryInAKeysConversationFindsTheLatestUnfinished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "error:@auditor end") {
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "error:@auditor end") {
 		t.Fatalf("first run = %s", got)
 	}
-	if _, err := a.client().ConversationRetry(ctx, nil, 0); !errors.Is(err, serve.ErrNothingToRetry) {
+	if _, err := a.client().ConversationRetry(ctx, nil, ""); !errors.Is(err, serve.ErrNothingToRetry) {
 		t.Fatalf("Group-level retry = %v, want ErrNothingToRetry", err)
 	}
 	fail.Store(false)
-	r, err := a.client().ConversationRetry(ctx, id[:], 0)
-	if err != nil || r.Chain != v.Seq {
-		t.Fatalf("retry = %+v, %v; want chain %d", r, err, v.Seq)
+	r, err := a.client().ConversationRetry(ctx, id[:], "")
+	if err != nil || r.Chain != v.MsgID {
+		t.Fatalf("retry = %+v, %v; want chain %s", r, err, v.MsgID)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, "commit:checked end") {
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "commit:checked end") {
 		t.Fatalf("retry = %s", got)
 	}
 }

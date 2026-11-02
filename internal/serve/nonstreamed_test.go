@@ -133,12 +133,13 @@ func responsesWhole(w http.ResponseWriter, text, said string) {
 }
 
 // runLines is a run's Transcript lines as compared across replies: the
-// request bodies, which differ by stream, and the seq left out.
-func runLines(t *testing.T, a *node, seq uint64) string {
+// request bodies, which differ by stream, and the msg_id and seq left out.
+func runLines(t *testing.T, a *node, chain string) string {
 	t.Helper()
 	var out []string
-	for _, l := range transcript(t, a, seq) {
+	for _, l := range transcript(t, a, chain) {
 		delete(l, "handle")
+		delete(l, "msg_id")
 		delete(l, "seq")
 		if l["kind"] == serve.KindRequest {
 			delete(l, "request")
@@ -188,8 +189,8 @@ func TestAnAgentReadsAReplyThatIsNotStreamed(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				runs[h] = strings.ReplaceAll(summary(untilEnd(t, s, v.Seq)), "@"+h, "@h")
-				lines[h] = runLines(t, a, v.Seq)
+				runs[h] = strings.ReplaceAll(summary(untilEnd(t, s, v.MsgID)), "@"+h, "@h")
+				lines[h] = runLines(t, a, v.MsgID)
 			}
 			want := `chain.start start:@h/1 ` + tc.think + `text:first tool:say {"text":""} ` +
 				tc.think + `text:second tool:say {"text":"hello"} commit:hello end`
@@ -234,20 +235,20 @@ func TestAJSONReplyCutOffIsRetriedAndOneAtItsBoundIsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); !strings.HasSuffix(got, `tool:say {"text":"fine"} commit:fine end`) {
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, `tool:say {"text":"fine"} commit:fine end`) {
 		t.Fatalf("events = %s", got)
 	}
-	if got := lineWords(transcript(t, a, v.Seq)); strings.Count(got, ":request") != 2 || !strings.HasSuffix(got, "outcome=said") {
+	if got := lineWords(transcript(t, a, v.MsgID)); strings.Count(got, ":request") != 2 || !strings.HasSuffix(got, "outcome=said") {
 		t.Fatalf("transcript = %s", got)
 	}
 	v, err = a.client().ConversationSend(context.Background(), "@whole", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.Seq)); got != "chain.start start:@whole/1 text:on and on error:@whole end" {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != "chain.start start:@whole/1 text:on and on error:@whole end" {
 		t.Fatalf("events = %s", got)
 	}
-	lines := transcript(t, a, v.Seq)
+	lines := transcript(t, a, v.MsgID)
 	last := lines[len(lines)-1]
 	if last["outcome"] != serve.OutcomeError || !strings.Contains(fmt.Sprint(last["error"]), "token bound") {
 		t.Fatalf("transcript = %s, last %v", lineWords(lines), last)

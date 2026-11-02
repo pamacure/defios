@@ -114,7 +114,7 @@ func TestTranscriptsLiveInTheConversationDir(t *testing.T) {
 	if got := p.TranscriptsDir("home", "group"); got != "/tmp/n1/group/home/conversations/group/transcripts" {
 		t.Fatalf("transcripts dir %q", got)
 	}
-	if got := p.TranscriptFile("home", "ab12", 7); got != "/tmp/n1/group/home/conversations/ab12/transcripts/7.jsonl" {
+	if got := p.TranscriptFile("home", "ab12", "cd34"); got != "/tmp/n1/group/home/conversations/ab12/transcripts/cd34.jsonl" {
 		t.Fatalf("transcript file %q", got)
 	}
 }

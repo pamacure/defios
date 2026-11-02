@@ -224,6 +224,7 @@ var errorKinds = []struct {
 	{ErrNothingToRetry, "nothing-to-retry", http.StatusConflict},
 	{ErrChainBusy, "chain-busy", http.StatusConflict},
 	{ErrNotAChain, "not-a-chain", http.StatusBadRequest},
+	{ErrAmbiguousChain, "ambiguous-chain", http.StatusConflict},
 	{network.ErrInvalid, "bad-network", http.StatusBadRequest},
 	{network.ErrUnknown, "no-network", http.StatusNotFound},
 	{network.ErrNoChain, "no-chain", http.StatusUnprocessableEntity},

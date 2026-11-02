@@ -27,19 +27,18 @@ import (
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/secret"
-	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // Chain events on GET /v1/conversation/stream, one JSON object per line
-// (ADR 0015, ADR 0018). Every event names its chain by the seq of the
-// person's message that started it.
+// (ADR 0015, ADR 0018). Every event names its chain by the hex msg_id of the
+// person's message that started it (ADR 0025).
 const (
 	EventChainStart   = "chain.start"
 	EventAgentStart   = "agent.start"   // handle, depth
 	EventAgentDelta   = "agent.delta"   // kind, text: output as the agent generates it
 	EventAgentReset   = "agent.reset"   // a retry starts the model call over: its deltas are void
 	EventAgentSkipped = "agent.skipped" // handle, reason
-	EventAgentCommit  = "agent.commit"  // seq, text: an accepted say committed
+	EventAgentCommit  = "agent.commit"  // msg_id, seq, text: an accepted say committed
 	EventAgentSilent  = "agent.silent"  // handle: it ended without say
 	EventAgentError   = "agent.error"   // handle, error
 	EventChainEnd     = "chain.end"     // cancelled
@@ -48,14 +47,16 @@ const (
 // ChainEvent is one event of a chain of agents answering a mention.
 type ChainEvent struct {
 	Type   string `json:"type"`
-	Chain  uint64 `json:"chain"` // the seq of the message that started it
+	Chain  string `json:"chain"` // the hex msg_id of the message that started it
 	Handle string `json:"handle,omitempty"`
 	Depth  uint32 `json:"depth,omitempty"`
 	Kind   string `json:"kind,omitempty"` // agent.delta: thinking, text or tool
 	Text   string `json:"text,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
-	Seq    uint64 `json:"seq,omitempty"` // agent.commit: the message's row
+	// MsgID and Seq, on agent.commit, are the message's, Seq once it has a row.
+	MsgID string `json:"msg_id,omitempty"`
+	Seq   uint64 `json:"seq,omitempty"`
 	// Cancelled, on chain.end, means the chain was cut short by a cancel.
 	// Error, on chain.end, means the serve stopped and the chain is lost.
 	Cancelled bool `json:"cancelled,omitempty"`
@@ -125,7 +126,7 @@ func (sh *shown) events() []ChainEvent {
 
 // chain is the agents one person's message summons, in mention order.
 type chain struct {
-	seq     uint64
+	id      string // the hex msg_id of the person's message that starts it
 	conv    []byte
 	handles []string
 	ctx     context.Context
@@ -168,12 +169,12 @@ func (h *chainHub) release(key string, cc *conversationChains) {
 
 // enqueue queues c behind its Conversation's chains, under ctx, and starts
 // the Conversation's worker in wg if none runs. It refuses, reporting
-// false, while a chain of the same seq is running or queued there.
+// false, while a chain of the same id is running or queued there.
 func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, run func(*chain)) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	key := conversationKey(c.conv)
-	if h.busyLocked(key, c.seq) {
+	if h.busyLocked(key, c.id) {
 		return false
 	}
 	c.ctx, c.cancel = context.WithCancel(ctx)
@@ -203,42 +204,62 @@ func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, ru
 	return true
 }
 
-// busy reports whether the chain started by seq in the Conversation is
-// running or queued.
-func (h *chainHub) busy(conv []byte, seq uint64) bool {
+// busy reports whether the chain id in the Conversation is running or
+// queued.
+func (h *chainHub) busy(conv []byte, id string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.busyLocked(conversationKey(conv), seq)
+	return h.busyLocked(conversationKey(conv), id)
 }
 
-func (h *chainHub) busyLocked(key string, seq uint64) bool {
+func (h *chainHub) busyLocked(key, id string) bool {
 	cc := h.conversation(key, false)
 	if cc == nil {
 		return false
 	}
-	return slices.ContainsFunc(cc.queue, func(c *chain) bool { return c.seq == seq && c.ctx.Err() == nil })
+	return slices.ContainsFunc(cc.queue, func(c *chain) bool { return c.id == id && c.ctx.Err() == nil })
 }
 
-// cancel cancels the chain started by seq in the Conversation, running or
-// queued, or with seq 0 the running one. It reports whether there was one.
-func (h *chainHub) cancel(conv []byte, seq uint64) bool {
+// cancel cancels the chain in the Conversation, running or queued, whose
+// hex msg_id starts with prefix, or with prefix "" the running one. It
+// returns that chain's msg_id, "" if there was none; a prefix more than one
+// running or queued chain there starts with is ErrAmbiguousChain, and
+// cancels nothing.
+func (h *chainHub) cancel(conv []byte, prefix string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	cc := h.conversation(conversationKey(conv), false)
 	if cc == nil {
-		return false
+		return "", nil
 	}
+	var ids []string
 	for i, c := range cc.queue {
-		if c.ctx.Err() != nil {
-			continue // ended, or already cancelled
+		// An ended or already cancelled chain is not there to cancel.
+		if c.ctx.Err() == nil && (prefix != "" || (i == 0 && cc.running)) {
+			ids = append(ids, c.id)
 		}
-		if c.seq == seq || (seq == 0 && i == 0 && cc.running) {
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	id := ids[0]
+	if prefix != "" {
+		var err error
+		id, err = matchChain(prefix, ids)
+		if errors.Is(err, ErrNotAChain) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	for _, c := range cc.queue {
+		if c.id == id && c.ctx.Err() == nil {
 			c.cancelled.Store(true)
 			c.cancel()
-			return true
 		}
 	}
-	return false
+	return id, nil
 }
 
 // subscribe adds a watcher of the Conversation's chains; stop removes it.
@@ -289,7 +310,7 @@ func (h *chainHub) publish(conv []byte, ev ChainEvent) {
 func (h *chainHub) end(c *chain) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	ev := ChainEvent{Type: EventChainEnd, Chain: c.seq, Cancelled: c.cancelled.Load()}
+	ev := ChainEvent{Type: EventChainEnd, Chain: c.id, Cancelled: c.cancelled.Load()}
 	if c.ctx.Err() != nil && !ev.Cancelled {
 		ev.Error = "the serve stopped; this chain is lost and will not resume"
 	}
@@ -343,23 +364,12 @@ func (s *server) startChains(ctx context.Context, wg *sync.WaitGroup, store *cos
 		return err
 	}
 	for _, r := range rows {
-		if r.Sender != s.opts.Node.NodeID || r.Pruned() {
-			continue
-		}
-		env, err := r.Decode()
+		handles, err := s.chainHandles(r)
 		if err != nil {
 			return err
 		}
-		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-		if err != nil {
-			continue // the FSM does not parse payloads; this one says nothing
-		}
-		ff := msg.(*coslv1.AppFreeform)
-		if ff.Handle != "" {
-			continue // an agent's reply summons within its own chain
-		}
-		if handles := mention.Handles(ff.Text); len(handles) > 0 {
-			s.chains.enqueue(ctx, wg, &chain{seq: r.Seq, conv: r.ConversationID, handles: handles}, s.runChain)
+		if len(handles) > 0 {
+			s.chains.enqueue(ctx, wg, &chain{id: hex.EncodeToString(r.MsgID[:]), conv: r.ConversationID, handles: handles}, s.runChain)
 		}
 	}
 	return nil
@@ -371,11 +381,11 @@ func (s *server) startChains(ctx context.Context, wg *sync.WaitGroup, store *cos
 // stopped at.
 func (s *server) runChain(c *chain) {
 	publish := func(ev ChainEvent) {
-		ev.Chain = c.seq
+		ev.Chain = c.id
 		s.chains.publish(c.conv, ev)
 	}
 	if c.ctx.Err() == nil {
-		c.tr = &transcript{path: s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(c.conv), c.seq), logf: s.opts.Logf}
+		c.tr = &transcript{path: s.transcriptPath(c.conv, c.id), logf: s.opts.Logf}
 		defer c.tr.close()
 		publish(ChainEvent{Type: EventChainStart})
 		s.runAgents(c, mentioned(c.handles), 1, publish)
@@ -427,7 +437,7 @@ func (s *server) runAgents(c *chain, sums []summons, depth uint32, publish func(
 			said, inc = text, in
 		case sm.skip != "":
 			if !c.dry {
-				s.opts.Logf("serve: seq %d skips @%s: %s", c.seq, h, sm.skip)
+				s.opts.Logf("serve: chain %s skips @%s: %s", c.id, h, sm.skip)
 			}
 			publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: sm.skip})
 			continue
@@ -445,7 +455,7 @@ func (s *server) runAgents(c *chain, sums []summons, depth uint32, publish func(
 				continue
 			}
 			if err != nil {
-				s.opts.Logf("serve: @%s answering seq %d: %v", h, c.seq, err)
+				s.opts.Logf("serve: @%s answering chain %s: %v", h, c.id, err)
 				publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
 				return false
 			}
@@ -485,7 +495,7 @@ func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEv
 	}
 	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said seq %d at step %d; not run again", handle, p.seq, c.step)})
 	fail := func(err error) (string, config.Included, bool) {
-		s.opts.Logf("serve: retrying seq %d after @%s: %v", c.seq, handle, err)
+		s.opts.Logf("serve: retrying chain %s after @%s: %v", c.id, handle, err)
 		publish(ChainEvent{Type: EventAgentError, Handle: handle, Error: err.Error()})
 		return "", inc, false
 	}
@@ -499,7 +509,7 @@ func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEv
 	}
 	if ff == nil {
 		if !c.dry {
-			s.opts.Logf("serve: retrying seq %d: @%s's seq %d is pruned or gone; it summons nobody", c.seq, handle, p.seq)
+			s.opts.Logf("serve: retrying chain %s: @%s's seq %d is pruned or gone; it summons nobody", c.id, handle, p.seq)
 		}
 		return "", inc, true
 	}
@@ -559,7 +569,7 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 		l.Step, l.Handle, l.Depth, l.Attempt = c.step, handle, depth, attempt
 		c.tr.write(l)
 	}
-	var said uint64
+	var said SendView
 	defer func() {
 		if l, ok := runOutcome(said, err, c.cancelled.Load(), c.ctx.Err() != nil); ok {
 			line(l)
@@ -603,8 +613,8 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 	}
 	// It is posted: whatever fails from here, the Transcript says so, and a
 	// retry does not post it again.
-	said = v.Seq
-	publish(ChainEvent{Type: EventAgentCommit, Seq: v.Seq, Text: res.Said})
+	said = v
+	publish(ChainEvent{Type: EventAgentCommit, MsgID: v.MsgID, Seq: v.Seq, Text: res.Said})
 	// The next agent reads this message from the replica.
 	wait, cancel := context.WithTimeout(commit, raftx.ApplyTimeout)
 	defer cancel()
@@ -817,14 +827,16 @@ func displayName(rec *group.Record, r cosl.Row) string {
 
 type cancelRequest struct {
 	ConversationID string `json:"conversation_id,omitempty"`
-	// Chain is the seq of the message that started the chain to cancel,
-	// running or queued; 0 is whichever is running.
-	Chain uint64 `json:"chain,omitempty"`
+	// Chain is a hex prefix of the msg_id of the message that started the
+	// chain to cancel, running or queued; "" is whichever is running.
+	Chain string `json:"chain,omitempty"`
 }
 
-// CancelView reports whether a cancel found a chain to cancel.
+// CancelView reports whether a cancel found a chain to cancel, and which:
+// Chain is its hex msg_id.
 type CancelView struct {
-	Cancelled bool `json:"cancelled"`
+	Cancelled bool   `json:"cancelled"`
+	Chain     string `json:"chain,omitempty"`
 }
 
 func (s *server) chainRoutes(mux *http.ServeMux) {
@@ -869,7 +881,17 @@ func (s *server) chainRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, CancelView{Cancelled: s.chains.cancel(conv, req.Chain)})
+		prefix, err := ChainPrefix(req.Chain)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		chain, err := s.chains.cancel(conv, prefix)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, CancelView{Cancelled: chain != "", Chain: chain})
 	})
 	s.retryRoutes(mux)
 }
@@ -915,10 +937,11 @@ func (c Client) ConversationStream(ctx context.Context, conversationID []byte) (
 	return &ChainStream{resp: resp, dec: json.NewDecoder(bufio.NewReader(resp.Body))}, nil
 }
 
-// ConversationCancel cancels the chain started by seq in a Conversation,
-// running or queued, or with chain 0 whichever is running. The person's
-// message stays; nothing is committed for the agent it stops.
-func (c Client) ConversationCancel(ctx context.Context, conversationID []byte, chain uint64) (CancelView, error) {
+// ConversationCancel cancels the chain in a Conversation, running or queued,
+// whose msg_id starts with the hex prefix chain, or with chain "" whichever
+// is running. The person's message stays; nothing is committed for the
+// agent it stops.
+func (c Client) ConversationCancel(ctx context.Context, conversationID []byte, chain string) (CancelView, error) {
 	var v CancelView
 	req := cancelRequest{Chain: chain}
 	if conversationID != nil {

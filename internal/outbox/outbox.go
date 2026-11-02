@@ -132,7 +132,8 @@ func (o *Outbox) Run(ctx context.Context, leaderKnown <-chan struct{}) {
 }
 
 // Commit commits s now and never queues it, for a writer that needs its
-// seq at once: an agent's say, while chains are named by seq.
+// seq at once: an agent's say, while the next agent reads it from the
+// replica.
 func (o *Outbox) Commit(ctx context.Context, s cosl.Signed) (raftx.Position, error) {
 	return o.cfg.Append(ctx, s)
 }

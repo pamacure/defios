@@ -116,7 +116,7 @@ func TestAnAgentSpeaksTheResponsesAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `chain.start start:@auditor/1 thinking:pondering text:first tool:say {"text":""} thinking:pondering text:second tool:say {"text":"hello"} commit:hello end`
-	if got := summary(untilEnd(t, s, v.Seq)); got != want {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "hello" || ffs[1].Handle != "auditor" {
@@ -125,7 +125,7 @@ func TestAnAgentSpeaksTheResponsesAPI(t *testing.T) {
 	if calls() != 2 {
 		t.Fatalf("%d calls, want 2", calls())
 	}
-	lines := transcript(t, a, v.Seq)
+	lines := transcript(t, a, v.MsgID)
 	var requests []map[string]any
 	usages := 0
 	for _, l := range lines {
@@ -167,7 +167,7 @@ func TestAnIncompleteResponseCommitsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := untilEnd(t, s, v.Seq)
+	events := untilEnd(t, s, v.MsgID)
 	if last := events[len(events)-2]; last.Type != serve.EventAgentError || !strings.Contains(last.Error, "max_output_tokens") {
 		t.Fatalf("events = %s, error %q", summary(events), last.Error)
 	}

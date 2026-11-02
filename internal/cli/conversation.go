@@ -57,14 +57,20 @@ func conversationCommand(g *globals) *cobra.Command {
 	follow.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	root.AddCommand(follow)
 	cancel := &cobra.Command{
-		Use:   "cancel",
-		Short: "Cancel the chain of agents running in a Conversation on this Node (requires serve). --key scopes it to that Key",
-		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return runConversationCancel(cmd, g, keyQuery) },
+		Use:   "cancel [msg-id]",
+		Short: "Cancel the chain of agents running in a Conversation on this Node, or the chain, running or queued, that the person's message with this msg id (or a unique prefix of it) started (requires serve). --key scopes it to that Key",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var chain string
+			if len(args) == 1 {
+				chain = args[0]
+			}
+			return runConversationCancel(cmd, g, keyQuery, chain)
+		},
 	}
 	cancel.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	root.AddCommand(cancel)
-	var retryChain uint64
+	var retryChain string
 	var retryDetach bool
 	retry := &cobra.Command{
 		Use:   "retry",
@@ -75,7 +81,7 @@ func conversationCommand(g *globals) *cobra.Command {
 		},
 	}
 	retry.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
-	retry.Flags().Uint64Var(&retryChain, "chain", 0, "the seq of the person's message that started the chain")
+	retry.Flags().StringVar(&retryChain, "chain", "", "the msg id, or a unique prefix of it, of the person's message that started the chain")
 	retry.Flags().BoolVar(&retryDetach, "detach", false, "return once the chain is queued, without streaming it")
 	root.AddCommand(retry)
 	var opts logOptions
@@ -198,7 +204,7 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 		}
 		return exitQueued()
 	}
-	att := attached{client: client, conv: conv, stream: stream, chain: v.Seq, cancelled: "; your message stays"}
+	att := attached{client: client, conv: conv, stream: stream, chain: v.MsgID, cancelled: "; your message stays"}
 	return att.run(ctx, g, v, fmt.Sprintf("sent as seq %d (msg_id %s)", v.Seq, v.MsgID))
 }
 
@@ -208,7 +214,7 @@ type attached struct {
 	client serve.Client
 	conv   []byte
 	stream *serve.ChainStream // nil when detached
-	chain  uint64             // the seq that started it
+	chain  string             // the hex msg_id that started it
 	// cancelled ends what Ctrl-C reports once the chain is cancelled.
 	cancelled string
 }
@@ -242,11 +248,11 @@ func (a attached) run(ctx context.Context, g *globals, view any, line string) er
 	return err
 }
 
-// followChain prints the chain the message at seq started, until it ends:
-// each agent's message as it commits, labelled @handle:, with skips and
-// silences, but not its output; or under --json those events as lines.
+// followChain prints the chain the message with msg_id chain started, until
+// it ends: each agent's message as it commits, labelled @handle:, with skips
+// and silences, but not its output; or under --json those events as lines.
 // Other chains in the Conversation are not this send's.
-func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
+func followChain(g *globals, stream *serve.ChainStream, chain string) error {
 	cp := newChainPrinter(g, false)
 	var failed error
 	for {
@@ -254,7 +260,7 @@ func followChain(g *globals, stream *serve.ChainStream, seq uint64) error {
 		if err != nil {
 			return exitOperationalf("lost the serve while the agents were answering: %w; check `conversation log`", err)
 		}
-		if ev.Chain != seq {
+		if ev.Chain != chain {
 			continue
 		}
 		if err := cp.print(ev); err != nil {
@@ -307,7 +313,7 @@ func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) erro
 		}
 		switch ev.Type {
 		case serve.EventChainStart:
-			fmt.Fprintln(g.app.Stdout, p.dim(fmt.Sprintf("[agents answering seq %d]", ev.Chain)))
+			fmt.Fprintln(g.app.Stdout, p.dim(fmt.Sprintf("[agents answering msg_id %s]", shortChain(ev.Chain))))
 		case serve.EventAgentError:
 			fmt.Fprintf(g.app.Stderr, "%s @%s: %s; nothing is committed for it\n", paletteFor(g.app.Stderr, g.app.Getenv).concern("defios:"), ev.Handle, ev.Error)
 		case serve.EventChainEnd:
@@ -320,31 +326,61 @@ func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) erro
 	}
 }
 
-// runConversationCancel cancels the chain running in the Conversation, and
+// runConversationCancel cancels the chain running in the Conversation, or
+// with chain the one, running or queued, whose msg_id starts with it, and
 // says whether there was one.
-func runConversationCancel(cmd *cobra.Command, g *globals, keyQuery string) error {
+func runConversationCancel(cmd *cobra.Command, g *globals, keyQuery, chain string) error {
+	chain, err := chainPrefix(chain)
+	if err != nil {
+		return err
+	}
 	conv, err := queriedConversation(g, keyQuery)
 	if err != nil {
 		return err
 	}
-	v, err := serve.Client{Socket: g.paths().Socket}.ConversationCancel(cmd.Context(), conv, 0)
+	v, err := serve.Client{Socket: g.paths().Socket}.ConversationCancel(cmd.Context(), conv, chain)
+	if errors.Is(err, serve.ErrAmbiguousChain) {
+		return exitUsagef("%w", err)
+	}
 	if err != nil {
 		return serveError(err)
 	}
 	if g.json {
 		return g.emitJSON(v)
 	}
-	if v.Cancelled {
+	switch {
+	case v.Cancelled && chain == "":
 		fmt.Fprintln(g.app.Stdout, "cancelled the running chain: nothing is committed for the agent that was answering, and the rest of the chain is dropped")
-	} else {
+	case v.Cancelled:
+		fmt.Fprintf(g.app.Stdout, "cancelled the chain of msg_id %s: nothing is committed for the agent that was answering, and the rest of the chain is dropped\n", shortChain(v.Chain))
+	case chain == "":
 		fmt.Fprintln(g.app.Stdout, "no chain was running")
+	default:
+		fmt.Fprintf(g.app.Stdout, "no chain of msg_id %s is running or queued\n", chain)
 	}
 	return nil
 }
 
+// chainPrefix is a chain's msg_id prefix as given, in lower case, or a
+// usage error if it is not hex. "" is no chain named.
+func chainPrefix(chain string) (string, error) {
+	p, err := serve.ChainPrefix(chain)
+	if err != nil {
+		return "", exitUsagef("%w", err)
+	}
+	return p, nil
+}
+
+// shortChain is a chain's msg_id as printed: a prefix that names it.
+func shortChain(chain string) string { return chain[:min(8, len(chain))] }
+
 // runConversationRetry queues a chain again and, unless detached, prints
 // it as an attached send does; Ctrl-C cancels it.
-func runConversationRetry(cmd *cobra.Command, g *globals, keyQuery string, chain uint64, detach bool) error {
+func runConversationRetry(cmd *cobra.Command, g *globals, keyQuery, chain string, detach bool) error {
+	chain, err := chainPrefix(chain)
+	if err != nil {
+		return err
+	}
 	conv, err := queriedConversation(g, keyQuery)
 	if err != nil {
 		return err
@@ -366,13 +402,13 @@ func runConversationRetry(cmd *cobra.Command, g *globals, keyQuery string, chain
 		}
 		fmt.Fprintln(g.app.Stdout, err)
 		return nil
-	case errors.Is(err, serve.ErrChainBusy), errors.Is(err, serve.ErrNotAChain):
+	case errors.Is(err, serve.ErrChainBusy), errors.Is(err, serve.ErrNotAChain), errors.Is(err, serve.ErrAmbiguousChain):
 		return exitUsagef("%w", err)
 	case err != nil:
 		return serveError(err)
 	}
 	att := attached{client: client, conv: conv, stream: stream, chain: v.Chain}
-	return att.run(ctx, g, v, fmt.Sprintf("retrying the chain of seq %d", v.Chain))
+	return att.run(ctx, g, v, fmt.Sprintf("retrying the chain of msg_id %s", shortChain(v.Chain)))
 }
 
 // isOutput reports whether ev is part of an agent's output as it streams,

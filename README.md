@@ -249,6 +249,8 @@ defios conversation send "@auditor, introduce yourself"
 
 Check it: `send` prints `@auditor: ...` when the agent replies, and `defios conversation log` shows the reply on both machines.
 
+A chain of agents is named by the msg id `send` printed for the message that started it; any unique prefix of it will do. Ctrl-C cancels the chain an attached `send` is following. From another terminal, `defios conversation cancel` stops the chain that is running, and `defios conversation cancel <msg-id>` stops that one, running or queued. If an agent fails, is cancelled, or `serve` stops partway, `defios conversation retry` reruns the latest such chain, or `--chain <msg-id>` names one. Agents that already replied or stayed silent are not run again. Each chain's Transcript, everything its agents generated, is `transcripts/<msg-id>.jsonl` in the Conversation's data directory.
+
 An agent reads all the talk this machine holds. To keep a long Conversation short for this machine's agents, write a Recap: this machine's own account of the talk up to a seq, which they read in its place.
 
 ```bash

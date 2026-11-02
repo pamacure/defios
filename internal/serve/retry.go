@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,10 +28,45 @@ var (
 	ErrNothingToRetry = errors.New("serve: nothing to retry")
 	// ErrChainBusy means the chain to retry is running or queued.
 	ErrChainBusy = errors.New("serve: that chain is running or queued; wait for it or cancel it first")
-	// ErrNotAChain means the seq is not a person's message from this Node,
-	// with mentions, in that Conversation.
+	// ErrNotAChain means the msg_id prefix names no person's message from
+	// this Node, with mentions, in that Conversation.
 	ErrNotAChain = errors.New("serve: no chain of this Node's starts there")
+	// ErrAmbiguousChain means the msg_id prefix names more than one chain.
+	ErrAmbiguousChain = errors.New("serve: that msg_id prefix names more than one chain")
 )
+
+// ChainPrefix is prefix, a hex prefix of a chain's msg_id, in lower case;
+// "" names no chain.
+func ChainPrefix(prefix string) (string, error) {
+	p := strings.ToLower(prefix)
+	if len(p) > 64 || strings.Trim(p, "0123456789abcdef") != "" {
+		return "", &requestError{fmt.Sprintf("serve: chain %q is not a hex msg_id prefix", prefix)}
+	}
+	return p, nil
+}
+
+// matchChain is the one of ids, chains' hex msg_ids, that starts with the
+// hex prefix (ADR 0025). None is ErrNotAChain; more than one is
+// ErrAmbiguousChain, naming them.
+func matchChain(prefix string, ids []string) (string, error) {
+	p, err := ChainPrefix(prefix)
+	if err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, id := range ids {
+		if strings.HasPrefix(id, p) {
+			matches = append(matches, id)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("%w: no msg_id here starts with %s", ErrNotAChain, p)
+	case 1:
+		return matches[0], nil
+	}
+	return "", fmt.Errorf("%w: %s matches %s", ErrAmbiguousChain, p, strings.Join(matches, ", "))
+}
 
 // priorRun is a step's latest attempt, as a chain's Transcript shows it.
 // outcome is "" for a run cut off by a stop.
@@ -80,51 +114,97 @@ func readTranscript(path string) (map[int]priorRun, error) {
 	return runs, nil
 }
 
-// unfinished reports whether a retry of the chain seq in conv, which first
-// summoned handles, would run anything. It walks the chain as the retry
-// would, reusing the summons of the steps runs shows said, and looks for a
-// step it reaches that has no finished latest attempt and is not skipped:
-// one that failed, was cancelled or cut off, or that a stop came before.
-func (s *server) unfinished(conv []byte, seq uint64, handles []string, runs map[int]priorRun) bool {
-	c := &chain{seq: seq, conv: conv, handles: handles, ctx: context.Background(), prior: runs, dry: true}
-	return !s.runAgents(c, mentioned(handles), 1, func(ChainEvent) {})
+// chainStart is a person's message from this Node that mentions agents:
+// the message a chain starts from.
+type chainStart struct {
+	id      string // its hex msg_id, which names the chain
+	handles []string
 }
 
-// latestUnfinished is the seq of the latest chain in conv whose Transcript
-// shows it unfinished, or 0.
-func (s *server) latestUnfinished(store *cosl.Store, conv []byte) (uint64, error) {
-	dir := s.opts.Paths.TranscriptsDir(s.opts.Alias, nodedir.ConversationName(conv))
-	entries, err := os.ReadDir(dir)
+// chainHandles is what r mentions if it is a person's message from this
+// Node, whose payload is still held; nil otherwise.
+func (s *server) chainHandles(r cosl.Row) ([]string, error) {
+	if r.Sender != s.opts.Node.NodeID || r.Pruned() {
+		return nil, nil
+	}
+	env, err := r.Decode()
+	if err != nil {
+		return nil, err
+	}
+	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+	if err != nil {
+		return nil, nil // the FSM does not parse payloads; this one says nothing
+	}
+	ff := msg.(*coslv1.AppFreeform)
+	if ff.Handle != "" {
+		return nil, nil // an agent's reply summons within its own chain
+	}
+	return mention.Handles(ff.Text), nil
+}
+
+// chainStarts is the chain starts conv's talk holds, oldest first.
+func (s *server) chainStarts(store *cosl.Store, conv []byte) ([]chainStart, error) {
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, GroupLevel: conv == nil, ConversationID: conv})
+	if err != nil {
+		return nil, err
+	}
+	var out []chainStart
+	for _, r := range rows {
+		handles, err := s.chainHandles(r)
+		if err != nil {
+			return nil, err
+		}
+		if len(handles) > 0 {
+			out = append(out, chainStart{id: hex.EncodeToString(r.MsgID[:]), handles: handles})
+		}
+	}
+	return out, nil
+}
+
+// transcriptPath is the Transcript of the chain id in conv.
+func (s *server) transcriptPath(conv []byte, id string) string {
+	return s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(conv), id)
+}
+
+// unfinished reports whether a retry of the chain st in conv would run
+// anything. It walks the chain as the retry would, reusing the summons of
+// the steps runs shows said, and looks for a step it reaches that has no
+// finished latest attempt and is not skipped: one that failed, was
+// cancelled or cut off, or that a stop came before.
+func (s *server) unfinished(conv []byte, st chainStart, runs map[int]priorRun) bool {
+	c := &chain{id: st.id, conv: conv, handles: st.handles, ctx: context.Background(), prior: runs, dry: true}
+	return !s.runAgents(c, mentioned(st.handles), 1, func(ChainEvent) {})
+}
+
+// latestUnfinished is the latest of starts in conv whose Transcript shows
+// its chain unfinished; ok is false if there is none.
+func (s *server) latestUnfinished(conv []byte, starts []chainStart) (chainStart, bool, error) {
+	entries, err := os.ReadDir(s.opts.Paths.TranscriptsDir(s.opts.Alias, nodedir.ConversationName(conv)))
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return chainStart{}, false, nil
 	}
 	if err != nil {
-		return 0, err
+		return chainStart{}, false, err
 	}
-	var seqs []uint64
+	transcribed := map[string]bool{}
 	for _, e := range entries {
-		if seq, err := strconv.ParseUint(strings.TrimSuffix(e.Name(), ".jsonl"), 10, 64); err == nil && strings.HasSuffix(e.Name(), ".jsonl") {
-			seqs = append(seqs, seq)
+		if id, ok := strings.CutSuffix(e.Name(), ".jsonl"); ok {
+			transcribed[id] = true
 		}
 	}
-	slices.Sort(seqs)
-	for _, seq := range slices.Backward(seqs) {
-		runs, err := readTranscript(s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(conv), seq))
-		if err != nil {
-			return 0, err
-		}
-		if runs == nil {
+	for _, st := range slices.Backward(starts) {
+		if !transcribed[st.id] {
 			continue
 		}
-		handles, err := s.chainHandles(store, conv, seq)
+		runs, err := readTranscript(s.transcriptPath(conv, st.id))
 		if err != nil {
-			continue // its message is pruned: nothing to walk from
+			return chainStart{}, false, err
 		}
-		if s.unfinished(conv, seq, handles, runs) {
-			return seq, nil
+		if runs != nil && s.unfinished(conv, st, runs) {
+			return st, true, nil
 		}
 	}
-	return 0, nil
+	return chainStart{}, false, nil
 }
 
 // freeformAt is conv's app.freeform at seq, nil if there is none or its
@@ -148,66 +228,60 @@ func freeformAt(store *cosl.Store, conv []byte, seq uint64) (cosl.Row, *coslv1.A
 	return rows[0], msg.(*coslv1.AppFreeform), nil
 }
 
-// chainHandles is what the person's message at seq in conv mentions, as
-// the chain it started first ran.
-func (s *server) chainHandles(store *cosl.Store, conv []byte, seq uint64) ([]string, error) {
-	r, ff, err := freeformAt(store, conv, seq)
+// retry queues again the chain in conv whose msg_id starts with the hex
+// prefix, or with prefix "" the latest unfinished one, reusing what its
+// Transcript shows finished (ADR 0018). It returns the chain's msg_id.
+func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, store *cosl.Store, conv []byte, prefix string) (string, error) {
+	starts, err := s.chainStarts(store, conv)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	if ff == nil || r.Sender != s.opts.Node.NodeID || ff.Handle != "" {
-		return nil, fmt.Errorf("%w: seq %d is not a person's message from this Node here", ErrNotAChain, seq)
-	}
-	handles := mention.Handles(ff.Text)
-	if len(handles) == 0 {
-		return nil, fmt.Errorf("%w: seq %d mentions no agent", ErrNotAChain, seq)
-	}
-	return handles, nil
-}
-
-// retry queues the chain started by seq in conv again, or with seq 0 the
-// latest unfinished one, reusing what its Transcript shows finished
-// (ADR 0018). It returns the chain's seq.
-func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, store *cosl.Store, conv []byte, seq uint64) (uint64, error) {
-	if seq == 0 {
-		var err error
-		if seq, err = s.latestUnfinished(store, conv); err != nil {
-			return 0, err
+	var st chainStart
+	if prefix == "" {
+		var ok bool
+		if st, ok, err = s.latestUnfinished(conv, starts); err != nil {
+			return "", err
 		}
-		if seq == 0 {
-			return 0, fmt.Errorf("%w: no chain here failed, was cancelled or was cut off", ErrNothingToRetry)
+		if !ok {
+			return "", fmt.Errorf("%w: no chain here failed, was cancelled or was cut off", ErrNothingToRetry)
 		}
+	} else {
+		ids := make([]string, len(starts))
+		for i, st := range starts {
+			ids[i] = st.id
+		}
+		id, err := matchChain(prefix, ids)
+		if err != nil {
+			return "", err
+		}
+		st = starts[slices.Index(ids, id)]
 	}
-	handles, err := s.chainHandles(store, conv, seq)
+	if s.chains.busy(conv, st.id) {
+		return "", ErrChainBusy
+	}
+	runs, err := readTranscript(s.transcriptPath(conv, st.id))
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	if s.chains.busy(conv, seq) {
-		return 0, ErrChainBusy
+	if !s.unfinished(conv, st, runs) {
+		return "", fmt.Errorf("%w: every step of chain %s said, stayed silent or is skipped", ErrNothingToRetry, st.id)
 	}
-	runs, err := readTranscript(s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(conv), seq))
-	if err != nil {
-		return 0, err
+	if !s.chains.enqueue(ctx, wg, &chain{id: st.id, conv: conv, handles: st.handles, prior: runs}, s.runChain) {
+		return "", ErrChainBusy
 	}
-	if !s.unfinished(conv, seq, handles, runs) {
-		return 0, fmt.Errorf("%w: every step of chain %d said, stayed silent or is skipped", ErrNothingToRetry, seq)
-	}
-	if !s.chains.enqueue(ctx, wg, &chain{seq: seq, conv: conv, handles: handles, prior: runs}, s.runChain) {
-		return 0, ErrChainBusy
-	}
-	return seq, nil
+	return st.id, nil
 }
 
 // retryCall is a retry asked of the replica's mention follower, which owns
 // the chains it starts.
 type retryCall struct {
-	conv  []byte
-	seq   uint64
-	reply chan retryReply // buffered: the follower never waits on it
+	conv   []byte
+	prefix string
+	reply  chan retryReply // buffered: the follower never waits on it
 }
 
 type retryReply struct {
-	chain uint64
+	chain string
 	err   error
 }
 
@@ -218,22 +292,23 @@ func (s *server) takeRetries(ctx context.Context, wg *sync.WaitGroup, store *cos
 		case <-ctx.Done():
 			return
 		case call := <-s.retries:
-			seq, err := s.retry(ctx, wg, store, call.conv, call.seq)
-			call.reply <- retryReply{chain: seq, err: err}
+			chain, err := s.retry(ctx, wg, store, call.conv, call.prefix)
+			call.reply <- retryReply{chain: chain, err: err}
 		}
 	}
 }
 
 type retryRequest struct {
 	ConversationID string `json:"conversation_id,omitempty"`
-	// Chain is the seq of the message that started the chain to retry; 0 is
-	// the latest one whose Transcript shows a step unfinished.
-	Chain uint64 `json:"chain,omitempty"`
+	// Chain is a hex prefix of the msg_id of the message that started the
+	// chain to retry; "" is the latest one whose Transcript shows a step
+	// unfinished.
+	Chain string `json:"chain,omitempty"`
 }
 
-// RetryView names the chain a retry queued.
+// RetryView names the chain a retry queued by its hex msg_id.
 type RetryView struct {
-	Chain uint64 `json:"chain"`
+	Chain string `json:"chain"`
 }
 
 func (s *server) retryRoutes(mux *http.ServeMux) {
@@ -247,6 +322,10 @@ func (s *server) retryRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
+		if _, err := ChainPrefix(req.Chain); err != nil {
+			writeError(w, err)
+			return
+		}
 		if _, store, ok := s.current(); !ok {
 			writeError(w, ErrNoReplica)
 			return
@@ -254,7 +333,7 @@ func (s *server) retryRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		call := retryCall{conv: conv, seq: req.Chain, reply: make(chan retryReply, 1)}
+		call := retryCall{conv: conv, prefix: req.Chain, reply: make(chan retryReply, 1)}
 		select {
 		case s.retries <- call:
 		case <-r.Context().Done():
@@ -272,12 +351,12 @@ func (s *server) retryRoutes(mux *http.ServeMux) {
 	})
 }
 
-// ConversationRetry reruns the chain started by seq in a Conversation (nil
-// for Group-level talk), or with chain 0 the latest that failed, was
-// cancelled or was cut off by a stop. Steps that said or stayed silent are
-// not run again; the rest run as new attempts. It returns once the chain is
-// queued; watch ConversationStream for it.
-func (c Client) ConversationRetry(ctx context.Context, conversationID []byte, chain uint64) (RetryView, error) {
+// ConversationRetry reruns the chain in a Conversation (nil for Group-level
+// talk) whose msg_id starts with the hex prefix chain, or with chain "" the
+// latest that failed, was cancelled or was cut off by a stop. Steps that
+// said or stayed silent are not run again; the rest run as new attempts. It
+// returns once the chain is queued; watch ConversationStream for it.
+func (c Client) ConversationRetry(ctx context.Context, conversationID []byte, chain string) (RetryView, error) {
 	var v RetryView
 	req := retryRequest{Chain: chain}
 	if conversationID != nil {

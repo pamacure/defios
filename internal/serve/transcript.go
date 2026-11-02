@@ -12,7 +12,7 @@ import (
 // Transcript outcomes: how a run ended (ADR 0018). A run cut off by a serve
 // stop has none.
 const (
-	OutcomeSaid      = "said"      // seq: the message's row
+	OutcomeSaid      = "said"      // msg_id, and seq once it has a row: the message
 	OutcomeSilent    = "silent"    // ended its turn without say
 	OutcomeError     = "error"     // error: why
 	OutcomeCancelled = "cancelled" // a cancel stopped it
@@ -23,19 +23,19 @@ const (
 	KindRequest = agent.RecordRequest // request: a request body as sent, never its headers
 	KindBlock   = agent.RecordBlock   // block: one output block
 	KindUsage   = agent.RecordUsage   // usage: a model call's usage
-	KindOutcome = "outcome"           // outcome, and seq or error with it
+	KindOutcome = "outcome"           // outcome, and msg_id and seq or error with it
 )
 
-// runOutcome is the closing line of a run that committed seq said (0 if
-// nothing) and ended with err; a run that commits nothing and ends without
+// runOutcome is the closing line of a run that posted said (its MsgID empty
+// if nothing) and ended with err; a run that commits nothing and ends without
 // an error is silent. Once a say has committed it is `said`, whatever
 // failed after, so a retry never posts it again. A run cut off by the serve
 // stopping before that has none: ok is false.
-func runOutcome(said uint64, err error, cancelled, stopped bool) (l TranscriptLine, ok bool) {
+func runOutcome(said SendView, err error, cancelled, stopped bool) (l TranscriptLine, ok bool) {
 	l.Kind = KindOutcome
 	switch {
-	case said != 0:
-		l.Outcome, l.Seq = OutcomeSaid, said
+	case said.MsgID != "":
+		l.Outcome, l.MsgID, l.Seq = OutcomeSaid, said.MsgID, said.Seq
 	case err == nil:
 		l.Outcome = OutcomeSilent
 	case cancelled:
@@ -62,6 +62,7 @@ type TranscriptLine struct {
 	Block   json.RawMessage `json:"block,omitempty"`
 	Usage   json.RawMessage `json:"usage,omitempty"`
 	Outcome string          `json:"outcome,omitempty"`
+	MsgID   string          `json:"msg_id,omitempty"`
 	Seq     uint64          `json:"seq,omitempty"`
 	Error   string          `json:"error,omitempty"`
 }
