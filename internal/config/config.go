@@ -45,13 +45,10 @@ type Config struct {
 	Workspace
 }
 
-// Profile is one Agent Profile: its profile directory, the Provider alias it
-// runs on, and its request body (ADR 0018, ADR 0019).
+// Profile is one Agent Profile: the Provider alias it runs on and its
+// request body (ADR 0018, ADR 0019). Its profile directory, holding
+// SYSTEM.md, is agents/<handle> under the config directory (ADR 0026).
 type Profile struct {
-	// Dir is the profile directory, holding SYSTEM.md. "~" expands, a
-	// relative path is under the config directory, and empty is
-	// agents/<handle>.
-	Dir string `toml:"dir,omitempty"`
 	// Provider is the alias of the Provider it calls, resolved at summon.
 	Provider string `toml:"provider"`
 	// MaxTurns is how many model calls a summon may make; 0 is unset,
@@ -361,10 +358,10 @@ type ResolvedProfile struct {
 }
 
 // Included resolves the profiles and depth for talk whose Workspace is conv,
-// over the Group's: pass an empty Workspace for Group-level talk. A relative
-// profile directory is under root, the config directory, and "~" is home.
-// Whether the directory exists is for whoever summons it to find out.
-func (c Config) Included(conv Workspace, root, home string) (Included, error) {
+// over the Group's: pass an empty Workspace for Group-level talk. A profile's
+// directory is agents/<handle> under root, the config directory. Whether the
+// directory exists is for whoever summons it to find out.
+func (c Config) Included(conv Workspace, root string) (Included, error) {
 	ws, err := c.Workspace.Merge(conv)
 	if err != nil {
 		return Included{}, fmt.Errorf("config: %w", err)
@@ -379,7 +376,7 @@ func (c Config) Included(conv Workspace, root, home string) (Included, error) {
 		if !ok {
 			return Included{}, fmt.Errorf("config: [agent] profiles: no [agents.%s] is defined in the Group config", h)
 		}
-		r := ResolvedProfile{Handle: h, Dir: profileDir(p.Dir, h, root, home), Provider: p.Provider,
+		r := ResolvedProfile{Handle: h, Dir: filepath.Join(root, "agents", h), Provider: p.Provider,
 			MaxTurns: p.MaxTurns, Body: p.Body}
 		if base := ws.Providers[p.Provider].Body; base != nil {
 			r.Body = agent.MergeBody(base, p.Body)
@@ -390,19 +387,6 @@ func (c Config) Included(conv Workspace, root, home string) (Included, error) {
 		out.Profiles = append(out.Profiles, r)
 	}
 	return out, nil
-}
-
-func profileDir(dir, handle, root, home string) string {
-	switch {
-	case dir == "":
-		return filepath.Join(root, "agents", handle)
-	case dir == "~" || strings.HasPrefix(dir, "~/"):
-		return filepath.Join(home, dir[1:])
-	case filepath.IsAbs(dir):
-		return filepath.Clean(dir)
-	default:
-		return filepath.Join(root, dir)
-	}
 }
 
 // jsonValue is v, a value TOML decoded, as a JSON value: a table is an

@@ -90,6 +90,8 @@ this Node configured. The API Shapes, the body and the profile keys stand.*
   nests: `model` always, and, under the shape's own names, anything else,
   such as `stream`, `max_tokens` or `max_output_tokens`, `reasoning_effort`
   or `reasoning.effort`, and `store`.
+  *Amended by [ADR 0026](0026-an-agent-profile-is-named-by-its-handle.md):
+  `dir` is gone; the profile directory is always `agents/<handle>`.*
 - **The body.** DeFiOS writes only the conversation (system prompt and
   turns, in the shape's own fields) and the `say` tool. The profile's body
   merges over that: an object merges key by key, and any other value

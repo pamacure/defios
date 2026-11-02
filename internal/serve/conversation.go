@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 
@@ -145,8 +144,7 @@ func (s *server) included(store *cosl.Store, conversation []byte) (config.Config
 	if err != nil {
 		return config.Config{}, config.Workspace{}, config.Included{}, err
 	}
-	home, _ := os.UserHomeDir()
-	inc, err := cfg.Included(conv, s.opts.Paths.Config, home)
+	inc, err := cfg.Included(conv, s.opts.Paths.Config)
 	if err != nil {
 		groupPath := s.opts.Paths.GroupConfigFile(s.opts.Alias)
 		if conv.Agent.Profiles != nil {

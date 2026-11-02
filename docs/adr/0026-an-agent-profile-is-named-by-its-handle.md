@@ -8,7 +8,8 @@ directory a second identity beside the Handle: a CLI that creates, edits or
 deletes a profile would have to ask which Groups bind which directory, and
 guard against a `dir` that points anywhere on disk. An Agent Profile's
 directory is now always `<config root>/agents/<handle>/`, and `dir` is gone.
-This amends ADR 0015.
+This amends ADR 0015 and
+[ADR 0019](0019-providers-replace-models-on-the-cosl.md).
 
 ## Considered options
 

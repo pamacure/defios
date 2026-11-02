@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -40,14 +38,8 @@ func bothWays(t *testing.T, a *node, apiPath string, reply func(n int, w http.Re
 	var cfg strings.Builder
 	fmt.Fprintf(&cfg, "[providers.p]\nbase_url = %q\napi_path = %q\n\n", srv.URL, apiPath)
 	for _, h := range []string{"streamed", "whole"} {
-		dir := filepath.Join(t.TempDir(), h)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "SYSTEM.md"), []byte("You are "+h+"."), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		fmt.Fprintf(&cfg, "[agents.%s]\ndir = %q\nprovider = \"p\"\n\n[agents.%s.body]\nmodel = \"m\"\n", h, dir, h)
+		writeSystemPrompt(t, a, h)
+		fmt.Fprintf(&cfg, "[agents.%s]\nprovider = \"p\"\n\n[agents.%s.body]\nmodel = \"m\"\n", h, h)
 		if h == "streamed" {
 			cfg.WriteString("stream = true\n")
 		}

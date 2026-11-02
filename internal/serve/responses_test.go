@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -67,15 +65,8 @@ func openaiAgent(t *testing.T, a *node, reply func(n int, w http.ResponseWriter)
 		reply(n, w)
 	}))
 	t.Cleanup(srv.Close)
-	dir := filepath.Join(t.TempDir(), "auditor")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "SYSTEM.md"), []byte("You are auditor."), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSystemPrompt(t, a, "auditor")
 	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), fmt.Sprintf(`[agents.auditor]
-dir = %q
 provider = "openai"
 
 [agents.auditor.body]
@@ -91,7 +82,7 @@ profiles = ["auditor"]
 base_url = %q
 api_path = "/v1/responses"
 api_key = "$OPENAI_KEY"
-`, dir, srv.URL))
+`, srv.URL))
 	a.secrets["OPENAI_KEY"] = "sk-openai"
 	return func() int { mu.Lock(); defer mu.Unlock(); return calls }
 }

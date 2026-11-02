@@ -200,14 +200,8 @@ func agentNode(t *testing.T, n *node, baseURL string, handles ...string) {
 	t.Helper()
 	var cfg strings.Builder
 	for _, h := range handles {
-		dir := filepath.Join(t.TempDir(), h)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "SYSTEM.md"), []byte("You are "+h+"."), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		fmt.Fprintf(&cfg, "[agents.%s]\ndir = %q\nprovider = \"claude\"\n\n", h, dir)
+		writeSystemPrompt(t, n, h)
+		fmt.Fprintf(&cfg, "[agents.%s]\nprovider = \"claude\"\n\n", h)
 		fmt.Fprintf(&cfg, "[agents.%s.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n\n", h)
 	}
 	fmt.Fprintf(&cfg, "[agent]\nprofiles = [\"%s\"]\n\n", strings.Join(handles, `", "`))
@@ -749,22 +743,27 @@ func TestSummonErrorsNameWhatToFix(t *testing.T) {
 		t.Errorf("unknown Provider: %+v", ev)
 	}
 	writeConfig(t, path, cfg)
-	dir := regexpDir(t, cfg)
-	os.Remove(filepath.Join(dir, "SYSTEM.md"))
+	os.Remove(filepath.Join(profileDir(a, "auditor"), "SYSTEM.md"))
 	if ev := send("@auditor"); ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, "SYSTEM.md") {
 		t.Errorf("missing SYSTEM.md: %+v", ev)
 	}
 }
 
-// regexpDir is the first dir = "..." in cfg.
-func regexpDir(t *testing.T, cfg string) string {
+// profileDir is n's profile directory for the Handle h (ADR 0026).
+func profileDir(n *node, h string) string {
+	return filepath.Join(n.paths.Config, "agents", h)
+}
+
+// writeSystemPrompt writes n's SYSTEM.md for the Handle h, saying who it is.
+func writeSystemPrompt(t *testing.T, n *node, h string) {
 	t.Helper()
-	_, rest, ok := strings.Cut(cfg, `dir = "`)
-	if !ok {
-		t.Fatal("no dir in config")
+	dir := profileDir(n, h)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	dir, _, _ := strings.Cut(rest, `"`)
-	return dir
+	if err := os.WriteFile(filepath.Join(dir, "SYSTEM.md"), []byte("You are "+h+"."), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func readFile(t *testing.T, path string) string {

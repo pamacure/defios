@@ -111,7 +111,6 @@ api_path = "/v1/messages"
 api_key = "$DEFIOS_ANTHROPIC"
 
 [agents.auditor]
-dir = "agents/auditor"
 provider = "claude"
 
 [agents.trader]
@@ -144,7 +143,7 @@ func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
 	if !reflect.DeepEqual(c.Workspace, want) || c.TailnetAuthKey != "$TS_AUTHKEY" {
 		t.Fatalf("read %+v", c)
 	}
-	wantAgents := map[string]config.Profile{"auditor": {Dir: "agents/auditor", Provider: "claude"}, "trader": {Provider: "gpt"}}
+	wantAgents := map[string]config.Profile{"auditor": {Provider: "claude"}, "trader": {Provider: "gpt"}}
 	if !reflect.DeepEqual(c.Agents, wantAgents) {
 		t.Fatalf("read %+v", c)
 	}
@@ -415,7 +414,7 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 		"handle ending in -":         "[agents.auditor-]\nprovider = \"claude\"",
 		"handle ending in _":         "[agents.auditor_]\nprovider = \"claude\"",
 		"handle with --":             "[agents.au--di]\nprovider = \"claude\"",
-		"missing provider":           "[agents.auditor]\ndir = \"agents/auditor\"",
+		"missing provider":           "[agents.auditor]\nmax_turns = 4",
 		"bad provider alias":         "[agents.auditor]\nprovider = \"Claude!\"",
 		"undefined handle":           "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"trader\"]",
 		"handle listed twice":        "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"auditor\", \"auditor\"]",
@@ -492,7 +491,7 @@ profiles = ["auditor", "scribe"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.Included(config.Workspace{}, "/r", "/h")
+	got, err := c.Included(config.Workspace{}, "/r")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +577,7 @@ stream = false
 			`{"model":"claude-opus-5-5"}`,
 		}},
 	} {
-		got, err := c.Included(tc.conv, "/r", "/h")
+		got, err := c.Included(tc.conv, "/r")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -600,24 +599,31 @@ stream = false
 	}
 }
 
+// A profile's directory is named by its Handle (ADR 0026): a Group config
+// that still sets [agents.<handle>] dir is refused as an unknown key.
+func TestConfigRefusesAProfileDir(t *testing.T) {
+	_, err := config.ReadFile(write(t, "[agents.x]\ndir = \"agents/y\"\nprovider = \"claude\""))
+	if err == nil || !strings.Contains(err.Error(), "agents.x.dir") {
+		t.Fatalf("read = %v; want an unknown-key error naming agents.x.dir", err)
+	}
+}
+
 // Included is what may answer in one place: the Group's included profiles, or
 // the Conversation's list in their place, each with its profile directory
-// resolved, and the depth a chain may reach.
+// named by its Handle under the config root (ADR 0026), and the depth a chain
+// may reach.
 func TestIncludedResolvesTheProfiles(t *testing.T) {
 	c, err := config.ReadFile(write(t, `
 [agents.auditor]
 provider = "claude"
 
 [agents.trader]
-dir = "/srv/agents/trader"
 provider = "gpt"
 
 [agents.scout]
-dir = "~/agents/scout"
 provider = "claude"
 
 [agents.quant]
-dir = "shared/quant"
 provider = "gpt"
 
 [agent]
@@ -627,9 +633,9 @@ max_depth = 3
 	if err != nil {
 		t.Fatal(err)
 	}
-	const root, home = "/home/op/.config/defios", "/home/op"
+	const root = "/home/op/.config/defios"
 
-	got, err := c.Included(config.Workspace{}, root, home)
+	got, err := c.Included(config.Workspace{}, root)
 	want := config.Included{
 		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: "/home/op/.config/defios/agents/auditor", Provider: "claude", MaxTurns: 8}},
 		MaxDepth: 3,
@@ -638,12 +644,12 @@ max_depth = 3
 		t.Fatalf("Group-level = %+v, %v\nwant %+v", got, err, want)
 	}
 
-	got, err = c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"quant", "trader", "scout"}}}, root, home)
+	got, err = c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"quant", "trader", "scout"}}}, root)
 	want = config.Included{
 		Profiles: []config.ResolvedProfile{
-			{Handle: "quant", Dir: "/home/op/.config/defios/shared/quant", Provider: "gpt", MaxTurns: 8},
-			{Handle: "trader", Dir: "/srv/agents/trader", Provider: "gpt", MaxTurns: 8},
-			{Handle: "scout", Dir: "/home/op/agents/scout", Provider: "claude", MaxTurns: 8},
+			{Handle: "quant", Dir: "/home/op/.config/defios/agents/quant", Provider: "gpt", MaxTurns: 8},
+			{Handle: "trader", Dir: "/home/op/.config/defios/agents/trader", Provider: "gpt", MaxTurns: 8},
+			{Handle: "scout", Dir: "/home/op/.config/defios/agents/scout", Provider: "claude", MaxTurns: 8},
 		},
 		MaxDepth: 3,
 	}
@@ -655,16 +661,16 @@ max_depth = 3
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err = c.Included(cleared, root, home)
+	got, err = c.Included(cleared, root)
 	if err != nil || len(got.Profiles) != 0 || got.MaxDepth != 2 {
 		t.Fatalf("Conversation with profiles = [] = %+v, %v; want none, depth 2", got, err)
 	}
 
-	if _, err := c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"ghost"}}}, root, home); err == nil || !strings.Contains(err.Error(), "ghost") {
+	if _, err := c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"ghost"}}}, root); err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("a Conversation including an undefined Handle = %v; want an error naming it", err)
 	}
 
-	none, err := config.Config{}.Included(config.Workspace{}, root, home)
+	none, err := config.Config{}.Included(config.Workspace{}, root)
 	if err != nil || len(none.Profiles) != 0 || none.MaxDepth != 1 {
 		t.Fatalf("no agents configured = %+v, %v; want none, depth 1", none, err)
 	}
