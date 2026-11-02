@@ -97,8 +97,8 @@ The canonically-ordered signature log: the shared, append-only message history e
 _Avoid_: log, ledger, history, message list
 
 **Outbox**:
-One Node's own queue of messages it has signed for a Group's COSL while no majority of the Roster was reachable to commit them. A queued message is not on the COSL: it gets its place in the log only when a majority returns and it commits, after whatever others committed meanwhile, in the order this Node wrote it. Until then it is part of this Node's own view of the talk, which its agents read and answer, but no other Node sees it. Only talk and Sign Request messages may wait there; a Session's messages never do. Never replicated and never held for another Node. There is no Inbox: a Node that was away catches up from the COSL itself.
-_Avoid_: queue, pending log, mailbox, inbox
+One Node's own messages for a Group's COSL that its replica does not show yet. Most are **queued**: signed while no majority of the Roster was reachable to commit them, they are not on the COSL and have no seq; each gets its place in the log only when a majority returns and it commits, after whatever others committed meanwhile, in the order this Node wrote it. Briefly, one is **sent**: committed, with its seq, but not yet applied by this Node's replica, as on a follower until the leader's next heartbeat. A message leaves the Outbox once this Node's replica holds it, or when it is dropped. Together with the replica, it is this Node's own view of the talk, which its agents read and answer, but no other Node sees it. Only talk and Sign Request messages may be queued; a Session's messages never are. Never replicated and never held for another Node. There is no Inbox: a Node that was away catches up from the COSL itself.
+_Avoid_: queue, pending log, mailbox, inbox; pending, unsent (for queued); in flight, unapplied (for sent)
 
 **Conversation**:
 A Key-scoped discussion among a Group's Nodes, carried as COSL messages whose conversation id is that Key's. One Conversation per Key; membership is the Roster. Exists iff the Key exists.

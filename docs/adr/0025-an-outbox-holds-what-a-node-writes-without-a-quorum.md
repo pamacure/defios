@@ -84,6 +84,11 @@ pre-release, so nothing is migrated.
   apply it goes. Amends [ADR 0015](0015-agent-profiles-handles-and-agent-chains.md)
   and [ADR 0018](0018-an-agent-says-one-message.md), where each reply commits
   before the next agent starts.
+- **The Outbox also holds what this Node has sent**: a message it committed
+  stays there, with its seq, until this Node's replica applies it, as on a
+  follower until the leader's next heartbeat. So its agents never wait on
+  Raft and still see every message this Node wrote. Only queued messages
+  persist; a restart reopens the replica, which shows what it has applied.
 - **A chain is named by msg_id**, the msg_id of the person's message that
   starts it, not its seq, which a queued message does not have: the
   Transcript's file name, `conversation retry --chain` and
