@@ -115,7 +115,7 @@ defios conversation send --key ecdsa:<hex> "about this key"
 
 Check it: `defios conversation log` (Group talk) and `defios conversation log --key ecdsa:<hex>` (the Key's talk) show the same messages on both machines, and `defios cosl log` shows every row on the log.
 
-A message is on the log once a majority of the Group commits it, so with two machines both must be up. If the other machine's `serve` is down, a send prints `queued` with its msg id and exits with code `5`: the message waits in this machine's Outbox, and `serve` commits it as soon as the other machine is back, in the order this machine wrote it, even across a restart. While anything is queued, later sends queue behind it. Until then it is not on the log, so `conversation log` and `cosl log` don't show it. Talk, `sign propose`, `sign accept` and `sign broadcast`'s receipts queue this way; a Sign Request with a Solana transaction does not, since its `recent_blockhash` would expire first, and a queued Sign Request whose deadline passes is dropped unsent.
+A message is on the log once a majority of the Group commits it, so with two machines both must be up. If the other machine's `serve` is down, a send prints `queued` with its msg id and exits with code `5`: the message waits in this machine's Outbox, and `serve` commits it as soon as the other machine is back, in the order this machine wrote it, even across a restart. While anything is queued, later sends queue behind it. Until then it is not on the log: `cosl log` and `sign list` don't show it, while `conversation log` shows it last, marked `queued` with no seq (`"queued": true` under `--json`). Talk, `sign propose`, `sign accept` and `sign broadcast`'s receipts queue this way; a Sign Request with a Solana transaction does not, since its `recent_blockhash` would expire first, and a queued Sign Request whose deadline passes is dropped unsent.
 
 ### 6. Add a Provider
 
@@ -248,6 +248,8 @@ defios conversation send "@auditor, introduce yourself"
 ```
 
 Check it: `send` prints `@auditor: ...` when the agent replies, and `defios conversation log` shows the reply on both machines.
+
+This machine's agents answer what it has written even before the log has it: a message that mentions agents starts its chain when it is sent, committed or queued, and each reply is read by the next agent at once. With the other machine down, a whole chain runs and its replies queue; nothing runs again when they commit.
 
 A chain of agents is named by the msg id `send` printed for the message that started it; any unique prefix of it will do. Ctrl-C cancels the chain an attached `send` is following. From another terminal, `defios conversation cancel` stops the chain that is running, and `defios conversation cancel <msg-id>` stops that one, running or queued. If an agent fails, is cancelled, or `serve` stops partway, `defios conversation retry` reruns the latest such chain, or `--chain <msg-id>` names one. Agents that already replied or stayed silent are not run again. Each chain's Transcript, everything its agents generated, is `transcripts/<msg-id>.jsonl` in the Conversation's data directory.
 

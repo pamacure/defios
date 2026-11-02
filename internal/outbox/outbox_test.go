@@ -62,6 +62,8 @@ type fixture struct {
 	author cosl.Author
 	logs   []string
 	now    time.Time // zero is the wall clock
+	// applied is the seq the fake replica has applied up to.
+	applied uint64
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -82,8 +84,9 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) open() *outbox.Outbox {
 	f.t.Helper()
 	o, err := outbox.Open(outbox.Config{
-		Path:   f.path,
-		Append: f.raft.append,
+		Path:    f.path,
+		Append:  f.raft.append,
+		Applied: func() uint64 { return f.applied },
 		Now: func() time.Time {
 			if f.now.IsZero() {
 				return time.Now()
@@ -272,5 +275,111 @@ func TestDrainDropsExpiredSignRequest(t *testing.T) {
 	}
 	if !f.logged("expired unsent") {
 		t.Fatalf("no log line says expired unsent: %q", f.logs)
+	}
+}
+
+// rows are the fake replica's committed rows of ss, at seq 1 on.
+func (f *fixture) rows(ss ...cosl.Signed) []cosl.Row {
+	f.t.Helper()
+	out := make([]cosl.Row, len(ss))
+	for i, s := range ss {
+		r, err := cosl.RowOf(s, uint64(i+1))
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// texts is each row's app.freeform text, "#<seq>" after it, or "#queued".
+func texts(t *testing.T, rows []cosl.Row) string {
+	t.Helper()
+	var out []string
+	for _, r := range rows {
+		env, err := r.Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := fmt.Sprint("#", r.Seq)
+		if r.Queued() {
+			at = "#queued"
+		}
+		out = append(out, msg.(*coslv1.AppFreeform).Text+at)
+	}
+	return strings.Join(out, " ")
+}
+
+// This Node's view of the talk is its committed rows, then what it wrote
+// that its replica has not applied yet: committed messages by seq, then the
+// queued ones in queue order. A message both applied and remembered shows
+// once, as committed; once applied it is no longer remembered.
+func TestTheViewIsCommittedTalkThenWhatThisNodeHasNotApplied(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	f.raft.setLeader(true)
+	one, two := f.talk("one"), f.talk("two")
+	f.write(o, one)
+	f.write(o, two)
+	f.raft.setLeader(false)
+	three := f.talk("three")
+	f.write(o, three)
+	f.write(o, f.sign(cosl.TypeSignAccept, &coslv1.SignAccept{}))
+
+	f.applied = 1
+	view, err := outbox.View(f.rows(one), o.Unapplied(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(t, view); got != "one#1 two#2 three#queued" {
+		t.Fatalf("view = %s", got)
+	}
+	f.applied = 2
+	if got := len(o.Unapplied()); got != 2 {
+		t.Fatalf("Unapplied holds %d once seq 2 is applied, want the 2 queued", got)
+	}
+}
+
+// The view of a Conversation holds only its own talk: Group-level talk and
+// another Conversation's are not in it.
+func TestTheViewIsOneConversations(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	conv := make([]byte, 32)
+	conv[0] = 1
+	here, err := f.author.Sign(cosl.TypeAppFreeform, conv, &coslv1.AppFreeform{Text: "here", ContentType: "text/plain"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.write(o, f.talk("group-level"))
+	f.write(o, here)
+	view, err := outbox.View(nil, o.Unapplied(), conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(t, view); got != "here#queued" {
+		t.Fatalf("view = %s", got)
+	}
+}
+
+// Read is the queued messages on disk, for a reader with no serve.
+func TestReadIsWhatIsQueued(t *testing.T) {
+	f := newFixture(t)
+	o := f.open()
+	a := f.talk("a")
+	f.write(o, a)
+	got, err := outbox.Read(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ids(got...), ids(a)) {
+		t.Fatalf("Read = %x, want a", ids(got...))
+	}
+	if got, err := outbox.Read(filepath.Join(t.TempDir(), "none.json")); err != nil || len(got) != 0 {
+		t.Fatalf("Read of no file = %v, %v; want empty", got, err)
 	}
 }

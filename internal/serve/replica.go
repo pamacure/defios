@@ -62,6 +62,13 @@ func (s *server) startReplica() {
 			defer cancel()
 			return replica.Append(ctx, signed)
 		},
+		Applied: func() uint64 {
+			m, err := store.Mark()
+			if err != nil {
+				return 0
+			}
+			return m.LastAppliedSeq
+		},
 		Logf: s.opts.Logf,
 	})
 	if err != nil {
@@ -80,19 +87,14 @@ func (s *server) startReplica() {
 
 // startWatchers runs what follows the replica on this Node's behalf: the
 // Conversation Workspaces, the prune policy, which follows config.toml
-// and does nothing while there is none, and the agents a mention summons. The
-// mentions follower takes the replica as it is now before any send can
-// commit, so it misses none of this serve's and replays none before it.
+// and does nothing while there is none, and the chains of agents this
+// Node's mentions summon.
 func (s *server) startWatchers(store *cosl.Store) {
 	ctx, cancel := context.WithCancel(s.ctx)
-	mentions := store.Follow(cosl.FallbackTick)
-	if err := mentions.Act(func(cosl.Wake) error { return nil }); err != nil {
-		s.opts.Logf("serve: agent mentions: %v", err)
-	}
 	var wg sync.WaitGroup
 	wg.Go(func() { s.watchWorkspaces(ctx, store) })
 	wg.Go(func() { s.keepPruned(ctx, store) })
-	wg.Go(func() { s.followMentions(ctx, store, mentions) })
+	wg.Go(func() { s.runChains(ctx) })
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	s.watchCancel, s.watchDone = cancel, done
@@ -189,19 +191,7 @@ func (s *server) writer() (*outbox.Outbox, *cosl.Store, bool) {
 // write commits signed, or queues it in ob when no leader is known or ob
 // already holds something (ADR 0025).
 func write(ctx context.Context, ob *outbox.Outbox, signed cosl.Signed) (SendView, error) {
-	return send(ctx, ob, signed, true)
-}
-
-// send is write, or with queue false a commit that fails with no leader
-// rather than wait in ob.
-func send(ctx context.Context, ob *outbox.Outbox, signed cosl.Signed, queue bool) (SendView, error) {
-	var res outbox.Result
-	var err error
-	if queue {
-		res, err = ob.Write(ctx, signed)
-	} else {
-		res.Position, err = ob.Commit(ctx, signed)
-	}
+	res, err := ob.Write(ctx, signed)
 	if err != nil {
 		return SendView{}, err
 	}

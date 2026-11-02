@@ -14,16 +14,17 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"defios.com/internal/agent"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
-	"defios.com/internal/errlog"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/secret"
@@ -38,7 +39,7 @@ const (
 	EventAgentDelta   = "agent.delta"   // kind, text: output as the agent generates it
 	EventAgentReset   = "agent.reset"   // a retry starts the model call over: its deltas are void
 	EventAgentSkipped = "agent.skipped" // handle, reason
-	EventAgentCommit  = "agent.commit"  // msg_id, seq, text: an accepted say committed
+	EventAgentCommit  = "agent.commit"  // msg_id, seq or queued, text: an accepted say was written
 	EventAgentSilent  = "agent.silent"  // handle: it ended without say
 	EventAgentError   = "agent.error"   // handle, error
 	EventChainEnd     = "chain.end"     // cancelled
@@ -54,9 +55,11 @@ type ChainEvent struct {
 	Text   string `json:"text,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
-	// MsgID and Seq, on agent.commit, are the message's, Seq once it has a row.
-	MsgID string `json:"msg_id,omitempty"`
-	Seq   uint64 `json:"seq,omitempty"`
+	// MsgID and Seq, on agent.commit, are the message's, Seq once it has a
+	// row; Queued means it waits in this Node's Outbox, with no seq yet.
+	MsgID  string `json:"msg_id,omitempty"`
+	Seq    uint64 `json:"seq,omitempty"`
+	Queued bool   `json:"queued,omitempty"`
 	// Cancelled, on chain.end, means the chain was cut short by a cancel.
 	// Error, on chain.end, means the serve stopped and the chain is lost.
 	Cancelled bool `json:"cancelled,omitempty"`
@@ -334,49 +337,59 @@ func (h *chainHub) publishLocked(conv []byte, ev ChainEvent) {
 	}
 }
 
-// followMentions runs a chain for each of this Node's people's messages
-// that mentions agents, as it commits, until ctx ends; then it waits for
-// the chains it started. follow has already acted on the replica as it was
-// when the serve started: a chain cut off by a restart is lost, never
-// replayed (ADR 0015), and so is a mention in history a restore brings;
-// `conversation retry` recovers it (ADR 0018), and its chains are queued
-// here too.
-func (s *server) followMentions(ctx context.Context, store *cosl.Store, follow *cosl.Follower) {
+// chainCall is work for the replica's chain runner, which owns the chains
+// it queues.
+type chainCall struct {
+	do   func(ctx context.Context, chains *sync.WaitGroup)
+	done chan struct{}
+}
+
+// runChains runs the chain calls of this replica's serve, queuing chains in
+// its own WaitGroup, until ctx ends; then it waits for the chains it
+// queued. A chain cut off by a restart is lost, never replayed (ADR 0015);
+// `conversation retry` recovers it (ADR 0018).
+func (s *server) runChains(ctx context.Context) {
 	var chains sync.WaitGroup
 	defer chains.Wait()
-	chains.Go(func() { s.takeRetries(ctx, &chains, store) })
-	errs := errlog.New(s.opts.Logf, "serve: agent mentions")
-	for follow.Wait(ctx) {
-		errs.Report(follow.Act(func(wk cosl.Wake) error {
-			if wk.Rescan {
-				return nil
-			}
-			return s.startChains(ctx, &chains, store, wk.Since)
-		}))
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case call := <-s.chainCalls:
+			call.do(ctx, &chains)
+			close(call.done)
+		}
 	}
 }
 
-// startChains queues a chain, in wg, for each person's message from this
-// Node after seq that mentions agents.
-func (s *server) startChains(ctx context.Context, wg *sync.WaitGroup, store *cosl.Store, since uint64) error {
-	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, AfterSeq: since})
-	if err != nil {
-		return err
+// onChains runs do on the replica's chain runner and reports whether it
+// ran: it does not if no replica's runner takes it within the apply
+// timeout, or ctx ends first.
+func (s *server) onChains(ctx context.Context, do func(ctx context.Context, chains *sync.WaitGroup)) bool {
+	call := chainCall{do: do, done: make(chan struct{})}
+	select {
+	case s.chainCalls <- call:
+	case <-ctx.Done():
+		return false
+	case <-time.After(raftx.ApplyTimeout):
+		return false
 	}
-	for _, r := range rows {
-		handles, err := s.chainHandles(r)
-		if err != nil {
-			return err
-		}
-		if len(handles) > 0 {
-			s.chains.enqueue(ctx, wg, &chain{id: hex.EncodeToString(r.MsgID[:]), conv: r.ConversationID, handles: handles}, s.runChain)
-		}
-	}
-	return nil
+	<-call.done
+	return true
 }
 
-// runChain runs each agent c summons in turn, each reply committed before
-// the next starts, and depth-first the agents each reply summons. It stops
+// startChain queues the chain of the person's message with hex msg_id id,
+// which mentions handles, as soon as it is written, committed or queued; it
+// never starts again when a queued message commits (ADR 0025).
+func (s *server) startChain(conv []byte, id string, handles []string) {
+	c := &chain{id: id, conv: conv, handles: handles}
+	if !s.onChains(s.ctx, func(ctx context.Context, chains *sync.WaitGroup) { s.chains.enqueue(ctx, chains, c, s.runChain) }) {
+		s.opts.Logf("serve: chain %s did not start: the replica stopped; `conversation retry --chain %s` runs it", id, id)
+	}
+}
+
+// runChain runs each agent c summons in turn, each reply written before the
+// next starts, and depth-first the agents each reply summons. It stops
 // at the first error or a cancel, and commits nothing for the agent it
 // stopped at.
 func (s *server) runChain(c *chain) {
@@ -493,23 +506,23 @@ func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEv
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", handle, c.step)})
 		return "", inc, true
 	}
-	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said seq %d at step %d; not run again", handle, p.seq, c.step)})
+	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", handle, p.msgID, c.step)})
 	fail := func(err error) (string, config.Included, bool) {
 		s.opts.Logf("serve: retrying chain %s after @%s: %v", c.id, handle, err)
 		publish(ChainEvent{Type: EventAgentError, Handle: handle, Error: err.Error()})
 		return "", inc, false
 	}
-	_, store, ok := s.current()
+	ob, store, ok := s.writer()
 	if !ok {
 		return fail(ErrNoReplica)
 	}
-	_, ff, err := freeformAt(store, c.conv, p.seq)
+	ff, err := saidIn(ob, store, c.conv, p.msgID)
 	if err != nil {
 		return fail(err)
 	}
 	if ff == nil {
 		if !c.dry {
-			s.opts.Logf("serve: retrying chain %s: @%s's seq %d is pruned or gone; it summons nobody", c.id, handle, p.seq)
+			s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, handle, p.msgID)
 		}
 		return "", inc, true
 	}
@@ -547,16 +560,16 @@ func canSummon(depth uint32, inc config.Included) bool { return int(depth) < inc
 var errSkipped = errors.New("skipped")
 
 // runAgent runs the agent on the talk so far, as step c.step of c:
-// commits what it says, or reports it silent, and returns how it ended,
-// with what was included where it answered. Everything the run generates,
+// writes what it says, committed or queued, or reports it silent, and
+// returns how it ended, with what was included where it answered. Everything the run generates,
 // and how it ended, goes to c's Transcript (ADR 0018); a run cut off by the
 // serve stopping records no outcome.
 func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(ChainEvent)) (res agent.Result, inc config.Included, err error) {
-	_, store, ok := s.current()
+	ob, store, ok := s.writer()
 	if !ok {
 		return res, inc, ErrNoReplica
 	}
-	req, inc, err := s.agentRequest(store, c.conv, handle, depth)
+	req, inc, err := s.agentRequest(ob, store, c.conv, handle, depth)
 	if errors.Is(err, errSkipped) {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
 		return res, inc, err
@@ -614,37 +627,17 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 	// It is posted: whatever fails from here, the Transcript says so, and a
 	// retry does not post it again.
 	said = v
-	publish(ChainEvent{Type: EventAgentCommit, MsgID: v.MsgID, Seq: v.Seq, Text: res.Said})
-	// The next agent reads this message from the replica.
-	wait, cancel := context.WithTimeout(commit, raftx.ApplyTimeout)
-	defer cancel()
-	return res, inc, waitApplied(wait, store, v.Seq)
-}
-
-// waitApplied returns once the replica has applied seq.
-func waitApplied(ctx context.Context, store *cosl.Store, seq uint64) error {
-	for {
-		changed := store.Changed()
-		m, err := store.Mark()
-		if err != nil {
-			return err
-		}
-		if m.LastAppliedSeq >= seq {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-changed:
-		}
-	}
+	// The next agent reads it from this Node's view of the talk at once,
+	// applied or not (ADR 0025).
+	publish(ChainEvent{Type: EventAgentCommit, MsgID: v.MsgID, Seq: v.Seq, Queued: v.Queued, Text: res.Said})
+	return res, inc, nil
 }
 
 // agentRequest is the call to the Provider that answers as handle: its
 // SYSTEM.md and the serve's preamble, then the talk so far as turns by
 // Handle (ADR 0018), sent with this Node's key to the Provider as this
 // Node's merged Workspace configures it, and nowhere else (ADR 0022).
-func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
+func (s *server) agentRequest(ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
 	_, ws, inc, err := s.included(store, conv)
 	if err != nil {
 		return agent.Request{}, inc, err
@@ -674,7 +667,7 @@ func (s *server) agentRequest(store *cosl.Store, conv []byte, handle string, dep
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	turns, missing, err := s.talkSoFar(store, conv, handle)
+	turns, missing, err := s.talkSoFar(ob, store, conv, handle)
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
@@ -740,16 +733,17 @@ func preamble(handle string, depth uint32, inc config.Included, where string, mi
 }
 
 // talkSoFar is conv's talk as handle sees it (ADR 0024): this Node's
-// RECAP.md opening the first user turn, then the lean view of the talk
-// after it as turns; and whether earlier talk is missing, pruned with no
-// Recap of this Node's in its place. Another Node's Recap is never read: it
-// is that Node's file. A RECAP.md that does not parse fails the summon.
-func (s *server) talkSoFar(store *cosl.Store, conv []byte, handle string) ([]agent.Turn, bool, error) {
+// RECAP.md opening the first user turn, then the lean view of this Node's
+// view of the talk after it (ADR 0025) as turns; and whether earlier talk
+// is missing, pruned with no Recap of this Node's in its place. Another
+// Node's Recap is never read: it is that Node's file. A RECAP.md that does
+// not parse fails the summon.
+func (s *server) talkSoFar(ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string) ([]agent.Turn, bool, error) {
 	r, err := recap.Read(s.opts.Paths.RecapFile(s.opts.Alias, nodedir.ConversationName(conv)))
 	if err != nil {
 		return nil, false, err
 	}
-	rows, err := store.Log(cosl.Query{GroupLevel: conv == nil, ConversationID: conv})
+	rows, err := talk(ob, store, conv)
 	if err != nil {
 		return nil, false, err
 	}
@@ -763,6 +757,19 @@ func (s *server) talkSoFar(store *cosl.Store, conv []byte, handle string) ([]age
 	}
 	rec, _ := s.slot.Current()
 	return talkTurns(opening, v.Talk, func(r cosl.Row) string { return displayName(rec, r) }, s.opts.Node.NodeID, handle), v.Missing, nil
+}
+
+// talk is this Node's view of conv's talk (ADR 0025): its committed
+// app.freeform rows, then the messages it wrote that its replica does not
+// hold yet, those queued with no seq. The Outbox is read first; see
+// Outbox.Unapplied.
+func talk(ob *outbox.Outbox, store *cosl.Store, conv []byte) ([]cosl.Row, error) {
+	mine := ob.Unapplied()
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, GroupLevel: conv == nil, ConversationID: conv})
+	if err != nil {
+		return nil, err
+	}
+	return outbox.View(rows, mine, conv)
 }
 
 // recapOpening is how this Node's Recap opens the first user turn: framed

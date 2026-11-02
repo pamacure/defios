@@ -66,19 +66,26 @@ func requestConversation(hexID string) ([]byte, error) {
 }
 
 // conversationSend is `conversation send` (§8): author an app.freeform and
-// commit it. A nil conversationID is Group-level. An empty handle is a
-// person's message; otherwise it is that agent's at depth, and this Node's
-// config must include the Handle there (ADR 0015). A person's message is
-// queued in the Outbox when no leader is known; an agent's is not, since
-// the next agent in its chain reads it from the replica.
+// commit it, or queue it in the Outbox when no leader is known (ADR 0025).
+// A nil conversationID is Group-level. An empty handle is a person's
+// message, whose mentions start its chain of agents as soon as it is
+// written; otherwise it is that agent's at depth, and this Node's config
+// must include the Handle there (ADR 0015).
 func (s *server) conversationSend(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
 	payload, err := cosl.AgentFreeform(text, handle, depth)
 	if err != nil {
 		return SendView{}, err
 	}
-	return s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, handle == "", func(store *cosl.Store) error {
+	v, err := s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, func(store *cosl.Store) error {
 		return s.checkHandle(store, conversationID, handle, depth, text)
 	})
+	if err != nil || handle != "" {
+		return v, err
+	}
+	if handles := mention.Handles(text); len(handles) > 0 {
+		s.startChain(conversationID, v.MsgID, handles)
+	}
+	return v, nil
 }
 
 // checkHandle allows a person's message at depth 0 whose mentions all name
@@ -174,10 +181,9 @@ func listHandles(profiles []config.ResolvedProfile) string {
 
 // conversationAppend signs payload as typ in the Conversation (Group-level
 // when conversationID is nil) and commits it through Raft, bounded by the
-// §4.2 apply timeout; with no leader known it is queued in the Outbox if
-// queue is set. check, when set, is the writer's precondition against the
-// replica.
-func (s *server) conversationAppend(ctx context.Context, typ uint32, conversationID []byte, payload proto.Message, queue bool, check func(*cosl.Store) error) (SendView, error) {
+// §4.2 apply timeout, or queues it in the Outbox (ADR 0025). check, when
+// set, is the writer's precondition against the replica.
+func (s *server) conversationAppend(ctx context.Context, typ uint32, conversationID []byte, payload proto.Message, check func(*cosl.Store) error) (SendView, error) {
 	if conversationID != nil && len(conversationID) != 32 {
 		return SendView{}, fmt.Errorf("serve: conversation id is %d bytes, want 32", len(conversationID))
 	}
@@ -199,7 +205,7 @@ func (s *server) conversationAppend(ctx context.Context, typ uint32, conversatio
 	if err != nil {
 		return SendView{}, fmt.Errorf("serve: %w", err)
 	}
-	return send(ctx, ob, signed, queue)
+	return write(ctx, ob, signed)
 }
 
 // requireConversation allows Group-level talk (a nil id) and a Conversation

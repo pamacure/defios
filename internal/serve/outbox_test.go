@@ -128,3 +128,54 @@ func waitEmptyOutbox(t *testing.T, n *node) {
 	}
 	t.Fatalf("%s: Outbox not empty after the drain", n.name)
 }
+
+// With no leader, a person's mention of @auditor, whose reply summons
+// @scribe, runs both: each reply is queued, and @scribe reads @auditor's
+// from this Node's view of the talk. When the queued messages commit, no
+// chain runs again (ADR 0025).
+func TestAChainRunsWithNoLeader(t *testing.T) {
+	a, b, gid, provider := agentPair(t, "auditor", "scribe")
+	maxDepth2(t, a)
+	replyAs(provider, map[string]string{"auditor": "ask @scribe", "scribe": "done"})
+	b.stop()
+	a.waitLeaderless(t)
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor check", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Queued {
+		t.Fatalf("send = %+v, want queued", v)
+	}
+	events := untilEnd(t, s, v.MsgID)
+	want := `chain.start start:@auditor/1 tool:say {"text":"ask @scribe"} commit:ask @scribe start:@scribe/2 tool:say {"text":"done"} commit:done end`
+	if got := summary(events); got != want {
+		t.Fatalf("events = %s\nwant     %s", got, want)
+	}
+	for _, ev := range events {
+		if ev.Type == serve.EventAgentCommit && (!ev.Queued || ev.Seq != 0) {
+			t.Fatalf("agent.commit %+v, want queued with no seq", ev)
+		}
+	}
+	calls := provider.seen()
+	if want := "alice: @auditor check\nalice/@auditor: ask @scribe"; len(calls) != 2 || calls[1].Prompt != want {
+		t.Fatalf("calls = %+v, want @scribe's prompt %q", calls, want)
+	}
+
+	b.restart(t)
+	rows := a.groupLevelRows(t, gid, 3)
+	if ffs := freeforms(t, rows); ffs[0].Text != "@auditor check" || ffs[1].Text != "ask @scribe" || ffs[2].Text != "done" {
+		t.Fatalf("rows = %+v", ffs)
+	}
+	waitEmptyOutbox(t, a)
+	// One chain at a time runs per Conversation, so once this one ends any
+	// chain the commits had started has run.
+	v, err = a.client().ConversationSend(context.Background(), "@scribe again", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, v.MsgID)
+	if n := len(provider.seen()); n != 3 {
+		t.Fatalf("provider called %d times, want 3: a chain ran again when its messages committed", n)
+	}
+}

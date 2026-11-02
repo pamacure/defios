@@ -419,6 +419,31 @@ func (s *Store) Meta() (Meta, error) {
 // envelope that carried it; only its metadata and envelope_hash remain.
 func (r Row) Pruned() bool { return r.Envelope == nil }
 
+// Queued reports whether the row is a message waiting in this Node's Outbox,
+// which has no seq yet (ADR 0025).
+func (r Row) Queued() bool { return r.Seq == 0 }
+
+// RowOf is s as a row at seq, 0 for a message still queued, for a reader
+// that shows this Node's messages before its replica applies them (ADR
+// 0025). Term and PrevHash are unset: only applying the row sets them.
+func RowOf(s Signed, seq uint64) (Row, error) {
+	env, err := Unmarshal(s.Bytes)
+	if err != nil {
+		return Row{}, err
+	}
+	r := Row{
+		Seq:            seq,
+		Envelope:       s.Bytes,
+		EnvelopeHash:   sha256.Sum256(s.Bytes),
+		MsgType:        env.MsgType,
+		MsgID:          s.MsgID,
+		ConversationID: env.ConversationId,
+		CreatedAt:      env.CreatedAt,
+	}
+	copy(r.Sender[:], env.Sender)
+	return r, nil
+}
+
 // Decode parses the stored envelope bytes.
 func (r Row) Decode() (*coslv1.Envelope, error) {
 	var env coslv1.Envelope

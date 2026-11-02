@@ -12,12 +12,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/mention"
 	"defios.com/internal/nodedir"
-	"defios.com/internal/raftx"
+	"defios.com/internal/outbox"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -74,7 +73,7 @@ type priorRun struct {
 	handle  string
 	attempt int
 	outcome string
-	seq     uint64
+	msgID   string // what it said, hex
 }
 
 // finished reports whether a retry reuses the run instead of running it.
@@ -104,7 +103,7 @@ func readTranscript(path string) (map[int]priorRun, error) {
 			p = priorRun{handle: l.Handle, attempt: l.Attempt}
 		}
 		if l.Attempt == p.attempt && l.Kind == KindOutcome {
-			p.outcome, p.seq = l.Outcome, l.Seq
+			p.outcome, p.msgID = l.Outcome, l.MsgID
 		}
 		runs[l.Step] = p
 	}
@@ -124,7 +123,20 @@ type chainStart struct {
 // chainHandles is what r mentions if it is a person's message from this
 // Node, whose payload is still held; nil otherwise.
 func (s *server) chainHandles(r cosl.Row) ([]string, error) {
-	if r.Sender != s.opts.Node.NodeID || r.Pruned() {
+	if r.Sender != s.opts.Node.NodeID {
+		return nil, nil
+	}
+	ff, err := freeform(r)
+	if ff == nil || ff.Handle != "" {
+		return nil, err // an agent's reply summons within its own chain
+	}
+	return mention.Handles(ff.Text), nil
+}
+
+// freeform is r's app.freeform, nil if its payload is pruned or does not
+// parse: the FSM does not parse payloads, and such a one says nothing.
+func freeform(r cosl.Row) (*coslv1.AppFreeform, error) {
+	if r.Pruned() {
 		return nil, nil
 	}
 	env, err := r.Decode()
@@ -133,18 +145,15 @@ func (s *server) chainHandles(r cosl.Row) ([]string, error) {
 	}
 	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
 	if err != nil {
-		return nil, nil // the FSM does not parse payloads; this one says nothing
+		return nil, nil
 	}
-	ff := msg.(*coslv1.AppFreeform)
-	if ff.Handle != "" {
-		return nil, nil // an agent's reply summons within its own chain
-	}
-	return mention.Handles(ff.Text), nil
+	return msg.(*coslv1.AppFreeform), nil
 }
 
-// chainStarts is the chain starts conv's talk holds, oldest first.
-func (s *server) chainStarts(store *cosl.Store, conv []byte) ([]chainStart, error) {
-	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, GroupLevel: conv == nil, ConversationID: conv})
+// chainStarts is the chain starts this Node's view of conv's talk holds,
+// oldest first, queued ones included (ADR 0025).
+func (s *server) chainStarts(ob *outbox.Outbox, store *cosl.Store, conv []byte) ([]chainStart, error) {
+	rows, err := talk(ob, store, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -207,32 +216,30 @@ func (s *server) latestUnfinished(conv []byte, starts []chainStart) (chainStart,
 	return chainStart{}, false, nil
 }
 
-// freeformAt is conv's app.freeform at seq, nil if there is none or its
-// payload is pruned.
-func freeformAt(store *cosl.Store, conv []byte, seq uint64) (cosl.Row, *coslv1.AppFreeform, error) {
-	if seq == 0 {
-		return cosl.Row{}, nil, nil
-	}
-	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, AfterSeq: seq - 1, GroupLevel: conv == nil, ConversationID: conv})
-	if err != nil || len(rows) == 0 || rows[0].Seq != seq || rows[0].Pruned() {
-		return cosl.Row{}, nil, err
-	}
-	env, err := rows[0].Decode()
+// saidIn is conv's app.freeform with hex msg_id msgID in this Node's view
+// of the talk, nil if it is not there or its payload is pruned.
+func saidIn(ob *outbox.Outbox, store *cosl.Store, conv []byte, msgID string) (*coslv1.AppFreeform, error) {
+	rows, err := talk(ob, store, conv)
 	if err != nil {
-		return cosl.Row{}, nil, err
+		return nil, err
 	}
-	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-	if err != nil {
-		return cosl.Row{}, nil, nil
+	for _, r := range rows {
+		if hex.EncodeToString(r.MsgID[:]) == msgID {
+			return freeform(r)
+		}
 	}
-	return rows[0], msg.(*coslv1.AppFreeform), nil
+	return nil, nil
 }
 
 // retry queues again the chain in conv whose msg_id starts with the hex
 // prefix, or with prefix "" the latest unfinished one, reusing what its
 // Transcript shows finished (ADR 0018). It returns the chain's msg_id.
-func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, store *cosl.Store, conv []byte, prefix string) (string, error) {
-	starts, err := s.chainStarts(store, conv)
+func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, conv []byte, prefix string) (string, error) {
+	ob, store, ok := s.writer()
+	if !ok {
+		return "", ErrNoReplica
+	}
+	starts, err := s.chainStarts(ob, store, conv)
 	if err != nil {
 		return "", err
 	}
@@ -272,32 +279,6 @@ func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, store *cosl.Stor
 	return st.id, nil
 }
 
-// retryCall is a retry asked of the replica's mention follower, which owns
-// the chains it starts.
-type retryCall struct {
-	conv   []byte
-	prefix string
-	reply  chan retryReply // buffered: the follower never waits on it
-}
-
-type retryReply struct {
-	chain string
-	err   error
-}
-
-// takeRetries answers retries until ctx ends, queuing their chains in wg.
-func (s *server) takeRetries(ctx context.Context, wg *sync.WaitGroup, store *cosl.Store) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case call := <-s.retries:
-			chain, err := s.retry(ctx, wg, store, call.conv, call.prefix)
-			call.reply <- retryReply{chain: chain, err: err}
-		}
-	}
-}
-
 type retryRequest struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 	// Chain is a hex prefix of the msg_id of the message that started the
@@ -333,21 +314,21 @@ func (s *server) retryRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		call := retryCall{conv: conv, prefix: req.Chain, reply: make(chan retryReply, 1)}
-		select {
-		case s.retries <- call:
-		case <-r.Context().Done():
-			return
-		case <-time.After(raftx.ApplyTimeout):
-			writeError(w, ErrNoReplica)
+		var chain string
+		ran := s.onChains(r.Context(), func(ctx context.Context, chains *sync.WaitGroup) {
+			chain, err = s.retry(ctx, chains, conv, req.Chain)
+		})
+		if r.Context().Err() != nil {
 			return
 		}
-		rep := <-call.reply
-		if rep.err != nil {
-			writeError(w, rep.err)
+		if !ran {
+			err = ErrNoReplica
+		}
+		if err != nil {
+			writeError(w, err)
 			return
 		}
-		writeJSON(w, RetryView{Chain: rep.chain})
+		writeJSON(w, RetryView{Chain: chain})
 	})
 }
 

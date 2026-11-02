@@ -36,6 +36,7 @@ type chainServe struct {
 	cancelFindsNone bool
 	cancelKind      string // a cancel answers with this error kind, if set
 	retryKind       string // a retry answers with this error kind, if set
+	queued          bool   // a send is queued in the Outbox, not committed
 
 	mu       sync.Mutex
 	paths    []string // requests in order
@@ -80,7 +81,11 @@ func newChainServe(t *testing.T, dir string, cs *chainServe) *chainServe {
 	})
 	mux.HandleFunc("POST /v1/conversation/send", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
-		w.Write([]byte(`{"seq":9,"term":1,"msg_id":"` + chainA + `"}`))
+		if cs.queued {
+			w.Write([]byte(`{"msg_id":"` + chainA + `","queued":true}`))
+		} else {
+			w.Write([]byte(`{"seq":9,"term":1,"msg_id":"` + chainA + `"}`))
+		}
 		cs.sentOnce.Do(func() { close(cs.sent) })
 	})
 	mux.HandleFunc("POST /v1/conversation/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -178,6 +183,22 @@ func TestConversationSendStreamsTheChain(t *testing.T) {
 	want := "sent as seq 9 (msg_id " + strings.Repeat("ab", 32) + ")\n@auditor: all good\n@scribe skipped: @scribe is no longer in [agent] profiles here\n"
 	if r.stdout != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
+	}
+}
+
+// A queued message that mentions agents still runs its chain (ADR 0025):
+// send says it is queued, follows the chain to its end, and exits as
+// queued.
+func TestConversationSendFollowsAQueuedMessagesChain(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{events: replyEvents, queued: true})
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "@auditor @scribe, look")
+	if r.code != cli.ExitQueued {
+		t.Fatalf("exit %d, want %d (queued): %s", r.code, cli.ExitQueued, r.stderr)
+	}
+	if !strings.HasPrefix(r.stdout, "queued (msg_id "+chainA+")") || !strings.HasSuffix(r.stdout, "\n@auditor: all good\n@scribe skipped: @scribe is no longer in [agent] profiles here\n") {
+		t.Fatalf("stdout:\n%s", r.stdout)
 	}
 }
 

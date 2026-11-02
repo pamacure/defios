@@ -21,6 +21,7 @@ import (
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/serve"
@@ -194,18 +195,16 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 	if err != nil {
 		return sendError(err)
 	}
-	if v.Queued {
-		if g.json {
-			if err := g.emitJSON(v); err != nil {
-				return err
-			}
-		} else {
-			fmt.Fprintf(g.app.Stdout, "queued (msg_id %s): %s\n", v.MsgID, queuedNote)
-		}
-		return exitQueued()
-	}
 	att := attached{client: client, conv: conv, stream: stream, chain: v.MsgID, cancelled: "; your message stays"}
-	return att.run(ctx, g, v, fmt.Sprintf("sent as seq %d (msg_id %s)", v.Seq, v.MsgID))
+	if !v.Queued {
+		return att.run(ctx, g, v, fmt.Sprintf("sent as seq %d (msg_id %s)", v.Seq, v.MsgID))
+	}
+	// A queued message's chain runs now, on this Node's view of the talk
+	// (ADR 0025); the exit still says it is not on the log.
+	if err := att.run(ctx, g, v, fmt.Sprintf("queued (msg_id %s): %s", v.MsgID, queuedNote)); err != nil {
+		return err
+	}
+	return exitQueued()
 }
 
 // attached is a command that started or queued a chain and, with a stream
@@ -716,9 +715,10 @@ func sendError(err error) error {
 }
 
 // messageLine is one `conversation log` row, human or JSON: an app.freeform.
+// A queued one, in this Node's Outbox, has no seq or term (ADR 0025).
 type messageLine struct {
-	Seq               uint64 `json:"seq"`
-	Term              uint64 `json:"term"`
+	Seq               uint64 `json:"seq,omitempty"`
+	Term              uint64 `json:"term,omitempty"`
 	CreatedAt         string `json:"created_at"`
 	Sender            string `json:"sender"`
 	SenderDisplayName string `json:"sender_display_name"`
@@ -732,6 +732,7 @@ type messageLine struct {
 	Text        string  `json:"text"`
 	ContentType string  `json:"content_type"`
 	Pruned      bool    `json:"pruned,omitempty"` // no text: only the row's metadata remains
+	Queued      bool    `json:"queued,omitempty"` // in this Node's Outbox, not on the log yet
 }
 
 // leanLine is one `conversation log --lean` entry: who said what, or this
@@ -758,12 +759,14 @@ func newMessageLine(rec *group.Record, r cosl.Row) messageLine {
 		SenderDisplayName: rosterName(rec.Roster(), r.Sender),
 		MsgID:             hex.EncodeToString(r.MsgID[:]),
 		MsgType:           cosl.TypeName(r.MsgType),
+		Queued:            r.Queued(),
 	}
 }
 
-// runConversationLog prints the Conversation's talk this replica holds,
-// unfolded (ADR 0024): every message not pruned, and under --full the
-// pruned ones too as placeholders. --lean is what this Node's agents read.
+// runConversationLog prints this Node's view of the Conversation's talk
+// (ADR 0025), unfolded (ADR 0024): every message this replica holds that is
+// not pruned, and under --full the pruned ones too as placeholders, then
+// those queued in its Outbox. --lean is what this Node's agents read.
 func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if opts.limit < 0 {
 		return exitUsagef("--limit must be >= 0")
@@ -771,7 +774,7 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if opts.full && opts.lean {
 		return exitUsagef("--full and --lean are opposite views; pass one")
 	}
-	_, rec, err := loadGroup(g)
+	alias, rec, err := loadGroup(g)
 	if err != nil {
 		return err
 	}
@@ -784,8 +787,21 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if err != nil {
 		return err
 	}
+	// The Outbox before the replica: a message the serve drains between the
+	// two reads is in both, and shows once, as committed.
+	queued, err := outbox.Read(g.paths().OutboxFile(alias))
+	if err != nil {
+		return exitOperational(err)
+	}
 	rows, err := store.Log(cosl.Query{GroupLevel: conv == nil, ConversationID: conv, MsgTypes: []uint32{cosl.TypeAppFreeform}})
 	if err != nil {
+		return exitOperational(err)
+	}
+	mine := make([]outbox.Entry, len(queued))
+	for i, q := range queued {
+		mine[i] = outbox.Entry{Signed: q}
+	}
+	if rows, err = outbox.View(rows, mine, conv); err != nil {
 		return exitOperational(err)
 	}
 	if opts.lean {
@@ -816,7 +832,11 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 		if l.Handle != nil {
 			who += " " + p.primary(handleLabel(*l.Handle))
 		}
-		fmt.Fprintf(g.app.Stdout, "%s %s %s  %s\n", p.primary(fmt.Sprint(l.Seq)), p.dim(l.CreatedAt), who, text)
+		at := p.primary(fmt.Sprint(l.Seq))
+		if l.Queued {
+			at = p.dim("queued")
+		}
+		fmt.Fprintf(g.app.Stdout, "%s %s %s  %s\n", at, p.dim(l.CreatedAt), who, text)
 	}
 	return nil
 }
@@ -852,7 +872,7 @@ func newTalkLine(rec *group.Record, r cosl.Row) (messageLine, error) {
 	}
 	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
 	if err != nil {
-		return messageLine{}, fmt.Errorf("cosl: seq %d: %w", r.Seq, err)
+		return messageLine{}, fmt.Errorf("cosl: msg_id %x: %w", r.MsgID, err)
 	}
 	ff := msg.(*coslv1.AppFreeform)
 	l.Text, l.ContentType = ff.Text, ff.ContentType

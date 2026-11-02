@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
@@ -26,6 +27,8 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/outbox"
+	"defios.com/internal/raftx"
 	coslv1 "defios.com/proto/cosl/v1"
 	groupv1 "defios.com/proto/group/v1"
 )
@@ -997,5 +1000,84 @@ func TestConversationSendDepthOverflowExitsUsage(t *testing.T) {
 	r := run(t, nil, "", "--dir", dir, "conversation", "send", "--handle", "@auditor", "--depth", "4294967297", "hi")
 	if r.code != 1 || body.Load() != "" {
 		t.Errorf("exit %d, posted %q; stderr %q", r.code, body.Load(), r.stderr)
+	}
+}
+
+// queueTalk puts n's Group-level text, then text in the zero Conversation,
+// in the Outbox under dir, as a serve with no leader would.
+func queueTalk(t *testing.T, dir string, n *identity.Node, text string) {
+	t.Helper()
+	gdir := filepath.Join(dir, "group", group.ImplicitAlias)
+	store, err := cosl.Open(filepath.Join(gdir, "cosl.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.Log(cosl.Query{Limit: 1})
+	store.Close()
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("no row to take the Group ID from: %v", err)
+	}
+	env, err := rows[0].Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ob, err := outbox.Open(outbox.Config{
+		Path:   filepath.Join(gdir, "outbox.json"),
+		Append: func(context.Context, cosl.Signed) (raftx.Position, error) { return raftx.Position{}, raftx.ErrNoLeader },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	author := cosl.Author{Node: n, GroupID: group.ID(env.GroupId)}
+	for _, conv := range [][]byte{nil, make([]byte, 32)} {
+		ff, _ := cosl.Freeform(text)
+		s, err := author.Sign(cosl.TypeAppFreeform, conv, ff)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := ob.Write(context.Background(), s); err != nil || !res.Queued {
+			t.Fatalf("queue: %+v, %v", res, err)
+		}
+	}
+}
+
+// conversation log shows this Node's view of the talk: its queued messages
+// after the committed ones, marked queued with no seq, and under --lean as
+// its agents read them. cosl log is the log: it shows none of them (ADR
+// 0025).
+func TestConversationLogShowsQueuedTalkLast(t *testing.T) {
+	dir := t.TempDir()
+	alice, _ := groupWithTalk(t, dir)
+	queueTalk(t, dir, alice, "waiting")
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "log")
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if r.code != 0 || len(lines) != 4 {
+		t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	if !strings.HasPrefix(lines[3], "queued ") || !strings.HasSuffix(lines[3], " alice user  waiting") {
+		t.Errorf("queued line: %q", lines[3])
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--json", "--limit", "2")
+	var rows []map[string]any
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 2 {
+		t.Fatalf("--json: %v\n%s", err, r.stdout)
+	}
+	if rows[0]["seq"] != float64(5) || rows[0]["queued"] != nil {
+		t.Errorf("committed row = %v", rows[0])
+	}
+	_, hasSeq := rows[1]["seq"]
+	if hasSeq || rows[1]["queued"] != true || rows[1]["text"] != "waiting" || rows[1]["msg_id"] == "" {
+		t.Errorf("queued row = %v, want queued with no seq", rows[1])
+	}
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--lean", "--limit", "1")
+	if r.stdout != "alice: waiting\n" {
+		t.Errorf("--lean = %q", r.stdout)
+	}
+	r = run(t, nil, "", "--dir", dir, "cosl", "log")
+	if r.code != 0 || strings.Contains(r.stdout, "waiting") {
+		t.Errorf("cosl log shows a queued message (exit %d):\n%s", r.code, r.stdout)
 	}
 }

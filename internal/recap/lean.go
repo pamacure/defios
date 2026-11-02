@@ -27,13 +27,14 @@ type View struct {
 }
 
 // Lean is the view of one Conversation's rows, in seq order as a Query on
-// its Conversation ID (or GroupLevel) returns them, under this Node's Recap
-// r, nil for none. Nothing is folded from the log: only r stands in for
-// talk.
+// its Conversation ID (or GroupLevel) returns them, then this Node's queued
+// ones (ADR 0025), under this Node's Recap r, nil for none. Nothing is
+// folded from the log: only r stands in for talk, and a queued message is
+// always after it.
 func Lean(r *Recap, rows []cosl.Row) (View, error) {
 	v := View{Recap: r}
 	for _, row := range rows {
-		if row.MsgType != cosl.TypeAppFreeform || (r != nil && row.Seq <= r.BaseSeq) {
+		if row.MsgType != cosl.TypeAppFreeform || (r != nil && !row.Queued() && row.Seq <= r.BaseSeq) {
 			continue
 		}
 		if row.Pruned() {

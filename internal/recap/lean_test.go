@@ -78,6 +78,18 @@ func TestLeanIsTheRecapThenTheTalkAfterIt(t *testing.T) {
 	}
 }
 
+// This Node's queued messages, which have no seq, come after its Recap.
+func TestQueuedTalkIsAfterTheRecap(t *testing.T) {
+	r := &recap.Recap{BaseSeq: 3, Text: "a to c"}
+	v, err := recap.Lean(r, []cosl.Row{talk(t, 3, "c"), talk(t, 4, "d"), talk(t, 0, "queued")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []line{{4, "", "d"}, {0, "", "queued"}}; !slices.Equal(lines(v.Talk), want) {
+		t.Fatalf("talk = %v, want %v", lines(v.Talk), want)
+	}
+}
+
 // Pruned talk the Recap does not account for, or any pruned talk with no
 // Recap, is missing: the view says so, and has nothing to show for it.
 func TestPrunedTalkNoRecapAccountsForIsMissing(t *testing.T) {
