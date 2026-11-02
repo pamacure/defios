@@ -50,7 +50,12 @@ pre-release, so nothing is migrated.
   with `no-leader` as before. A `sign.request` queues whatever its chains,
   but one with a Solana transaction commits only if a majority returns
   before its deadline (60 seconds by default, about as long as its
-  `recent_blockhash` lives); otherwise it is dropped as expired unsent.
+  `recent_blockhash` lives); otherwise it is dropped as expired unsent. A
+  longer deadline does not help: the cluster refuses a stale blockhash, so
+  such a request commits and is signed but never lands. Solana is still not
+  blocked, so the Outbox stays blind to chains: a later way for a Solana
+  transaction to outlive its blockhash, such as a durable nonce, would need
+  no change here.
 - **Queueing is automatic.** When a queueable write finds no leader, `serve`
   queues it and answers `queued`, with an exit code distinct from a commit's;
   nothing reports a queued message as committed. While the Outbox is not
