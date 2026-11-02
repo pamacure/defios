@@ -57,7 +57,7 @@ A Node's local directory of settings for one Group, or for one Conversation with
 _Avoid_: profile, project, config dir, profile directory
 
 **Agent Profile**:
-One agent persona a Node can summon into talk: a profile directory holding its system prompt, and the Provider and Model ID it runs on, that a Group's config binds to a Handle. Node-local and never replicated; one profile may serve any of the Node's Groups and Keys, but answers only in a Conversation (or Group-level talk) whose config includes its Handle.
+One agent persona a Node can summon into talk: the system prompt in the profile directory named by its Handle, and the Provider and Model ID each Group's config gives it under that Handle. Node-local and never replicated; every Group of the Node that defines the Handle shares its prompt, but it answers only in a Conversation (or Group-level talk) whose config includes its Handle.
 _Avoid_: agent (that is the running thing, not its definition), persona, bot, workspace
 
 **Agent**:

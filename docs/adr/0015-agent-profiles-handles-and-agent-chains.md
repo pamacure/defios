@@ -79,6 +79,8 @@ message too, and is named by msg_id, not seq.*
   list. A `profiles` entry that names no `[agents.*]` table is an error when
   the config is read. A Model alias the COSL does not hold, or a profile
   directory without `SYSTEM.md`, is an error when the agent is summoned.
+  *Amended by [ADR 0026](0026-an-agent-profile-is-named-by-its-handle.md):
+  `dir` is gone; the profile directory is always `agents/<handle>`.*
 - **Credentials are unchanged.** The profile's Model alias gives its provider
   on the COSL, and the key comes from the Conversation's merged
   `[providers.<provider>] api_key`, from the environment or the Group's Vault,
