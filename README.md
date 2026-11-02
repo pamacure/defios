@@ -124,8 +124,10 @@ A message is on the log once a majority of the Group commits it, so with two mac
 A Provider is an LLM API this Node's agents call: a base URL and an API path. It is this Node's own config, a `[providers.<alias>]` table in the Group's `config.toml`, and is never shared with the Group, so each machine adds its own and its key goes only to the base URL it named. `provider` needs no serve. The `anthropic` preset is Anthropic's Messages API:
 
 ```bash
-defios provider add anthropic
+defios provider add anthropic --api-key '$ANTHROPIC_API_KEY'
 ```
+
+`--api-key` names the Secret that holds the key, as a `$NAME` reference; the key itself is refused, so it never lands in `config.toml`.
 
 The `openai` preset is OpenAI's Responses API:
 
@@ -153,6 +155,8 @@ defios secret set ANTHROPIC_API_KEY
 
 Check it: `defios provider list` shows the Providers this machine has, and `defios secret show ANTHROPIC_API_KEY` says where the key comes from.
 
+`defios provider edit <alias>` changes only what it is given: `--base-url`, `--api-path`, `--api-key` (`--api-key ''` removes it), or `--body`, the base request for every agent on the Provider, a JSON object read as `agent add --body` reads it. `--body` replaces the body whole, and `--body '{}'` clears it.
+
 ### 7. Create an agent
 
 Add an agent with the Handle `@auditor`, on the `anthropic` Provider:
@@ -177,7 +181,7 @@ An agent answers only where it is included. Include it in Group talk:
 defios agent include auditor
 ```
 
-It prints the Handles now mentionable there. Give the Provider the API key by editing the `[providers.anthropic]` table `provider add` wrote in `~/.config/defios/group/personal/config.toml`. The file then reads:
+It prints the Handles now mentionable there. `~/.config/defios/group/personal/config.toml` then reads:
 
 ```toml
 [agent]

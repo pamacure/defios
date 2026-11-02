@@ -12,17 +12,55 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/provider"
+	"defios.com/internal/secret"
 )
 
 // providerFlags are the fields add and edit take.
 type providerFlags struct {
 	baseURL string
 	apiPath string
+	apiKey  string
+	body    string
 }
 
 func (f *providerFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.baseURL, "base-url", "", "http(s) base URL, e.g. https://api.anthropic.com, with no userinfo, query or fragment")
 	cmd.Flags().StringVar(&f.apiPath, "api-path", "", "API path; its suffix picks the shape: .../messages, .../chat/completions or .../responses")
+	cmd.Flags().StringVar(&f.apiKey, "api-key", "", `the Secret that holds its key, as a "$NAME" reference (see secret), never the key itself`)
+	cmd.Flags().StringVar(&f.body, "body", "", "the base request body for every agent on it, a JSON object: inline, @path to read a file, or - for stdin")
+}
+
+// apply sets on p each field whose flag cmd was given: --body replaces the
+// body whole, and --api-key must be a Secret reference.
+func (f *providerFlags) apply(g *globals, cmd *cobra.Command, p *config.Provider) error {
+	fl := cmd.Flags()
+	if fl.Changed("base-url") {
+		p.BaseURL = f.baseURL
+	}
+	if fl.Changed("api-path") {
+		p.APIPath = f.apiPath
+	}
+	if fl.Changed("api-key") {
+		if f.apiKey != "" {
+			if _, err := secret.ParseRef(f.apiKey); err != nil {
+				return fmt.Errorf("--api-key: %w", err)
+			}
+		}
+		p.APIKey = f.apiKey
+	}
+	if fl.Changed("body") {
+		body, err := readBody(g, f.body)
+		if err != nil {
+			return err
+		}
+		// An empty body is no body, as the file reads back, so clearing
+		// one already clear is unchanged.
+		if len(body) == 0 {
+			body = nil
+		}
+		p.Body = body
+	}
+	return nil
 }
 
 func providerCommand(g *globals) *cobra.Command {
@@ -57,11 +95,8 @@ option are set there or per agent, in [agents.<handle>.body]. These commands nee
 			} else if cmd.Flags().Changed("preset") {
 				return exitUsagef("no preset %q; the presets are %s", preset, strings.Join(provider.PresetNames(), ", "))
 			}
-			if cmd.Flags().Changed("base-url") {
-				p.BaseURL = add.baseURL
-			}
-			if cmd.Flags().Changed("api-path") {
-				p.APIPath = add.apiPath
+			if err := add.apply(g, cmd, &p); err != nil {
+				return exitUsagef("%w", err)
 			}
 			path, err := writeProviders(g, func(ps map[string]config.Provider) error {
 				if _, ok := ps[alias]; ok {
@@ -83,8 +118,10 @@ option are set there or per agent, in [agents.<handle>.body]. These commands nee
 	var edit providerFlags
 	editCmd := &cobra.Command{
 		Use:   "edit <alias>",
-		Short: "Change a Provider's base URL or API path; unspecified fields keep their value",
-		Args:  cobra.ExactArgs(1),
+		Short: "Change a Provider's base URL, API path, API key or body; unspecified fields keep their value",
+		Long: `Change a Provider. --body replaces its body whole, and --body '{}' clears it; --api-key '' removes
+its key reference.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			alias := args[0]
 			var p config.Provider
@@ -94,11 +131,8 @@ option are set there or per agent, in [agents.<handle>.body]. These commands nee
 					return fmt.Errorf("%w: %q", provider.ErrUnknown, alias)
 				}
 				p = cur
-				if cmd.Flags().Changed("base-url") {
-					p.BaseURL = edit.baseURL
-				}
-				if cmd.Flags().Changed("api-path") {
-					p.APIPath = edit.apiPath
+				if err := edit.apply(g, cmd, &p); err != nil {
+					return err
 				}
 				if reflect.DeepEqual(p, cur) {
 					return fmt.Errorf("%w: %q", provider.ErrUnchanged, alias)

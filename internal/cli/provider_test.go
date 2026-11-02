@@ -123,6 +123,63 @@ func TestProviderEditAndRemoveTheTable(t *testing.T) {
 	}
 }
 
+// provider add and edit set api_key, a Secret reference, and the base body,
+// a JSON object read as agent add --body reads it. A literal key is
+// refused and writes nothing. On edit, --body replaces the whole body,
+// --body '{}' clears it and an empty --api-key removes the key; an edit to what
+// is already there is refused as unchanged.
+func TestProviderAddAndEditSetTheKeyAndBody(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	mustGroupNew(t, dir)
+	r := run(t, nil, "", "--dir", dir, "provider", "add", "x", "--preset", "anthropic",
+		"--api-key", "$ANTHROPIC_KEY", "--body", `{"stream":true, "max_tokens": 1024}`)
+	if r.code != 0 {
+		t.Fatalf("add: exit %d: %s", r.code, r.stderr)
+	}
+	want := config.Provider{BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", APIKey: "$ANTHROPIC_KEY",
+		Body: map[string]any{"stream": true, "max_tokens": int64(1024)}}
+	if got := groupConfig(t, dir).Providers["x"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("added %#v\nwant  %#v", got, want)
+	}
+
+	before := groupConfig(t, dir)
+	for _, args := range [][]string{
+		{"add", "y", "--preset", "anthropic", "--api-key", "sk-ant-literal"},
+		{"add", "y", "--preset", "anthropic", "--body", `["stream"]`},
+		{"edit", "x", "--api-key", "sk-ant-literal"},
+		{"edit", "x", "--api-key", "$lower"},
+		{"edit", "x", "--body", "@/no/such/file"},
+		{"edit", "x", "--api-key", "$ANTHROPIC_KEY"},
+		{"edit", "x", "--body", `{"max_tokens": 1024, "stream": true}`},
+	} {
+		if r := run(t, nil, "", append([]string{"--dir", dir, "provider"}, args...)...); r.code != 1 {
+			t.Errorf("%v: exit %d, stderr %q; want 1", args, r.code, r.stderr)
+		}
+	}
+	if after := groupConfig(t, dir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("refused adds and edits changed the config:\n%+v\nwant\n%+v", after, before)
+	}
+
+	if r := run(t, nil, `{"temperature": 0.5}`, "--dir", dir, "provider", "edit", "x", "--body", "-", "--api-key", "$OTHER"); r.code != 0 {
+		t.Fatalf("edit --body -: exit %d: %s", r.code, r.stderr)
+	}
+	want.APIKey, want.Body = "$OTHER", map[string]any{"temperature": 0.5}
+	if got := groupConfig(t, dir).Providers["x"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("edited %#v\nwant   %#v", got, want)
+	}
+	if r := run(t, nil, "", "--dir", dir, "provider", "edit", "x", "--body", "{}", "--api-key", ""); r.code != 0 {
+		t.Fatalf("edit clearing: exit %d: %s", r.code, r.stderr)
+	}
+	want.APIKey, want.Body = "", nil
+	if got := groupConfig(t, dir).Providers["x"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleared %#v\nwant    %#v", got, want)
+	}
+	if r := run(t, nil, "", "--dir", dir, "provider", "edit", "x", "--body", "{}"); r.code != 1 || !strings.Contains(r.stderr, "nothing to change") {
+		t.Fatalf("clearing a cleared body: exit %d, stderr %q; want 1, nothing to change", r.code, r.stderr)
+	}
+}
+
 // provider list and show read the config: the Group's, or with --key that
 // Key's Conversation config.toml merged over it. Neither shows the key's
 // value, only its reference.
