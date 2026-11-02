@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
+	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -53,9 +55,25 @@ func (s *server) startReplica() {
 		s.opts.Logf("serve: starting Raft: %v", err)
 		return
 	}
-	s.replica, s.store = replica, store
+	ob, err := outbox.Open(outbox.Config{
+		Path: s.opts.Paths.OutboxFile(s.opts.Alias),
+		Append: func(ctx context.Context, signed cosl.Signed) (raftx.Position, error) {
+			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
+			defer cancel()
+			return replica.Append(ctx, signed)
+		},
+		Logf: s.opts.Logf,
+	})
+	if err != nil {
+		replica.Close()
+		store.Close()
+		s.opts.Logf("serve: opening the Outbox: %v", err)
+		return
+	}
+	s.replica, s.store, s.outbox = replica, store, ob
 	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(s.opts.Alias))
-	s.startSessions(replica, store, rec.Roster())
+	s.startOutbox(replica, ob)
+	s.startSessions(store, ob, rec.Roster())
 	s.startWatchers(store)
 	go s.join(s.ctx, replica, store, gid)
 }
@@ -80,10 +98,19 @@ func (s *server) startWatchers(store *cosl.Store) {
 	s.watchCancel, s.watchDone = cancel, done
 }
 
+// startOutbox drains the Outbox now, whenever a leader becomes known, and
+// on the fallback tick, until the replica stops (ADR 0025).
+func (s *server) startOutbox(replica *raftx.Replica, ob *outbox.Outbox) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	done := make(chan struct{})
+	go func() { ob.Run(ctx, replica.LeaderKnown()); close(done) }()
+	s.outboxCancel, s.outboxDone = cancel, done
+}
+
 // startSessions runs the keygen Session layer for this replica. A nil
 // engine means this process is not driving Sessions (tests that only
 // form a Group).
-func (s *server) startSessions(replica *raftx.Replica, store *cosl.Store, roster group.Roster) {
+func (s *server) startSessions(store *cosl.Store, ob *outbox.Outbox, roster group.Roster) {
 	if s.opts.NewEngine == nil {
 		return
 	}
@@ -103,9 +130,10 @@ func (s *server) startSessions(replica *raftx.Replica, store *cosl.Store, roster
 		AcceptPath:    filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "local-accept.json"),
 		PendingPath:   filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "pending-shares.json"),
 		Append: func(ctx context.Context, signed cosl.Signed) error {
-			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
-			defer cancel()
-			_, err := replica.Append(ctx, signed)
+			res, err := ob.Write(ctx, signed)
+			if err == nil && res.Queued {
+				return session.ErrQueued
+			}
 			return err
 		},
 	})
@@ -134,11 +162,13 @@ func (s *server) stopReplica() {
 	}
 	s.watchCancel()
 	<-s.watchDone
+	s.outboxCancel()
+	<-s.outboxDone
 	if err := s.replica.Close(); err != nil {
 		s.opts.Logf("serve: stopping Raft: %v", err)
 	}
 	s.store.Close()
-	s.replica, s.store = nil, nil
+	s.replica, s.store, s.outbox = nil, nil, nil
 }
 
 // current is the running replica, if any.
@@ -146,6 +176,36 @@ func (s *server) current() (*raftx.Replica, *cosl.Store, bool) {
 	s.replicaMu.Lock()
 	defer s.replicaMu.Unlock()
 	return s.replica, s.store, s.replica != nil
+}
+
+// writer is the running replica's COSL and the Outbox every write of this
+// Node's goes through, if a replica runs.
+func (s *server) writer() (*outbox.Outbox, *cosl.Store, bool) {
+	s.replicaMu.Lock()
+	defer s.replicaMu.Unlock()
+	return s.outbox, s.store, s.replica != nil
+}
+
+// write commits signed, or queues it in ob when no leader is known or ob
+// already holds something (ADR 0025).
+func write(ctx context.Context, ob *outbox.Outbox, signed cosl.Signed) (SendView, error) {
+	return send(ctx, ob, signed, true)
+}
+
+// send is write, or with queue false a commit that fails with no leader
+// rather than wait in ob.
+func send(ctx context.Context, ob *outbox.Outbox, signed cosl.Signed, queue bool) (SendView, error) {
+	var res outbox.Result
+	var err error
+	if queue {
+		res, err = ob.Write(ctx, signed)
+	} else {
+		res.Position, err = ob.Commit(ctx, signed)
+	}
+	if err != nil {
+		return SendView{}, err
+	}
+	return SendView{Seq: res.Position.Index, Term: res.Position.Term, MsgID: hex.EncodeToString(signed.MsgID[:]), Queued: res.Queued}, nil
 }
 
 // join appends this Node's membership.join once (§6.2 step 6), retrying

@@ -188,6 +188,16 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 	if err != nil {
 		return sendError(err)
 	}
+	if v.Queued {
+		if g.json {
+			if err := g.emitJSON(v); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintf(g.app.Stdout, "queued (msg_id %s): %s\n", v.MsgID, queuedNote)
+		}
+		return exitQueued()
+	}
 	att := attached{client: client, conv: conv, stream: stream, chain: v.Seq, cancelled: "; your message stays"}
 	return att.run(ctx, g, v, fmt.Sprintf("sent as seq %d (msg_id %s)", v.Seq, v.MsgID))
 }
@@ -640,6 +650,17 @@ func prunePolicy(g *globals) (config.Age, error) {
 		return 0, exitOperational(err)
 	}
 	return cfg.Prune, nil
+}
+
+// queuedNote says what a queued write means.
+const queuedNote = "no leader is known, so it waits in this Node's Outbox and commits when a majority of the Group is back; it is not on the log yet"
+
+// queuedExit is exitQueued when queued, else success.
+func queuedExit(queued bool) error {
+	if queued {
+		return exitQueued()
+	}
+	return nil
 }
 
 // sendError maps an append failure from serve to an exit code: a commit

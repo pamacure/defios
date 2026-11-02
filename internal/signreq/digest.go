@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
-	"time"
 
 	"golang.org/x/crypto/sha3"
 
@@ -158,8 +157,7 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 		}
 		out.Digests = append(out.Digests, dgs...)
 	}
-	window := min(req.DeadlineSeconds, MaxDeadlineSeconds)
-	out.Deadline = time.Unix(0, row.CreatedAt).Add(time.Duration(window) * time.Second)
+	out.Deadline = Deadline(row.CreatedAt, req)
 	return out, nil
 }
 

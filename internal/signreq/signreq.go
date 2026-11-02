@@ -349,8 +349,14 @@ const (
 
 // deadline is when a request lapses.
 func deadline(r cosl.Row, req *coslv1.SignRequest) time.Time {
+	return Deadline(r.CreatedAt, req)
+}
+
+// Deadline is when a request whose envelope was created at createdAt
+// (Unix nanoseconds) lapses, committed or not.
+func Deadline(createdAt int64, req *coslv1.SignRequest) time.Time {
 	window := min(req.DeadlineSeconds, MaxDeadlineSeconds) // a row from a foreign writer may carry more
-	return time.Unix(0, r.CreatedAt).Add(time.Duration(window) * time.Second)
+	return time.Unix(0, createdAt).Add(time.Duration(window) * time.Second)
 }
 
 // Accepts is who has accepted the request at row, in COSL log order with the

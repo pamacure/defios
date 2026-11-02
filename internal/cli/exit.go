@@ -9,15 +9,22 @@ const (
 	ExitOperational = 2 // no serve, wrong dir, Node missing or already present
 	ExitProtocol    = 3 // protocol reject
 	ExitVerify      = 4 // signature or passphrase verification failed
+	ExitQueued      = 5 // written but not committed: waiting in this Node's Outbox (ADR 0025)
 )
 
-// ExitError carries the process exit code alongside the cause.
+// ExitError carries the process exit code alongside the cause. A nil Err
+// is an outcome already reported on stdout, so nothing is printed.
 type ExitError struct {
 	Code int
 	Err  error
 }
 
-func (e *ExitError) Error() string { return e.Err.Error() }
+func (e *ExitError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("exit %d", e.Code)
+	}
+	return e.Err.Error()
+}
 func (e *ExitError) Unwrap() error { return e.Err }
 
 // exitUsagef tags err with ExitUsage.
@@ -35,3 +42,7 @@ func exitOperationalf(format string, args ...any) error {
 
 // exitVerify tags err with ExitVerify.
 func exitVerify(err error) error { return &ExitError{Code: ExitVerify, Err: err} }
+
+// exitQueued is the exit of a verb whose write was queued, which it has
+// already reported.
+func exitQueued() error { return &ExitError{Code: ExitQueued} }

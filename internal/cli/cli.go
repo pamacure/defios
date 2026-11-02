@@ -68,6 +68,9 @@ func (a App) Run(ctx context.Context, args []string) int {
 		var exit *ExitError
 		if errors.As(err, &exit) {
 			code = exit.Code
+			if exit.Err == nil {
+				return code
+			}
 		}
 		fmt.Fprintf(a.Stderr, "%s %v\n", paletteFor(a.Stderr, a.Getenv).concern("defios:"), err)
 		return code

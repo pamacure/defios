@@ -127,6 +127,12 @@ func (p Paths) CoslFile(alias string) string {
 	return filepath.Join(p.GroupDir(alias), "cosl.sqlite")
 }
 
+// OutboxFile is this Node's Outbox for the Group with this alias: what it
+// wrote while no leader was known, waiting to commit (ADR 0025).
+func (p Paths) OutboxFile(alias string) string {
+	return filepath.Join(p.GroupDir(alias), "outbox.json")
+}
+
 // TsnetDir is a Group's tsnet state, per-Group so one device presents its
 // own tsnet identity on each tailnet.
 func (p Paths) TsnetDir(alias string) string {

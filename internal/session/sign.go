@@ -58,7 +58,8 @@ func (s *Service) acceptStarted(r *rec, requestID [32]byte) error {
 }
 
 // appendAccept opens the local gate and appends this Node's sign.accept,
-// closing the gate again if the append fails.
+// closing the gate again if the append fails. A queued accept keeps the
+// gate open and returns ErrQueued.
 func (s *Service) appendAccept(ctx context.Context, requestID [32]byte, info SignInfo) error {
 	if err := s.remember(ID(requestID)); err != nil {
 		return err
@@ -68,7 +69,7 @@ func (s *Service) appendAccept(ctx context.Context, requestID [32]byte, info Sig
 	if err == nil {
 		err = s.cfg.Append(ctx, signed)
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrQueued) {
 		s.forget(ID(requestID))
 	}
 	return err

@@ -115,6 +115,8 @@ defios conversation send --key ecdsa:<hex> "about this key"
 
 Check it: `defios conversation log` (Group talk) and `defios conversation log --key ecdsa:<hex>` (the Key's talk) show the same messages on both machines, and `defios cosl log` shows every row on the log.
 
+A message is on the log once a majority of the Group commits it, so with two machines both must be up. If the other machine's `serve` is down, a send prints `queued` with its msg id and exits with code `5`: the message waits in this machine's Outbox, and `serve` commits it as soon as the other machine is back, in the order this machine wrote it, even across a restart. While anything is queued, later sends queue behind it. Until then it is not on the log, so `conversation log` and `cosl log` don't show it. Talk, `sign propose`, `sign accept` and `sign broadcast`'s receipts queue this way; a Sign Request with a Solana transaction does not, since its `recent_blockhash` would expire first, and a queued Sign Request whose deadline passes is dropped unsent.
+
 ### 6. Add a Provider
 
 A Provider is an LLM API this Node's agents call: a base URL and an API path. It is this Node's own config, a `[providers.<alias>]` table in the Group's `config.toml`, and is never shared with the Group, so each machine adds its own and its key goes only to the base URL it named. `provider` needs no serve. The `anthropic` preset is Anthropic's Messages API:

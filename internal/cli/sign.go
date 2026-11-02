@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/key"
 	"defios.com/internal/network"
+	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -50,11 +52,21 @@ Every chain must be of the Key's curve.`,
 			}
 			spec := signreq.Spec{Reason: reason, DeadlineSeconds: deadline, Transactions: txs}
 			v, err := serve.Client{Socket: g.paths().Socket}.SignPropose(cmd.Context(), keyQuery, spec)
+			if errors.Is(err, raftx.ErrNoLeader) {
+				return exitOperationalf("%w; a Sign Request is queued without a leader unless it has a Solana transaction, whose recent_blockhash would expire before a majority is back", err)
+			}
 			if err != nil {
 				return signError(err)
 			}
 			if g.json {
-				return g.emitJSON(v)
+				if err := g.emitJSON(v); err != nil {
+					return err
+				}
+				return queuedExit(v.Queued)
+			}
+			if v.Queued {
+				fmt.Fprintf(g.app.Stdout, "queued (msg_id %s): %s\n", v.MsgID, queuedNote)
+				return exitQueued()
 			}
 			fmt.Fprintf(g.app.Stdout, "proposed as seq %d (msg_id %s)\n", v.Seq, v.MsgID)
 			return nil
@@ -136,8 +148,19 @@ signature verifies against the Key. A Node that accepts after that is not a sign
 a request for chains it has a Network for (see network); the refusal names the chain.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := (serve.Client{Socket: g.paths().Socket}).SignAccept(cmd.Context(), args[0]); err != nil {
+			v, err := serve.Client{Socket: g.paths().Socket}.SignAccept(cmd.Context(), args[0])
+			if err != nil {
 				return signError(err)
+			}
+			if g.json {
+				if err := g.emitJSON(v); err != nil {
+					return err
+				}
+				return queuedExit(v.Queued)
+			}
+			if v.Queued {
+				fmt.Fprintf(g.app.Stdout, "accept of %s queued: %s\n", args[0], queuedNote)
+				return exitQueued()
 			}
 			fmt.Fprintf(g.app.Stdout, "accepted %s\n", args[0])
 			return nil
@@ -201,9 +224,12 @@ already has a transaction is not an error, the repeat shows as one more receipt,
 						}
 						fmt.Fprintf(g.app.Stdout, "%s  tx %d  %s%s\n", n.Chain, t.Index, t.TxHash, repeat)
 					}
-					if n.Receipt != nil {
+					switch {
+					case n.Receipt != nil && n.Receipt.Queued:
+						fmt.Fprintf(g.app.Stdout, "%s: receipt queued (msg_id %s): %s\n", n.Chain, n.Receipt.MsgID, queuedNote)
+					case n.Receipt != nil:
 						fmt.Fprintf(g.app.Stdout, "%s: receipt recorded as seq %d (msg_id %s)\n", n.Chain, n.Receipt.Seq, n.Receipt.MsgID)
-					} else {
+					default:
 						fmt.Fprintf(g.app.Stdout, "%s: %s %s\n", n.Chain, g.out().concern("FAILED, no receipt recorded:"), n.Error)
 					}
 				}
@@ -211,7 +237,7 @@ already has a transaction is not an error, the repeat shows as one more receipt,
 			if v.Failed() {
 				return exitOperationalf("some chains failed to broadcast; run sign broadcast again to retry them")
 			}
-			return nil
+			return queuedExit(slices.ContainsFunc(v.Chains, func(n serve.ChainBroadcast) bool { return n.Receipt != nil && n.Receipt.Queued }))
 		},
 	}
 

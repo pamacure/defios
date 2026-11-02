@@ -17,7 +17,6 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
-	"defios.com/internal/raftx"
 )
 
 var (
@@ -35,11 +34,13 @@ var (
 	ErrBadHandle = errors.New("serve: that Handle may not write here")
 )
 
-// SendView is the local API's report of a committed COSL append.
+// SendView is the local API's report of a COSL append: committed at Seq,
+// or Queued in this Node's Outbox with no seq yet (ADR 0025).
 type SendView struct {
-	Seq   uint64 `json:"seq"`
-	Term  uint64 `json:"term"`
-	MsgID string `json:"msg_id"`
+	Seq    uint64 `json:"seq,omitempty"`
+	Term   uint64 `json:"term,omitempty"`
+	MsgID  string `json:"msg_id"`
+	Queued bool   `json:"queued,omitempty"`
 }
 
 type sendRequest struct {
@@ -67,13 +68,15 @@ func requestConversation(hexID string) ([]byte, error) {
 // conversationSend is `conversation send` (§8): author an app.freeform and
 // commit it. A nil conversationID is Group-level. An empty handle is a
 // person's message; otherwise it is that agent's at depth, and this Node's
-// config must include the Handle there (ADR 0015).
+// config must include the Handle there (ADR 0015). A person's message is
+// queued in the Outbox when no leader is known; an agent's is not, since
+// its chain needs its seq.
 func (s *server) conversationSend(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
 	payload, err := cosl.AgentFreeform(text, handle, depth)
 	if err != nil {
 		return SendView{}, err
 	}
-	return s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, func(store *cosl.Store) error {
+	return s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, handle == "", func(store *cosl.Store) error {
 		return s.checkHandle(store, conversationID, handle, depth, text)
 	})
 }
@@ -171,13 +174,14 @@ func listHandles(profiles []config.ResolvedProfile) string {
 
 // conversationAppend signs payload as typ in the Conversation (Group-level
 // when conversationID is nil) and commits it through Raft, bounded by the
-// §4.2 apply timeout; with the other Node down that bound is the failure.
-// check, when set, is the writer's precondition against the replica.
-func (s *server) conversationAppend(ctx context.Context, typ uint32, conversationID []byte, payload proto.Message, check func(*cosl.Store) error) (SendView, error) {
+// §4.2 apply timeout; with no leader known it is queued in the Outbox if
+// queue is set. check, when set, is the writer's precondition against the
+// replica.
+func (s *server) conversationAppend(ctx context.Context, typ uint32, conversationID []byte, payload proto.Message, queue bool, check func(*cosl.Store) error) (SendView, error) {
 	if conversationID != nil && len(conversationID) != 32 {
 		return SendView{}, fmt.Errorf("serve: conversation id is %d bytes, want 32", len(conversationID))
 	}
-	replica, store, running := s.current()
+	ob, store, running := s.writer()
 	rec, held := s.slot.Current()
 	if !running || !held {
 		return SendView{}, ErrNoReplica
@@ -195,13 +199,7 @@ func (s *server) conversationAppend(ctx context.Context, typ uint32, conversatio
 	if err != nil {
 		return SendView{}, fmt.Errorf("serve: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
-	defer cancel()
-	pos, err := replica.Append(ctx, signed)
-	if err != nil {
-		return SendView{}, err
-	}
-	return SendView{Seq: pos.Index, Term: pos.Term, MsgID: hex.EncodeToString(signed.MsgID[:])}, nil
+	return send(ctx, ob, signed, queue)
 }
 
 // requireConversation allows Group-level talk (a nil id) and a Conversation

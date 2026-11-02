@@ -294,7 +294,7 @@ func signedRequestOn(t *testing.T, kind string, rpcURL string, otherURL ...strin
 	if _, err := a.client().SignBroadcast(ctx, msgID[:8]); !errors.Is(err, signreq.ErrNotSigned) {
 		t.Fatalf("broadcast before signing: %v", err)
 	}
-	if err := a.client().SignAccept(ctx, msgID[:8]); err != nil {
+	if _, err := a.client().SignAccept(ctx, msgID[:8]); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(20 * time.Second)

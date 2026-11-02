@@ -213,7 +213,7 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 	setNetworks(t, b, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n")
 	setNetworks(t, a, "[networks.goerli]\ntype = \"ethereum\"\nchain_id = 5\n")
 
-	if err := a.client().SignAccept(ctx, "ff"); !errors.Is(err, signreq.ErrUnknown) {
+	if _, err := a.client().SignAccept(ctx, "ff"); !errors.Is(err, signreq.ErrUnknown) {
 		t.Fatalf("accept of an unknown request: %v", err)
 	}
 
@@ -235,12 +235,12 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 		t.Fatalf("inspect before accept = %+v, %v", d, err)
 	}
 
-	err = a.client().SignAccept(ctx, v.MsgID[:8])
+	_, err = a.client().SignAccept(ctx, v.MsgID[:8])
 	if !errors.Is(err, network.ErrNoChain) || !strings.Contains(err.Error(), "ethereum chain 1") {
 		t.Fatalf("accept with no Network for the chain = %v, want ErrNoChain naming ethereum chain 1", err)
 	}
 	setNetworks(t, a, "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\n")
-	if err := a.client().SignAccept(ctx, v.MsgID[:8]); err != nil {
+	if _, err := a.client().SignAccept(ctx, v.MsgID[:8]); err != nil {
 		t.Fatal(err)
 	}
 	var aliceParams, bobParams session.Params

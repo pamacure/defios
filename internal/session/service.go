@@ -94,6 +94,8 @@ type Config struct {
 	Node   *identity.Node
 	Roster group.Roster
 	Store  *cosl.Store
+	// Append commits an envelope; ErrQueued means it waits in this Node's
+	// Outbox, which only a sign.accept may.
 	Append func(context.Context, cosl.Signed) error
 	// NewEngine is called once per Session, when this Node's engine starts.
 	NewEngine func() Engine

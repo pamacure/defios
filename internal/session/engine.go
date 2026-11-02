@@ -24,6 +24,10 @@ var (
 	// ErrBadSignRequest is a sign.request that is definitively missing or
 	// invalid, as opposed to one that could not be read this time.
 	ErrBadSignRequest = errors.New("session: bad sign request")
+	// ErrQueued is Config.Append's answer when no leader is known and the
+	// envelope waits in this Node's Outbox to commit later (ADR 0025). It
+	// is not a failure: what was written stands.
+	ErrQueued = errors.New("session: queued in this Node's Outbox")
 )
 
 // Unavailable is the engine serve uses until a curve adapter is wired.

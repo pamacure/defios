@@ -96,6 +96,10 @@ type Replica struct {
 	mu       sync.Mutex
 	inflight map[[32]byte]*pending // msg_ids this leader is proposing
 	closed   bool
+
+	observer    *raft.Observer
+	observed    chan raft.Observation
+	leaderKnown chan struct{} // signalled when an election names a leader
 }
 
 // pending lets a second Append of an in-flight msg_id wait for the first.
@@ -186,6 +190,8 @@ func Open(o Options) (*Replica, error) {
 		return fail(fmt.Errorf("raftx: %w", err))
 	}
 	cleanup = append(cleanup, func() { r.raft.Shutdown().Error() })
+	r.observeLeader()
+	cleanup = append(cleanup, r.stopObserving)
 	r.forward, err = newForwardGate(r)
 	if err != nil {
 		return fail(err)
@@ -202,6 +208,38 @@ func (r *Replica) Leader() (identity.ID, bool) {
 	nodeID, err := identity.ParseID(string(id))
 	return nodeID, err == nil
 }
+
+// observeLeader signals leaderKnown whenever Raft learns of a leader. An
+// observation that finds the signal already pending is dropped: one is
+// enough to wake the reader.
+func (r *Replica) observeLeader() {
+	r.leaderKnown = make(chan struct{}, 1)
+	r.observed = make(chan raft.Observation, 1)
+	r.observer = raft.NewObserver(r.observed, false, func(o *raft.Observation) bool {
+		l, ok := o.Data.(raft.LeaderObservation)
+		return ok && l.LeaderID != ""
+	})
+	r.raft.RegisterObserver(r.observer)
+	go func() {
+		for range r.observed {
+			select {
+			case r.leaderKnown <- struct{}{}:
+			default:
+			}
+		}
+	}()
+}
+
+// stopObserving ends observeLeader's goroutine. Raft sends nothing to an
+// observer once it is deregistered.
+func (r *Replica) stopObserving() {
+	r.raft.DeregisterObserver(r.observer)
+	close(r.observed)
+}
+
+// LeaderKnown is signalled each time this replica learns of a leader. It
+// has one reader.
+func (r *Replica) LeaderKnown() <-chan struct{} { return r.leaderKnown }
 
 // Append commits a signed envelope (§4.3): the leader Applies it, a
 // follower forwards it over :4633. The same msg_id is never proposed
@@ -391,6 +429,7 @@ func (r *Replica) Close() error {
 		r.forward.close()
 	}
 	err := r.raft.Shutdown().Error()
+	r.stopObserving()
 	r.trans.Close()
 	if cerr := r.logs.Close(); err == nil {
 		err = cerr

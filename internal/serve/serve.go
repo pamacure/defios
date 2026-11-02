@@ -20,6 +20,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
 	"defios.com/internal/vault"
@@ -166,6 +167,10 @@ type server struct {
 	replicaMu sync.Mutex
 	replica   *raftx.Replica // nil until the Group is valid
 	store     *cosl.Store    // the replica's COSL
+	outbox    *outbox.Outbox // what this Node wrote with no leader known (ADR 0025)
+
+	outboxCancel context.CancelFunc
+	outboxDone   chan struct{}
 
 	sessions      *session.Service
 	sessionCancel context.CancelFunc

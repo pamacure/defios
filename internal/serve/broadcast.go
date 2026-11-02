@@ -2,7 +2,6 @@ package serve
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,7 +10,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/ethrpc"
 	"defios.com/internal/network"
-	"defios.com/internal/raftx"
+	"defios.com/internal/outbox"
 	"defios.com/internal/secret"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -34,7 +33,8 @@ type BroadcastedTx struct {
 type ChainBroadcast struct {
 	Chain        string          `json:"chain"` // never an alias
 	Transactions []BroadcastedTx `json:"transactions"`
-	// Receipt is the committed Broadcast Receipt; nil when the group failed.
+	// Receipt is the committed or queued Broadcast Receipt; nil when the
+	// group failed.
 	Receipt *SendView `json:"receipt,omitempty"`
 	Error   string    `json:"error,omitempty"`
 }
@@ -66,7 +66,7 @@ func (v BroadcastView) Failed() bool {
 // not an error, so a repeat is harmless, shows as one more receipt, and retries
 // only what failed (ADR 0010).
 func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (BroadcastView, error) {
-	replica, store, running := s.current()
+	ob, store, running := s.writer()
 	if !running {
 		return BroadcastView{}, ErrNoReplica
 	}
@@ -129,7 +129,7 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Chain: c.String(), TxHash: signreq.TxIDString(c, tx.ID), AlreadyKnown: known})
 		}
 		if out.Error == "" {
-			sv, err := s.commitReceipt(ctx, replica, info.Conversation, receipt)
+			sv, err := s.commitReceipt(ctx, ob, info.Conversation, receipt)
 			if err != nil {
 				return BroadcastView{}, err
 			}
@@ -178,8 +178,9 @@ func submit(ctx context.Context, c network.Chain, urls []string, tx signreq.Sign
 	return ethrpc.Send(ctx, urls, c.ChainID, tx.Raw, [32]byte(tx.ID))
 }
 
-// commitReceipt appends a signed sign.broadcast to the Key's Conversation.
-func (s *server) commitReceipt(ctx context.Context, replica *raftx.Replica, conversation []byte, receipt *coslv1.SignBroadcast) (SendView, error) {
+// commitReceipt appends a signed sign.broadcast to the Key's Conversation,
+// or queues it in the Outbox.
+func (s *server) commitReceipt(ctx context.Context, ob *outbox.Outbox, conversation []byte, receipt *coslv1.SignBroadcast) (SendView, error) {
 	rec, held := s.slot.Current()
 	if !held {
 		return SendView{}, ErrNoReplica
@@ -188,13 +189,7 @@ func (s *server) commitReceipt(ctx context.Context, replica *raftx.Replica, conv
 	if err != nil {
 		return SendView{}, fmt.Errorf("serve: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
-	defer cancel()
-	pos, err := replica.Append(ctx, signed)
-	if err != nil {
-		return SendView{}, err
-	}
-	return SendView{Seq: pos.Index, Term: pos.Term, MsgID: hex.EncodeToString(signed.MsgID[:])}, nil
+	return write(ctx, ob, signed)
 }
 
 func (s *server) broadcastRoutes(mux *http.ServeMux) {

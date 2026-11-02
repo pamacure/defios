@@ -2,7 +2,6 @@ package serve
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
-	"defios.com/internal/raftx"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 )
@@ -32,7 +30,7 @@ type signInspectRequest struct {
 // the request names (ADR 0023). The writer validates first, so a bad request
 // fails loudly here (ADR 0009).
 func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendView, error) {
-	replica, store, running := s.current()
+	ob, store, running := s.writer()
 	rec, held := s.slot.Current()
 	if !running || !held {
 		return SendView{}, ErrNoReplica
@@ -62,9 +60,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 	if err != nil {
 		return SendView{}, fmt.Errorf("serve: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
-	defer cancel()
-	pos, err := replica.Append(ctx, signed)
+	v, err := write(ctx, ob, signed)
 	if err != nil {
 		return SendView{}, err
 	}
@@ -76,7 +72,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 			return SendView{}, err
 		}
 	}
-	return SendView{Seq: pos.Index, Term: pos.Term, MsgID: hex.EncodeToString(signed.MsgID[:])}, nil
+	return v, nil
 }
 
 // signInfoFrom is the Session layer's view of a sign.request, read off the log.
@@ -177,6 +173,12 @@ func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(
 	writeJSON(w, struct{}{})
 }
 
+// AcceptView is what `sign accept` did: its sign.accept committed, or is
+// Queued in this Node's Outbox (ADR 0025).
+type AcceptView struct {
+	Queued bool `json:"queued,omitempty"`
+}
+
 // DeclineView is what `sign decline` did.
 type DeclineView struct {
 	Result session.DeclineResult `json:"result"`
@@ -184,7 +186,14 @@ type DeclineView struct {
 
 func (s *server) signRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sign/accept", func(w http.ResponseWriter, r *http.Request) {
-		s.signAnswer(w, r, s.acceptSign, nil)
+		var v AcceptView
+		s.signAnswer(w, r, func(svc *session.Service, ctx context.Context, id [32]byte) error {
+			err := s.acceptSign(svc, ctx, id)
+			if errors.Is(err, session.ErrQueued) {
+				v.Queued, err = true, nil
+			}
+			return err
+		}, func() any { return v })
 	})
 	mux.HandleFunc("POST /v1/sign/decline", func(w http.ResponseWriter, r *http.Request) {
 		var result session.DeclineResult
@@ -288,9 +297,11 @@ func (c Client) SignPropose(ctx context.Context, keyQuery string, spec signreq.S
 	return v, err
 }
 
-// SignAccept is `sign accept`: append this Node's sign.accept.
-func (c Client) SignAccept(ctx context.Context, msgID string) error {
-	return c.do(ctx, "/v1/sign/accept", signInspectRequest{MsgID: msgID}, &struct{}{})
+// SignAccept is `sign accept`: append this Node's sign.accept, or queue it.
+func (c Client) SignAccept(ctx context.Context, msgID string) (AcceptView, error) {
+	var v AcceptView
+	err := c.do(ctx, "/v1/sign/accept", signInspectRequest{MsgID: msgID}, &v)
+	return v, err
 }
 
 // SignDecline is `sign decline`: abort the signing Session, if one has started.
