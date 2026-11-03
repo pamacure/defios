@@ -7,7 +7,7 @@ import (
 	"defios.com/internal/agent"
 	"defios.com/internal/cosl"
 	"defios.com/internal/identity"
-	"defios.com/internal/recap"
+	"defios.com/internal/talk"
 )
 
 // The Nodes of alice and bob.
@@ -15,16 +15,16 @@ var aliceNode, bobNode = identity.ID{1}, identity.ID{2}
 
 // said is a lean entry written by name (bob for even seqs, alice for odd),
 // from that one's Node, as handle, empty for a person or the Recap.
-func said(seq uint64, handle, text string) recap.Said {
+func said(seq uint64, handle, text string) talk.Message {
 	sender := aliceNode
 	if seq%2 == 0 {
 		sender = bobNode
 	}
-	return recap.Said{Row: cosl.Row{Seq: seq, Sender: sender}, Handle: handle, Text: text}
+	return talk.Message{Row: cosl.Row{Seq: seq, Sender: sender}, Handle: handle, Text: text}
 }
 
-func byParity(r cosl.Row) string {
-	if r.Seq%2 == 0 {
+func byParity(m talk.Message) string {
+	if m.Row.Seq%2 == 0 {
 		return "bob"
 	}
 	return "alice"
@@ -45,7 +45,7 @@ func render(turns []agent.Turn) string {
 // Consecutive messages of its own merge too, a blank line apart, so the
 // turns alternate.
 func TestTalkTurnsSplitByNodeAndHandle(t *testing.T) {
-	got := talkTurns("", []recap.Said{
+	got := talkTurns("", []talk.Message{
 		said(1, "", "Recap: the key is minted"),
 		said(2, "", "@auditor check\nthis"),
 		said(3, "auditor", "looks fine\nto me"),
@@ -65,7 +65,7 @@ func TestTalkTurnsSplitByNodeAndHandle(t *testing.T) {
 // Talk that opens or ends with the agent's own message still alternates,
 // starting and ending with a user turn.
 func TestTalkTurnsOpenAndEndWithUser(t *testing.T) {
-	got := talkTurns("", []recap.Said{said(1, "auditor", "first")}, byParity, aliceNode, "auditor")
+	got := talkTurns("", []talk.Message{said(1, "auditor", "first")}, byParity, aliceNode, "auditor")
 	want := "[user] " + talkOpensWithYou + "\n[assistant] first\n[user] " + talkEndsWithYou + "\n"
 	if r := render(got); r != want {
 		t.Fatalf("turns =\n%s\nwant\n%s", r, want)

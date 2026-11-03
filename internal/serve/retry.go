@@ -1,23 +1,20 @@
 package serve
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/mention"
-	"defios.com/internal/nodedir"
 	"defios.com/internal/outbox"
-	coslv1 "defios.com/proto/cosl/v1"
+	"defios.com/internal/talk"
+	"defios.com/internal/transcript"
 )
 
 var (
@@ -47,10 +44,10 @@ func ChainPrefix(prefix string) (string, error) {
 	return p, nil
 }
 
-// matchChain is the one of ids, chains' hex msg_ids, that starts with the
+// MatchChain is the one of ids, chains' hex msg_ids, that starts with the
 // hex prefix (ADR 0025). None is ErrNotAChain; more than one is
 // ErrAmbiguousChain, naming them.
-func matchChain(prefix string, ids []string) (string, error) {
+func MatchChain(prefix string, ids []string) (string, error) {
 	p, err := ChainPrefix(prefix)
 	if err != nil {
 		return "", err
@@ -70,52 +67,6 @@ func matchChain(prefix string, ids []string) (string, error) {
 	return "", fmt.Errorf("%w: %s matches %s", ErrAmbiguousChain, p, strings.Join(matches, ", "))
 }
 
-// priorRun is a step's latest attempt, as a chain's Transcript shows it.
-// outcome is "" for a run cut off by a stop.
-type priorRun struct {
-	handle  string
-	attempt int
-	outcome string
-	msgID   string // what it said, hex
-}
-
-// finished reports whether a retry reuses the run instead of running it.
-func (p priorRun) finished() bool {
-	return p.outcome == OutcomeSaid || p.outcome == OutcomeSilent
-}
-
-// readTranscript is each step's latest attempt in the Transcript at path;
-// nil when there is none. A line it cannot read, such as one cut off by a
-// stop, is passed over.
-func readTranscript(path string) (map[int]priorRun, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	runs := map[int]priorRun{}
-	for line := range bytes.SplitSeq(data, []byte("\n")) {
-		var l TranscriptLine
-		if json.Unmarshal(line, &l) != nil || l.Step < 1 {
-			continue
-		}
-		p := runs[l.Step]
-		if l.Attempt > p.attempt {
-			p = priorRun{handle: l.Handle, attempt: l.Attempt}
-		}
-		if l.Attempt == p.attempt && l.Kind == KindOutcome {
-			p.outcome, p.msgID = l.Outcome, l.MsgID
-		}
-		runs[l.Step] = p
-	}
-	if len(runs) == 0 {
-		return nil, nil
-	}
-	return runs, nil
-}
-
 // chainStart is a person's message from this Node that mentions agents:
 // the message a chain starts from.
 type chainStart struct {
@@ -123,59 +74,36 @@ type chainStart struct {
 	handles []string
 }
 
-// chainHandles is what r mentions if it is a person's message from this
-// Node, whose payload is still held; nil otherwise.
-func (s *server) chainHandles(r cosl.Row) ([]string, error) {
-	if r.Sender != s.opts.Node.NodeID {
-		return nil, nil
+// chainHandles is what m mentions if it is a person's message from this
+// Node that says anything; nil otherwise.
+func (s *server) chainHandles(m talk.Message) []string {
+	if m.Row.Sender != s.opts.Node.NodeID || m.Pruned || m.Unreadable || m.Handle != "" {
+		return nil // an agent's reply summons within its own chain
 	}
-	ff, err := freeform(r)
-	if ff == nil || ff.Handle != "" {
-		return nil, err // an agent's reply summons within its own chain
-	}
-	return mention.Handles(ff.Text), nil
-}
-
-// freeform is r's app.freeform, nil if its payload is pruned or does not
-// parse: the FSM does not parse payloads, and such a one says nothing.
-func freeform(r cosl.Row) (*coslv1.AppFreeform, error) {
-	if r.Pruned() {
-		return nil, nil
-	}
-	env, err := r.Decode()
-	if err != nil {
-		return nil, err
-	}
-	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-	if err != nil {
-		return nil, nil
-	}
-	return msg.(*coslv1.AppFreeform), nil
+	return mention.Handles(m.Text)
 }
 
 // chainStarts is the chain starts this Node's view of conv's talk holds,
 // oldest first, queued ones included (ADR 0025).
 func (s *server) chainStarts(ob *outbox.Outbox, store *cosl.Store, conv []byte) ([]chainStart, error) {
-	rows, err := talk(ob, store, conv)
+	v, err := s.talk(ob, store, conv)
 	if err != nil {
 		return nil, err
 	}
 	var out []chainStart
-	for _, r := range rows {
-		handles, err := s.chainHandles(r)
-		if err != nil {
-			return nil, err
-		}
-		if len(handles) > 0 {
-			out = append(out, chainStart{id: hex.EncodeToString(r.MsgID[:]), handles: handles})
+	for _, m := range v.Messages {
+		if handles := s.chainHandles(m); len(handles) > 0 {
+			out = append(out, chainStart{id: hex.EncodeToString(m.Row.MsgID[:]), handles: handles})
 		}
 	}
 	return out, nil
 }
 
-// transcriptPath is the Transcript of the chain id in conv.
-func (s *server) transcriptPath(conv []byte, id string) string {
-	return s.opts.Paths.TranscriptFile(s.opts.Alias, nodedir.ConversationName(conv), id)
+// prior is each step's latest attempt in the Transcript of the chain id in
+// conv; nil when there is none.
+func (s *server) prior(conv []byte, id string) (transcript.Prior, error) {
+	t, err := transcript.Read(s.opts.Paths, s.opts.Alias, conv, id)
+	return t.Prior(), err
 }
 
 // unfinished reports whether a retry of the chain st in conv would run
@@ -183,7 +111,7 @@ func (s *server) transcriptPath(conv []byte, id string) string {
 // the steps runs shows said, and looks for a step it reaches that has no
 // finished latest attempt and is not skipped: one that failed, was
 // cancelled or cut off, or that a stop came before.
-func (s *server) unfinished(conv []byte, st chainStart, runs map[int]priorRun) bool {
+func (s *server) unfinished(conv []byte, st chainStart, runs transcript.Prior) bool {
 	c := &chain{id: st.id, conv: conv, handles: st.handles, ctx: context.Background(), prior: runs, dry: true}
 	return !s.runAgents(c, mentioned(st.handles), 1, func(ChainEvent) {})
 }
@@ -191,24 +119,15 @@ func (s *server) unfinished(conv []byte, st chainStart, runs map[int]priorRun) b
 // latestUnfinished is the latest of starts in conv whose Transcript shows
 // its chain unfinished; ok is false if there is none.
 func (s *server) latestUnfinished(conv []byte, starts []chainStart) (chainStart, bool, error) {
-	entries, err := os.ReadDir(s.opts.Paths.TranscriptsDir(s.opts.Alias, nodedir.ConversationName(conv)))
-	if errors.Is(err, os.ErrNotExist) {
-		return chainStart{}, false, nil
-	}
+	transcribed, err := transcript.List(s.opts.Paths, s.opts.Alias, conv)
 	if err != nil {
 		return chainStart{}, false, err
 	}
-	transcribed := map[string]bool{}
-	for _, e := range entries {
-		if id, ok := strings.CutSuffix(e.Name(), ".jsonl"); ok {
-			transcribed[id] = true
-		}
-	}
 	for _, st := range slices.Backward(starts) {
-		if !transcribed[st.id] {
+		if !slices.Contains(transcribed, st.id) {
 			continue
 		}
-		runs, err := readTranscript(s.transcriptPath(conv, st.id))
+		runs, err := s.prior(conv, st.id)
 		if err != nil {
 			return chainStart{}, false, err
 		}
@@ -219,19 +138,19 @@ func (s *server) latestUnfinished(conv []byte, starts []chainStart) (chainStart,
 	return chainStart{}, false, nil
 }
 
-// saidIn is conv's app.freeform with hex msg_id msgID in this Node's view
-// of the talk, nil if it is not there or its payload is pruned.
-func saidIn(ob *outbox.Outbox, store *cosl.Store, conv []byte, msgID string) (*coslv1.AppFreeform, error) {
-	rows, err := talk(ob, store, conv)
+// saidIn is conv's message with hex msg_id msgID in this Node's view of
+// the talk; ok is false if it is not there, or is pruned or unreadable.
+func (s *server) saidIn(ob *outbox.Outbox, store *cosl.Store, conv []byte, msgID string) (m talk.Message, ok bool, err error) {
+	v, err := s.talk(ob, store, conv)
 	if err != nil {
-		return nil, err
+		return talk.Message{}, false, err
 	}
-	for _, r := range rows {
-		if hex.EncodeToString(r.MsgID[:]) == msgID {
-			return freeform(r)
+	for _, m := range v.Messages {
+		if hex.EncodeToString(m.Row.MsgID[:]) == msgID {
+			return m, !m.Pruned && !m.Unreadable, nil
 		}
 	}
-	return nil, nil
+	return talk.Message{}, false, nil
 }
 
 // retry queues again the chain in conv whose msg_id starts with the hex
@@ -260,7 +179,7 @@ func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, conv []byte, pre
 		for i, st := range starts {
 			ids[i] = st.id
 		}
-		id, err := matchChain(prefix, ids)
+		id, err := MatchChain(prefix, ids)
 		if err != nil {
 			return "", err
 		}
@@ -269,7 +188,7 @@ func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, conv []byte, pre
 	if s.chains.busy(conv, st.id) {
 		return "", ErrChainBusy
 	}
-	runs, err := readTranscript(s.transcriptPath(conv, st.id))
+	runs, err := s.prior(conv, st.id)
 	if err != nil {
 		return "", err
 	}

@@ -60,16 +60,16 @@ func TestMatchChain(t *testing.T) {
 		{prefix: "ef", err: ErrNotAChain},
 		{prefix: "ab", err: ErrAmbiguousChain},
 	} {
-		got, err := matchChain(tc.prefix, ids)
+		got, err := MatchChain(tc.prefix, ids)
 		if got != tc.want || !errors.Is(err, tc.err) {
-			t.Errorf("matchChain(%q) = %q, %v; want %q, %v", tc.prefix, got, err, tc.want, tc.err)
+			t.Errorf("MatchChain(%q) = %q, %v; want %q, %v", tc.prefix, got, err, tc.want, tc.err)
 		}
 		if tc.err == ErrAmbiguousChain && (!strings.Contains(err.Error(), ids[0]) || !strings.Contains(err.Error(), ids[1]) || strings.Contains(err.Error(), ids[2])) {
 			t.Errorf("ambiguous error %q does not name exactly the matches", err)
 		}
 	}
 	var bad *requestError
-	if _, err := matchChain("xyz", ids); !errors.As(err, &bad) {
-		t.Errorf("matchChain(xyz) = %v, want a request error", err)
+	if _, err := MatchChain("xyz", ids); !errors.As(err, &bad) {
+		t.Errorf("MatchChain(xyz) = %v, want a request error", err)
 	}
 }

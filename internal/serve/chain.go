@@ -23,11 +23,12 @@ import (
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
-	"defios.com/internal/nodedir"
 	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/secret"
+	"defios.com/internal/talk"
+	"defios.com/internal/transcript"
 )
 
 // Chain events on GET /v1/conversation/stream, one JSON object per line
@@ -139,10 +140,10 @@ type chain struct {
 	// step counts the chain's runs, depth-first; tr is its Transcript.
 	// Only the chain's worker touches them.
 	step int
-	tr   *transcript
+	tr   *transcript.Writer
 	// prior is each step's latest attempt on a retry, from the Transcript;
 	// nil on a first run (ADR 0018).
-	prior map[int]priorRun
+	prior transcript.Prior
 	// dry walks the chain as a retry would without running or reusing
 	// anything for real: see runAgents.
 	dry bool
@@ -248,7 +249,7 @@ func (h *chainHub) cancel(conv []byte, prefix string) (string, error) {
 	id := ids[0]
 	if prefix != "" {
 		var err error
-		id, err = matchChain(prefix, ids)
+		id, err = MatchChain(prefix, ids)
 		if errors.Is(err, ErrNotAChain) {
 			return "", nil
 		}
@@ -398,8 +399,8 @@ func (s *server) runChain(c *chain) {
 		s.chains.publish(c.conv, ev)
 	}
 	if c.ctx.Err() == nil {
-		c.tr = &transcript{path: s.transcriptPath(c.conv, c.id), logf: s.opts.Logf}
-		defer c.tr.close()
+		c.tr = transcript.NewWriter(s.opts.Paths, s.opts.Alias, c.conv, c.id, s.opts.Logf)
+		defer c.tr.Close()
 		publish(ChainEvent{Type: EventChainStart})
 		s.runAgents(c, mentioned(c.handles), 1, publish)
 	}
@@ -442,7 +443,7 @@ func (s *server) runAgents(c *chain, sums []summons, depth uint32, publish func(
 		var said string
 		var inc config.Included
 		switch p, ok := c.prior[c.step]; {
-		case ok && p.handle == h && p.finished():
+		case ok && p.Handle == h && p.Finished():
 			text, in, goOn := s.reuse(c, h, p, publish)
 			if !goOn {
 				return false
@@ -505,12 +506,12 @@ func (s *server) wouldRun(conv []byte, handle string) bool {
 // stayed silent: it is not run again. It returns what it said, "" if it was
 // silent or its message is gone, so the summons in it run as on its first
 // run, with what is included now; and it reports whether the chain goes on.
-func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEvent)) (said string, inc config.Included, goOn bool) {
-	if p.outcome == OutcomeSilent {
+func (s *server) reuse(c *chain, handle string, p transcript.PriorRun, publish func(ChainEvent)) (said string, inc config.Included, goOn bool) {
+	if p.Outcome == OutcomeSilent {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", handle, c.step)})
 		return "", inc, true
 	}
-	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", handle, p.msgID, c.step)})
+	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", handle, p.MsgID, c.step)})
 	fail := func(err error) (string, config.Included, bool) {
 		s.opts.Logf("serve: retrying chain %s after @%s: %v", c.id, handle, err)
 		publish(ChainEvent{Type: EventAgentError, Handle: handle, Error: err.Error()})
@@ -520,13 +521,13 @@ func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEv
 	if !ok {
 		return fail(ErrNoReplica)
 	}
-	ff, err := saidIn(ob, store, c.conv, p.msgID)
+	m, ok, err := s.saidIn(ob, store, c.conv, p.MsgID)
 	if err != nil {
 		return fail(err)
 	}
-	if ff == nil {
+	if !ok {
 		if !c.dry {
-			s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, handle, p.msgID)
+			s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, handle, p.MsgID)
 		}
 		return "", inc, true
 	}
@@ -537,7 +538,7 @@ func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEv
 	if inc, err = e.Included(); err != nil {
 		return fail(err)
 	}
-	return ff.Text, inc, true
+	return m.Text, inc, true
 }
 
 // summoned is what handle's message at depth summons under inc, in mention
@@ -584,11 +585,11 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 	}
 	attempt := 1
 	if p, ok := c.prior[c.step]; ok {
-		attempt = p.attempt + 1 // a retry of this step
+		attempt = p.Attempt + 1 // a retry of this step
 	}
 	line := func(l TranscriptLine) {
 		l.Step, l.Handle, l.Depth, l.Attempt = c.step, handle, depth, attempt
-		c.tr.write(l)
+		c.tr.Write(l)
 	}
 	var said SendView
 	defer func() {
@@ -752,37 +753,28 @@ func preamble(handle string, depth uint32, inc config.Included, where string, mi
 // Node's Recap is never read: it is that Node's file. A RECAP.md that does
 // not parse fails the summon.
 func (s *server) talkSoFar(ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string) ([]agent.Turn, bool, error) {
-	r, err := recap.Read(s.opts.Paths.RecapFile(s.opts.Alias, nodedir.ConversationName(conv)))
+	v, err := s.talk(ob, store, conv)
 	if err != nil {
 		return nil, false, err
 	}
-	rows, err := talk(ob, store, conv)
-	if err != nil {
-		return nil, false, err
-	}
-	v, err := recap.Lean(r, rows)
-	if err != nil {
-		return nil, false, err
-	}
+	l := v.Lean()
 	var opening string
-	if r != nil {
-		opening = recapOpening(*r)
+	if l.Recap != nil {
+		opening = recapOpening(*l.Recap)
 	}
-	rec, _ := s.slot.Current()
-	return talkTurns(opening, v.Talk, func(r cosl.Row) string { return displayName(rec, r) }, s.opts.Node.NodeID, handle), v.Missing, nil
+	return talkTurns(opening, l.Messages, displayName, s.opts.Node.NodeID, handle), l.Missing, nil
 }
 
 // talk is this Node's view of conv's talk (ADR 0025): its committed
-// app.freeform rows, then the messages it wrote that its replica does not
-// hold yet, those queued with no seq. The Outbox is read first; see
-// Outbox.Unapplied.
-func talk(ob *outbox.Outbox, store *cosl.Store, conv []byte) ([]cosl.Row, error) {
-	mine := ob.Unapplied()
-	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, GroupLevel: conv == nil, ConversationID: conv})
-	if err != nil {
-		return nil, err
+// app.freeform, then the messages it wrote that its replica does not hold
+// yet, those queued with no seq, under this Node's Recap.
+func (s *server) talk(ob *outbox.Outbox, store *cosl.Store, conv []byte) (talk.View, error) {
+	var roster *group.Roster
+	if rec, _ := s.slot.Current(); rec != nil {
+		r := rec.Roster()
+		roster = &r
 	}
-	return outbox.View(rows, mine, conv)
+	return talk.Reader{Paths: s.opts.Paths, Alias: s.opts.Alias, Store: store, Mine: talk.Live(ob), Roster: roster}.Read(conv)
 }
 
 // recapOpening is how this Node's Recap opens the first user turn: framed
@@ -807,7 +799,7 @@ const (
 // starts the first user turn (ADR 0024). Without one, a fixed user turn goes
 // before talk that opens with its own message; and one goes after talk that
 // ends with its own, so the turns alternate and start and end with user.
-func talkTurns(opening string, said []recap.Said, name func(cosl.Row) string, node identity.ID, handle string) []agent.Turn {
+func talkTurns(opening string, said []talk.Message, name func(talk.Message) string, node identity.ID, handle string) []agent.Turn {
 	var turns []agent.Turn
 	if opening != "" {
 		turns = append(turns, agent.Turn{Role: agent.User, Text: opening})
@@ -827,7 +819,7 @@ func talkTurns(opening string, said []recap.Said, name func(cosl.Row) string, no
 			add(agent.Assistant, l.Text, "\n\n")
 			continue
 		}
-		add(agent.User, recap.LeanLine(name(l.Row), l.Handle, l.Text), "\n")
+		add(agent.User, talk.LeanLine(name(l), l.Handle, l.Text), "\n")
 	}
 	if len(turns) == 0 || turns[len(turns)-1].Role != agent.User {
 		add(agent.User, talkEndsWithYou, "")
@@ -835,14 +827,13 @@ func talkTurns(opening string, said []recap.Said, name func(cosl.Row) string, no
 	return turns
 }
 
-// displayName is the name the Roster pins for r's sender.
-func displayName(rec *group.Record, r cosl.Row) string {
-	if rec != nil {
-		if n, ok := rec.Roster().Lookup(r.Sender); ok {
-			return n.DisplayName
-		}
+// displayName is the name the Roster pins for m's sender, or the start of
+// its Node ID if there is none.
+func displayName(m talk.Message) string {
+	if m.Sender != "" {
+		return m.Sender
 	}
-	return r.Sender.String()[:8]
+	return m.Row.Sender.String()[:8]
 }
 
 type cancelRequest struct {

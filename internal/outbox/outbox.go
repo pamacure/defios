@@ -5,7 +5,6 @@
 package outbox
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/hex"
@@ -505,30 +504,6 @@ func (o *Outbox) remember(s cosl.Signed, seq uint64) {
 func (o *Outbox) forget() {
 	applied := o.cfg.Applied()
 	o.sent = slices.DeleteFunc(o.sent, func(e Entry) bool { return e.Seq <= applied })
-}
-
-// View is this Node's view of conv's talk (nil for Group-level), ADR 0025:
-// rows, its committed app.freeform rows in seq order, then mine, from
-// Unapplied, that rows do not hold. A queued message's row has no seq.
-func View(rows []cosl.Row, mine []Entry, conv []byte) ([]cosl.Row, error) {
-	held := make(map[[32]byte]bool, len(rows))
-	for _, r := range rows {
-		held[r.MsgID] = true
-	}
-	out := slices.Clip(rows)
-	for _, e := range mine {
-		if held[e.MsgID] {
-			continue
-		}
-		r, err := cosl.RowOf(e.Signed, e.Seq)
-		if err != nil {
-			return nil, fmt.Errorf("outbox: %w", err)
-		}
-		if r.MsgType == cosl.TypeAppFreeform && bytes.Equal(r.ConversationID, conv) {
-			out = append(out, r)
-		}
-	}
-	return out, nil
 }
 
 // save replaces the file with entries, atomically.

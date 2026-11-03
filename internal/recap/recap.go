@@ -1,5 +1,6 @@
-// Package recap is a Node's Recap of a Conversation and the talk as that
-// Node's agents read it (docs/adr/0024-a-recap-is-a-local-file.md). A Recap
+// Package recap is a Node's Recap of a Conversation
+// (docs/adr/0024-a-recap-is-a-local-file.md); package talk reads the talk
+// under it. A Recap
 // is the file RECAP.md in the Conversation's data directory: this Node's own
 // account of the talk up to a seq, never on the COSL and replaced whole each
 // time it is written.
