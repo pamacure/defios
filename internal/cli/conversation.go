@@ -103,6 +103,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
 	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it, as its agents read them")
 	log.Flags().BoolVar(&opts.chat, "chat", false, "the talk as chat: \"<display name>: <text>\" with its newlines, every message this Node holds from the first, a blank line between")
+	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each agent message this Node's chain said preceded by its Transcript blocks: thinking, text and tool calls")
 	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	var baseSeq uint64
@@ -756,6 +757,7 @@ type leanLine struct {
 type logOptions struct {
 	limit            int
 	full, lean, chat bool
+	transcripts      bool // with chat
 }
 
 // runConversationLog prints this Node's view of the Conversation's talk
@@ -769,6 +771,9 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	}
 	if countTrue(opts.full, opts.lean, opts.chat) > 1 {
 		return exitUsagef("--full, --lean and --chat are different views; pass one")
+	}
+	if opts.transcripts && !opts.chat {
+		return exitUsagef("--transcripts expands --chat; pass both")
 	}
 	alias, rec, err := loadGroup(g)
 	if err != nil {
@@ -784,13 +789,20 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 		return err
 	}
 	roster := rec.Roster()
-	v, err := talk.Reader{Paths: g.paths(), Alias: alias, Store: store, Mine: talk.File(g.paths().OutboxFile(alias)), Roster: &roster}.Read(conv)
+	reader := talk.Reader{Paths: g.paths(), Alias: alias, Store: store, Mine: talk.File(g.paths().OutboxFile(alias)), Roster: &roster}
+	v, err := reader.Read(conv)
 	if err != nil {
 		return exitOperational(err)
 	}
 	switch {
 	case opts.lean:
 		return emitLean(g, v.Lean(), opts.limit)
+	case opts.chat && opts.transcripts:
+		chat, err := reader.Expand(conv, v.Chat().Last(opts.limit))
+		if err != nil {
+			return exitOperational(err)
+		}
+		return emitChatTranscripts(g, chat)
 	case opts.chat:
 		return emitChat(g, v.Chat().Last(opts.limit))
 	}
@@ -924,6 +936,39 @@ func emitChat(g *globals, msgs talk.Messages) error {
 		if i > 0 {
 			fmt.Fprintln(g.app.Stdout)
 		}
+		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(talk.Speaker(l.SenderDisplayName, l.Handle)+":"), l.Text)
+	}
+	return nil
+}
+
+// chatTranscriptLine is one `--chat --transcripts` entry: a `--chat`
+// entry and the blocks of the run that said it, none for the rest.
+type chatTranscriptLine struct {
+	leanLine
+	Blocks []json.RawMessage `json:"blocks"`
+}
+
+// emitChatTranscripts prints the talk as emitChat does, each agent message
+// this Node's chain said preceded by its run's blocks as conversation
+// transcript shows them, indented apart from what was said; with --json,
+// one line per message with its blocks.
+func emitChatTranscripts(g *globals, msgs []talk.Expanded) error {
+	chat := make([]chatTranscriptLine, len(msgs))
+	for i, m := range msgs {
+		chat[i] = chatTranscriptLine{
+			leanLine: leanLine{SenderDisplayName: messageSender(m.Message), Handle: m.Handle, Text: m.Text},
+			Blocks:   append([]json.RawMessage{}, m.Blocks...),
+		}
+	}
+	if g.json {
+		return emitJSONL(g, chat)
+	}
+	p := g.out()
+	for i, l := range chat {
+		if i > 0 {
+			fmt.Fprintln(g.app.Stdout)
+		}
+		printBlocks(g, "  ", "@"+l.Handle, l.Blocks)
 		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(talk.Speaker(l.SenderDisplayName, l.Handle)+":"), l.Text)
 	}
 	return nil

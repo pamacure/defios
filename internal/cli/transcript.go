@@ -62,17 +62,7 @@ func printRuns(g *globals, runs []transcript.Run) {
 	for _, r := range runs {
 		fmt.Fprintf(out, "step %d: %s, depth %d, attempt %d\n", r.Step, p.primary("@"+r.Handle), r.Depth, r.Attempt)
 		at := "@" + r.Handle
-		for _, raw := range r.Blocks {
-			kind, text := blockOutput(raw)
-			if text == "" {
-				continue
-			}
-			show := p.dim
-			if kind == agent.KindText {
-				show = func(s string) string { return s }
-			}
-			fmt.Fprintln(out, show(at+" ("+kind+"):")+" "+show(text))
-		}
+		printBlocks(g, "", at, r.Blocks)
 		switch r.Outcome {
 		case transcript.OutcomeSaid:
 			fmt.Fprintf(out, "%s said msg_id %s\n", at, shortChain(r.MsgID))
@@ -85,6 +75,23 @@ func printRuns(g *globals, runs []transcript.Run) {
 		default:
 			fmt.Fprintln(out, p.dim(at+" was cut off by a stop"))
 		}
+	}
+}
+
+// printBlocks prints each block that streams anything as `<at> (<kind>):
+// <text>` after indent, thinking and tool calls dimmed.
+func printBlocks(g *globals, indent, at string, blocks []json.RawMessage) {
+	p := g.out()
+	for _, raw := range blocks {
+		kind, text := blockOutput(raw)
+		if text == "" {
+			continue
+		}
+		show := p.dim
+		if kind == agent.KindText {
+			show = func(s string) string { return s }
+		}
+		fmt.Fprintln(g.app.Stdout, indent+show(at+" ("+kind+"):")+" "+show(text))
 	}
 }
 
