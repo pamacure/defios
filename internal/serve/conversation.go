@@ -12,10 +12,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	plan "defios.com/internal/chain"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
+	"defios.com/internal/talk"
 )
 
 var (
@@ -78,10 +80,11 @@ func (s *server) conversationSend(ctx context.Context, text, handle string, dept
 	v, err := s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, func(store *cosl.Store) error {
 		return s.checkHandle(store, conversationID, handle, depth, text)
 	})
-	if err != nil || handle != "" {
+	if err != nil {
 		return v, err
 	}
-	if handles := mention.Handles(text); len(handles) > 0 {
+	m := talk.Message{Row: cosl.Row{Sender: s.opts.Node.NodeID}, Handle: handle, Text: text}
+	if handles := plan.Summons(m, s.opts.Node.NodeID); len(handles) > 0 {
 		s.startChain(conversationID, v.MsgID, handles)
 	}
 	return v, nil

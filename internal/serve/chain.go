@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"defios.com/internal/agent"
+	plan "defios.com/internal/chain"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
-	"defios.com/internal/mention"
 	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
@@ -137,16 +137,9 @@ type chain struct {
 	cancel  context.CancelFunc
 	// cancelled tells a cancel from the serve stopping; both end ctx.
 	cancelled atomic.Bool
-	// step counts the chain's runs, depth-first; tr is its Transcript.
-	// Only the chain's worker touches them.
-	step int
-	tr   *transcript.Writer
 	// prior is each step's latest attempt on a retry, from the Transcript;
 	// nil on a first run (ADR 0018).
-	prior transcript.Prior
-	// dry walks the chain as a retry would without running or reusing
-	// anything for real: see runAgents.
-	dry bool
+	prior plan.Prior
 }
 
 func conversationKey(conv []byte) string { return hex.EncodeToString(conv) }
@@ -389,129 +382,68 @@ func (s *server) startChain(conv []byte, id string, handles []string) {
 	}
 }
 
-// runChain runs each agent c summons in turn, each reply written before the
-// next starts, and depth-first the agents each reply summons. It stops
-// at the first error or a cancel, and commits nothing for the agent it
-// stopped at.
+// runChain walks c's plan, running each agent it summons in turn, each
+// reply written before the next starts, and depth-first the agents each
+// reply summons. It stops at the first error or a cancel, and commits
+// nothing for the agent it stopped at.
 func (s *server) runChain(c *chain) {
 	publish := func(ev ChainEvent) {
 		ev.Chain = c.id
 		s.chains.publish(c.conv, ev)
 	}
 	if c.ctx.Err() == nil {
-		c.tr = transcript.NewWriter(s.opts.Paths, s.opts.Alias, c.conv, c.id, s.opts.Logf)
-		defer c.tr.Close()
+		tr := transcript.NewWriter(s.opts.Paths, s.opts.Alias, c.conv, c.id, s.opts.Logf)
+		defer tr.Close()
 		publish(ChainEvent{Type: EventChainStart})
-		s.runAgents(c, mentioned(c.handles), 1, publish)
+		plan.Walk(c.handles, c.prior, func(st plan.Step) plan.Outcome { return s.step(c, tr, st, publish) })
 	}
 	s.chains.end(c)
 }
 
-// summons is a Handle a message reaches, with why it cannot run, if it
-// cannot.
-type summons struct {
-	handle string
-	skip   string
-}
-
-// mentioned is the chain's own summons: the Handles the person's message
-// mentions. Whether each is included is known only once it is reached.
-func mentioned(handles []string) []summons {
-	out := make([]summons, len(handles))
-	for i, h := range handles {
-		out[i] = summons{handle: h}
+// step performs st of c: runs its agent, writing the run to tr, reuses its
+// latest attempt, or publishes its skip.
+func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) plan.Outcome {
+	switch st.Action {
+	case plan.Skip:
+		s.opts.Logf("serve: chain %s skips @%s: %s", c.id, st.Handle, st.Reason)
+		publish(ChainEvent{Type: EventAgentSkipped, Handle: st.Handle, Reason: st.Reason})
+		return plan.Outcome{}
+	case plan.Reuse:
+		return s.reuse(c, st, publish)
 	}
-	return out
-}
-
-// runAgents runs sums at depth, each followed by the agents its message
-// summons at depth+1; a silent agent summons nobody. It reports whether the
-// chain goes on.
-//
-// Every Handle reached takes the next step, whether it runs, is reused or
-// is skipped. The steps follow from the person's message and the said texts
-// alone, so a retry numbers them as the first run did even when what is
-// included has changed since (ADR 0018). A step whose latest attempt said
-// or stayed silent is reused, included or not, and never runs again.
-//
-// A dry chain only walks: it stops, reporting false, at the first step a
-// retry would run.
-func (s *server) runAgents(c *chain, sums []summons, depth uint32, publish func(ChainEvent)) bool {
-	for _, sm := range sums {
-		h := sm.handle
-		c.step++
-		var said string
-		var inc config.Included
-		switch p, ok := c.prior[c.step]; {
-		case ok && p.Handle == h && p.Finished():
-			text, in, goOn := s.reuse(c, h, p, publish)
-			if !goOn {
-				return false
-			}
-			said, inc = text, in
-		case sm.skip != "":
-			if !c.dry {
-				s.opts.Logf("serve: chain %s skips @%s: %s", c.id, h, sm.skip)
-			}
-			publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: sm.skip})
-			continue
-		case c.dry:
-			if s.wouldRun(c.conv, h) {
-				return false
-			}
-			continue
-		default:
-			res, in, err := s.runAgent(c, h, depth, publish)
-			if c.ctx.Err() != nil {
-				return false
-			}
-			if errors.Is(err, errSkipped) {
-				continue
-			}
-			if err != nil {
-				s.opts.Logf("serve: @%s answering chain %s: %v", h, c.id, err)
-				publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
-				return false
-			}
-			if !res.Silent {
-				said, inc = res.Said, in
-			}
-		}
-		if said == "" {
-			continue
-		}
-		if !s.runAgents(c, summoned(h, depth, said, inc), depth+1, publish) {
-			return false
-		}
+	res, inc, err := s.runAgent(c, tr, st, publish)
+	if c.ctx.Err() != nil {
+		return plan.Outcome{Stop: true}
 	}
-	return true
-}
-
-// wouldRun reports whether handle is included in conv now, so a step of it
-// would run rather than be skipped.
-func (s *server) wouldRun(conv []byte, handle string) bool {
-	_, store, ok := s.current()
-	if !ok {
-		return true // the retry itself finds out
+	if errors.Is(err, errSkipped) {
+		return plan.Outcome{}
 	}
-	_, _, inc, err := s.included(store, conv)
-	return err != nil || includes(inc, handle)
+	if err != nil {
+		s.opts.Logf("serve: @%s answering chain %s: %v", st.Handle, c.id, err)
+		publish(ChainEvent{Type: EventAgentError, Handle: st.Handle, Error: err.Error()})
+		return plan.Outcome{Stop: true}
+	}
+	if res.Silent {
+		return plan.Outcome{}
+	}
+	return plan.Outcome{Said: res.Said, Included: inc}
 }
 
-// reuse stands in for step c.step, handle's, whose latest attempt p said or
-// stayed silent: it is not run again. It returns what it said, "" if it was
-// silent or its message is gone, so the summons in it run as on its first
-// run, with what is included now; and it reports whether the chain goes on.
-func (s *server) reuse(c *chain, handle string, p transcript.PriorRun, publish func(ChainEvent)) (said string, inc config.Included, goOn bool) {
+// reuse stands in for step st, whose latest attempt said or stayed silent:
+// it is not run again. Its outcome is what it said, "" if it was silent or
+// its message is gone, so the summons in it run as on its first run, with
+// what is included now.
+func (s *server) reuse(c *chain, st plan.Step, publish func(ChainEvent)) plan.Outcome {
+	h, p := st.Handle, st.Prior
 	if p.Outcome == OutcomeSilent {
-		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", handle, c.step)})
-		return "", inc, true
+		publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", h, st.N)})
+		return plan.Outcome{}
 	}
-	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", handle, p.MsgID, c.step)})
-	fail := func(err error) (string, config.Included, bool) {
-		s.opts.Logf("serve: retrying chain %s after @%s: %v", c.id, handle, err)
-		publish(ChainEvent{Type: EventAgentError, Handle: handle, Error: err.Error()})
-		return "", inc, false
+	publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", h, p.MsgID, st.N)})
+	fail := func(err error) plan.Outcome {
+		s.opts.Logf("serve: retrying chain %s after @%s: %v", c.id, h, err)
+		publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
+		return plan.Outcome{Stop: true}
 	}
 	ob, store, ok := s.writer()
 	if !ok {
@@ -522,35 +454,14 @@ func (s *server) reuse(c *chain, handle string, p transcript.PriorRun, publish f
 		return fail(err)
 	}
 	if !ok {
-		if !c.dry {
-			s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, handle, p.MsgID)
-		}
-		return "", inc, true
+		s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, h, p.MsgID)
+		return plan.Outcome{}
 	}
-	if _, _, inc, err = s.included(store, c.conv); err != nil {
+	_, _, inc, err := s.included(store, c.conv)
+	if err != nil {
 		return fail(err)
 	}
-	return m.Text, inc, true
-}
-
-// summoned is what handle's message at depth summons under inc, in mention
-// order, each with why it cannot run if it cannot; handle's mention of
-// itself is ignored (ADR 0015).
-func summoned(handle string, depth uint32, reply string, inc config.Included) []summons {
-	var out []summons
-	for _, h := range mention.Handles(reply) {
-		sm := summons{handle: h}
-		switch {
-		case h == handle:
-			continue
-		case !includes(inc, h):
-			sm.skip = fmt.Sprintf("@%s is not in [agent] profiles here", h)
-		case !canSummon(depth, inc):
-			sm.skip = fmt.Sprintf("@%s replied at depth %d, which is max_depth %d", handle, depth, inc.MaxDepth)
-		}
-		out = append(out, sm)
-	}
-	return out
+	return plan.Outcome{Said: m.Text, Included: inc}
 }
 
 // canSummon reports whether a message at depth summons agents under inc.
@@ -560,12 +471,13 @@ func canSummon(depth uint32, inc config.Included) bool { return int(depth) < inc
 // included; runAgent has already published the skip.
 var errSkipped = errors.New("skipped")
 
-// runAgent runs the agent on the talk so far, as step c.step of c:
-// writes what it says, committed or queued, or reports it silent, and
-// returns how it ended, with what was included where it answered. Everything the run generates,
-// and how it ended, goes to c's Transcript (ADR 0018); a run cut off by the
-// serve stopping records no outcome.
-func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(ChainEvent)) (res agent.Result, inc config.Included, err error) {
+// runAgent runs st's agent on the talk so far, as step st of c: writes
+// what it says, committed or queued, or reports it silent, and returns how
+// it ended, with what was included where it answered. Everything the run
+// generates, and how it ended, goes to c's Transcript tr (ADR 0018); a run
+// cut off by the serve stopping records no outcome.
+func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) (res agent.Result, inc config.Included, err error) {
+	handle, depth := st.Handle, st.Depth
 	ob, store, ok := s.writer()
 	if !ok {
 		return res, inc, ErrNoReplica
@@ -575,13 +487,9 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
 		return res, inc, err
 	}
-	attempt := 1
-	if p, ok := c.prior[c.step]; ok {
-		attempt = p.Attempt + 1 // a retry of this step
-	}
 	line := func(l TranscriptLine) {
-		l.Step, l.Handle, l.Depth, l.Attempt = c.step, handle, depth, attempt
-		c.tr.Write(l)
+		l.Step, l.Handle, l.Depth, l.Attempt = st.N, handle, depth, st.Attempt()
+		tr.Write(l)
 	}
 	var said SendView
 	defer func() {
