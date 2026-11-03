@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -376,38 +375,6 @@ type ResolvedProfile struct {
 	Provider string // a Provider alias
 	MaxTurns int
 	Body     map[string]any // JSON values; nil when neither body is set
-}
-
-// Included resolves the profiles and depth for talk whose Workspace is conv,
-// over the Group's: pass an empty Workspace for Group-level talk. A profile's
-// directory is agents/<handle> under root, the config directory. Whether the
-// directory exists is for whoever summons it to find out.
-func (c Config) Included(conv Workspace, root string) (Included, error) {
-	ws, err := c.Workspace.Merge(conv)
-	if err != nil {
-		return Included{}, fmt.Errorf("config: %w", err)
-	}
-	a := ws.Agent
-	out := Included{MaxDepth: a.MaxDepth}
-	if out.MaxDepth == 0 {
-		out.MaxDepth = 1
-	}
-	for _, h := range a.Profiles {
-		p, ok := c.Agents[h]
-		if !ok {
-			return Included{}, fmt.Errorf("config: [agent] profiles: no [agents.%s] is defined in the Group config", h)
-		}
-		r := ResolvedProfile{Handle: h, Dir: filepath.Join(root, "agents", h), Provider: p.Provider,
-			MaxTurns: p.MaxTurns, Body: p.Body}
-		if base := ws.Providers[p.Provider].Body; base != nil {
-			r.Body = agent.MergeBody(base, p.Body)
-		}
-		if r.MaxTurns == 0 {
-			r.MaxTurns = agent.DefaultMaxTurns
-		}
-		out.Profiles = append(out.Profiles, r)
-	}
-	return out, nil
 }
 
 // jsonValue is v, a value TOML decoded, as a JSON value: a table is an

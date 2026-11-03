@@ -90,7 +90,11 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 	if err != nil {
 		return BroadcastView{}, err
 	}
-	nets, err := s.localNetworks(store, info.Conversation)
+	e, err := s.load(store, info.Conversation)
+	if err != nil {
+		return BroadcastView{}, err
+	}
+	nets, err := e.Networks()
 	if err != nil {
 		return BroadcastView{}, err
 	}

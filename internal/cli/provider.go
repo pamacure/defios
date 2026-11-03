@@ -236,10 +236,11 @@ func providerViewOf(alias string, p config.Provider) providerView {
 }
 
 func runProviderList(g *globals, keyQuery string) error {
-	ws, err := readWorkspace(g, keyQuery)
+	e, err := load(g, keyQuery)
 	if err != nil {
 		return err
 	}
+	ws := e.Workspace
 	aliases := make([]string, 0, len(ws.Providers))
 	for a := range ws.Providers {
 		aliases = append(aliases, a)
@@ -264,11 +265,11 @@ func runProviderList(g *globals, keyQuery string) error {
 }
 
 func runProviderShow(g *globals, keyQuery, alias string) error {
-	ws, err := readWorkspace(g, keyQuery)
+	e, err := load(g, keyQuery)
 	if err != nil {
 		return err
 	}
-	p, err := ws.Provider(alias)
+	p, err := e.Workspace.Provider(alias)
 	if errors.Is(err, provider.ErrUnknown) {
 		return exitUsagef("%w", err)
 	} else if err != nil {

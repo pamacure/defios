@@ -457,7 +457,11 @@ func (s *server) reuse(c *chain, st plan.Step, publish func(ChainEvent)) plan.Ou
 		s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, h, p.MsgID)
 		return plan.Outcome{}
 	}
-	_, _, inc, err := s.included(store, c.conv)
+	e, err := s.load(store, c.conv)
+	if err != nil {
+		return fail(err)
+	}
+	inc, err := e.Included()
 	if err != nil {
 		return fail(err)
 	}
@@ -547,7 +551,12 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 // Handle (ADR 0018), sent with this Node's key to the Provider as this
 // Node's merged Workspace configures it, and nowhere else (ADR 0022).
 func (s *server) agentRequest(ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
-	_, ws, inc, err := s.included(store, conv)
+	e, err := s.load(store, conv)
+	if err != nil {
+		return agent.Request{}, config.Included{}, err
+	}
+	ws := e.Workspace
+	inc, err := e.Included()
 	if err != nil {
 		return agent.Request{}, inc, err
 	}

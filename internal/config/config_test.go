@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"defios.com/internal/config"
+	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/provider"
@@ -464,7 +465,7 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 // of objects, integers and floats numbers. max_turns resolves with it;
 // unset, it is 8, and an unset body is empty.
 func TestIncludedResolvesTheProfileBody(t *testing.T) {
-	c, err := config.ReadFile(write(t, `
+	e, err := config.Load(node(t, `
 [agents.auditor]
 provider = "claude"
 max_turns = 3
@@ -487,11 +488,11 @@ provider = "local"
 
 [agent]
 profiles = ["auditor", "scribe"]
-`))
+`, ""), "home", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.Included(config.Workspace{}, "/r")
+	got, err := e.Included()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +515,7 @@ profiles = ["auditor", "scribe"]
 // replacing, and a Conversation's body for that Provider merges over the
 // Group's the same way.
 func TestAProfileBodyMergesOverItsProvidersBody(t *testing.T) {
-	c, err := config.ReadFile(write(t, `
+	const group = `
 [providers.gpt]
 base_url = "https://api.openai.com"
 api_path = "/v1/responses"
@@ -551,33 +552,27 @@ model = "claude-opus-5-5"
 
 [agent]
 profiles = ["trader", "auditor", "scribe"]
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	conv, err := config.ReadWorkspace(write(t, `
-[providers.gpt.body]
-stream = false
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
+`
 	for _, tc := range []struct {
-		conv config.Workspace
+		conv string
 		want []string
 	}{
-		{config.Workspace{}, []string{
+		{"", []string{
 			`{"include":["reasoning.encrypted_content"],"model":"gpt-base","reasoning":{"effort":"low","summary":"auto"},"store":false,"stream":true}`,
 			`{"include":[],"model":"gpt-big","reasoning":{"effort":"high","summary":"auto"},"store":false,"stream":true}`,
 			`{"model":"claude-opus-5-5"}`,
 		}},
-		{conv, []string{
+		{"[providers.gpt.body]\nstream = false\n", []string{
 			`{"include":["reasoning.encrypted_content"],"model":"gpt-base","reasoning":{"effort":"low","summary":"auto"},"store":false,"stream":false}`,
 			`{"include":[],"model":"gpt-big","reasoning":{"effort":"high","summary":"auto"},"store":false,"stream":false}`,
 			`{"model":"claude-opus-5-5"}`,
 		}},
 	} {
-		got, err := c.Included(tc.conv, "/r")
+		e, err := config.Load(node(t, group, tc.conv), "home", mainConv(), []key.Key{mainKey})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.Included()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -590,12 +585,13 @@ stream = false
 				t.Errorf("%s body %s\nwant        %s", p.Handle, raw, tc.want[i])
 			}
 		}
-	}
-	if c.Workspace.Providers["gpt"].Body["stream"] != true || c.Workspace.Providers["gpt"].Body["reasoning"].(map[string]any)["effort"] != "low" {
-		t.Fatalf("Included changed the Group's Provider body: %v", c.Workspace.Providers["gpt"].Body)
-	}
-	if c.Agents["auditor"].Body["reasoning"].(map[string]any)["summary"] != nil {
-		t.Fatalf("Included changed the profile's body: %v", c.Agents["auditor"].Body)
+		c := e.Group
+		if c.Workspace.Providers["gpt"].Body["stream"] != true || c.Workspace.Providers["gpt"].Body["reasoning"].(map[string]any)["effort"] != "low" {
+			t.Fatalf("Load or Included changed the Group's Provider body: %v", c.Workspace.Providers["gpt"].Body)
+		}
+		if c.Agents["auditor"].Body["reasoning"].(map[string]any)["summary"] != nil {
+			t.Fatalf("Included changed the profile's body: %v", c.Agents["auditor"].Body)
+		}
 	}
 }
 
@@ -656,7 +652,7 @@ func TestConfigRefusesAProfileDir(t *testing.T) {
 // named by its Handle under the config root (ADR 0026), and the depth a chain
 // may reach.
 func TestIncludedResolvesTheProfiles(t *testing.T) {
-	c, err := config.ReadFile(write(t, `
+	const group = `
 [agents.auditor]
 provider = "claude"
 
@@ -672,27 +668,33 @@ provider = "gpt"
 [agent]
 profiles = ["auditor"]
 max_depth = 3
-`))
-	if err != nil {
-		t.Fatal(err)
+`
+	included := func(group, conv string) (nodedir.Paths, config.Included, error) {
+		t.Helper()
+		p := node(t, group, conv)
+		e, err := config.Load(p, "home", mainConv(), []key.Key{mainKey})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inc, err := e.Included()
+		return p, inc, err
 	}
-	const root = "/home/op/.config/defios"
 
-	got, err := c.Included(config.Workspace{}, root)
+	p, got, err := included(group, "")
 	want := config.Included{
-		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: "/home/op/.config/defios/agents/auditor", Provider: "claude", MaxTurns: 8}},
+		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: filepath.Join(p.Config, "agents", "auditor"), Provider: "claude", MaxTurns: 8}},
 		MaxDepth: 3,
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Group-level = %+v, %v\nwant %+v", got, err, want)
 	}
 
-	got, err = c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"quant", "trader", "scout"}}}, root)
+	p, got, err = included(group, "[agent]\nprofiles = [\"quant\", \"trader\", \"scout\"]\n")
 	want = config.Included{
 		Profiles: []config.ResolvedProfile{
-			{Handle: "quant", Dir: "/home/op/.config/defios/agents/quant", Provider: "gpt", MaxTurns: 8},
-			{Handle: "trader", Dir: "/home/op/.config/defios/agents/trader", Provider: "gpt", MaxTurns: 8},
-			{Handle: "scout", Dir: "/home/op/.config/defios/agents/scout", Provider: "claude", MaxTurns: 8},
+			{Handle: "quant", Dir: filepath.Join(p.Config, "agents", "quant"), Provider: "gpt", MaxTurns: 8},
+			{Handle: "trader", Dir: filepath.Join(p.Config, "agents", "trader"), Provider: "gpt", MaxTurns: 8},
+			{Handle: "scout", Dir: filepath.Join(p.Config, "agents", "scout"), Provider: "claude", MaxTurns: 8},
 		},
 		MaxDepth: 3,
 	}
@@ -700,20 +702,16 @@ max_depth = 3
 		t.Fatalf("Conversation = %+v, %v\nwant %+v", got, err, want)
 	}
 
-	cleared, err := config.ReadWorkspace(write(t, "[agent]\nprofiles = []\nmax_depth = 2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err = c.Included(cleared, root)
+	_, got, err = included(group, "[agent]\nprofiles = []\nmax_depth = 2")
 	if err != nil || len(got.Profiles) != 0 || got.MaxDepth != 2 {
 		t.Fatalf("Conversation with profiles = [] = %+v, %v; want none, depth 2", got, err)
 	}
 
-	if _, err := c.Included(config.Workspace{Agent: config.Agent{Profiles: []string{"ghost"}}}, root); err == nil || !strings.Contains(err.Error(), "ghost") {
+	if _, _, err := included(group, "[agent]\nprofiles = [\"ghost\"]\n"); err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("a Conversation including an undefined Handle = %v; want an error naming it", err)
 	}
 
-	none, err := config.Config{}.Included(config.Workspace{}, root)
+	_, none, err := included("", "")
 	if err != nil || len(none.Profiles) != 0 || none.MaxDepth != 1 {
 		t.Fatalf("no agents configured = %+v, %v; want none, depth 1", none, err)
 	}

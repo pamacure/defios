@@ -73,62 +73,34 @@ func writeGroup(g *globals, change func(*config.Config) error) (string, error) {
 	return path, nil
 }
 
-// readWorkspace is the targeted Group's Workspace, an absent config.toml
-// being empty, with the Conversation of the Key keyQuery names merged over
-// it when one is named.
-func readWorkspace(g *globals, keyQuery string) (config.Workspace, error) {
-	cfg, err := readConfig(g, keyQuery)
-	return cfg.Workspace, err
-}
-
-// readConfig is the targeted Group's config.toml, an absent one being
-// empty, its Workspace merged as readWorkspace's is.
-func readConfig(g *globals, keyQuery string) (config.Config, error) {
+// load is the settings in force in the targeted Group, an absent
+// config.toml being empty: Group-level talk's, or the Conversation's of the
+// Key keyQuery names when one is named.
+func load(g *globals, keyQuery string) (config.Effective, error) {
 	alias, err := g.resolveAlias()
 	if err != nil {
-		return config.Config{}, err
+		return config.Effective{}, err
 	}
-	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config.Config{}, exitOperational(err)
+	var conv []byte
+	var keys []key.Key
+	if keyQuery != "" {
+		store, err := openReplica(g)
+		if err != nil {
+			return config.Effective{}, err
+		}
+		defer store.Close()
+		if conv, err = conversationID(store, keyQuery); err != nil {
+			return config.Effective{}, err
+		}
+		if keys, err = key.Read(store); err != nil {
+			return config.Effective{}, exitOperational(err)
+		}
 	}
-	if keyQuery == "" {
-		return cfg, nil
-	}
-	path, err := conversationConfigFile(g, alias, keyQuery)
+	e, err := config.Load(g.paths(), alias, conv, keys)
 	if err != nil {
-		return config.Config{}, err
+		return config.Effective{}, exitOperational(err)
 	}
-	over, err := config.ReadWorkspace(path)
-	if err != nil {
-		return config.Config{}, exitOperational(err)
-	}
-	cfg.Workspace, err = cfg.Workspace.Merge(over)
-	if err != nil {
-		return config.Config{}, exitOperationalf("config: %s over the Group's: %v", path, err)
-	}
-	return cfg, nil
-}
-
-// conversationConfigFile is the path of the config.toml of the Conversation
-// of the Key keyQuery names, in the Group alias.
-func conversationConfigFile(g *globals, alias, keyQuery string) (string, error) {
-	store, err := openReplica(g)
-	if err != nil {
-		return "", err
-	}
-	defer store.Close()
-	conv, err := conversationID(store, keyQuery)
-	if err != nil {
-		return "", err
-	}
-	keys, err := key.Read(store)
-	if err != nil {
-		return "", exitOperational(err)
-	}
-	var id [32]byte
-	copy(id[:], conv)
-	return g.paths().ConversationConfigFile(alias, key.WorkspaceNames(keys)[id]), nil
+	return e, nil
 }
 
 // keyFlagHelp is --key on a read verb of a Workspace section.

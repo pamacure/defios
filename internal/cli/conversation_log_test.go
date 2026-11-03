@@ -7,6 +7,9 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/group"
+	"defios.com/internal/nodedir"
+	"defios.com/internal/transcript"
 )
 
 // A message whose payload does not parse is shown as [unreadable], not an
@@ -69,5 +72,53 @@ func TestConversationLogChat(t *testing.T) {
 		if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--chat", other); r.code != 1 {
 			t.Errorf("--chat %s: exit %d, want 1", other, r.code)
 		}
+	}
+}
+
+// --chat --transcripts is the talk as chat with each agent message this
+// Node's chain said preceded by the blocks of the run that said it, set
+// apart by indent; a message with no Transcript here shows as plain chat.
+// With --json each line carries its blocks, none for the rest.
+func TestConversationLogChatTranscripts(t *testing.T) {
+	dir := t.TempDir()
+	groupWithAgentTalk(t, dir)
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--json", "--limit", "1")
+	var last []map[string]any
+	if err := unmarshalLines(r.stdout, &last); err != nil || len(last) != 1 {
+		t.Fatalf("log --json: %v\n%s", err, r.stdout)
+	}
+	msgID := last[0]["msg_id"].(string)
+	w := transcript.NewWriter(nodedir.Resolve(nodedir.Lookup{Dir: dir}), group.ImplicitAlias, nil, transcribedChain, t.Logf)
+	for _, l := range transcriptLines {
+		if l.Outcome == transcript.OutcomeSaid {
+			l.MsgID = msgID
+		}
+		w.Write(l)
+	}
+	w.Close()
+
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--chat", "--transcripts", "--limit", "2")
+	want := "alice: two\nlines\n\n" +
+		"  @auditor (thinking): check it\n" +
+		"  @auditor (tool): say {\"text\":\"ok @scribe\"}\n" +
+		"  @auditor (text): done\n" +
+		"alice/@auditor: looks fine\n"
+	if r.code != 0 || r.stdout != want {
+		t.Errorf("--chat --transcripts: exit %d, %q, want %q; %s", r.code, r.stdout, want, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--chat", "--transcripts", "--json", "--limit", "2")
+	var rows []map[string]any
+	if err := unmarshalLines(r.stdout, &rows); err != nil || len(rows) != 2 {
+		t.Fatalf("--chat --transcripts --json: %v\n%s", err, r.stdout)
+	}
+	if b, ok := rows[0]["blocks"].([]any); !ok || len(b) != 0 {
+		t.Errorf("a person's line's blocks = %v", rows[0]["blocks"])
+	}
+	b, _ := rows[1]["blocks"].([]any)
+	if rows[1]["text"] != "looks fine" || len(b) != 3 || b[0].(map[string]any)["thinking"] != "check it" {
+		t.Errorf("the agent's line = %v", rows[1])
+	}
+	if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--transcripts"); r.code != 1 {
+		t.Errorf("--transcripts without --chat: exit %d, want 1", r.code)
 	}
 }

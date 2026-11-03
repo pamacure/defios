@@ -93,7 +93,11 @@ func (s *server) unfinished(conv []byte, st plan.Start, runs plan.Prior) (bool, 
 	if !ok {
 		return false, ErrNoReplica
 	}
-	_, _, inc, err := s.included(store, conv)
+	e, err := s.load(store, conv)
+	if err != nil {
+		return false, err
+	}
+	inc, err := e.Included()
 	if err != nil {
 		return false, err
 	}
