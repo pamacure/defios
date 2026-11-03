@@ -1,116 +1,28 @@
 package serve
 
-import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
+import "defios.com/internal/transcript"
 
-	"defios.com/internal/agent"
-)
-
-// Transcript outcomes: how a run ended (ADR 0018). A run cut off by a serve
-// stop has none.
+// Transcript outcomes: how a run ended (ADR 0018); see package transcript.
 const (
-	OutcomeSaid      = "said"      // msg_id, and seq once it has a row: the message
-	OutcomeSilent    = "silent"    // ended its turn without say
-	OutcomeError     = "error"     // error: why
-	OutcomeCancelled = "cancelled" // a cancel stopped it
+	OutcomeSaid      = transcript.OutcomeSaid
+	OutcomeSilent    = transcript.OutcomeSilent
+	OutcomeError     = transcript.OutcomeError
+	OutcomeCancelled = transcript.OutcomeCancelled
 )
 
 // Transcript line kinds: which of a TranscriptLine's fields it holds.
 const (
-	KindRequest = agent.RecordRequest // request: a request body as sent, never its headers
-	KindBlock   = agent.RecordBlock   // block: one output block
-	KindUsage   = agent.RecordUsage   // usage: a model call's usage
-	KindOutcome = "outcome"           // outcome, and msg_id and seq or error with it
+	KindRequest = transcript.KindRequest
+	KindBlock   = transcript.KindBlock
+	KindUsage   = transcript.KindUsage
+	KindOutcome = transcript.KindOutcome
 )
 
+// TranscriptLine is one line of a chain's Transcript.
+type TranscriptLine = transcript.Line
+
 // runOutcome is the closing line of a run that posted said (its MsgID empty
-// if nothing) and ended with err; a run that commits nothing and ends without
-// an error is silent. Once a say has committed it is `said`, whatever
-// failed after, so a retry never posts it again. A run cut off by the serve
-// stopping before that has none: ok is false.
-func runOutcome(said SendView, err error, cancelled, stopped bool) (l TranscriptLine, ok bool) {
-	l.Kind = KindOutcome
-	switch {
-	case said.MsgID != "":
-		l.Outcome, l.MsgID, l.Seq = OutcomeSaid, said.MsgID, said.Seq
-	case err == nil:
-		l.Outcome = OutcomeSilent
-	case cancelled:
-		l.Outcome = OutcomeCancelled
-	case stopped:
-		return l, false
-	default:
-		l.Outcome, l.Error = OutcomeError, err.Error()
-	}
-	return l, true
-}
-
-// TranscriptLine is one line of a chain's Transcript. Every line names the
-// run it belongs to: its step in the chain's depth-first order (from 1), its
-// Handle, depth and attempt (from 1). Kind says which of the rest it holds.
-type TranscriptLine struct {
-	Step    int    `json:"step"`
-	Handle  string `json:"handle"`
-	Depth   uint32 `json:"depth"`
-	Attempt int    `json:"attempt"`
-	// Kind is KindRequest, KindBlock, KindUsage or KindOutcome.
-	Kind    string          `json:"kind"`
-	Request json.RawMessage `json:"request,omitempty"`
-	Block   json.RawMessage `json:"block,omitempty"`
-	Usage   json.RawMessage `json:"usage,omitempty"`
-	Outcome string          `json:"outcome,omitempty"`
-	MsgID   string          `json:"msg_id,omitempty"`
-	Seq     uint64          `json:"seq,omitempty"`
-	Error   string          `json:"error,omitempty"`
-}
-
-// transcript appends a chain's Transcript, plaintext JSONL under the
-// Group's data directory, opened on its first line. One chain runs at a
-// time per Conversation, so it is the file's one writer. A write that fails
-// is logged once and the chain goes on: the Transcript is this Node's
-// record, not what the chain is for.
-type transcript struct {
-	path   string
-	logf   func(string, ...any)
-	f      *os.File
-	failed bool
-}
-
-func (t *transcript) write(l TranscriptLine) {
-	if t.failed {
-		return
-	}
-	err := t.append(l)
-	if err != nil {
-		t.failed = true
-		t.logf("serve: transcript %s: %v; the rest of this chain is not recorded", t.path, err)
-	}
-}
-
-func (t *transcript) append(l TranscriptLine) error {
-	if t.f == nil {
-		if err := os.MkdirAll(filepath.Dir(t.path), 0o700); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(t.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-		t.f = f
-	}
-	line, err := json.Marshal(l)
-	if err != nil {
-		return fmt.Errorf("encoding a line: %w", err)
-	}
-	_, err = t.f.Write(append(line, '\n'))
-	return err
-}
-
-func (t *transcript) close() {
-	if t.f != nil {
-		t.f.Close()
-	}
+// if nothing) and ended with err: see transcript.Outcome.
+func runOutcome(said SendView, err error, cancelled, stopped bool) (TranscriptLine, bool) {
+	return transcript.Outcome(said.MsgID, said.Seq, err, cancelled, stopped)
 }

@@ -85,6 +85,15 @@ func conversationCommand(g *globals) *cobra.Command {
 	retry.Flags().StringVar(&retryChain, "chain", "", "the msg id, or a unique prefix of it, of the person's message that started the chain")
 	retry.Flags().BoolVar(&retryDetach, "detach", false, "return once the chain is queued, without streaming it")
 	root.AddCommand(retry)
+	transcriptCmd := &cobra.Command{
+		Use:   "transcript <msg-id>",
+		Short: "Print the Transcript of the chain that the person's message with this msg id (or a unique prefix of it) started: each step's agent at work, then how it ended; --json prints its lines as stored. Needs no serve. --key scopes it to that Key",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(_ *cobra.Command, args []string) error { return runConversationTranscript(g, keyQuery, args[0]) },
+	}
+	transcriptCmd.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	bindGroupFlag(g, transcriptCmd)
+	root.AddCommand(transcriptCmd)
 	var opts logOptions
 	log := &cobra.Command{
 		Use:   "log",
