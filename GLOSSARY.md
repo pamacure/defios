@@ -53,7 +53,7 @@ A named value a Node's config refers to but never contains, such as an API key o
 _Avoid_: credential (that is what a Secret often holds), env var, vault entry
 
 **Workspace**:
-A Node's local directory of settings for one Group, or for one Conversation within it: a config that a Conversation's may partly override. Never replicated; two Nodes may configure the same Conversation differently. An agent's markdown lives in its Agent Profile, not here.
+A Node's local directory of settings for one Group, or for one Conversation within it: a config that a Conversation's may partly override. The settings in force in a Conversation are its Workspace merged over the Group's; in Group-level talk, the Group's alone. Never replicated; two Nodes may configure the same Conversation differently. An agent's markdown lives in its Agent Profile, not here.
 _Avoid_: profile, project, config dir, profile directory
 
 **Agent Profile**:
@@ -67,6 +67,10 @@ _Avoid_: assistant, bot, the agent across Nodes
 **Handle**:
 The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
 _Avoid_: agent name, username, alias (that is a Group's, Network's or Provider's local label)
+
+**Chain**:
+The agents one person's message summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id. Each agent reached is one **step**, numbered in that order whether it runs, is reused on a retry, or is skipped.
+_Avoid_: thread, run, cascade
 
 **Transcript**:
 Everything the agents of one chain generated — thinking, text, tool calls and their results — kept on the Node that ran the chain and never replicated. Only what its agents say reaches the COSL; the Transcript is the rest, and other parties never see it.
