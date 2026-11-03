@@ -17,7 +17,7 @@ import (
 	"defios.com/internal/mention"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/outbox"
-	coslv1 "defios.com/proto/cosl/v1"
+	"defios.com/internal/talk"
 )
 
 var (
@@ -123,51 +123,26 @@ type chainStart struct {
 	handles []string
 }
 
-// chainHandles is what r mentions if it is a person's message from this
-// Node, whose payload is still held; nil otherwise.
-func (s *server) chainHandles(r cosl.Row) ([]string, error) {
-	if r.Sender != s.opts.Node.NodeID {
-		return nil, nil
+// chainHandles is what m mentions if it is a person's message from this
+// Node that says anything; nil otherwise.
+func (s *server) chainHandles(m talk.Message) []string {
+	if m.Row.Sender != s.opts.Node.NodeID || m.Pruned || m.Unreadable || m.Handle != "" {
+		return nil // an agent's reply summons within its own chain
 	}
-	ff, err := freeform(r)
-	if ff == nil || ff.Handle != "" {
-		return nil, err // an agent's reply summons within its own chain
-	}
-	return mention.Handles(ff.Text), nil
-}
-
-// freeform is r's app.freeform, nil if its payload is pruned or does not
-// parse: the FSM does not parse payloads, and such a one says nothing.
-func freeform(r cosl.Row) (*coslv1.AppFreeform, error) {
-	if r.Pruned() {
-		return nil, nil
-	}
-	env, err := r.Decode()
-	if err != nil {
-		return nil, err
-	}
-	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-	if err != nil {
-		return nil, nil
-	}
-	return msg.(*coslv1.AppFreeform), nil
+	return mention.Handles(m.Text)
 }
 
 // chainStarts is the chain starts this Node's view of conv's talk holds,
 // oldest first, queued ones included (ADR 0025).
 func (s *server) chainStarts(ob *outbox.Outbox, store *cosl.Store, conv []byte) ([]chainStart, error) {
-	rows, err := talk(ob, store, conv)
+	v, err := s.talk(ob, store, conv)
 	if err != nil {
 		return nil, err
 	}
 	var out []chainStart
-	for _, r := range rows {
-		handles, err := s.chainHandles(r)
-		if err != nil {
-			return nil, err
-		}
-		if len(handles) > 0 {
-			out = append(out, chainStart{id: hex.EncodeToString(r.MsgID[:]), handles: handles})
+	for _, m := range v.Messages {
+		if handles := s.chainHandles(m); len(handles) > 0 {
+			out = append(out, chainStart{id: hex.EncodeToString(m.Row.MsgID[:]), handles: handles})
 		}
 	}
 	return out, nil
@@ -219,19 +194,19 @@ func (s *server) latestUnfinished(conv []byte, starts []chainStart) (chainStart,
 	return chainStart{}, false, nil
 }
 
-// saidIn is conv's app.freeform with hex msg_id msgID in this Node's view
-// of the talk, nil if it is not there or its payload is pruned.
-func saidIn(ob *outbox.Outbox, store *cosl.Store, conv []byte, msgID string) (*coslv1.AppFreeform, error) {
-	rows, err := talk(ob, store, conv)
+// saidIn is conv's message with hex msg_id msgID in this Node's view of
+// the talk; ok is false if it is not there, or is pruned or unreadable.
+func (s *server) saidIn(ob *outbox.Outbox, store *cosl.Store, conv []byte, msgID string) (m talk.Message, ok bool, err error) {
+	v, err := s.talk(ob, store, conv)
 	if err != nil {
-		return nil, err
+		return talk.Message{}, false, err
 	}
-	for _, r := range rows {
-		if hex.EncodeToString(r.MsgID[:]) == msgID {
-			return freeform(r)
+	for _, m := range v.Messages {
+		if hex.EncodeToString(m.Row.MsgID[:]) == msgID {
+			return m, !m.Pruned && !m.Unreadable, nil
 		}
 	}
-	return nil, nil
+	return talk.Message{}, false, nil
 }
 
 // retry queues again the chain in conv whose msg_id starts with the hex

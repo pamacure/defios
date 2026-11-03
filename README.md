@@ -285,7 +285,7 @@ An agent reads all the talk this machine holds. To keep a long Conversation shor
 defios conversation recap --base-seq <seq> --text "<what was said up to it>"
 ```
 
-It is `RECAP.md` in the Conversation's data directory on this machine only; nothing reaches the other one. Writing a Recap replaces the last. `defios conversation log --lean` prints what this machine's agents read.
+It is `RECAP.md` in the Conversation's data directory on this machine only; nothing reaches the other one. Writing a Recap replaces the last. `defios conversation log --lean` prints what this machine's agents read. `defios conversation log --chat` prints the talk as chat instead: every message this machine holds from the first, newlines kept, with no Recap in place of any.
 
 To drop old talk from this machine, prune it. Pruning destroys the text of the talk at or below a seq, or older than an age, on this machine only. The log still verifies, and the other machine keeps its copy:
 

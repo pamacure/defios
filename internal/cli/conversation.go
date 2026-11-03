@@ -16,16 +16,13 @@ import (
 	"defios.com/internal/agent"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
-	"defios.com/internal/group"
-	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
 	"defios.com/internal/nodedir"
-	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/serve"
-	coslv1 "defios.com/proto/cosl/v1"
+	"defios.com/internal/talk"
 )
 
 func conversationCommand(g *globals) *cobra.Command {
@@ -96,6 +93,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	log.Flags().IntVar(&opts.limit, "limit", 0, "only the latest N messages (with --lean, after this Node's Recap)")
 	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
 	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it, as its agents read them")
+	log.Flags().BoolVar(&opts.chat, "chat", false, "the talk as chat: \"<display name>: <text>\" with its newlines, every message this Node holds from the first, a blank line between")
 	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	var baseSeq uint64
@@ -731,12 +729,13 @@ type messageLine struct {
 	Depth       *uint32 `json:"depth,omitempty"`
 	Text        string  `json:"text"`
 	ContentType string  `json:"content_type"`
-	Pruned      bool    `json:"pruned,omitempty"` // no text: only the row's metadata remains
-	Queued      bool    `json:"queued,omitempty"` // in this Node's Outbox, not on the log yet
+	Pruned      bool    `json:"pruned,omitempty"`     // no text: only the row's metadata remains
+	Unreadable  bool    `json:"unreadable,omitempty"` // its payload does not parse: no text
+	Queued      bool    `json:"queued,omitempty"`     // in this Node's Outbox, not on the log yet
 }
 
 // leanLine is one `conversation log --lean` entry: who said what, or this
-// Node's Recap with the seq it accounts up to.
+// Node's Recap with the seq it accounts up to; and one `--chat` entry.
 type leanLine struct {
 	SenderDisplayName string `json:"sender_display_name,omitempty"` // talk only
 	Handle            string `json:"handle,omitempty"`              // an agent's only
@@ -746,33 +745,21 @@ type leanLine struct {
 
 // logOptions are `conversation log`'s reader flags.
 type logOptions struct {
-	limit      int
-	full, lean bool
-}
-
-func newMessageLine(rec *group.Record, r cosl.Row) messageLine {
-	return messageLine{
-		Seq:               r.Seq,
-		Term:              r.Term,
-		CreatedAt:         rfc3339(r.CreatedAt),
-		Sender:            r.Sender.String(),
-		SenderDisplayName: rosterName(rec.Roster(), r.Sender),
-		MsgID:             hex.EncodeToString(r.MsgID[:]),
-		MsgType:           cosl.TypeName(r.MsgType),
-		Queued:            r.Queued(),
-	}
+	limit            int
+	full, lean, chat bool
 }
 
 // runConversationLog prints this Node's view of the Conversation's talk
 // (ADR 0025), unfolded (ADR 0024): every message this replica holds that is
 // not pruned, and under --full the pruned ones too as placeholders, then
-// those queued in its Outbox. --lean is what this Node's agents read.
+// those queued in its Outbox. --lean is what this Node's agents read, and
+// --chat the talk as chat.
 func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if opts.limit < 0 {
 		return exitUsagef("--limit must be >= 0")
 	}
-	if opts.full && opts.lean {
-		return exitUsagef("--full and --lean are opposite views; pass one")
+	if countTrue(opts.full, opts.lean, opts.chat) > 1 {
+		return exitUsagef("--full, --lean and --chat are different views; pass one")
 	}
 	alias, rec, err := loadGroup(g)
 	if err != nil {
@@ -787,37 +774,25 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if err != nil {
 		return err
 	}
-	// The Outbox before the replica: a message the serve drains between the
-	// two reads is in both, and shows once, as committed.
-	queued, err := outbox.Read(g.paths().OutboxFile(alias))
+	roster := rec.Roster()
+	v, err := talk.Reader{Paths: g.paths(), Alias: alias, Store: store, Mine: talk.File(g.paths().OutboxFile(alias)), Roster: &roster}.Read(conv)
 	if err != nil {
 		return exitOperational(err)
 	}
-	rows, err := store.Log(cosl.Query{GroupLevel: conv == nil, ConversationID: conv, MsgTypes: []uint32{cosl.TypeAppFreeform}})
-	if err != nil {
-		return exitOperational(err)
+	switch {
+	case opts.lean:
+		return emitLean(g, v.Lean(), opts.limit)
+	case opts.chat:
+		return emitChat(g, v.Chat().Last(opts.limit))
 	}
-	mine := make([]outbox.Entry, len(queued))
-	for i, q := range queued {
-		mine[i] = outbox.Entry{Signed: q}
-	}
-	if rows, err = outbox.View(rows, mine, conv); err != nil {
-		return exitOperational(err)
-	}
-	if opts.lean {
-		return emitLean(g, rec, conv, rows, opts.limit)
-	}
+	msgs := v.Messages
 	if !opts.full {
-		rows = slices.DeleteFunc(rows, cosl.Row.Pruned)
+		msgs = slices.DeleteFunc(slices.Clone(msgs), func(m talk.Message) bool { return m.Pruned })
 	}
-	rows = latest(rows, opts.limit)
-	lines := make([]messageLine, 0, len(rows))
-	for _, r := range rows {
-		l, err := newTalkLine(rec, r)
-		if err != nil {
-			return exitOperational(err)
-		}
-		lines = append(lines, l)
+	msgs = msgs.Last(opts.limit)
+	lines := make([]messageLine, len(msgs))
+	for i, m := range msgs {
+		lines[i] = newTalkLine(m)
 	}
 	if g.json {
 		return emitJSONL(g, lines)
@@ -825,8 +800,11 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	p := g.out()
 	for _, l := range lines {
 		text := cosl.EscapeNewlines(l.Text)
-		if l.Pruned {
+		switch {
+		case l.Pruned:
 			text = p.dim("[pruned]")
+		case l.Unreadable:
+			text = p.dim("[unreadable]")
 		}
 		who := p.primary(l.SenderDisplayName)
 		if l.Handle != nil {
@@ -839,6 +817,17 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 		fmt.Fprintf(g.app.Stdout, "%s %s %s  %s\n", at, p.dim(l.CreatedAt), who, text)
 	}
 	return nil
+}
+
+// countTrue is how many of bs are true.
+func countTrue(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
 }
 
 // handleLabel is how a message's Handle shows: @handle for an agent's, user
@@ -858,26 +847,27 @@ func latest[T any](xs []T, n int) []T {
 	return xs
 }
 
-// newTalkLine is an app.freeform row as a log row, or a pruned one's
-// metadata.
-func newTalkLine(rec *group.Record, r cosl.Row) (messageLine, error) {
-	l := newMessageLine(rec, r)
-	if r.Pruned() {
-		l.Pruned = true
-		return l, nil
+// newTalkLine is a message as a log row: a pruned or unreadable one's
+// metadata only.
+func newTalkLine(m talk.Message) messageLine {
+	r := m.Row
+	l := messageLine{
+		Seq:               r.Seq,
+		Term:              r.Term,
+		CreatedAt:         rfc3339(r.CreatedAt),
+		Sender:            r.Sender.String(),
+		SenderDisplayName: messageSender(m),
+		MsgID:             hex.EncodeToString(r.MsgID[:]),
+		MsgType:           cosl.TypeName(r.MsgType),
+		Pruned:            m.Pruned,
+		Unreadable:        m.Unreadable,
+		Queued:            r.Queued(),
 	}
-	env, err := r.Decode()
-	if err != nil {
-		return messageLine{}, err
+	if !m.Pruned && !m.Unreadable {
+		l.Text, l.ContentType = m.Text, m.ContentType
+		l.Handle, l.Depth = &m.Handle, &m.Depth
 	}
-	msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
-	if err != nil {
-		return messageLine{}, fmt.Errorf("cosl: msg_id %x: %w", r.MsgID, err)
-	}
-	ff := msg.(*coslv1.AppFreeform)
-	l.Text, l.ContentType = ff.Text, ff.ContentType
-	l.Handle, l.Depth = &ff.Handle, &ff.Depth
-	return l, nil
+	return l
 }
 
 // emitLean prints the Conversation as this Node's agents read it: its
@@ -886,33 +876,46 @@ func newTalkLine(rec *group.Record, r cosl.Row) (messageLine, error) {
 // or `<display name>/@handle: <text>` for an agent's, one entry per line
 // and nothing else: timestamps are advisory and never ordering, while who
 // said what is load-bearing in a multi-party Conversation.
-func emitLean(g *globals, rec *group.Record, conv []byte, rows []cosl.Row, limit int) error {
-	r, err := readRecap(g, conv)
-	if err != nil {
-		return err
+func emitLean(g *globals, v talk.Lean, limit int) error {
+	msgs := v.Messages.Last(limit)
+	lean := make([]leanLine, 0, len(msgs)+1)
+	if v.Recap != nil {
+		lean = append(lean, leanLine{BaseSeq: v.Recap.BaseSeq, Text: v.Recap.Text})
 	}
-	v, err := recap.Lean(r, rows)
-	if err != nil {
-		return exitOperational(err)
-	}
-	talk := latest(v.Talk, limit)
-	lean := make([]leanLine, 0, len(talk)+1)
-	if r != nil {
-		lean = append(lean, leanLine{BaseSeq: r.BaseSeq, Text: r.Text})
-	}
-	for _, s := range talk {
-		lean = append(lean, leanLine{SenderDisplayName: rosterName(rec.Roster(), s.Row.Sender), Handle: s.Handle, Text: s.Text})
+	for _, m := range msgs {
+		lean = append(lean, leanLine{SenderDisplayName: messageSender(m), Handle: m.Handle, Text: m.Text})
 	}
 	if g.json {
 		return emitJSONL(g, lean)
 	}
 	p := g.out()
 	for _, l := range lean {
-		who := p.primary(recap.Speaker(l.SenderDisplayName, l.Handle) + ":")
+		who := p.primary(talk.Speaker(l.SenderDisplayName, l.Handle) + ":")
 		if l.BaseSeq != 0 {
 			who = p.dim(fmt.Sprintf("[recap to seq %d]", l.BaseSeq))
 		}
 		fmt.Fprintf(g.app.Stdout, "%s %s\n", who, cosl.EscapeNewlines(l.Text))
+	}
+	return nil
+}
+
+// emitChat prints the talk as chat: each message as `<speaker>: <text>`,
+// its newlines kept, a blank line between messages; with --json, one line
+// per message.
+func emitChat(g *globals, msgs talk.Messages) error {
+	chat := make([]leanLine, len(msgs))
+	for i, m := range msgs {
+		chat[i] = leanLine{SenderDisplayName: messageSender(m), Handle: m.Handle, Text: m.Text}
+	}
+	if g.json {
+		return emitJSONL(g, chat)
+	}
+	p := g.out()
+	for i, l := range chat {
+		if i > 0 {
+			fmt.Fprintln(g.app.Stdout)
+		}
+		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(talk.Speaker(l.SenderDisplayName, l.Handle)+":"), l.Text)
 	}
 	return nil
 }
@@ -941,12 +944,12 @@ func conversationID(store *cosl.Store, query string) ([]byte, error) {
 	return append([]byte(nil), id[:]...), nil
 }
 
-// rosterName is the display name the Roster pins for a sender; the FSM
+// messageSender is the display name the Roster pins for m's sender; the FSM
 // only admits Roster Nodes, so the fallback is for a replica older than
 // its Roster.
-func rosterName(roster group.Roster, sender identity.ID) string {
-	if n, ok := roster.Lookup(sender); ok {
-		return n.DisplayName
+func messageSender(m talk.Message) string {
+	if m.Sender != "" {
+		return m.Sender
 	}
-	return sender.String()[:8]
+	return m.Row.Sender.String()[:8]
 }
