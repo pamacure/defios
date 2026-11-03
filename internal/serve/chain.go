@@ -28,6 +28,7 @@ import (
 	"defios.com/internal/recap"
 	"defios.com/internal/secret"
 	"defios.com/internal/talk"
+	"defios.com/internal/transcript"
 )
 
 // Chain events on GET /v1/conversation/stream, one JSON object per line
@@ -139,10 +140,10 @@ type chain struct {
 	// step counts the chain's runs, depth-first; tr is its Transcript.
 	// Only the chain's worker touches them.
 	step int
-	tr   *transcript
+	tr   *transcript.Writer
 	// prior is each step's latest attempt on a retry, from the Transcript;
 	// nil on a first run (ADR 0018).
-	prior map[int]priorRun
+	prior transcript.Prior
 	// dry walks the chain as a retry would without running or reusing
 	// anything for real: see runAgents.
 	dry bool
@@ -248,7 +249,7 @@ func (h *chainHub) cancel(conv []byte, prefix string) (string, error) {
 	id := ids[0]
 	if prefix != "" {
 		var err error
-		id, err = matchChain(prefix, ids)
+		id, err = MatchChain(prefix, ids)
 		if errors.Is(err, ErrNotAChain) {
 			return "", nil
 		}
@@ -398,8 +399,8 @@ func (s *server) runChain(c *chain) {
 		s.chains.publish(c.conv, ev)
 	}
 	if c.ctx.Err() == nil {
-		c.tr = &transcript{path: s.transcriptPath(c.conv, c.id), logf: s.opts.Logf}
-		defer c.tr.close()
+		c.tr = transcript.NewWriter(s.opts.Paths, s.opts.Alias, c.conv, c.id, s.opts.Logf)
+		defer c.tr.Close()
 		publish(ChainEvent{Type: EventChainStart})
 		s.runAgents(c, mentioned(c.handles), 1, publish)
 	}
@@ -442,7 +443,7 @@ func (s *server) runAgents(c *chain, sums []summons, depth uint32, publish func(
 		var said string
 		var inc config.Included
 		switch p, ok := c.prior[c.step]; {
-		case ok && p.handle == h && p.finished():
+		case ok && p.Handle == h && p.Finished():
 			text, in, goOn := s.reuse(c, h, p, publish)
 			if !goOn {
 				return false
@@ -501,12 +502,12 @@ func (s *server) wouldRun(conv []byte, handle string) bool {
 // stayed silent: it is not run again. It returns what it said, "" if it was
 // silent or its message is gone, so the summons in it run as on its first
 // run, with what is included now; and it reports whether the chain goes on.
-func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEvent)) (said string, inc config.Included, goOn bool) {
-	if p.outcome == OutcomeSilent {
+func (s *server) reuse(c *chain, handle string, p transcript.PriorRun, publish func(ChainEvent)) (said string, inc config.Included, goOn bool) {
+	if p.Outcome == OutcomeSilent {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", handle, c.step)})
 		return "", inc, true
 	}
-	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", handle, p.msgID, c.step)})
+	publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", handle, p.MsgID, c.step)})
 	fail := func(err error) (string, config.Included, bool) {
 		s.opts.Logf("serve: retrying chain %s after @%s: %v", c.id, handle, err)
 		publish(ChainEvent{Type: EventAgentError, Handle: handle, Error: err.Error()})
@@ -516,13 +517,13 @@ func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEv
 	if !ok {
 		return fail(ErrNoReplica)
 	}
-	m, ok, err := s.saidIn(ob, store, c.conv, p.msgID)
+	m, ok, err := s.saidIn(ob, store, c.conv, p.MsgID)
 	if err != nil {
 		return fail(err)
 	}
 	if !ok {
 		if !c.dry {
-			s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, handle, p.msgID)
+			s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, handle, p.MsgID)
 		}
 		return "", inc, true
 	}
@@ -576,11 +577,11 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 	}
 	attempt := 1
 	if p, ok := c.prior[c.step]; ok {
-		attempt = p.attempt + 1 // a retry of this step
+		attempt = p.Attempt + 1 // a retry of this step
 	}
 	line := func(l TranscriptLine) {
 		l.Step, l.Handle, l.Depth, l.Attempt = c.step, handle, depth, attempt
-		c.tr.write(l)
+		c.tr.Write(l)
 	}
 	var said SendView
 	defer func() {
