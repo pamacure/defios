@@ -493,7 +493,11 @@ func (s *server) wouldRun(conv []byte, handle string) bool {
 	if !ok {
 		return true // the retry itself finds out
 	}
-	_, _, inc, err := s.included(store, conv)
+	e, err := s.load(store, conv)
+	if err != nil {
+		return true
+	}
+	inc, err := e.Included()
 	return err != nil || includes(inc, handle)
 }
 
@@ -526,7 +530,11 @@ func (s *server) reuse(c *chain, handle string, p priorRun, publish func(ChainEv
 		}
 		return "", inc, true
 	}
-	if _, _, inc, err = s.included(store, c.conv); err != nil {
+	e, err := s.load(store, c.conv)
+	if err != nil {
+		return fail(err)
+	}
+	if inc, err = e.Included(); err != nil {
 		return fail(err)
 	}
 	return ff.Text, inc, true
@@ -638,7 +646,12 @@ func (s *server) runAgent(c *chain, handle string, depth uint32, publish func(Ch
 // Handle (ADR 0018), sent with this Node's key to the Provider as this
 // Node's merged Workspace configures it, and nowhere else (ADR 0022).
 func (s *server) agentRequest(ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32) (agent.Request, config.Included, error) {
-	_, ws, inc, err := s.included(store, conv)
+	e, err := s.load(store, conv)
+	if err != nil {
+		return agent.Request{}, config.Included{}, err
+	}
+	ws := e.Workspace
+	inc, err := e.Included()
 	if err != nil {
 		return agent.Request{}, inc, err
 	}

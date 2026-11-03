@@ -188,11 +188,11 @@ type networkView struct {
 // the Conversation of the Key keyQuery names merged over it when one is
 // named. A Group with no config.toml has none.
 func readNetworks(g *globals, keyQuery string) ([]networkView, error) {
-	ws, err := readWorkspace(g, keyQuery)
+	e, err := load(g, keyQuery)
 	if err != nil {
 		return nil, err
 	}
-	nets, err := network.List(ws.Networks)
+	nets, err := e.Networks()
 	if err != nil {
 		return nil, exitOperational(err)
 	}

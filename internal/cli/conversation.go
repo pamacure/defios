@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -677,14 +676,11 @@ func prunePolicy(g *globals) (config.Age, error) {
 	if err != nil {
 		return 0, err
 	}
-	cfg, err := config.ReadFile(g.paths().GroupConfigFile(alias))
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
-	}
+	e, err := config.Load(g.paths(), alias, nil, nil)
 	if err != nil {
 		return 0, exitOperational(err)
 	}
-	return cfg.Prune, nil
+	return e.Group.Prune, nil
 }
 
 // queuedNote says what a queued write means.

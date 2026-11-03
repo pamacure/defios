@@ -326,21 +326,14 @@ func runAgentInclusion(g *globals, keyQuery, handle string, include bool) error 
 // returns the list. A Conversation with no list follows the Group's: an
 // include gives it its own, and warns so; an exclude is refused.
 func editConversationList(g *globals, keyQuery, handle string, include bool, edit func([]string) []string) ([]string, error) {
-	alias, err := g.resolveAlias()
+	e, err := load(g, keyQuery)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := readConfig(g, "")
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := cfg.Agents[handle]; !ok {
+	if _, ok := e.Group.Agents[handle]; !ok {
 		return nil, exitUsagef("%w", noProfile(handle))
 	}
-	path, err := conversationConfigFile(g, alias, keyQuery)
-	if err != nil {
-		return nil, err
-	}
+	path := e.ConversationFile()
 	w, err := config.ReadWorkspace(path)
 	if err != nil {
 		return nil, exitOperational(err)
@@ -402,14 +395,14 @@ func removeAgent(g *globals, handle string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := readConfig(g, "")
+	e, err := load(g, "")
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := cfg.Agents[handle]; !ok {
+	if _, ok := e.Group.Agents[handle]; !ok {
 		return nil, exitUsagef("%w", noProfile(handle))
 	}
-	convs, err := filepath.Glob(filepath.Join(g.paths().GroupConfigDir(alias), "*", "config.toml"))
+	convs, err := config.ConversationFiles(g.paths(), alias)
 	if err != nil {
 		return nil, exitOperational(err)
 	}
@@ -482,18 +475,18 @@ func agentRemoved(g *globals, handle string, changed []string, deleted string) e
 }
 
 func runAgentList(g *globals, keyQuery string) error {
-	cfg, err := readConfig(g, keyQuery)
+	e, err := load(g, keyQuery)
 	if err != nil {
 		return err
 	}
-	handles := make([]string, 0, len(cfg.Agents))
-	for h := range cfg.Agents {
+	handles := make([]string, 0, len(e.Group.Agents))
+	for h := range e.Group.Agents {
 		handles = append(handles, h)
 	}
 	sort.Strings(handles)
 	views := make([]agentView, len(handles))
 	for i, h := range handles {
-		views[i] = agentViewOf(g, h, cfg.Agents[h], contains(cfg.Agent.Profiles, h))
+		views[i] = agentViewOf(g, h, e.Group.Agents[h], contains(e.Workspace.Agent.Profiles, h))
 	}
 	if g.json {
 		return g.emitJSON(views)
@@ -514,15 +507,15 @@ func runAgentList(g *globals, keyQuery string) error {
 }
 
 func runAgentShow(g *globals, keyQuery, handle string) error {
-	cfg, err := readConfig(g, keyQuery)
+	e, err := load(g, keyQuery)
 	if err != nil {
 		return err
 	}
-	p, ok := cfg.Agents[handle]
+	p, ok := e.Group.Agents[handle]
 	if !ok {
 		return exitUsagef("%w", noProfile(handle))
 	}
-	v := agentViewOf(g, handle, p, contains(cfg.Agent.Profiles, handle))
+	v := agentViewOf(g, handle, p, contains(e.Workspace.Agent.Profiles, handle))
 	if g.json {
 		return g.emitJSON(v)
 	}

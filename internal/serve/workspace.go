@@ -12,46 +12,19 @@ import (
 	"defios.com/internal/key"
 )
 
-// readConfig is this Node's Group config.toml, the defaults when there is
-// none, and the Workspace of the Conversation, empty for Group-level talk
-// (a nil conversation) or a Key with no Workspace config.toml. Both are read
-// at each use, so an edit needs no restart. A Conversation's that, merged
-// over the Group's, names one chain twice is refused here (ADR 0023).
-func (s *server) readConfig(store *cosl.Store, conversation []byte) (config.Config, config.Workspace, error) {
-	cfg, conv, _, err := s.readConfigFrom(store, conversation)
-	return cfg, conv, err
-}
-
-// readConfigFrom is readConfig, and the path of the Conversation's
-// config.toml, empty for Group-level talk or a Key with no Workspace.
-func (s *server) readConfigFrom(store *cosl.Store, conversation []byte) (config.Config, config.Workspace, string, error) {
-	p, alias := s.opts.Paths, s.opts.Alias
-	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config.Config{}, config.Workspace{}, "", err
+// load is the settings in force where conversation's talk is sent,
+// Group-level talk for a nil conversation, read at each use so an edit
+// needs no restart. The Keys, which name the Conversation's Workspace, are
+// read only for a Conversation.
+func (s *server) load(store *cosl.Store, conversation []byte) (config.Effective, error) {
+	var keys []key.Key
+	if len(conversation) > 0 {
+		var err error
+		if keys, err = key.Read(store); err != nil {
+			return config.Effective{}, err
+		}
 	}
-	var id [32]byte
-	if len(conversation) != len(id) {
-		return cfg, config.Workspace{}, "", nil
-	}
-	keys, err := key.Read(store)
-	if err != nil {
-		return config.Config{}, config.Workspace{}, "", err
-	}
-	copy(id[:], conversation)
-	name, ok := key.WorkspaceNames(keys)[id]
-	if !ok {
-		return cfg, config.Workspace{}, "", nil
-	}
-	path := p.ConversationConfigFile(alias, name)
-	conv, err := config.ReadWorkspace(path)
-	if err != nil {
-		return config.Config{}, config.Workspace{}, "", err
-	}
-	if _, err := cfg.Workspace.Merge(conv); err != nil {
-		return config.Config{}, config.Workspace{}, "", fmt.Errorf("config: %s over %s: %w", path, p.GroupConfigFile(alias), err)
-	}
-	return cfg, conv, path, nil
+	return config.Load(s.opts.Paths, s.opts.Alias, conversation, keys)
 }
 
 // watchWorkspaces gives every minted Key's Conversation a Workspace in

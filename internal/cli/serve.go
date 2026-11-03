@@ -40,10 +40,11 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.ReadFile(p.GroupConfigFile(alias))
+	e, err := config.Load(p, alias, nil, nil)
 	if err != nil {
 		return exitOperational(err)
 	}
+	cfg := e.Group
 	if cfg.HeadscaleURL == "" {
 		return exitOperationalf("headscale_url is not set in %s", p.GroupConfigFile(alias))
 	}

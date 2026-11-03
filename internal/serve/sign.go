@@ -9,7 +9,6 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
-	"defios.com/internal/network"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 )
@@ -44,7 +43,11 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 		return SendView{}, err
 	}
 	conv := key.ConversationID(k.Curve, k.PublicKey)
-	nets, err := s.localNetworks(store, conv[:])
+	e, err := s.load(store, conv[:])
+	if err != nil {
+		return SendView{}, err
+	}
+	nets, err := e.Networks()
 	if err != nil {
 		return SendView{}, err
 	}
@@ -98,22 +101,6 @@ func signInfoFrom(store *cosl.Store) func([32]byte) (session.SignInfo, error) {
 	}
 }
 
-// localNetworks are this Node's Networks for a Key's Sign Requests: the
-// Group config.toml's [networks] with the Key's Conversation Workspace
-// merged over it, table by table (ADR 0023). They are the chains this Node
-// signs for.
-func (s *server) localNetworks(store *cosl.Store, conversation []byte) ([]network.Network, error) {
-	cfg, conv, err := s.readConfig(store, conversation)
-	if err != nil {
-		return nil, err
-	}
-	ws, err := cfg.Workspace.Merge(conv)
-	if err != nil {
-		return nil, err
-	}
-	return network.List(ws.Networks)
-}
-
 // acceptSign is this Node's accept of a Sign Request, which it gives only
 // when it has a Network for every chain the request names: a Node's
 // Networks are the chains it is willing to sign for.
@@ -130,7 +117,11 @@ func (s *server) acceptSign(svc *session.Service, ctx context.Context, id [32]by
 	if err != nil {
 		return err
 	}
-	nets, err := s.localNetworks(store, conv)
+	e, err := s.load(store, conv)
+	if err != nil {
+		return err
+	}
+	nets, err := e.Networks()
 	if err != nil {
 		return err
 	}

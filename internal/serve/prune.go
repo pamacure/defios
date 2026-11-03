@@ -103,13 +103,12 @@ func (p *prunePolicy) reread() {
 		return
 	}
 	p.mtime = mtime
-	var cfg config.Config
-	if !mtime.IsZero() {
-		if cfg, err = config.ReadFile(path); err != nil {
-			p.configErrs.Report(err)
-			return
-		}
+	e, err := config.Load(p.s.opts.Paths, p.s.opts.Alias, nil, nil)
+	if err != nil {
+		p.configErrs.Report(err)
+		return
 	}
+	cfg := e.Group
 	p.configErrs.Report(nil)
 	if cfg.Prune == p.age {
 		return

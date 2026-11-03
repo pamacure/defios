@@ -81,11 +81,11 @@ func runNodeInspect(g *globals) error {
 		if current, err := readCurrentGroup(p); err == nil && contains(aliases, current) {
 			alias = current
 		}
-		cfg, err := config.ReadFile(p.GroupConfigFile(alias))
+		e, err := config.Load(p, alias, nil, nil)
 		if err != nil {
 			return exitOperational(err)
 		}
-		displayName, hostname = cfg.DisplayName, cfg.Hostname
+		displayName, hostname = e.Group.DisplayName, e.Group.Hostname
 	}
 	v := nodeView{
 		NodeID:              pub.NodeID.String(),
