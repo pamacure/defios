@@ -147,6 +147,8 @@ func TestProviderAddAndEditSetTheKeyAndBody(t *testing.T) {
 	for _, args := range [][]string{
 		{"add", "y", "--preset", "anthropic", "--api-key", "sk-ant-literal"},
 		{"add", "y", "--preset", "anthropic", "--body", `["stream"]`},
+		{"add", "y", "--preset", "anthropic", "--body", `{"": 1}`},
+		{"edit", "x", "--body", `{"": 1}`},
 		{"edit", "x", "--api-key", "sk-ant-literal"},
 		{"edit", "x", "--api-key", "$lower"},
 		{"edit", "x", "--body", "@/no/such/file"},

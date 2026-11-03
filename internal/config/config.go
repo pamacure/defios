@@ -134,23 +134,46 @@ func WriteWorkspace(path string, w Workspace) error {
 // agentHeader is the [agent] table's header as the encoder writes it.
 var agentHeader = regexp.MustCompile(`(?m)^\[agent\]\n`)
 
-// write encodes v, whose [agent] table is a, to path.
+// ErrNotWritten is a write refused because ReadFile or ReadWorkspace would
+// refuse what it writes: a config that does not read back stops every
+// command and summon that reads it until it is fixed by hand.
+var ErrNotWritten = errors.New("not written")
+
+// write encodes v, whose [agent] table is a, to path, once it reads back.
 func write(path string, v any, a Agent) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(v); err != nil {
-		return fmt.Errorf("config: %w", err)
+		return fmt.Errorf("config: %w; %w", err, ErrNotWritten)
 	}
 	out := buf.Bytes()
 	if a.Profiles != nil && len(a.Profiles) == 0 {
 		out = agentHeader.ReplaceAll(out, []byte("[agent]\nprofiles = []\n"))
+	}
+	var err error
+	if _, ok := v.(Config); ok {
+		_, err = parseConfig(path, out)
+	} else {
+		_, err = parseWorkspace(path, out)
+	}
+	if err != nil {
+		return fmt.Errorf("%w; %w", err, ErrNotWritten)
 	}
 	return os.WriteFile(path, out, 0o600)
 }
 
 // ReadFile parses and validates a Group's config.toml.
 func ReadFile(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
+	return parseConfig(path, data)
+}
+
+// parseConfig is ReadFile of data, the contents of path.
+func parseConfig(path string, data []byte) (Config, error) {
 	var c Config
-	md, err := decode(path, &c)
+	md, err := decode(path, data, &c)
 	if err != nil {
 		return Config{}, err
 	}
@@ -171,11 +194,20 @@ func ReadFile(path string) (Config, error) {
 // ReadWorkspace parses and validates a Conversation's config.toml, which may
 // hold only the Workspace sections. A missing file is an empty Workspace.
 func ReadWorkspace(path string) (Workspace, error) {
-	var w Workspace
-	md, err := decode(path, &w)
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Workspace{}, nil
 	} else if err != nil {
+		return Workspace{}, fmt.Errorf("config: %w", err)
+	}
+	return parseWorkspace(path, data)
+}
+
+// parseWorkspace is ReadWorkspace of data, the contents of path.
+func parseWorkspace(path string, data []byte) (Workspace, error) {
+	var w Workspace
+	md, err := decode(path, data, &w)
+	if err != nil {
 		return Workspace{}, err
 	}
 	if err := w.validate(md, false); err != nil {
@@ -186,8 +218,8 @@ func ReadWorkspace(path string) (Workspace, error) {
 
 // decode refuses any key that into does not define, so a misplaced or misspelt
 // secret is an error rather than ignored.
-func decode(path string, into any) (toml.MetaData, error) {
-	md, err := toml.DecodeFile(path, into)
+func decode(path string, data []byte, into any) (toml.MetaData, error) {
+	md, err := toml.Decode(string(data), into)
 	if err != nil {
 		return md, fmt.Errorf("config: %w", err)
 	}
@@ -228,6 +260,9 @@ func (w Workspace) validate(md toml.MetaData, complete bool) error {
 			if _, err := secret.ParseRef(p.APIKey); err != nil {
 				return fmt.Errorf("[providers.%s] api_key: %w", alias, err)
 			}
+		}
+		if _, ok := p.Body[""]; ok {
+			return fmt.Errorf("[providers.%s] body: a key may not be empty", alias)
 		}
 		if t := md.Type("providers", alias, "body"); t != "" && t != "Hash" {
 			return fmt.Errorf("[providers.%s] body must be a table", alias)
@@ -273,6 +308,9 @@ func (c Config) validateAgents(md toml.MetaData) error {
 		}
 		if md.IsDefined("agents", h, "max_turns") && p.MaxTurns < 1 {
 			return fmt.Errorf("[agents.%s] max_turns %d must be a positive integer", h, p.MaxTurns)
+		}
+		if _, ok := p.Body[""]; ok {
+			return fmt.Errorf("[agents.%s] body: a key may not be empty", h)
 		}
 		if t := md.Type("agents", h, "body"); t != "" && t != "Hash" {
 			return fmt.Errorf("[agents.%s] body must be a table", h)

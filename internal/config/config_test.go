@@ -435,6 +435,8 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 		"time in an array":           "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nat = [07:32:00]",
 		"nan in body":                "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\ntemperature = nan",
 		"provider body not a table":  "[providers.claude]\n" + endpoint + "body = \"x\"",
+		"empty key in body":          "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\n\"\" = 1",
+		"empty key in provider body": "[providers.claude]\n" + endpoint + "[providers.claude.body]\n\"\" = 1",
 		"date-time in provider body": "[providers.claude]\n" + endpoint + "[providers.claude.body]\nsince = 2026-01-01T00:00:00Z",
 		"unknown provider key":       "[providers.claude]\n" + endpoint + "model = \"claude-opus-5-5\"",
 	} {
@@ -635,6 +637,39 @@ func TestWriteFileKeepsAnEmptyProfilesList(t *testing.T) {
 	got, err := config.ReadFile(path)
 	if err != nil || !reflect.DeepEqual(got, c) {
 		t.Fatalf("read back %#v, %v\nwant %#v", got, err, c)
+	}
+}
+
+// A write that ReadFile or ReadWorkspace would refuse is refused with
+// ErrNotWritten and leaves the file as it was: a config that does not read
+// back stops every command and summon that reads it.
+func TestAWriteThatWouldNotReadBackIsRefused(t *testing.T) {
+	claude := map[string]config.Provider{"claude": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	good := config.Config{DisplayName: "alice", Workspace: config.Workspace{Providers: claude}}
+	if err := config.WriteFile(path, good); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]config.Config{
+		"empty key in a body": {Workspace: config.Workspace{Providers: map[string]config.Provider{
+			"claude": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", Body: map[string]any{"": int64(1)}}}}},
+		"undefined handle":      {Workspace: config.Workspace{Providers: claude, Agent: config.Agent{Profiles: []string{"ghost"}}}},
+		"incomplete provider":   {Workspace: config.Workspace{Providers: map[string]config.Provider{"claude": {BaseURL: "https://api.anthropic.com"}}}},
+		"nil in a body's array": {Agents: map[string]config.Profile{"auditor": {Provider: "claude", Body: map[string]any{"stop": []any{nil}}}}},
+	} {
+		if err := config.WriteFile(path, c); !errors.Is(err, config.ErrNotWritten) {
+			t.Errorf("%s: WriteFile = %v; want ErrNotWritten", name, err)
+		}
+	}
+	if got, err := config.ReadFile(path); err != nil || !reflect.DeepEqual(got, good) {
+		t.Fatalf("refused writes changed the file: %#v, %v", got, err)
+	}
+	conv := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.WriteWorkspace(conv, config.Workspace{Agent: config.Agent{Profiles: []string{"Bad"}}}); !errors.Is(err, config.ErrNotWritten) {
+		t.Errorf("WriteWorkspace = %v; want ErrNotWritten", err)
+	}
+	if _, err := os.Stat(conv); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused WriteWorkspace wrote %s", conv)
 	}
 }
 

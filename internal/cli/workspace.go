@@ -67,7 +67,9 @@ func writeGroup(g *globals, change func(*config.Config) error) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", exitOperational(err)
 	}
-	if err := config.WriteFile(path, cfg); err != nil {
+	if err := config.WriteFile(path, cfg); errors.Is(err, config.ErrNotWritten) {
+		return "", exitUsagef("%w", err)
+	} else if err != nil {
 		return "", exitOperational(err)
 	}
 	return path, nil
