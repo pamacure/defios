@@ -2,7 +2,8 @@
 // Group-level talk (docs/adr/0024-a-recap-is-a-local-file.md,
 // docs/adr/0025-an-outbox-holds-what-a-node-writes-without-a-quorum.md):
 // its committed app.freeform rows, then the messages it wrote that its
-// replica does not hold yet, each decoded once, under this Node's Recap.
+// replica does not hold yet, each decoded once, under this Node's Recap;
+// and its chat expanded with the Transcripts of this Node's chains.
 // serve and every frontend read the talk through it; it returns plain
 // values, and formats nothing but the lean line agents read.
 package talk
