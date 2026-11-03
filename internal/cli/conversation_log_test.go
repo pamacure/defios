@@ -1,6 +1,8 @@
 package cli_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,6 +44,29 @@ func TestConversationLogMarksAnUnreadableMessage(t *testing.T) {
 		if r.code != 0 || !strings.HasPrefix(r.stdout, "alice: two") {
 			t.Errorf("%s: exit %d, %q%s", mode, r.code, r.stdout, r.stderr)
 		}
+	}
+}
+
+// A RECAP.md that does not parse fails --lean, which reads it, naming the
+// file; the log and --chat never read the Recap and show the talk.
+func TestConversationLogMalformedRecapFailsOnlyLean(t *testing.T) {
+	dir := t.TempDir()
+	groupWithTalk(t, dir)
+	path := recapFile(dir, nodedir.ConversationName(nil))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not a recap"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range [][]string{nil, {"--chat"}, {"--full"}} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "log"}, mode...)...)
+		if r.code != 0 || !strings.Contains(r.stdout, "two") {
+			t.Errorf("log %v: exit %d, %q%s", mode, r.code, r.stdout, r.stderr)
+		}
+	}
+	if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--lean"); r.code != 2 || !strings.Contains(r.stderr, path) {
+		t.Errorf("--lean: exit %d, stderr %q", r.code, r.stderr)
 	}
 }
 
@@ -100,6 +125,8 @@ func TestConversationLogChatTranscripts(t *testing.T) {
 	r = run(t, nil, "", "--dir", dir, "conversation", "log", "--chat", "--transcripts", "--limit", "2")
 	want := "alice: two\nlines\n\n" +
 		"  @auditor (thinking): check it\n" +
+		"  @auditor (tool): shout {}\n" +
+		"  @auditor (tool result): no such tool\n" +
 		"  @auditor (tool): say {\"text\":\"ok @scribe\"}\n" +
 		"  @auditor (text): done\n" +
 		"alice/@auditor: looks fine\n"
@@ -115,7 +142,8 @@ func TestConversationLogChatTranscripts(t *testing.T) {
 		t.Errorf("a person's line's blocks = %v", rows[0]["blocks"])
 	}
 	b, _ := rows[1]["blocks"].([]any)
-	if rows[1]["text"] != "looks fine" || len(b) != 3 || b[0].(map[string]any)["thinking"] != "check it" {
+	if rows[1]["text"] != "looks fine" || len(b) != 5 || b[0].(map[string]any)["thinking"] != "check it" ||
+		b[2].(map[string]any)["type"] != "tool_result" || b[2].(map[string]any)["content"] != "no such tool" {
 		t.Errorf("the agent's line = %v", rows[1])
 	}
 	if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--transcripts"); r.code != 1 {

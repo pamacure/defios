@@ -284,6 +284,64 @@ func checkSay(b Block) (text, refusal string) {
 // accepted say ends the run.
 type toolResult struct{ id, text string }
 
+// ToolResult is the answer a run gave one of its agent's tool calls, as a
+// block of the run's output: always an error, since an accepted say ends
+// the run.
+type ToolResult struct {
+	Type      string `json:"type"` // tool_result
+	ToolUseID string `json:"tool_use_id"`
+	Content   string `json:"content"`
+	IsError   bool   `json:"is_error"`
+}
+
+// ToolResults is the answers to tool calls that requests, a run's request
+// bodies in any shape, carried, by the ID of the call each answers. A body
+// that does not parse carries none.
+func ToolResults(requests []json.RawMessage) map[string]ToolResult {
+	type item struct {
+		Type       string          `json:"type"`
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolUseID  string          `json:"tool_use_id"`  // Messages
+		ToolCallID string          `json:"tool_call_id"` // Chat Completions
+		CallID     string          `json:"call_id"`      // Responses
+		Output     string          `json:"output"`
+	}
+	out := map[string]ToolResult{}
+	answer := func(id, text string) {
+		out[id] = ToolResult{Type: "tool_result", ToolUseID: id, Content: text, IsError: true}
+	}
+	for _, body := range requests {
+		var b struct{ Messages, Input []item }
+		if json.Unmarshal(body, &b) != nil {
+			continue
+		}
+		for _, it := range append(b.Messages, b.Input...) {
+			switch {
+			case it.Type == "function_call_output":
+				answer(it.CallID, it.Output)
+			case it.Role == "tool":
+				var text string
+				json.Unmarshal(it.Content, &text)
+				answer(it.ToolCallID, text)
+			case it.Role == "user":
+				var parts []item
+				if json.Unmarshal(it.Content, &parts) != nil {
+					continue // plain text
+				}
+				for _, p := range parts {
+					if p.Type == "tool_result" {
+						var text string
+						json.Unmarshal(p.Content, &text)
+						answer(p.ToolUseID, text)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
 // conversation is a run's request so far, in its provider's shape. Each
 // call's content begins with the content of the one before it, unchanged,
 // so a provider can read that prefix from cache (ADR 0018). The bodies are

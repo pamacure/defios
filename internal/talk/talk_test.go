@@ -2,6 +2,7 @@ package talk_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -196,12 +197,22 @@ func TestAnUnreadablePayloadIsMarkedNotAnError(t *testing.T) {
 	if got := texts(v.Messages); got != "before#1 [unreadable]#2 after#3" {
 		t.Fatalf("view = %s", got)
 	}
-	if got := texts(v.Lean().Messages); got != "before#1 after#3" {
+	if got := texts(lean(t, v).Messages); got != "before#1 after#3" {
 		t.Errorf("lean = %s", got)
 	}
 	if got := texts(v.Chat()); got != "before#1 after#3" {
 		t.Errorf("chat = %s", got)
 	}
+}
+
+// lean is v's lean view, which must read.
+func lean(t *testing.T, v talk.View) talk.Lean {
+	t.Helper()
+	l, err := v.Lean()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
 }
 
 // writeRecap is this Node's RECAP.md of Group-level talk up to base.
@@ -227,7 +238,7 @@ func TestTheRecapCutsTheLeanView(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := f.writeRecap(3, "a to c")
-	l := f.read(nil).Lean()
+	l := lean(t, f.read(nil))
 	if l.Recap == nil || *l.Recap != *want || l.Missing || texts(l.Messages) != "d#4 e#5 queued#queued" {
 		t.Fatalf("lean = %+v: %s", l, texts(l.Messages))
 	}
@@ -243,16 +254,16 @@ func TestPrunedTalkNoRecapAccountsForIsMissing(t *testing.T) {
 	if _, err := f.store.Prune(nil, 3); err != nil {
 		t.Fatal(err)
 	}
-	l := f.read(nil).Lean()
+	l := lean(t, f.read(nil))
 	if !l.Missing || l.Recap != nil || texts(l.Messages) != "d#4" {
 		t.Errorf("no Recap: lean = %+v: %s", l, texts(l.Messages))
 	}
 	f.writeRecap(1, "a")
-	if l := f.read(nil).Lean(); !l.Missing || texts(l.Messages) != "d#4" {
+	if l := lean(t, f.read(nil)); !l.Missing || texts(l.Messages) != "d#4" {
 		t.Errorf("a Recap before it: lean = %+v: %s", l, texts(l.Messages))
 	}
 	f.writeRecap(3, "a to c")
-	if l := f.read(nil).Lean(); l.Missing || texts(l.Messages) != "d#4" {
+	if l := lean(t, f.read(nil)); l.Missing || texts(l.Messages) != "d#4" {
 		t.Errorf("a Recap over it: lean = %+v: %s", l, texts(l.Messages))
 	}
 }
@@ -277,7 +288,7 @@ func TestChatStartsAtTheFirstMessage(t *testing.T) {
 	if got := texts(v.Messages); got != "[pruned]#1 b#2 c#3 d#4 queued#queued" {
 		t.Errorf("messages = %s", got)
 	}
-	if got := texts(v.Last(2)); got != "d#4 queued#queued" {
+	if got := texts(v.Messages.Last(2)); got != "d#4 queued#queued" {
 		t.Errorf("last 2 = %s", got)
 	}
 }
@@ -315,5 +326,26 @@ func TestLeanLine(t *testing.T) {
 	}
 	if got := talk.LeanLine("alice", "auditor", "ok"); got != "alice/@auditor: ok" {
 		t.Errorf("agent: %q", got)
+	}
+}
+
+// A RECAP.md that does not parse fails only what reads the Recap, the lean
+// view, naming the file; the talk and the chat read as ever.
+func TestAMalformedRecapFailsOnlyTheLeanView(t *testing.T) {
+	f := newFixture(t)
+	f.say(f.alice, "a")
+	path := f.paths.RecapFile("home", nodedir.ConversationName(nil))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not a recap"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := f.read(nil)
+	if got := texts(v.Chat()); got != "a#1" {
+		t.Errorf("chat = %s", got)
+	}
+	if _, err := v.Lean(); err == nil || !strings.Contains(err.Error(), path) {
+		t.Errorf("lean: %v, want an error naming %s", err, path)
 	}
 }

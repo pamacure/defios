@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,7 +101,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
 	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it, as its agents read them")
 	log.Flags().BoolVar(&opts.chat, "chat", false, "the talk as chat: \"<display name>: <text>\" with its newlines, every message this Node holds from the first, a blank line between")
-	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each agent message this Node's chain said preceded by its Transcript blocks: thinking, text and tool calls")
+	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each agent message this Node's chain said preceded by its Transcript blocks: thinking, text, tool calls and their results")
 	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	var baseSeq uint64
@@ -792,15 +791,23 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	}
 	switch {
 	case opts.lean:
-		return emitLean(g, v.Lean(), opts.limit)
-	case opts.chat && opts.transcripts:
-		chat, err := reader.Expand(conv, v.Chat().Last(opts.limit))
+		l, err := v.Lean()
 		if err != nil {
 			return exitOperational(err)
 		}
-		return emitChatTranscripts(g, chat)
+		return emitLean(g, l, opts.limit)
 	case opts.chat:
-		return emitChat(g, v.Chat().Last(opts.limit))
+		msgs := v.Chat().Last(opts.limit)
+		chat := make([]talk.Expanded, len(msgs))
+		for i, m := range msgs {
+			chat[i].Message = m
+		}
+		if opts.transcripts {
+			if chat, err = reader.Expand(conv, msgs); err != nil {
+				return exitOperational(err)
+			}
+		}
+		return emitChat(g, chat, opts.transcripts)
 	}
 	msgs := v.Messages
 	if !opts.full {
@@ -874,13 +881,13 @@ func newTalkLine(m talk.Message) messageLine {
 		CreatedAt:         rfc3339(r.CreatedAt),
 		Sender:            r.Sender.String(),
 		SenderDisplayName: messageSender(m),
-		MsgID:             hex.EncodeToString(r.MsgID[:]),
+		MsgID:             m.MsgID(),
 		MsgType:           cosl.TypeName(r.MsgType),
 		Pruned:            m.Pruned,
 		Unreadable:        m.Unreadable,
 		Queued:            r.Queued(),
 	}
-	if !m.Pruned && !m.Unreadable {
+	if m.Readable() {
 		l.Text, l.ContentType = m.Text, m.ContentType
 		l.Handle, l.Depth = &m.Handle, &m.Depth
 	}
@@ -916,44 +923,25 @@ func emitLean(g *globals, v talk.Lean, limit int) error {
 	return nil
 }
 
+// chatLine is one --chat entry; with --transcripts, also the blocks of
+// the run that said it, none for the rest.
+type chatLine struct {
+	leanLine
+	Blocks *[]json.RawMessage `json:"blocks,omitempty"`
+}
+
 // emitChat prints the talk as chat: each message as `<speaker>: <text>`,
 // its newlines kept, a blank line between messages; with --json, one line
-// per message.
-func emitChat(g *globals, msgs talk.Messages) error {
-	chat := make([]leanLine, len(msgs))
+// per message. With transcripts, each agent message this Node's chain said
+// is preceded by its run's blocks as conversation transcript shows them,
+// indented apart from what was said, and each --json line has its blocks.
+func emitChat(g *globals, msgs []talk.Expanded, transcripts bool) error {
+	chat := make([]chatLine, len(msgs))
 	for i, m := range msgs {
-		chat[i] = leanLine{SenderDisplayName: messageSender(m), Handle: m.Handle, Text: m.Text}
-	}
-	if g.json {
-		return emitJSONL(g, chat)
-	}
-	p := g.out()
-	for i, l := range chat {
-		if i > 0 {
-			fmt.Fprintln(g.app.Stdout)
-		}
-		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(talk.Speaker(l.SenderDisplayName, l.Handle)+":"), l.Text)
-	}
-	return nil
-}
-
-// chatTranscriptLine is one `--chat --transcripts` entry: a `--chat`
-// entry and the blocks of the run that said it, none for the rest.
-type chatTranscriptLine struct {
-	leanLine
-	Blocks []json.RawMessage `json:"blocks"`
-}
-
-// emitChatTranscripts prints the talk as emitChat does, each agent message
-// this Node's chain said preceded by its run's blocks as conversation
-// transcript shows them, indented apart from what was said; with --json,
-// one line per message with its blocks.
-func emitChatTranscripts(g *globals, msgs []talk.Expanded) error {
-	chat := make([]chatTranscriptLine, len(msgs))
-	for i, m := range msgs {
-		chat[i] = chatTranscriptLine{
-			leanLine: leanLine{SenderDisplayName: messageSender(m.Message), Handle: m.Handle, Text: m.Text},
-			Blocks:   append([]json.RawMessage{}, m.Blocks...),
+		chat[i].leanLine = leanLine{SenderDisplayName: messageSender(m.Message), Handle: m.Handle, Text: m.Text}
+		if transcripts {
+			blocks := append([]json.RawMessage{}, m.Blocks...)
+			chat[i].Blocks = &blocks
 		}
 	}
 	if g.json {
@@ -964,7 +952,9 @@ func emitChatTranscripts(g *globals, msgs []talk.Expanded) error {
 		if i > 0 {
 			fmt.Fprintln(g.app.Stdout)
 		}
-		printBlocks(g, "  ", "@"+l.Handle, l.Blocks)
+		if l.Blocks != nil {
+			printBlocks(g, "  ", "@"+l.Handle, *l.Blocks)
+		}
 		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(talk.Speaker(l.SenderDisplayName, l.Handle)+":"), l.Text)
 	}
 	return nil

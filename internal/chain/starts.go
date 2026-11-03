@@ -1,8 +1,6 @@
 package chain
 
 import (
-	"encoding/hex"
-
 	"defios.com/internal/identity"
 	"defios.com/internal/mention"
 	"defios.com/internal/talk"
@@ -21,7 +19,7 @@ func Starts(messages []talk.Message, node identity.ID) []Start {
 	var out []Start
 	for _, m := range messages {
 		if handles := Summons(m, node); len(handles) > 0 {
-			out = append(out, Start{MsgID: hex.EncodeToString(m.Row.MsgID[:]), Handles: handles})
+			out = append(out, Start{MsgID: m.MsgID(), Handles: handles})
 		}
 	}
 	return out
@@ -32,7 +30,7 @@ func Starts(messages []talk.Message, node identity.ID) []Start {
 // An agent's message summons within its own chain, and another Node's
 // mentions are resolved on that Node (ADR 0015).
 func Summons(m talk.Message, node identity.ID) []string {
-	if m.Row.Sender != node || m.Pruned || m.Unreadable || m.Handle != "" {
+	if m.Row.Sender != node || !m.Readable() || m.Handle != "" {
 		return nil
 	}
 	return mention.Handles(m.Text)

@@ -309,6 +309,31 @@ func TestRetryRunsAStepAStopCameBefore(t *testing.T) {
 	}
 }
 
+// With a config that does not resolve, a retry cannot tell which steps
+// would run: it queues the failed chain anyway, and the chain reports why.
+func TestRetryQueuesAChainWhoseConfigDoesNotResolve(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor")
+	var fail atomic.Bool
+	fail.Store(true)
+	answerAs(provider, map[string]string{"auditor": "checked"}, map[string]*atomic.Bool{"auditor": &fail})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "error:@auditor end") {
+		t.Fatalf("first run = %s", got)
+	}
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), `profiles = ["`, `profiles = ["ghost", "`, 1))
+	if got := summary(retry(t, a, s, "")); !strings.HasSuffix(got, "error:@auditor end") {
+		t.Fatalf("retry = %s", got)
+	}
+	if got := summary(retry(t, a, s, v.MsgID[:8])); !strings.HasSuffix(got, "error:@auditor end") {
+		t.Fatalf("retry %s = %s", v.MsgID[:8], got)
+	}
+}
+
 // In a Key's Conversation a retry without a chain finds the latest
 // unfinished one from that Conversation's Transcripts (ADR 0024).
 func TestRetryInAKeysConversationFindsTheLatestUnfinished(t *testing.T) {

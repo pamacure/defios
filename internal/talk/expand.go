@@ -1,7 +1,6 @@
 package talk
 
 import (
-	"encoding/hex"
 	"encoding/json"
 
 	"defios.com/internal/transcript"
@@ -11,8 +10,9 @@ import (
 // it.
 type Expanded struct {
 	Message
-	// Blocks are the output blocks of the run whose outcome said it, in
-	// order: thinking, text and tool calls (ADR 0018). None for a person's
+	// Blocks are the output of the run whose outcome said it, in order:
+	// thinking, text and tool calls, each call followed by its result
+	// (transcript.Run.Output; ADR 0018). None for a person's
 	// message, another Node's (Transcripts are never replicated), or one
 	// whose Transcript is gone.
 	Blocks []json.RawMessage
@@ -34,13 +34,13 @@ func (r Reader) Expand(conv []byte, msgs Messages) ([]Expanded, error) {
 		}
 		for _, run := range t.Runs() {
 			if run.Outcome == transcript.OutcomeSaid {
-				said[run.MsgID] = run.Blocks
+				said[run.MsgID] = run.Output()
 			}
 		}
 	}
 	out := make([]Expanded, len(msgs))
 	for i, m := range msgs {
-		out[i] = Expanded{Message: m, Blocks: said[hex.EncodeToString(m.Row.MsgID[:])]}
+		out[i] = Expanded{Message: m, Blocks: said[m.MsgID()]}
 	}
 	return out, nil
 }

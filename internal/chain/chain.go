@@ -54,7 +54,8 @@ type Step struct {
 	Depth  uint32 // the depth its agent answers at, from 1
 	Action Action
 	// Prior is the step's latest attempt, if it has one: with Reuse, the
-	// one reused; with Run, the one this run retries.
+	// one reused; with Run, the one this run's Attempt follows, whatever
+	// its Handle, since a Transcript names a run by step and attempt.
 	Prior PriorRun
 	// Reason, with Skip, is why the Handle cannot run.
 	Reason string
@@ -150,7 +151,7 @@ func summoned(handle string, depth uint32, said string, inc config.Included) []s
 			continue
 		case !includes(inc, h):
 			sm.skip = fmt.Sprintf("@%s is not in [agent] profiles here", h)
-		case int(depth) >= inc.MaxDepth:
+		case !inc.Summons(depth):
 			sm.skip = fmt.Sprintf("@%s replied at depth %d, which is max_depth %d", handle, depth, inc.MaxDepth)
 		}
 		out = append(out, sm)

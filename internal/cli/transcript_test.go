@@ -14,13 +14,16 @@ import (
 
 const transcribedChain = "abab0000cdcd"
 
-// transcriptLines are a chain's: @auditor failed, then said, summoning
+// transcriptLines are a chain's: @auditor failed, then called a tool there
+// is none of and said, summoning
 // @scribe, who stayed silent; @critic was cut off by a stop.
 var transcriptLines = []transcript.Line{
 	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
 	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"thinking","thinking":"check it"}`)},
+	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"tool_use","id":"t0","name":"shout","input":{}}`)},
+	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","content":"no such tool","is_error":true}]}]}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"tool_use","id":"t1","name":"say","input":{"text":"ok @scribe"}}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindUsage, Usage: json.RawMessage(`{"input_tokens":3}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"text","text":"done"}`)},
@@ -56,6 +59,8 @@ func TestConversationTranscriptShowsEachRun(t *testing.T) {
 @auditor failed: boom
 step 1: @auditor, depth 1, attempt 2
 @auditor (thinking): check it
+@auditor (tool): shout {}
+@auditor (tool result): no such tool
 @auditor (tool): say {"text":"ok @scribe"}
 @auditor (text): done
 @auditor said msg_id cdcdcdcd

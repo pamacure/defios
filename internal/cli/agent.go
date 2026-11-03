@@ -326,14 +326,17 @@ func runAgentInclusion(g *globals, keyQuery, handle string, include bool) error 
 // returns the list. A Conversation with no list follows the Group's: an
 // include gives it its own, and warns so; an exclude is refused.
 func editConversationList(g *globals, keyQuery, handle string, include bool, edit func([]string) []string) ([]string, error) {
-	e, err := load(g, keyQuery)
+	e, err := load(g, "")
 	if err != nil {
 		return nil, err
 	}
 	if _, ok := e.Group.Agents[handle]; !ok {
 		return nil, exitUsagef("%w", noProfile(handle))
 	}
-	path := e.ConversationFile()
+	path, err := conversationConfigFile(g, keyQuery)
+	if err != nil {
+		return nil, err
+	}
 	w, err := config.ReadWorkspace(path)
 	if err != nil {
 		return nil, exitOperational(err)

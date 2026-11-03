@@ -10,6 +10,7 @@ package talk
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 
 	"defios.com/internal/cosl"
@@ -70,8 +71,13 @@ type Message struct {
 	Sender             string // the sender's display name, "" with no Roster or none for it
 }
 
-// readable reports whether m says anything.
-func (m Message) readable() bool { return !m.Pruned && !m.Unreadable }
+// MsgID is m's msg_id in hex, as a chain and a Transcript name it (ADR
+// 0025).
+func (m Message) MsgID() string { return hex.EncodeToString(m.Row.MsgID[:]) }
+
+// Readable reports whether m says anything: it is neither pruned nor
+// unreadable.
+func (m Message) Readable() bool { return !m.Pruned && !m.Unreadable }
 
 // Messages is talk in order: committed by seq, then queued.
 type Messages []Message
@@ -86,12 +92,12 @@ func (ms Messages) Last(n int) Messages {
 
 // View is this Node's view of the talk.
 type View struct {
-	Messages Messages     // all of it, pruned and unreadable included
-	Recap    *recap.Recap // this Node's, nil if it has none
+	Messages Messages // all of it, pruned and unreadable included
+	// recap is this Node's Recap, nil if it has none; recapErr is why it
+	// did not read, which only the lean view needs.
+	recap    *recap.Recap
+	recapErr error
 }
-
-// Last is the last n of v's messages, or all of them when n is 0.
-func (v View) Last(n int) Messages { return v.Messages.Last(n) }
 
 // Lean is the talk as this Node's agents read it, and as `conversation log
 // --lean` prints it (ADR 0024).
@@ -107,21 +113,25 @@ type Lean struct {
 }
 
 // Lean is v under its Recap: nothing is folded from the log, only the
-// Recap stands in for talk, and a queued message is always after it.
-func (v View) Lean() Lean {
-	l := Lean{Recap: v.Recap}
+// Recap stands in for talk, and a queued message is always after it. A
+// RECAP.md that does not parse is an error naming it.
+func (v View) Lean() (Lean, error) {
+	if v.recapErr != nil {
+		return Lean{}, v.recapErr
+	}
+	l := Lean{Recap: v.recap}
 	for _, m := range v.Messages {
-		if v.Recap != nil && !m.Row.Queued() && m.Row.Seq <= v.Recap.BaseSeq {
+		if v.recap != nil && !m.Row.Queued() && m.Row.Seq <= v.recap.BaseSeq {
 			continue
 		}
 		if m.Pruned {
 			l.Missing = true
 		}
-		if m.readable() {
+		if m.Readable() {
 			l.Messages = append(l.Messages, m)
 		}
 	}
-	return l
+	return l, nil
 }
 
 // Chat is the talk as chat: every readable message this replica holds,
@@ -129,7 +139,7 @@ func (v View) Lean() Lean {
 func (v View) Chat() Messages {
 	var out Messages
 	for _, m := range v.Messages {
-		if m.readable() {
+		if m.Readable() {
 			out = append(out, m)
 		}
 	}
@@ -139,14 +149,12 @@ func (v View) Chat() Messages {
 // Read is this Node's view of conv's talk, nil conv for Group-level talk.
 // It reads Mine before the replica: a message committed between the two
 // reads is in both, and shows once, as committed (ADR 0025). It reads this
-// Node's RECAP.md, never another Node's; one that does not parse is an
-// error naming it.
+// Node's RECAP.md, never another Node's; one that does not parse fails
+// only View.Lean.
 func (r Reader) Read(conv []byte) (View, error) {
-	rc, err := recap.Read(r.Paths.RecapFile(r.Alias, nodedir.ConversationName(conv)))
-	if err != nil {
-		return View{}, err
-	}
+	rc, recapErr := recap.Read(r.Paths.RecapFile(r.Alias, nodedir.ConversationName(conv)))
 	var mine []outbox.Entry
+	var err error
 	if r.Mine != nil {
 		if mine, err = r.Mine(); err != nil {
 			return View{}, err
@@ -172,7 +180,7 @@ func (r Reader) Read(conv []byte) (View, error) {
 			rows = append(rows, row)
 		}
 	}
-	v := View{Recap: rc, Messages: make(Messages, 0, len(rows))}
+	v := View{Messages: make(Messages, 0, len(rows)), recap: rc, recapErr: recapErr}
 	for _, row := range rows {
 		m, err := r.message(row)
 		if err != nil {

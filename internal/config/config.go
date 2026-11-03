@@ -367,6 +367,10 @@ type Included struct {
 	MaxDepth int
 }
 
+// Summons reports whether a message at depth, 0 for a person's, summons
+// agents under in: an agent answers at most at MaxDepth.
+func (in Included) Summons(depth uint32) bool { return int(depth) < in.MaxDepth }
+
 // ResolvedProfile is an included Agent Profile with its directory resolved,
 // max_turns defaulted, and its body merged over its Provider's.
 type ResolvedProfile struct {

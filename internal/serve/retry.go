@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	plan "defios.com/internal/chain"
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/outbox"
 	"defios.com/internal/talk"
@@ -84,32 +85,53 @@ func (s *server) prior(conv []byte, id string) (plan.Prior, error) {
 	return t.Prior(), err
 }
 
-// unfinished reports whether a retry of the chain st in conv would run
-// anything, with what is included in conv now: a step it reaches, reusing
-// the summons of the steps runs shows said, that has no finished latest
-// attempt and is not skipped.
-func (s *server) unfinished(conv []byte, st plan.Start, runs plan.Prior) (bool, error) {
-	ob, store, ok := s.writer()
-	if !ok {
-		return false, ErrNoReplica
+// unfinished is whether a retry of a chain in conv would run anything,
+// given runs, its steps' latest attempts, and what is included in conv now,
+// which it reads once with the talk: a step the chain reaches, reusing the
+// summons of the steps runs shows said, that has no finished latest attempt
+// and is not skipped. Where what is included, or the talk, does not read, a
+// step that would run, or a reused step whose summons are not known, counts
+// as unfinished: the retry itself finds out, and reports why.
+func (s *server) unfinished(conv []byte) func(st plan.Start, runs plan.Prior) bool {
+	var inc *config.Included
+	var said func(msgID string) (string, bool)
+	if ob, store, ok := s.writer(); ok {
+		if v, err := s.talk(ob, store, conv); err == nil {
+			said = func(msgID string) (string, bool) {
+				m, ok := find(v.Messages, msgID)
+				return m.Text, ok
+			}
+		}
+		if e, err := s.load(store, conv); err == nil {
+			if in, err := e.Included(); err == nil {
+				inc = &in
+			}
+		}
 	}
-	e, err := s.load(store, conv)
-	if err != nil {
-		return false, err
+	if inc != nil && said != nil {
+		return func(st plan.Start, runs plan.Prior) bool {
+			return plan.Unfinished(st.Handles, runs, *inc, said)
+		}
 	}
-	inc, err := e.Included()
-	if err != nil {
-		return false, err
+	return func(st plan.Start, runs plan.Prior) bool {
+		return !plan.Walk(st.Handles, runs, func(step plan.Step) plan.Outcome {
+			switch step.Action {
+			case plan.Run:
+				return plan.Outcome{Stop: true}
+			case plan.Reuse:
+				if step.Prior.Outcome != OutcomeSaid {
+					return plan.Outcome{}
+				}
+				if said != nil {
+					if _, ok := said(step.Prior.MsgID); !ok {
+						return plan.Outcome{} // gone: it summons nobody
+					}
+				}
+				return plan.Outcome{Stop: true}
+			}
+			return plan.Outcome{}
+		})
 	}
-	v, err := s.talk(ob, store, conv)
-	if err != nil {
-		return false, err
-	}
-	said := func(msgID string) (string, bool) {
-		m, ok := find(v.Messages, msgID)
-		return m.Text, ok
-	}
-	return plan.Unfinished(st.Handles, runs, inc, said), nil
 }
 
 // latestUnfinished is the latest of starts in conv whose Transcript shows
@@ -119,6 +141,7 @@ func (s *server) latestUnfinished(conv []byte, starts []plan.Start) (plan.Start,
 	if err != nil {
 		return plan.Start{}, false, err
 	}
+	var unfinished func(plan.Start, plan.Prior) bool
 	for _, st := range slices.Backward(starts) {
 		if !slices.Contains(transcribed, st.MsgID) {
 			continue
@@ -130,9 +153,10 @@ func (s *server) latestUnfinished(conv []byte, starts []plan.Start) (plan.Start,
 		if runs == nil {
 			continue
 		}
-		if more, err := s.unfinished(conv, st, runs); err != nil {
-			return plan.Start{}, false, err
-		} else if more {
+		if unfinished == nil {
+			unfinished = s.unfinished(conv)
+		}
+		if unfinished(st, runs) {
 			return st, true, nil
 		}
 	}
@@ -154,8 +178,8 @@ func (s *server) saidIn(ob *outbox.Outbox, store *cosl.Store, conv []byte, msgID
 // not there, or is pruned or unreadable.
 func find(ms talk.Messages, msgID string) (talk.Message, bool) {
 	for _, m := range ms {
-		if hex.EncodeToString(m.Row.MsgID[:]) == msgID {
-			return m, !m.Pruned && !m.Unreadable
+		if m.MsgID() == msgID {
+			return m, m.Readable()
 		}
 	}
 	return talk.Message{}, false
@@ -200,9 +224,7 @@ func (s *server) retry(ctx context.Context, wg *sync.WaitGroup, conv []byte, pre
 	if err != nil {
 		return "", err
 	}
-	if more, err := s.unfinished(conv, st, runs); err != nil {
-		return "", err
-	} else if !more {
+	if !s.unfinished(conv)(st, runs) {
 		return "", fmt.Errorf("%w: every step of chain %s said, stayed silent or is skipped", ErrNothingToRetry, st.MsgID)
 	}
 	if !s.chains.enqueue(ctx, wg, &chain{id: st.MsgID, conv: conv, handles: st.Handles, prior: runs}, s.runChain) {

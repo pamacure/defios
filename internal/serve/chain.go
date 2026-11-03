@@ -468,9 +468,6 @@ func (s *server) reuse(c *chain, st plan.Step, publish func(ChainEvent)) plan.Ou
 	return plan.Outcome{Said: m.Text, Included: inc}
 }
 
-// canSummon reports whether a message at depth summons agents under inc.
-func canSummon(depth uint32, inc config.Included) bool { return int(depth) < inc.MaxDepth }
-
 // errSkipped is an agent the chain passes over because it is no longer
 // included; runAgent has already published the skip.
 var errSkipped = errors.New("skipped")
@@ -636,7 +633,7 @@ func preamble(handle string, depth uint32, inc config.Included, where string, mi
 	stable = b.String()
 	b.Reset()
 	var others []config.ResolvedProfile
-	if canSummon(depth, inc) {
+	if inc.Summons(depth) {
 		for _, p := range inc.Profiles {
 			if p.Handle != handle {
 				others = append(others, p)
@@ -661,7 +658,10 @@ func (s *server) talkSoFar(ob *outbox.Outbox, store *cosl.Store, conv []byte, ha
 	if err != nil {
 		return nil, false, err
 	}
-	l := v.Lean()
+	l, err := v.Lean()
+	if err != nil {
+		return nil, false, err
+	}
 	var opening string
 	if l.Recap != nil {
 		opening = recapOpening(*l.Recap)

@@ -54,32 +54,32 @@ func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 }
 
 // printRuns prints each run: its step, Handle, depth and attempt; its
-// output as conversation follow labels it, thinking and tool calls
-// dimmed; then how it ended.
+// output as conversation follow labels it, thinking, tool calls and their
+// results dimmed; then how it ended, its outcome colored as a status.
 func printRuns(g *globals, runs []transcript.Run) {
 	p := g.out()
 	out := g.app.Stdout
 	for _, r := range runs {
 		fmt.Fprintf(out, "step %d: %s, depth %d, attempt %d\n", r.Step, p.primary("@"+r.Handle), r.Depth, r.Attempt)
 		at := "@" + r.Handle
-		printBlocks(g, "", at, r.Blocks)
+		printBlocks(g, "", at, r.Output())
 		switch r.Outcome {
 		case transcript.OutcomeSaid:
 			fmt.Fprintf(out, "%s said msg_id %s\n", at, shortChain(r.MsgID))
 		case transcript.OutcomeSilent:
-			fmt.Fprintln(out, p.dim(at+" stayed silent"))
+			fmt.Fprintln(out, at+" stayed silent")
 		case transcript.OutcomeError:
-			fmt.Fprintf(out, "%s failed: %s\n", at, r.Error)
+			fmt.Fprintf(out, "%s %s: %s\n", at, p.status("failed"), r.Error)
 		case transcript.OutcomeCancelled:
-			fmt.Fprintln(out, p.dim(at+" was cancelled"))
+			fmt.Fprintf(out, "%s was %s\n", at, p.status("cancelled"))
 		default:
-			fmt.Fprintln(out, p.dim(at+" was cut off by a stop"))
+			fmt.Fprintf(out, "%s was %s by a stop\n", at, p.status("cut off"))
 		}
 	}
 }
 
-// printBlocks prints each block that streams anything as `<at> (<kind>):
-// <text>` after indent, thinking and tool calls dimmed.
+// printBlocks prints each block that shows anything as `<at> (<kind>):
+// <text>` after indent, thinking, tool calls and their results dimmed.
 func printBlocks(g *globals, indent, at string, blocks []json.RawMessage) {
 	p := g.out()
 	for _, raw := range blocks {
@@ -95,14 +95,20 @@ func printBlocks(g *globals, indent, at string, blocks []json.RawMessage) {
 	}
 }
 
-// blockOutput is an output block as it streamed: its kind and text, ""
-// for one that streams nothing, such as redacted thinking.
+// blockOutput is an output block as it streamed, or a tool call's result:
+// its kind and text, "" for one that shows nothing, such as redacted
+// thinking.
 func blockOutput(raw json.RawMessage) (kind, text string) {
-	var b agent.Block
+	var b struct {
+		agent.Block
+		Content string `json:"content"` // a tool result's
+	}
 	if json.Unmarshal(raw, &b) != nil {
 		return "", ""
 	}
 	switch b.Type {
+	case "tool_result":
+		return "tool result", b.Content
 	case "text":
 		return agent.KindText, b.Text
 	case "thinking", "reasoning":

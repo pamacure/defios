@@ -200,6 +200,28 @@ type Run struct {
 	Error    string // with OutcomeError: why
 }
 
+// Output is what r generated, in order: its blocks, thinking, text and
+// tool calls, each tool call followed by the result the run answered it
+// with, an agent.ToolResult, which the next request carried. A call it did
+// not answer, as an accepted say, has none.
+func (r Run) Output() []json.RawMessage {
+	results := agent.ToolResults(r.Requests)
+	out := make([]json.RawMessage, 0, len(r.Blocks))
+	for _, raw := range r.Blocks {
+		out = append(out, raw)
+		var b agent.Block
+		if json.Unmarshal(raw, &b) != nil || b.Type != "tool_use" {
+			continue
+		}
+		if res, ok := results[b.ID]; ok {
+			if j, err := json.Marshal(res); err == nil {
+				out = append(out, j)
+			}
+		}
+	}
+	return out
+}
+
 // Runs are t's runs by step, then attempt.
 func (t Transcript) Runs() []Run {
 	type key struct{ step, attempt int }

@@ -518,3 +518,21 @@ func TestAgentIncludeExcludeOnAConversationFollowingTheGroup(t *testing.T) {
 		t.Fatalf("include ghost --key: exit %d, stderr %q", r.code, r.stderr)
 	}
 }
+
+// agent include and exclude --key edit a Conversation's list without
+// merging its config.toml over the Group's, so a Conversation whose
+// Networks clash with the Group's can still have its list fixed.
+func TestAgentIncludeExcludeKeyDoNotMergeTheConfig(t *testing.T) {
+	p := agentsWithKeys(t)
+	gf := p.GroupConfigFile(group.ImplicitAlias)
+	writeFile(t, gf, readFile(t, gf)+"\n[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n")
+	path := p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111")
+	writeFile(t, path, "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\n\n[agent]\nprofiles = [\"scribe\"]\n")
+
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "auditor", "--key", "ab11"); r.code != 0 || r.stdout != "scribe\nauditor\n" {
+		t.Fatalf("include --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "scribe", "--key", "ab11"); r.code != 0 || r.stdout != "auditor\n" {
+		t.Fatalf("exclude --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+}
