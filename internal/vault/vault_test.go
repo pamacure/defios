@@ -3,6 +3,7 @@ package vault_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -173,5 +174,49 @@ func TestOpenSecretsMissingFileIsNotExist(t *testing.T) {
 	_, err := vault.OpenSecrets(filepath.Join(t.TempDir(), "secrets-home"), "pw")
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want os.ErrNotExist", err)
+	}
+}
+
+// A reseal replaces the file by rename, never rewrites it in place: a reader
+// that opened the old file still reads all of it (ADR 0027).
+func TestSealReplacesTheFileWholeNotInPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shared")
+	if err := vault.Seal(path, sample(), "pw"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if err := vault.Seal(path, &vaultv1.VaultContents{Version: 1}, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	held, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(held, before) {
+		t.Fatal("a reader of the old file saw it change: Seal wrote in place")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("Seal left %d files behind, want only shared", len(entries))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("mode %o, want 0600", perm)
 	}
 }

@@ -99,6 +99,14 @@ defios session accept <session-id>
 
 Check it: `defios session list` shows the Session complete, and `defios key list` and `defios key inspect ecdsa:<hex>` show the same Key on both machines with `share=yes`.
 
+Now take a Backup on each machine. A lost machine's share is gone for good without one, and a Backup holds only the Keys that existed when it was taken, so take a fresh one after every new Key:
+
+```bash
+defios backup ~/defios-$(date +%F).backup
+```
+
+It is sealed under the Vault passphrase and lists the Groups and Keys it holds. It may be taken while `serve` runs.
+
 ### 5. Send messages
 
 Post a message to the whole Group:

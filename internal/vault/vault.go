@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"filippo.io/age"
 	"google.golang.org/protobuf/proto"
@@ -29,7 +30,9 @@ var (
 	ErrBadPassphrase = errors.New("vault: wrong passphrase")
 )
 
-// Seal writes contents to path (mode 0600) encrypted under passphrase.
+// Seal writes contents to path (mode 0600) encrypted under passphrase. The
+// file is written beside path and renamed over it, so a reader, a Backup
+// taken while serve runs among them, never sees half a file (ADR 0027).
 func Seal(path string, contents *vaultv1.VaultContents, passphrase string) error {
 	if passphrase == "" {
 		return ErrEmptyPassphrase
@@ -55,7 +58,31 @@ func Seal(path string, contents *vaultv1.VaultContents, passphrase string) error
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("vault: %w", err)
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o600)
+	return writeAtomic(path, buf.Bytes())
+}
+
+// writeAtomic writes raw to a 0600 temp file in path's directory, syncs it,
+// and renames it over path.
+func writeAtomic(path string, raw []byte) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return fmt.Errorf("vault: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(tmp.Name())
+		}
+	}()
+	if _, err = tmp.Write(raw); err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("vault: %w", err)
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // Open decrypts the Vault at path. A wrong passphrase yields ErrBadPassphrase.
@@ -68,7 +95,19 @@ func Open(path string, passphrase string) (*vaultv1.VaultContents, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return open(f, passphrase)
+}
 
+// OpenBytes decrypts a Vault file already read into raw, so a caller can
+// check the very bytes it goes on to copy (ADR 0027).
+func OpenBytes(raw []byte, passphrase string) (*vaultv1.VaultContents, error) {
+	if passphrase == "" {
+		return nil, ErrEmptyPassphrase
+	}
+	return open(bytes.NewReader(raw), passphrase)
+}
+
+func open(f io.Reader, passphrase string) (*vaultv1.VaultContents, error) {
 	identity, err := age.NewScryptIdentity(passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("vault: %w", err)

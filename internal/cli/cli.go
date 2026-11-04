@@ -105,5 +105,6 @@ func (a App) rootCommand(g *globals) *cobra.Command {
 	root.AddCommand(keyCommand(g))
 	root.AddCommand(coslCommand(g))
 	root.AddCommand(outboxCommand(g))
+	root.AddCommand(backupCommand(g))
 	return root
 }

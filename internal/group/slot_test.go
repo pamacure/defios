@@ -1,7 +1,9 @@
 package group_test
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -228,5 +230,47 @@ func TestRecordFilesAreOwnerOnly(t *testing.T) {
 		if fi.Mode().Perm() != 0o600 {
 			t.Errorf("%s mode %o", e.Name(), fi.Mode().Perm())
 		}
+	}
+}
+
+// A Record write replaces roster.json by rename, never in place: a reader
+// that opened the pending Record still reads all of it after the Group turns
+// valid, and nothing else is left in the Group's directory (ADR 0027).
+func TestRecordWriteReplacesTheFileWhole(t *testing.T) {
+	alice, bob, ids := twoNodes(t)
+	sa, dir := openSlot(t, alice)
+	p, err := sa.Propose(ids, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, group.ImplicitAlias, "roster.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	prop, _ := group.VerifyProposal(p)
+	acc, _ := group.SignAccept(bob, prop.GroupID)
+	if _, err := sa.ReceiveAccept(acc); err != nil {
+		t.Fatal(err)
+	}
+	held, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(held, before) {
+		t.Fatal("a reader of the pending Record saw it change: written in place")
+	}
+	if after, _ := os.ReadFile(path); bytes.Equal(after, before) {
+		t.Fatal("the Accept was not written")
+	}
+	entries, _ := os.ReadDir(filepath.Join(dir, group.ImplicitAlias))
+	if len(entries) != 1 {
+		t.Fatalf("%d files in the Group's directory, want only roster.json", len(entries))
 	}
 }

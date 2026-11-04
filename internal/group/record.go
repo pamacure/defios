@@ -180,8 +180,9 @@ func loadRecord(path string) (*Record, error) {
 	return r, nil
 }
 
-// save writes r under groupDir (the Group's alias subtree) atomically,
-// 0700/0600.
+// save writes r under groupDir (the Group's alias subtree), 0700/0600, to a
+// synced temp file renamed over roster.json, so no reader, a Backup among
+// them, sees half a Record (ADR 0027).
 func (r *Record) save(groupDir string) error {
 	if err := os.MkdirAll(groupDir, 0o700); err != nil {
 		return err
@@ -204,12 +205,23 @@ func (r *Record) save(groupDir string) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(groupDir, recordFileName)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	tmp, err := os.CreateTemp(groupDir, "."+recordFileName+".*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if _, err = tmp.Write(raw); err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), filepath.Join(groupDir, recordFileName))
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+	}
+	return err
 }
 
 // remove deletes the Record file under groupDir, freeing the Slot. Only the
