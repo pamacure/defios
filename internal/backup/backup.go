@@ -74,23 +74,15 @@ type Archive struct {
 	Files    map[string][]byte
 }
 
-// LeftoverError names a vault.new/ or vault.old/ that a passphrase change
-// left behind; until it is resolved the Vault is not one thing to back up.
-type LeftoverError struct{ Dir string }
-
-func (e *LeftoverError) Error() string {
-	return fmt.Sprintf("backup: %s is left over from a passphrase change; finish or undo it first", e.Dir)
-}
-
 // Write seals the Node at p into a new file dst (0600) under passphrase. It
 // opens every Vault file with passphrase first and writes nothing if any
 // fails (vault.ErrBadPassphrase, wrapped with the file's name). An existing
 // dst is refused with an error matching os.ErrExist.
 func Write(p nodedir.Paths, passphrase, dst string) (Manifest, error) {
-	for _, dir := range []string{p.VaultDir() + ".new", p.VaultDir() + ".old"} {
-		if _, err := os.Stat(dir); err == nil {
-			return Manifest{}, &LeftoverError{Dir: dir}
-		}
+	// A vault.new/ or vault.old/ beside the Vault means it is not one thing
+	// under one passphrase to back up.
+	if err := vault.CheckLeftover(p.VaultDir()); err != nil {
+		return Manifest{}, err
 	}
 	if _, err := os.Lstat(dst); err == nil {
 		return Manifest{}, fmt.Errorf("backup: %s: %w", dst, os.ErrExist)

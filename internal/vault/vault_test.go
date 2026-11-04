@@ -220,3 +220,44 @@ func TestSealReplacesTheFileWholeNotInPlace(t *testing.T) {
 		t.Fatalf("mode %o, want 0600", perm)
 	}
 }
+
+// Shared holders use the Vault together; a passphrase change, exclusive,
+// excludes them and is excluded by them.
+func TestLockKeepsAChangeApartFromTheVaultsUsers(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "vault")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Seal(filepath.Join(dir, "shared"), sample(), "old"); err != nil {
+		t.Fatal(err)
+	}
+
+	serve, err := vault.Lock(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verb, err := vault.Lock(dir, false)
+	if err != nil {
+		t.Fatalf("a second shared holder refused: %v", err)
+	}
+	if _, err := vault.ChangePassphrase(dir, "old", "new"); !errors.Is(err, vault.ErrBusy) {
+		t.Fatalf("change under a shared holder: err = %v, want ErrBusy", err)
+	}
+	if _, err := vault.Open(filepath.Join(dir, "shared"), "old"); err != nil {
+		t.Fatalf("a refused change touched the Vault: %v", err)
+	}
+	verb()
+	serve()
+
+	change, err := vault.Lock(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Lock(dir, false); !errors.Is(err, vault.ErrBusy) {
+		t.Fatalf("shared under a change: err = %v, want ErrBusy", err)
+	}
+	change()
+	if _, err := vault.ChangePassphrase(dir, "old", "new"); err != nil {
+		t.Fatalf("change once released: %v", err)
+	}
+}

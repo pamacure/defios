@@ -63,6 +63,13 @@ passphrase. This is pre-release, so nothing is migrated.
   command touching the Vault refuses while a `vault.new/` or `vault.old/` is
   left over, naming it; `passphrase change` offers to finish the swap once
   `vault.new/` opens under the new passphrase.
+- **Vault lock.** The `serve.sock` check alone leaves a gap: a `serve`
+  started while the operator types passphrases would open the Vault under
+  the old one and could seal a new Key's share into a Vault about to be
+  retired. So `vault.lock`, beside `vault/`, is an `flock`: `serve` holds it
+  shared for as long as it runs, every verb touching the Vault while it does,
+  and `passphrase change` exclusive throughout. Neither waits; whichever
+  comes second refuses.
 - **Passphrase sources.** The old passphrase comes as before
   (`--passphrase-file`, `DEFIOS_PASSPHRASE`, or a prompt); the new one from
   `--new-passphrase-file` or a prompt asked twice, never from the

@@ -51,6 +51,13 @@ func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	if serve.IsUp(p.Socket) {
 		return exitOperational(serve.ErrAlreadyRunning)
 	}
+	// Held for as long as serve runs: it reseals a Group's shares on keygen,
+	// so no passphrase change may run under it.
+	unlock, err := useVault(p)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	passphrase, err := pass.read(g, false)
 	if err != nil {

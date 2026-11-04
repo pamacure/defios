@@ -80,6 +80,13 @@ func runNodeUsage(cmd *cobra.Command, g *globals) error {
 	} else if err != nil {
 		return exitOperational(err)
 	}
+	// The Vault's sizes are read below; mid-change or after an interrupted
+	// one they are not the Vault's.
+	unlock, err := useVault(p)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	aliases, err := groupAliases(p)
 	if err != nil {
 		return exitOperational(err)

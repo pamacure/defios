@@ -115,6 +115,14 @@ defios init --from-backup ~/defios-2026-11-04.backup
 
 The restored Node has the same Node ID, keys, Key shares, Secrets, Records, Workspaces and Agent Profiles. The old machine must never run it again. Before `defios serve`, store a fresh preauth key (`defios secret set TS_AUTHKEY`) and remove the old machine's registration in headscale.
 
+To change the Vault passphrase, stop `serve` and run:
+
+```bash
+defios passphrase change
+```
+
+It asks for the old passphrase, then the new one twice, and re-seals the whole Vault. If it is interrupted, other commands refuse to touch the Vault until you run it again to finish. Backups already taken are not re-sealed and still open with the old passphrase, so take a new one.
+
 ### 5. Send messages
 
 Post a message to the whole Group:

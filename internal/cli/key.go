@@ -157,6 +157,13 @@ func shareRefs(ctx context.Context, g *globals, pass passphraseSource) (map[stri
 		}
 		return out, nil
 	}
+	// Checked with a passphrase or without: a leftover can mean vault/ is
+	// gone, and "no shares" would then read as Keys lost.
+	unlock, err := useVault(p)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	phrase, ok, err := pass.provided(g)
 	if err != nil {
 		return nil, err

@@ -65,7 +65,8 @@ An environment variable of the same name, when set, takes precedence.`,
 
 // openSecrets unlocks the targeted Group's Secrets file. The passphrase is
 // first checked against the Node's shared secrets, so a typo cannot seal a
-// Secrets file the Node's own passphrase will not open.
+// Secrets file the Node's own passphrase will not open. The caller holds
+// useVault's lock across this and any reseal.
 func openSecrets(g *globals, pass passphraseSource) (path, phrase string, secrets map[string]string, err error) {
 	p := g.paths()
 	alias, err := g.resolveAlias()
@@ -101,6 +102,11 @@ func runSecretSet(g *globals, pass passphraseSource, name string) error {
 	if err := secret.ValidateName(name); err != nil {
 		return exitUsagef("%v", err)
 	}
+	unlock, err := useVault(g.paths())
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	path, phrase, secrets, err := openSecrets(g, pass)
 	if err != nil {
 		return err
@@ -165,6 +171,11 @@ func runSecretShow(g *globals, pass passphraseSource, name string, reveal bool) 
 		return err
 	}
 	r := secret.Resolver{Group: alias, Getenv: g.app.Getenv, Vault: func() (map[string]string, error) {
+		unlock, err := useVault(g.paths())
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
 		_, _, secrets, err := openSecrets(g, pass)
 		return secrets, err
 	}}
@@ -193,6 +204,11 @@ func runSecretRemove(g *globals, pass passphraseSource, name string) error {
 	if err := secret.ValidateName(name); err != nil {
 		return exitUsagef("%v", err)
 	}
+	unlock, err := useVault(g.paths())
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	path, phrase, secrets, err := openSecrets(g, pass)
 	if err != nil {
 		return err

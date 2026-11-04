@@ -39,6 +39,11 @@ func runBackup(g *globals, pass passphraseSource, dst string) error {
 	} else if !exists {
 		return errNoNode(p)
 	}
+	unlock, err := useVault(p)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	phrase, err := pass.read(g, false)
 	if err != nil {
 		return err

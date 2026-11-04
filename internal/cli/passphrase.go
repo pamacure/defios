@@ -29,11 +29,8 @@ func (p *passphraseSource) bind(cmd *cobra.Command) {
 // is set.
 func (p passphraseSource) provided(g *globals) (phrase string, ok bool, err error) {
 	if p.file != "" {
-		raw, err := os.ReadFile(p.file)
-		if err != nil {
-			return "", false, exitUsagef("passphrase file: %w", err)
-		}
-		return strings.TrimRight(string(raw), "\r\n"), true, nil
+		phrase, err := readPassphraseFile("passphrase file", p.file)
+		return phrase, err == nil, err
 	}
 	if v := g.app.Getenv("DEFIOS_PASSPHRASE"); v != "" {
 		return v, true, nil
@@ -45,11 +42,10 @@ func (p passphraseSource) read(g *globals, confirm bool) (string, error) {
 	var pass string
 	switch {
 	case p.file != "":
-		raw, err := os.ReadFile(p.file)
-		if err != nil {
-			return "", exitUsagef("passphrase file: %w", err)
+		var err error
+		if pass, err = readPassphraseFile("passphrase file", p.file); err != nil {
+			return "", err
 		}
-		pass = strings.TrimRight(string(raw), "\r\n")
 	case g.app.Getenv("DEFIOS_PASSPHRASE") != "":
 		pass = g.app.Getenv("DEFIOS_PASSPHRASE")
 	default:
@@ -69,23 +65,40 @@ func (p passphraseSource) prompt(g *globals, confirm bool) (string, error) {
 	if !ok || !term.IsTerminal(int(f.Fd())) {
 		return "", exitUsagef("no passphrase: set DEFIOS_PASSPHRASE, pass --passphrase-file, or run on a terminal")
 	}
-	first, err := p.ask(g, f, "Passphrase: ")
+	ask := func(label string) (string, error) { return askPassphrase(g, f, label) }
+	if confirm {
+		return askTwice(ask, "Passphrase: ", "Confirm passphrase: ")
+	}
+	return ask("Passphrase: ")
+}
+
+// readPassphraseFile reads a passphrase from path, stripping only a trailing
+// line ending. label names the flag's file in an error.
+func readPassphraseFile(label, path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", exitUsagef("%s: %w", label, err)
+	}
+	return strings.TrimRight(string(raw), "\r\n"), nil
+}
+
+// askTwice asks with first then second; the two entries must match.
+func askTwice(ask func(label string) (string, error), first, second string) (string, error) {
+	a, err := ask(first)
 	if err != nil {
 		return "", err
 	}
-	if confirm {
-		second, err := p.ask(g, f, "Confirm passphrase: ")
-		if err != nil {
-			return "", err
-		}
-		if first != second {
-			return "", exitUsagef("passphrases do not match")
-		}
+	b, err := ask(second)
+	if err != nil {
+		return "", err
 	}
-	return first, nil
+	if a != b {
+		return "", exitUsagef("passphrases do not match")
+	}
+	return a, nil
 }
 
-func (p passphraseSource) ask(g *globals, tty *os.File, label string) (string, error) {
+func askPassphrase(g *globals, tty *os.File, label string) (string, error) {
 	fmt.Fprint(g.app.Stderr, label)
 	raw, err := term.ReadPassword(int(tty.Fd())) // already excludes the newline
 	fmt.Fprintln(g.app.Stderr)
