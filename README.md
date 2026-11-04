@@ -107,6 +107,14 @@ defios backup ~/defios-$(date +%F).backup
 
 It is sealed under the Vault passphrase and lists the Groups and Keys it holds. It may be taken while `serve` runs.
 
+To bring a lost machine's Node back on a new one, restore the Backup into an empty config directory instead of running `defios init`. It asks for the passphrase the Backup was sealed under, and the restored Vault keeps that passphrase:
+
+```bash
+defios init --from-backup ~/defios-2026-11-04.backup
+```
+
+The restored Node has the same Node ID, keys, Key shares, Secrets, Records, Workspaces and Agent Profiles. The old machine must never run it again. Before `defios serve`, store a fresh preauth key (`defios secret set TS_AUTHKEY`) and remove the old machine's registration in headscale.
+
 ### 5. Send messages
 
 Post a message to the whole Group:

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/backup"
 	"defios.com/internal/engine/tssl"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
@@ -18,7 +18,7 @@ import (
 )
 
 type initOptions struct {
-	name, authKeyHex string
+	name, fromBackup string
 	pass             passphraseSource
 }
 
@@ -27,26 +27,34 @@ func initCommand(g *globals) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create this device: identity and Vault (no Group yet)",
-		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runInit(g, o) },
+		Long: `Create this device: identity and Vault (no Group yet).
+
+With --from-backup, bring back the Node a Backup holds instead: the same Node ID,
+keys, Key shares, Secrets, Records and config, under the passphrase the Backup was
+sealed under. The machine it came from must never run that Node again.`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			if o.fromBackup != "" {
+				return runRestore(g, o)
+			}
+			return runInit(g, o)
+		},
 	}
 	cmd.Flags().StringVar(&o.name, "name", "", "default display name for Groups (default: machine hostname)")
-	cmd.Flags().StringVar(&o.authKeyHex, "auth-key", "", "restore from a 32-byte hex Ed25519 seed instead of minting one")
+	cmd.Flags().StringVar(&o.fromBackup, "from-backup", "", "restore the Node in this Backup instead of minting one")
 	o.pass.bind(cmd)
 	return cmd
 }
 
-// runInit mints or restores the device and lays out its files: identity and
+// runInit mints the device and lays out its files: identity and
 // the Vault only, no Group (ADR 0007). A Group is scaffolded later by
 // `group new`. Order: refuse an existing Node, collect inputs (passphrase
 // last so a bad flag fails before any prompt), then write vault, identity,
 // and the device-level default display name.
 func runInit(g *globals, o initOptions) error {
 	p := g.paths()
-	if existing, err := nodeExists(p); err != nil {
-		return exitOperational(err)
-	} else if existing {
-		return exitOperationalf("a Node already exists at %s; refusing to overwrite", p.Data)
+	if err := refuseExistingNode(p); err != nil {
+		return err
 	}
 
 	name, err := displayName(o.name)
@@ -54,17 +62,8 @@ func runInit(g *globals, o initOptions) error {
 		return err
 	}
 
-	var node *identity.Node
-	if o.authKeyHex != "" {
-		seed, err := hex.DecodeString(o.authKeyHex)
-		if err != nil || len(seed) != ed25519.SeedSize {
-			return exitUsagef("--auth-key must be %d bytes of hex", ed25519.SeedSize)
-		}
-		node, err = identity.FromSeed(seed)
-		if err != nil {
-			return exitUsagef("--auth-key: %w", err)
-		}
-	} else if node, err = identity.Generate(); err != nil {
+	node, err := identity.Generate()
+	if err != nil {
 		return exitOperationalf("generating keys: %w", err)
 	}
 
@@ -122,6 +121,76 @@ func runInit(g *globals, o initOptions) error {
 	return nil
 }
 
+// runRestore is `init --from-backup`: the Node a Backup holds, written into
+// this machine's paths (ADR 0027). Restore is not a merge: everything that
+// would refuse is checked before the passphrase prompt, and a wrong
+// passphrase or unknown format writes nothing. The Vault's files come back as
+// sealed, so it keeps its passphrase and its ECDSA preparams.
+func runRestore(g *globals, o initOptions) error {
+	if o.name != "" {
+		return exitUsagef("--name does not go with --from-backup: the display name comes from the Backup")
+	}
+	p := g.paths()
+	if err := refuseExistingNode(p); err != nil {
+		return err
+	}
+	if entries, err := os.ReadDir(p.Config); err == nil && len(entries) > 0 {
+		return exitOperationalf("%s is not empty; a Backup restores only into an empty config directory", p.Config)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return exitOperational(err)
+	}
+	if info, err := os.Stat(o.fromBackup); err != nil {
+		return exitOperational(err)
+	} else if !info.Mode().IsRegular() {
+		return exitOperationalf("%s is not a file", o.fromBackup)
+	}
+
+	passphrase, err := o.pass.read(g, false)
+	if err != nil {
+		return err
+	}
+	a, err := backup.Open(o.fromBackup, passphrase)
+	switch {
+	case errors.Is(err, vault.ErrBadPassphrase):
+		return exitVerify(err)
+	case errors.Is(err, backup.ErrUnknownFormat):
+		return exitOperationalf("%s: %w; it was written by a build that this one does not know", o.fromBackup, err)
+	case err != nil:
+		return exitOperational(err)
+	}
+
+	for _, dir := range []string{p.Config, p.Data} {
+		if err := mkdirPrivate(dir); err != nil {
+			return exitOperational(err)
+		}
+	}
+	if err := backup.Restore(a, p); err != nil {
+		return exitOperational(err)
+	}
+
+	// The steps that are the operator's go to stderr under --json, so they
+	// are never lost behind the JSON on stdout.
+	w := g.app.Stdout
+	if g.json {
+		w = g.app.Stderr
+		if err := g.emitJSON(map[string]any{
+			"node_id":    a.Manifest.NodeID,
+			"groups":     a.Manifest.Groups,
+			"config_dir": p.Config,
+			"data_dir":   p.Data,
+		}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(w, "Node %s restored\n  config: %s\n  data:   %s\n", a.Manifest.NodeID, p.Config, p.Data)
+	}
+	fmt.Fprintln(w, "The machine this Backup came from must never run this Node again: nothing tells the two copies apart.")
+	fmt.Fprintln(w, "Before `defios serve`, two steps are yours:")
+	fmt.Fprintln(w, "  1. Mint a fresh tailnet preauth key and set it where each Group's tailnet_auth_key points (e.g. `defios secret set TS_AUTHKEY` for $TS_AUTHKEY).")
+	fmt.Fprintln(w, "  2. Remove the original machine's registration in headscale.")
+	return nil
+}
+
 // ecdsaPreparams fills VaultContents.ecdsa_preparams. Unset generates
 // tss-lib LocalPreParams and prints progress on stderr. DEFIOS_ECDSA_PREPARAMS
 // is a test hook: "skip" leaves the field empty, any other value is a file
@@ -160,6 +229,17 @@ func nodeExists(p nodedir.Paths) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// refuseExistingNode is the operational error for a Node already at p, for
+// the commands that create one.
+func refuseExistingNode(p nodedir.Paths) error {
+	if existing, err := nodeExists(p); err != nil {
+		return exitOperational(err)
+	} else if existing {
+		return exitOperationalf("a Node already exists at %s; refusing to overwrite", p.Data)
+	}
+	return nil
 }
 
 // errNoNode is the operational error for a data dir with no Node in it.

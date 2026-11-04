@@ -450,3 +450,84 @@ func archived(name string) bool {
 	}
 	return false
 }
+
+// Restore writes an opened Backup's files into this machine's paths p: each
+// data/ file under p.Data and each config/ file under p.Config, files 0600
+// and directories 0700. It never overwrites a file. The identity and the
+// Vault's shared file go last, so a Node exists at p only once everything
+// else is in place; on an error the files and directories it made are
+// removed, so a retry finds the target as it was.
+func Restore(a *Archive, p nodedir.Paths) (err error) {
+	names := make([]string, 0, len(a.Files))
+	for name := range a.Files {
+		names = append(names, name)
+	}
+	writtenLast := map[string]int{"data/vault/shared": 1, "data/identity": 2}
+	sort.Slice(names, func(i, j int) bool {
+		if writtenLast[names[i]] != writtenLast[names[j]] {
+			return writtenLast[names[i]] < writtenLast[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	var made []string // files and directories, in the order made
+	defer func() {
+		if err != nil {
+			for i := len(made) - 1; i >= 0; i-- {
+				os.Remove(made[i])
+			}
+		}
+	}()
+	for _, name := range names {
+		tree, rel, _ := strings.Cut(name, "/")
+		root := p.Data
+		if tree == "config" {
+			root = p.Config
+		}
+		dst := filepath.Join(root, filepath.FromSlash(rel))
+		dirs, err := mkdirs(filepath.Dir(dst))
+		made = append(made, dirs...)
+		if err != nil {
+			return fmt.Errorf("backup: %w", err)
+		}
+		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return fmt.Errorf("backup: %w", err)
+		}
+		made = append(made, dst)
+		if _, err = f.Write(a.Files[name]); err == nil {
+			err = f.Sync()
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return fmt.Errorf("backup: %w", err)
+		}
+	}
+	return nil
+}
+
+// mkdirs makes dir and any missing parents 0700, returning the ones it made,
+// outermost first.
+func mkdirs(dir string) ([]string, error) {
+	var missing []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		missing = append(missing, d)
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	var made []string
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := os.Mkdir(missing[i], 0o700); err != nil {
+			return made, err
+		}
+		made = append(made, missing[i])
+	}
+	return made, nil
+}

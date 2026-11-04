@@ -67,10 +67,10 @@ func Generate() (*Node, error) {
 	return FromSeed(seed)
 }
 
-// FromSeed restores the auth keypair from a 32-byte seed and mints a fresh
-// Encryption keypair. This is the one place a Node ID is computed: init.
-// Later readers take it from the identity file (ADR 0005), so a rotated
-// auth key never changes it.
+// FromSeed derives the auth keypair from a 32-byte seed and mints a fresh
+// Encryption keypair; restoring a Node is a Backup's job (ADR 0027). This is
+// the one place a Node ID is computed: init. Later readers take it from the
+// identity file (ADR 0005), so a rotated auth key never changes it.
 func FromSeed(seed []byte) (*Node, error) {
 	if len(seed) != ed25519.SeedSize {
 		return nil, fmt.Errorf("auth seed is %d bytes, want %d", len(seed), ed25519.SeedSize)

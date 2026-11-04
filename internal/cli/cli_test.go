@@ -284,27 +284,6 @@ func TestInitRefusesExistingNode(t *testing.T) {
 	}
 }
 
-func TestSameAuthSeedReproducesSameNodeID(t *testing.T) {
-	seed := strings.Repeat("ab", 32)
-	a, b := t.TempDir(), t.TempDir()
-	mustInit(t, a, "--auth-key", seed)
-	mustInit(t, b, "--auth-key", seed)
-	ida, idb := inspectJSON(t, a), inspectJSON(t, b)
-	if ida["node_id"] != idb["node_id"] {
-		t.Fatalf("node ids differ: %v vs %v", ida["node_id"], idb["node_id"])
-	}
-	if ida["auth_public_key"] != idb["auth_public_key"] {
-		t.Fatal("auth public keys differ for the same seed")
-	}
-}
-
-func TestInitRejectsMalformedAuthKey(t *testing.T) {
-	r := run(t, withPass, "", "--dir", t.TempDir(), "init", "--auth-key", "abcd")
-	if r.code != 1 {
-		t.Fatalf("exit %d, want 1 (usage); stderr: %s", r.code, r.stderr)
-	}
-}
-
 func TestPassphraseFromFile(t *testing.T) {
 	dir := t.TempDir()
 	pf := filepath.Join(t.TempDir(), "pass")
