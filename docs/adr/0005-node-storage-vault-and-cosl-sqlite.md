@@ -49,6 +49,9 @@ peer's `session.start`. Decided in
   `$XDG_RUNTIME_DIR`. Lookup: `--dir`, else `DEFIOS_CONFIG_DIR` /
   `DEFIOS_DATA_DIR`, else XDG defaults. Backup of this Node is `identity` +
   `vault`; `group/` is disposable.
+  *Amended by [ADR 0027](0027-a-backup-is-the-node-minus-what-peers-give-back.md):
+  a Node's backup is a Backup, which also carries each Group's Record and the
+  config tree.*
 - COSL schema, append-only triggers, and catch-up bookkeeping live in the
   ticket resolution; `conversation log` is a `conversation_id` filter, not a
   second table

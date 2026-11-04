@@ -48,6 +48,14 @@ _Avoid_: encryption key, box key, crypto key
 This Node's passphrase-encrypted store of secrets, and the only thing a Node keeps encrypted at rest: the auth private key, the encryption private key, and ECDSA preparams shared across all the Node's Groups, together with this Node's shares of each Group's Keys and each Group's Secrets, held separately per Group. Everything else — Identity, Group and Roster records, tailnet config, and the COSL replica — is plaintext, so a Group that is not currently being served can still be inspected.
 _Avoid_: keystore, wallet, keyring, container
 
+**Vault passphrase**:
+The one secret that unlocks every part of a Node's Vault, and any Backup taken while it was in force. Changing it re-seals the Vault, not Backups already taken, which still open with the passphrase they were sealed under.
+_Avoid_: password, PIN, master key
+
+**Backup**:
+One Node sealed into a single file under its Vault passphrase: its Identity, its Vault, each Group's Record, and its Workspaces, Agent Profiles and other local config — everything needed to bring the same Node back on another machine. It leaves out what the Node's peers give back (the COSL replica) and what belongs to one machine or one run alone (tailnet state, the Outbox, Recaps, Transcripts). Restoring a Backup brings back the same Node, not a new one, so the original must never run again.
+_Avoid_: export, archive, snapshot (that is Raft's)
+
 **Secret**:
 A named value a Node's config refers to but never contains, such as an API key or a key-bearing RPC URL. Found by its name in the environment of the process reading the config, or else in that Group's part of the Vault, which stores it by name alone and knows nothing of what it is for.
 _Avoid_: credential (that is what a Secret often holds), env var, vault entry
