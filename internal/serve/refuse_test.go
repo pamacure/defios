@@ -39,7 +39,10 @@ func stancePair(t *testing.T) (a, b *node, msgID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitSign(t, a, v.MsgID, func(signreq.Detail) bool { return true })
+	// b's own replica may apply its request after a's does.
+	for _, n := range []*node{a, b} {
+		waitSign(t, n, v.MsgID, func(signreq.Detail) bool { return true })
+	}
 	return a, b, v.MsgID
 }
 
