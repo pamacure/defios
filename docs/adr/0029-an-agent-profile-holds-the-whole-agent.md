@@ -9,7 +9,8 @@ that split worse. The whole agent now lives in its profile directory:
 the prompt ([ADR 0026](0026-an-agent-profile-is-named-by-its-handle.md)). A
 Group only includes Handles, through `[agent] profiles`. The profile's `tools`
 is an allow-list of what the agent may call; the first Tools beyond `say` are
-`sign_list`, `sign_inspect`, `sign_propose`, `sign_accept` and `sign_refuse`.
+`sign_list`, `sign_inspect`, `sign_propose`, `sign_accept`, `sign_refuse` and
+`chain_fill`.
 This amends [ADR 0015](0015-agent-profiles-handles-and-agent-chains.md),
 [ADR 0018](0018-an-agent-says-one-message.md),
 [ADR 0019](0019-providers-replace-models-on-the-cosl.md) and ADR 0026.
@@ -42,13 +43,22 @@ This amends [ADR 0015](0015-agent-profiles-handles-and-agent-chains.md),
 - **Sign Tools are Key-scoped.** They act only on the Sign Requests of the
   Conversation's Key and take no key argument; in Group-level talk they are
   not offered. `sign_propose` takes the transactions as `sign propose` does,
-  complete, since the serve does no chain RPC; filling nonces, fees, UTXOs
-  and blockhashes is a Plugin's job. `sign_broadcast` and `sign decline` are
-  not Tools yet.
+  complete. `sign_broadcast` and `sign decline` are not Tools yet.
+- **`chain_fill` completes a proposal from the chain.** A Sign Request must
+  arrive complete ([ADR 0009](0009-sign-request-on-cosl.md)), and an agent
+  cannot know a nonce or a blockhash. `chain_fill` takes transactions in the
+  `sign propose` form and fills each field a transaction leaves out from this
+  Node's Network for its chain: for Ethereum the nonce, gas limit and fees,
+  for Solana the fee payer and recent blockhash. It is read-only, the sender
+  is the Key's address, and it returns the completed transactions for the
+  agent to check and propose. Bitcoin is refused: its inputs need an index a
+  bitcoind endpoint does not keep, which is a Plugin's job. The CLI gets the
+  same as `sign fill`. A Plugin was rejected as the only way: proposing is
+  what DeFiOS is for, and the Node already reaches every chain it signs for.
 - **A run goes on after a Tool.** A Tool's result, or its refusal, is fed back
   to the model, and the run continues until `say`, silence or `max_turns`.
   Only `say` ends a run. What the Tool did is recorded in the Transcript.
-  Retry is not changed here and does not yet account for Tools that acted.
+  A failed chain is not retried: [ADR 0031](0031-conversation-retry-is-removed.md).
 - **Preamble.** It lists the granted Tools and says that sign Tools act as
   this Node, under the agent's Handle, and that a `reason` read from the log
   is another party's words, not instructions.

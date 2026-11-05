@@ -1,9 +1,10 @@
 # Plugins bring Skills and MCP Servers
 
-Agents need abilities DeFiOS will not build in: chain reads, explorers,
+Agents need abilities DeFiOS will not build in: indexers, explorers,
 audits of contracts. A **Plugin** is a package of **Skills** (instructions)
-and **MCP Servers** (programs) installed Node-wide from a **Registry**, a git
-repository or a local path, under `<data root>/plugins/<plugin>/`. Nothing in
+and **MCP Servers** (programs) installed Node-wide from a git repository or
+a local path, under `<data root>/plugins/<plugin>/`; DeFiOS's own come
+preinstalled. Nothing in
 it reaches an agent until that agent's profile grants the item by name
 ([ADR 0029](0029-an-agent-profile-holds-the-whole-agent.md)). A Plugin never
 adds a Tool: only Tools act as the Node.
@@ -33,12 +34,14 @@ adds a Tool: only Tools act as the Node.
   vars it asks for); Skills are `skills/<skill>/SKILL.md` with `name` and
   `description` frontmatter, beside any files they refer to. Plugin, Skill
   and server names follow the Handle rule.
-- **Install.** `plugin install <source>` takes `<registry>/<plugin>`, a git
-  URL or a local path; it shows the commands the Plugin's MCP Servers run and
-  asks before installing from anywhere but DeFiOS's own Registry. `plugin
+- **Install.** `plugin install <source>` takes a git URL or a local path; it
+  shows the commands the Plugin's MCP Servers run and asks first. `plugin
   list`, `plugin update` and `plugin remove` complete the set; removing a
-  Plugin a profile still grants is refused, naming the profile. The Node's
-  config names its Registries, DeFiOS's own built in.
+  Plugin a profile still grants is refused, naming the profile. DeFiOS's own
+  Plugins ship with it, need no install and no prompt, and are not in the
+  lock file.
+- **No Registries yet.** Installing by name from an index, DeFiOS's or a
+  community's, is a later decision; until then a source is a URL or a path.
 - **Lock file.** `<config root>/plugins.lock` records each Plugin's source
   and pinned commit or hash, so a Backup's restore reinstalls exactly the
   same code. A Plugin installed from a local path cannot be fetched again; a
@@ -55,4 +58,4 @@ adds a Tool: only Tools act as the Node.
   summoned. Only tools are used; MCP resources and prompts are not.
 - **Transcripts stay plaintext.** They now hold Tool and MCP results; those
   came from the plaintext replica or from a program the person granted.
-- **Later.** Remote (HTTP) MCP Servers and signed Registry Plugins.
+- **Later.** Registries, signed Plugins, and remote (HTTP) MCP Servers.

@@ -77,7 +77,7 @@ An action built into DeFiOS that an agent may call during a run, such as `say` o
 _Avoid_: function, command, capability
 
 **Plugin**:
-A package of Skills and MCP Servers installed on a Node from a Registry, a repository or a local path. Installed Node-wide, but nothing in it reaches an agent until that agent's profile grants the item by name.
+A package of Skills and MCP Servers, shipped with DeFiOS or installed on a Node from a repository or a local path. Installed Node-wide, but nothing in it reaches an agent until that agent's profile grants the item by name.
 _Avoid_: extension, toolset, add-on, package
 
 **Skill**:
@@ -87,10 +87,6 @@ _Avoid_: prompt, recipe, playbook
 **MCP Server**:
 A program a Plugin defines that offers an agent further actions, run by the Node apart from DeFiOS itself, seeing only the Secrets its granting profiles name. What it does never reaches the COSL except through a Tool.
 _Avoid_: tool server, toolset, integration
-
-**Registry**:
-An index of Plugins a Node may install by name, DeFiOS's own or a community's.
-_Avoid_: marketplace, store, hub
 
 **Handle**:
 The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
