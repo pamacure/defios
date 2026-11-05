@@ -30,7 +30,7 @@ const (
 // Line kinds: which of a Line's fields it holds.
 const (
 	KindRequest = agent.RecordRequest // request: a request body as sent, never its headers
-	KindBlock   = agent.RecordBlock   // block: one output block
+	KindBlock   = agent.RecordBlock   // block: one output block, or a tool call's result
 	KindUsage   = agent.RecordUsage   // usage: a model call's usage
 	KindOutcome = "outcome"           // outcome, and msg_id and seq or error with it
 )
@@ -188,7 +188,8 @@ type Run struct {
 	Handle string
 	Depth  uint32
 	// Requests are the request bodies of its model calls as sent, Blocks
-	// its output blocks and Usage each call's usage, in order.
+	// its output blocks and the results of its tool calls, and Usage each
+	// call's usage, in order.
 	Requests []json.RawMessage
 	Blocks   []json.RawMessage
 	Usage    []json.RawMessage
@@ -198,27 +199,11 @@ type Run struct {
 	Error    string // with OutcomeError: why
 }
 
-// Output is what r generated, in order: its blocks, thinking, text and
-// tool calls, each tool call followed by the result the run answered it
-// with, an agent.ToolResult, which the next request carried. A call it did
-// not answer, as an accepted say, has none.
-func (r Run) Output() []json.RawMessage {
-	results := agent.ToolResults(r.Requests)
-	out := make([]json.RawMessage, 0, len(r.Blocks))
-	for _, raw := range r.Blocks {
-		out = append(out, raw)
-		var b agent.Block
-		if json.Unmarshal(raw, &b) != nil || b.Type != "tool_use" {
-			continue
-		}
-		if res, ok := results[b.ID]; ok {
-			if j, err := json.Marshal(res); err == nil {
-				out = append(out, j)
-			}
-		}
-	}
-	return out
-}
+// Output is what r generated, in order: each model call's blocks,
+// thinking, text and tool calls, followed by the results the run answered
+// its tool calls with, agent.ToolResults. A call it did not answer, as an
+// accepted say, has none.
+func (r Run) Output() []json.RawMessage { return r.Blocks }
 
 // Runs are t's runs, one per step, by step.
 func (t Transcript) Runs() []Run {

@@ -34,6 +34,7 @@ type providerCall struct {
 	Prompt        string // the first message's text
 	Turns         string // every message, "[role] content" a line each
 	Messages      int    // how many messages the call carried
+	Tools         string // the names of the tools offered, space-separated
 }
 
 // fakeProvider is an Anthropic Messages endpoint. reply answers each call,
@@ -63,9 +64,17 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
 			} `json:"messages"`
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		call := providerCall{Key: r.Header.Get("x-api-key"), Path: r.URL.Path, Messages: len(body.Messages)}
+		var tools []string
+		for _, tool := range body.Tools {
+			tools = append(tools, tool.Name)
+		}
+		call.Tools = strings.Join(tools, " ")
 		cached := false
 		for _, b := range body.System {
 			call.System += b.Text
@@ -165,9 +174,15 @@ func streamDeltas(w http.ResponseWriter, parts ...string) {
 // endSay ends a begun stream with a say of text.
 func endSay(w http.ResponseWriter, text string) {
 	input, _ := json.Marshal(map[string]string{"text": text})
-	partial, _ := json.Marshal(string(input))
+	endCall(w, "say", string(input))
+}
+
+// endCall ends a begun stream with a call of the tool name with input, a
+// JSON object.
+func endCall(w http.ResponseWriter, name, input string) {
+	partial, _ := json.Marshal(input)
 	event(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
-	event(w, "content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"say","input":{}}}`)
+	event(w, "content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"`+name+`","input":{}}}`)
 	event(w, "content_block_delta", fmt.Sprintf(`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":%s}}`, partial))
 	event(w, "content_block_stop", `{"type":"content_block_stop","index":1}`)
 	endTurn(w, "tool_use")

@@ -221,6 +221,24 @@ var texts = map[agent.Shape]func(parts ...string) []string{
 	agent.Messages: anthropicText, agent.ChatCompletions: openaiText, agent.Responses: responsesText,
 }
 
+// callsTool is each shape's fake for a turn that calls the tool name with
+// input, a JSON object, and nothing else.
+var callsTool = map[agent.Shape]func(name, input string) []string{
+	agent.Messages: func(name, input string) []string {
+		out := append([]string{anthropicStart()}, anthropicToolBlock(0, "toolu_7", name, input)...)
+		return append(out, anthropicEnd("tool_use")...)
+	},
+	agent.ChatCompletions: func(name, input string) []string {
+		return []string{
+			openaiChunk(`{"role":"assistant","tool_calls":[{"index":0,"id":"call_7","type":"function","function":{"name":`+jsonString(name)+`,"arguments":`+jsonString(input)+`}}]}`, ""),
+			openaiChunk(`{}`, "tool_calls"), openaiUsage, `data: [DONE]`,
+		}
+	},
+	agent.Responses: func(name, input string) []string {
+		return append(responsesCall(0, "call_7", name, input), responsesEnd())
+	},
+}
+
 // recorder collects what Run reports as it goes, consecutive deltas of a
 // kind as one "kind:text" entry.
 type recorder struct {
@@ -308,10 +326,43 @@ func (s *script) body(n int) map[string]any {
 	return s.bodies[n-1]
 }
 
+// run runs a Request offering say alone against s.
 func run(s *script, shape agent.Shape, ev agent.Events) (agent.Result, error) {
+	return runWith(s, shape, ev, agent.Say)
+}
+
+// runWith runs a Request offering tools against s.
+func runWith(s *script, shape agent.Shape, ev agent.Events, tools ...agent.Tool) (agent.Result, error) {
 	return agent.Client{Backoff: time.Millisecond}.Run(context.Background(), agent.Request{
 		Shape: shape, URL: s.URL, APIKey: "sk-secret", Body: map[string]any{"model": "m"}, System: "be brief\n", SystemDepth: "at depth 1\n", Turns: talk,
+		Tools: tools,
 	}, ev)
+}
+
+// toolNames is the names of the tools body offers, in order.
+func toolNames(body map[string]any) string {
+	var names []string
+	tools, _ := body["tools"].([]any)
+	for _, raw := range tools {
+		t, _ := raw.(map[string]any)
+		if f, ok := t["function"].(map[string]any); ok {
+			t = f
+		}
+		names = append(names, fmt.Sprint(t["name"]))
+	}
+	return strings.Join(names, " ")
+}
+
+// resultBlocks is the tool results among rec's blocks.
+func (r *recorder) resultBlocks() []agent.ToolResult {
+	var out []agent.ToolResult
+	for _, rec := range r.records {
+		var res agent.ToolResult
+		if rec.Kind == agent.RecordBlock && json.Unmarshal(rec.Data, &res) == nil && res.Type == "tool_result" {
+			out = append(out, res)
+		}
+	}
+	return out
 }
 
 // messages is a request's conversation: its messages, or its input items.
@@ -502,7 +553,7 @@ func TestResponsesReplaysItsOutputItems(t *testing.T) {
 	if output["type"] != "function_call_output" || output["call_id"] != "call_9" || !strings.Contains(fmt.Sprint(output["output"]), "empty") {
 		t.Fatalf("refusal = %v", output)
 	}
-	if got := rec.kinds(); got != "request block block usage request block block usage" {
+	if got := rec.kinds(); got != "request block block usage block request block block usage" {
 		t.Fatalf("records = %s", got)
 	}
 	if b := string(rec.records[1].Data); !strings.Contains(b, `"type":"reasoning"`) || !strings.Contains(b, "weighing it") {
@@ -576,6 +627,89 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 		third, _ := json.Marshal(messages(s.body(3)))
 		if !strings.Contains(string(third), "first") || !strings.Contains(string(third), "empty") {
 			t.Errorf("%s: third call lacks the run so far: %s", p, third)
+		}
+	}
+}
+
+// A Tool other than say is offered in the shape's own form after say, called
+// with its input, and its result fed back to the model as a result, not an
+// error, and recorded as a block; the run goes on until a say. Every shape.
+func TestAToolResultIsFedBackAndTheRunGoesOn(t *testing.T) {
+	for p, says := range says {
+		var got []string
+		lookup := agent.Tool{Name: "lookup", Description: "Look it up.",
+			Schema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false}`),
+			Call: func(_ context.Context, in json.RawMessage) (string, error) {
+				got = append(got, string(in))
+				return "found 42", nil
+			}}
+		s := newScript(t, callsTool[p]("lookup", `{"q":"x"}`), says("so", "it is 42"))
+		var rec recorder
+		res, err := runWith(s, p, rec.events(), agent.Say, lookup)
+		if err != nil || res.Said != "it is 42" || s.calls() != 2 {
+			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
+		}
+		if fmt.Sprint(got) != `[{"q":"x"}]` {
+			t.Errorf("%s: lookup called with %v", p, got)
+		}
+		if names := toolNames(s.body(1)); names != "say lookup" {
+			t.Errorf("%s: tools offered %q", p, names)
+		}
+		second, _ := json.Marshal(messages(s.body(2)))
+		if !strings.Contains(string(second), "found 42") || strings.Contains(string(second), `"is_error":true`) {
+			t.Errorf("%s: second call does not carry the result: %s", p, second)
+		}
+		if r := rec.resultBlocks(); len(r) != 1 || r[0].Content != "found 42" || r[0].IsError || r[0].ToolUseID == "" {
+			t.Errorf("%s: results recorded %+v", p, r)
+		}
+	}
+}
+
+// A call of a Tool the run does not offer, or one whose Call fails, is
+// answered with a tool error saying why, and the run goes on. Every shape.
+func TestAnUnofferedOrFailingToolIsAToolError(t *testing.T) {
+	for p, says := range says {
+		broken := agent.Tool{Name: "broken", Schema: json.RawMessage(`{"type":"object"}`),
+			Call: func(context.Context, json.RawMessage) (string, error) {
+				return "", errors.New("the log is unreachable")
+			}}
+		s := newScript(t, callsTool[p]("sign_list", `{}`), callsTool[p]("broken", `{}`), says("ok", "done"))
+		var rec recorder
+		res, err := runWith(s, p, rec.events(), agent.Say, broken)
+		if err != nil || res.Said != "done" || s.calls() != 3 {
+			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
+		}
+		second, _ := json.Marshal(messages(s.body(2)))
+		if !strings.Contains(string(second), `no tool named \"sign_list\"`) || !strings.Contains(string(second), "say, broken") {
+			t.Errorf("%s: second call lacks the refusal: %s", p, second)
+		}
+		third, _ := json.Marshal(messages(s.body(3)))
+		if !strings.Contains(string(third), "the log is unreachable") {
+			t.Errorf("%s: third call lacks the failure: %s", p, third)
+		}
+		r := rec.resultBlocks()
+		if len(r) != 2 || !r[0].IsError || !r[1].IsError {
+			t.Errorf("%s: results recorded %+v", p, r)
+		}
+	}
+}
+
+// A run offered no Tools sends no tools field at all, and ends silent when
+// the model ends its turn; a say it calls is refused like any Tool not
+// offered, so nothing is said. Every shape.
+func TestARunWithNoToolsOffersNone(t *testing.T) {
+	for p, says := range says {
+		s := newScript(t, says("hmm", "let me speak"), texts[p]("nothing then"))
+		res, err := runWith(s, p, agent.Events{})
+		if err != nil || !res.Silent || res.Said != "" || s.calls() != 2 {
+			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
+		}
+		if tools, ok := s.body(1)["tools"]; ok {
+			t.Errorf("%s: tools = %v, want none sent", p, tools)
+		}
+		second, _ := json.Marshal(messages(s.body(2)))
+		if !strings.Contains(string(second), `no tool named \"say\"`) {
+			t.Errorf("%s: second call lacks the refusal: %s", p, second)
 		}
 	}
 }
@@ -739,7 +873,7 @@ func TestANonStreamedReplyIsRead(t *testing.T) {
 		if rec.String() != want {
 			t.Errorf("%s: events %s\nwant   %s", p, &rec, want)
 		}
-		if got, want := rec.kinds(), "request "+blocks+" usage request "+blocks+" usage"; got != want {
+		if got, want := rec.kinds(), "request "+blocks+" usage block request "+blocks+" usage"; got != want {
 			t.Errorf("%s: records = %s, want %s", p, got, want)
 		}
 		second := fmt.Sprint(messages(s.body(2)))
@@ -854,7 +988,7 @@ func TestShapeOfAPIPath(t *testing.T) {
 func TestMaxTurnsBoundsTheRun(t *testing.T) {
 	s := newScript(t, anthropicSays("again", ""))
 	_, err := agent.Client{}.Run(context.Background(), agent.Request{
-		Shape: agent.Messages, URL: s.URL, Turns: talk, MaxTurns: 3,
+		Shape: agent.Messages, URL: s.URL, Turns: talk, MaxTurns: 3, Tools: []agent.Tool{agent.Say},
 	}, agent.Events{})
 	if err == nil || !strings.Contains(err.Error(), "3 model calls") || s.calls() != 3 {
 		t.Fatalf("err %v after %d calls", err, s.calls())
@@ -874,26 +1008,27 @@ func TestAProviderRefusingAnOptionIsNotRetried(t *testing.T) {
 	}
 }
 
-// A run records each request body as sent, each output block and each
-// call's usage, and never the key.
+// A run records each request body as sent, each output block, each call's
+// usage and then the answer to each of its tool calls, and never the key.
 func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {
 	s := newScript(t, anthropicSays("first", ""), anthropicSays("second", "done"))
 	var rec recorder
 	if _, err := run(s, agent.Messages, rec.events()); err != nil {
 		t.Fatal(err)
 	}
-	if got := rec.kinds(); got != "request block block usage request block block usage" {
+	if got := rec.kinds(); got != "request block block usage block request block block usage" {
 		t.Fatalf("records = %s", got)
 	}
 	var sent map[string]any
-	if err := json.Unmarshal(rec.records[4].Data, &sent); err != nil {
+	if err := json.Unmarshal(rec.records[5].Data, &sent); err != nil {
 		t.Fatal(err)
 	}
 	if fmt.Sprint(sent) != fmt.Sprint(s.body(2)) {
 		t.Fatalf("recorded request %v, sent %v", sent, s.body(2))
 	}
-	if !strings.Contains(string(rec.records[2].Data), `"say"`) || !strings.Contains(string(rec.records[3].Data), "output_tokens") {
-		t.Fatalf("records = %s, %s", rec.records[2].Data, rec.records[3].Data)
+	if !strings.Contains(string(rec.records[2].Data), `"say"`) || !strings.Contains(string(rec.records[3].Data), "output_tokens") ||
+		!strings.Contains(string(rec.records[4].Data), `"is_error":true`) {
+		t.Fatalf("records = %s, %s, %s", rec.records[2].Data, rec.records[3].Data, rec.records[4].Data)
 	}
 	for _, r := range rec.records {
 		if strings.Contains(string(r.Data), "sk-secret") {
@@ -933,7 +1068,7 @@ func failing(t *testing.T, fail func(n int, w http.ResponseWriter) bool) (*httpt
 
 func generate(srv *httptest.Server, ev agent.Events) (agent.Result, error) {
 	c := agent.Client{Backoff: time.Millisecond}
-	return c.Run(context.Background(), agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, ev)
+	return c.Run(context.Background(), agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}, Tools: []agent.Tool{agent.Say}}, ev)
 }
 
 // Rate limits, overload, 5xx and dropped connections are retried; a retry

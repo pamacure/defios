@@ -1,10 +1,12 @@
 // Package agent runs a summoned agent against a Provider (docs/adr/0015-
 // agent-profiles-handles-and-agent-chains.md, docs/adr/0018-an-agent-says-
-// one-message.md, docs/adr/0019-providers-replace-models-on-the-cosl.md). A
-// run is a loop of model calls in one API Shape, streamed or not, offering one
-// tool, say: an accepted say is the run's result and ends it; a turn that
-// ends without one is silence. Each call is retried when a provider says it
-// is worth it.
+// one-message.md, docs/adr/0019-providers-replace-models-on-the-cosl.md,
+// docs/adr/0029-an-agent-profile-holds-the-whole-agent.md). A run is a loop
+// of model calls in one API Shape, streamed or not, offering the Tools it is
+// given: an accepted say is the run's result and ends it; any other Tool's
+// result goes back to the model and the run goes on; a turn that ends
+// without a tool call is silence. Each call is retried when a provider says
+// it is worth it.
 package agent
 
 import (
@@ -17,6 +19,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,8 +33,8 @@ const DefaultMaxTurns = 8
 // MaxSay is the most bytes a say may carry; a longer one is refused.
 const MaxSay = 4096
 
-// sayTool is the one tool every run offers.
-const sayTool = "say"
+// SayName is say's name: the Tool whose accepted call ends a run.
+const SayName = "say"
 
 // sayDescription tells the model what say does.
 const sayDescription = "Post your message to the group chat. Only what you pass here is posted; " +
@@ -42,6 +45,20 @@ const sayDescription = "Post your message to the group chat. Only what you pass 
 // saySchema is say's input: one string.
 // It admits no other property, as a strict function tool requires.
 var saySchema = json.RawMessage(`{"type":"object","properties":{"text":{"type":"string","description":"The message to post."}},"required":["text"],"additionalProperties":false}`)
+
+// Tool is one tool a run offers the model (ADR 0029).
+type Tool struct {
+	Name        string
+	Description string
+	Schema      json.RawMessage // its input, a JSON schema of an object
+	// Call answers a call of it with its input: a result for the model, or
+	// an error the model is told as a tool error. Say has none: the run
+	// itself checks a say, and an accepted one ends the run.
+	Call func(ctx context.Context, input json.RawMessage) (string, error)
+}
+
+// Say is the say Tool: post one message to the talk, and end the run.
+var Say = Tool{Name: SayName, Description: sayDescription, Schema: saySchema}
 
 // Request is one run to make.
 type Request struct {
@@ -56,8 +73,12 @@ type Request struct {
 	SystemDepth string
 	Turns       []Turn // the talk so far, alternating and ending with User
 
+	// Tools are what the run offers, in order; none is a run that can only
+	// end its turn. A call of any other name is a tool error.
+	Tools []Tool
+
 	// Body is the Agent Profile's request body, JSON values only: it merges
-	// over what DeFiOS writes, the conversation and the say tool (ADR 0019).
+	// over what DeFiOS writes, the conversation and the tools (ADR 0019).
 	// The model id, streaming and any token bound are set here or not at all.
 	Body map[string]any
 	// MaxTurns bounds the calls in the run; 0 is DefaultMaxTurns.
@@ -101,8 +122,10 @@ type Record struct {
 // The kinds of Record.
 const (
 	RecordRequest = "request" // a request body as sent, never its headers
-	RecordBlock   = "block"   // one output block of a call
-	RecordUsage   = "usage"   // a call's usage
+	// RecordBlock is one block of the run: an output block of a call, a
+	// Block, or the answer the run gave a tool call, a ToolResult.
+	RecordBlock = "block"
+	RecordUsage = "usage" // a call's usage
 )
 
 // Kinds of output an agent generates, as it streams (ADR 0018).
@@ -209,8 +232,10 @@ type call struct {
 }
 
 // Run makes req's run: model calls until a say is accepted, the model ends
-// its turn without one, or something fails. Each call carries everything
-// the run has generated so far. A call is retried on a
+// its turn without a tool call, or something fails. The tool calls of a
+// call are answered in order, each answer recorded as a block; an accepted
+// say ends the run there. Each call carries everything the run has
+// generated so far. A call is retried on a
 // rate limit, overload, 5xx response or dropped connection, up to Retries
 // times. A call that stops at its token bound, or a run that reaches its
 // turn bound without a say, is an error.
@@ -241,16 +266,20 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 		if out.incomplete {
 			return Result{}, fmt.Errorf("agent: the reply came back incomplete (%s)", out.stop)
 		}
-		var results []toolResult
+		var results []ToolResult
 		for _, b := range out.blocks {
 			if b.Type != "tool_use" {
 				continue
 			}
-			text, refusal := checkSay(b)
-			if refusal == "" {
+			text, said, res := answer(ctx, req.Tools, b)
+			if said {
 				return Result{Said: text}, nil
 			}
-			results = append(results, toolResult{id: b.ID, text: refusal})
+			if ctx.Err() != nil {
+				return Result{}, ctx.Err()
+			}
+			ev.record(RecordBlock, res)
+			results = append(results, res)
 		}
 		if len(results) == 0 {
 			return Result{Silent: true}, nil
@@ -260,11 +289,48 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 	return Result{}, fmt.Errorf("agent: %d model calls without an accepted say", req.maxTurns())
 }
 
+// answer answers the tool call b among tools: with said set, an accepted
+// say of text; otherwise the result for the model, an error when b names
+// no tool offered, its input is refused, or the Tool fails.
+func answer(ctx context.Context, tools []Tool, b Block) (text string, said bool, res ToolResult) {
+	res = ToolResult{Type: "tool_result", ToolUseID: b.ID}
+	i := slices.IndexFunc(tools, func(t Tool) bool { return t.Name == b.Name })
+	switch {
+	case i < 0:
+		res.Content, res.IsError = noSuchTool(tools, b.Name), true
+	case b.Name == SayName:
+		text, refusal := checkSay(b)
+		if refusal == "" {
+			return text, true, res
+		}
+		res.Content, res.IsError = refusal, true
+	case tools[i].Call == nil:
+		res.Content, res.IsError = fmt.Sprintf("%s cannot be called here.", b.Name), true
+	default:
+		out, err := tools[i].Call(ctx, b.Input)
+		if err != nil {
+			res.Content, res.IsError = fmt.Sprintf("%s failed: %v", b.Name, err), true
+		} else {
+			res.Content = out
+		}
+	}
+	return "", false, res
+}
+
+// noSuchTool is the refusal of a call of name, which tools does not offer.
+func noSuchTool(tools []Tool, name string) string {
+	if len(tools) == 0 {
+		return fmt.Sprintf("There is no tool named %q; you have no tools. End your turn.", name)
+	}
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
+	}
+	return fmt.Sprintf("There is no tool named %q; your tools are %s.", name, strings.Join(names, ", "))
+}
+
 // checkSay is the text of an acceptable say, or why b is refused.
 func checkSay(b Block) (text, refusal string) {
-	if b.Name != sayTool {
-		return "", fmt.Sprintf("There is no tool named %q; say is the only tool.", b.Name)
-	}
 	var in struct {
 		Text *string `json:"text"`
 	}
@@ -280,66 +346,13 @@ func checkSay(b Block) (text, refusal string) {
 	return *in.Text, ""
 }
 
-// toolResult is the answer to a tool call: always an error, since an
-// accepted say ends the run.
-type toolResult struct{ id, text string }
-
 // ToolResult is the answer a run gave one of its agent's tool calls, as a
-// block of the run's output: always an error, since an accepted say ends
-// the run.
+// block of the run: a Tool's result, or with IsError why the call failed.
 type ToolResult struct {
 	Type      string `json:"type"` // tool_result
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
 	IsError   bool   `json:"is_error"`
-}
-
-// ToolResults is the answers to tool calls that requests, a run's request
-// bodies in any shape, carried, by the ID of the call each answers. A body
-// that does not parse carries none.
-func ToolResults(requests []json.RawMessage) map[string]ToolResult {
-	type item struct {
-		Type       string          `json:"type"`
-		Role       string          `json:"role"`
-		Content    json.RawMessage `json:"content"`
-		ToolUseID  string          `json:"tool_use_id"`  // Messages
-		ToolCallID string          `json:"tool_call_id"` // Chat Completions
-		CallID     string          `json:"call_id"`      // Responses
-		Output     string          `json:"output"`
-	}
-	out := map[string]ToolResult{}
-	answer := func(id, text string) {
-		out[id] = ToolResult{Type: "tool_result", ToolUseID: id, Content: text, IsError: true}
-	}
-	for _, body := range requests {
-		var b struct{ Messages, Input []item }
-		if json.Unmarshal(body, &b) != nil {
-			continue
-		}
-		for _, it := range append(b.Messages, b.Input...) {
-			switch {
-			case it.Type == "function_call_output":
-				answer(it.CallID, it.Output)
-			case it.Role == "tool":
-				var text string
-				json.Unmarshal(it.Content, &text)
-				answer(it.ToolCallID, text)
-			case it.Role == "user":
-				var parts []item
-				if json.Unmarshal(it.Content, &parts) != nil {
-					continue // plain text
-				}
-				for _, p := range parts {
-					if p.Type == "tool_result" {
-						var text string
-						json.Unmarshal(p.Content, &text)
-						answer(p.ToolUseID, text)
-					}
-				}
-			}
-		}
-	}
-	return out
 }
 
 // conversation is a run's request so far, in its provider's shape. Each
@@ -372,11 +385,11 @@ func newConversation(req Request) (*conversation, error) {
 }
 
 // add appends a call's output and the answers to its tool calls.
-func (c *conversation) add(blocks []Block, results []toolResult) {
+func (c *conversation) add(blocks []Block, results []ToolResult) {
 	c.wire.add(c, blocks, results)
 }
 
-// body is the next call's request body: the conversation and the say tool
+// body is the next call's request body: the conversation and the tools
 // in the shape's own fields, with the profile's body merged over them. It
 // fails only on a body value JSON cannot hold.
 func (c *conversation) body() ([]byte, error) {
@@ -421,27 +434,44 @@ func messagesFields(c *conversation) map[string]any {
 	if len(c.system) > 0 {
 		v["system"] = c.system
 	}
-	v["tools"] = []any{map[string]any{"name": sayTool, "description": sayDescription, "input_schema": saySchema}}
+	offer(v, c.req.Tools, func(t Tool) any {
+		return map[string]any{"name": t.Name, "description": t.Description, "input_schema": t.Schema}
+	})
 	return v
 }
 
 func chatCompletionsFields(c *conversation) map[string]any {
-	return map[string]any{
-		"messages": c.msgs,
-		"tools":    []any{map[string]any{"type": "function", "function": map[string]any{"name": sayTool, "description": sayDescription, "parameters": saySchema}}},
-	}
+	v := map[string]any{"messages": c.msgs}
+	offer(v, c.req.Tools, func(t Tool) any {
+		return map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Schema}}
+	})
+	return v
 }
 
 func responsesFields(c *conversation) map[string]any {
-	return map[string]any{
-		"input": c.msgs,
-		"tools": []any{map[string]any{"type": "function", "name": sayTool, "description": sayDescription, "parameters": saySchema}},
+	v := map[string]any{"input": c.msgs}
+	offer(v, c.req.Tools, func(t Tool) any {
+		return map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Schema}
+	})
+	return v
+}
+
+// offer sets fields' tools to each of tools in a shape's form; with none
+// there is no tools field, which every shape takes as no tools.
+func offer(fields map[string]any, tools []Tool, form func(Tool) any) {
+	if len(tools) == 0 {
+		return
 	}
+	out := make([]any, len(tools))
+	for i, t := range tools {
+		out[i] = form(t)
+	}
+	fields["tools"] = out
 }
 
 // addResponses appends each output item as it came back, then the answers
 // to its function calls.
-func addResponses(c *conversation, blocks []Block, results []toolResult) {
+func addResponses(c *conversation, blocks []Block, results []ToolResult) {
 	for _, b := range blocks {
 		switch {
 		case b.Item != nil:
@@ -453,7 +483,7 @@ func addResponses(c *conversation, blocks []Block, results []toolResult) {
 		}
 	}
 	for _, r := range results {
-		c.msgs = append(c.msgs, map[string]any{"type": "function_call_output", "call_id": r.id, "output": r.text})
+		c.msgs = append(c.msgs, map[string]any{"type": "function_call_output", "call_id": r.ToolUseID, "output": r.Content})
 	}
 }
 
@@ -466,7 +496,7 @@ func toolArguments(input json.RawMessage) string {
 	return string(input)
 }
 
-func addMessages(c *conversation, blocks []Block, results []toolResult) {
+func addMessages(c *conversation, blocks []Block, results []ToolResult) {
 	content := make([]any, 0, len(blocks))
 	for _, b := range blocks {
 		switch b.Type {
@@ -482,7 +512,7 @@ func addMessages(c *conversation, blocks []Block, results []toolResult) {
 	}
 	answers := make([]any, len(results))
 	for i, r := range results {
-		answers[i] = map[string]any{"type": "tool_result", "tool_use_id": r.id, "content": r.text, "is_error": true}
+		answers[i] = map[string]any{"type": "tool_result", "tool_use_id": r.ToolUseID, "content": r.Content, "is_error": r.IsError}
 	}
 	if c.latest != nil {
 		delete(c.latest, "cache_control")
@@ -494,7 +524,7 @@ func addMessages(c *conversation, blocks []Block, results []toolResult) {
 		map[string]any{"role": "user", "content": answers})
 }
 
-func addChatCompletions(c *conversation, blocks []Block, results []toolResult) {
+func addChatCompletions(c *conversation, blocks []Block, results []ToolResult) {
 	var text strings.Builder
 	var calls []any
 	for _, b := range blocks {
@@ -511,7 +541,7 @@ func addChatCompletions(c *conversation, blocks []Block, results []toolResult) {
 	}
 	c.msgs = append(c.msgs, msg)
 	for _, r := range results {
-		c.msgs = append(c.msgs, map[string]any{"role": "tool", "tool_call_id": r.id, "content": r.text})
+		c.msgs = append(c.msgs, map[string]any{"role": "tool", "tool_call_id": r.ToolUseID, "content": r.Content})
 	}
 }
 

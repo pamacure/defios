@@ -220,8 +220,8 @@ func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
 	}
 }
 
-// Each chain's Transcript holds one line per request, output block, usage
-// and outcome, each tagged with its step, Handle and depth, and
+// Each chain's Transcript holds one line per request, output block, usage,
+// tool result and outcome, each tagged with its step, Handle and depth, and
 // never the key.
 func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
@@ -242,7 +242,7 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	}
 	events := untilEnd(t, s, v.MsgID)
 	lines := transcript(t, a, v.MsgID)
-	want := "1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage " +
+	want := "1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:block " +
 		"1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:outcome=said " +
 		"2/scribe/1:request 2/scribe/1:block 2/scribe/1:usage 2/scribe/1:outcome=silent"
 	if got := lineWords(lines); got != want {
@@ -254,10 +254,13 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 			commit = ev
 		}
 	}
-	if said := lines[8]; commit.Text != "ok" || said["seq"] != float64(commit.Seq) || said["msg_id"] != commit.MsgID || commit.MsgID == "" {
+	if res, _ := lines[4]["block"].(map[string]any); res["type"] != "tool_result" || res["is_error"] != true || !strings.Contains(fmt.Sprint(res["content"]), "empty") {
+		t.Fatalf("the refused say's answer = %v", lines[4])
+	}
+	if said := lines[9]; commit.Text != "ok" || said["seq"] != float64(commit.Seq) || said["msg_id"] != commit.MsgID || commit.MsgID == "" {
 		t.Fatalf("said seq %v, agent.commit %+v", said, commit)
 	}
-	req, _ := lines[4]["request"].(map[string]any)
+	req, _ := lines[5]["request"].(map[string]any)
 	if req["model"] != "claude-test" || len(req["messages"].([]any)) != 3 {
 		t.Fatalf("second request = %v", req)
 	}

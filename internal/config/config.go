@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,10 +54,39 @@ type Profile struct {
 	// MaxTurns is how many model calls a summon may make; 0 is unset,
 	// which is agent.DefaultMaxTurns.
 	MaxTurns int `toml:"max_turns,omitzero"`
+	// Tools is the whole list of built-in Tools it may call (ADR 0029): nil
+	// is unset, say alone; empty grants none.
+	Tools []string `toml:"tools,omitempty"`
 	// Body is the request's other fields, as TOML nests them: whatever the
 	// API shape takes. It merges over its Provider's body, which merges over
 	// what DeFiOS writes. ReadFile converts it to JSON values.
 	Body map[string]any `toml:"body,omitempty"`
+}
+
+// The built-in Tools a profile's tools may grant (ADR 0029).
+const (
+	ToolSay         = agent.SayName
+	ToolSignList    = "sign_list"
+	ToolSignInspect = "sign_inspect"
+)
+
+// Tools is every built-in Tool, in the order a run offers them.
+var Tools = []string{ToolSay, ToolSignList, ToolSignInspect}
+
+// Granted is the Tools p grants: its tools, or unset, say alone.
+func (p Profile) Granted() []string {
+	if p.Tools == nil {
+		return []string{ToolSay}
+	}
+	return p.Tools
+}
+
+// ValidateTool refuses a name that is no built-in Tool.
+func ValidateTool(name string) error {
+	if !slices.Contains(Tools, name) {
+		return fmt.Errorf("no Tool %q: the Tools are %s", name, strings.Join(Tools, ", "))
+	}
+	return nil
 }
 
 // Workspace is the part of a config.toml a Conversation's may override.
@@ -145,6 +175,9 @@ func write(path string, v any, a Agent) error {
 		return fmt.Errorf("config: %w; %w", err, ErrNotWritten)
 	}
 	out := buf.Bytes()
+	if p, ok := v.(Profile); ok && p.Tools != nil && len(p.Tools) == 0 {
+		out = append([]byte("tools = []\n"), out...)
+	}
 	if a.Profiles != nil && len(a.Profiles) == 0 {
 		out = agentHeader.ReplaceAll(out, []byte("[agent]\nprofiles = []\n"))
 	}
@@ -191,7 +224,8 @@ func parseConfig(path string, data []byte) (Config, error) {
 }
 
 // WriteProfile writes an Agent Profile's config.toml, mode 0600, once it
-// reads back.
+// reads back. The encoder drops an empty list, so tools set empty, which
+// grants none, is written first by hand.
 func WriteProfile(path string, p Profile) error {
 	return write(path, p, Agent{})
 }
@@ -226,6 +260,14 @@ func parseProfile(path string, data []byte) (Profile, error) {
 	}
 	if md.IsDefined("max_turns") && p.MaxTurns < 1 {
 		return fail("max_turns %d must be a positive integer", p.MaxTurns)
+	}
+	for i, t := range p.Tools {
+		if err := ValidateTool(t); err != nil {
+			return fail("tools: %w", err)
+		}
+		if slices.Contains(p.Tools[:i], t) {
+			return fail("tools: %q is listed twice", t)
+		}
 	}
 	if _, ok := p.Body[""]; ok {
 		return fail("body: a key may not be empty")
@@ -422,12 +464,13 @@ type Included struct {
 func (in Included) Summons(depth uint32) bool { return int(depth) < in.MaxDepth }
 
 // ResolvedProfile is an included Agent Profile with its directory resolved,
-// max_turns defaulted, and its body merged over its Provider's.
+// max_turns and tools defaulted, and its body merged over its Provider's.
 type ResolvedProfile struct {
 	Handle   string
 	Dir      string // absolute
 	Provider string // a Provider alias
 	MaxTurns int
+	Tools    []string       // the Tools it grants, never nil
 	Body     map[string]any // JSON values; nil when neither body is set
 }
 

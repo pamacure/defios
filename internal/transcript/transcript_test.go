@@ -2,6 +2,7 @@ package transcript_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -136,31 +137,18 @@ func TestNoTranscriptReadsEmpty(t *testing.T) {
 	}
 }
 
-// A run's output is its blocks with each tool call followed by the result
-// the run answered it with, which the next request carried, in each API
-// shape; a call the run did not answer, as an accepted say, has none.
+// A run's output is its blocks as recorded: each tool call followed by the
+// result the run answered it with; a call the run did not answer, as an
+// accepted say, has none.
 func TestOutputHasEachToolCallsResult(t *testing.T) {
-	calls := []json.RawMessage{
+	blocks := []json.RawMessage{
 		json.RawMessage(`{"type":"thinking","thinking":"hm"}`),
 		json.RawMessage(`{"type":"tool_use","id":"t1","name":"shout","input":{}}`),
+		json.RawMessage(`{"type":"tool_result","tool_use_id":"t1","content":"no such tool","is_error":true}`),
 		json.RawMessage(`{"type":"tool_use","id":"t2","name":"say","input":{"text":"ok"}}`),
 	}
-	result := `{"type":"tool_result","tool_use_id":"t1","content":"no such tool","is_error":true}`
-	want := []json.RawMessage{calls[0], calls[1], json.RawMessage(result), calls[2]}
-	for shape, next := range map[string]string{
-		"messages":         `{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"no such tool","is_error":true,"cache_control":{"type":"ephemeral"}}]}]}`,
-		"chat_completions": `{"messages":[{"role":"user","content":"hi"},{"role":"assistant","tool_calls":[]},{"role":"tool","tool_call_id":"t1","content":"no such tool"}]}`,
-		"responses":        `{"input":[{"role":"user","content":"hi"},{"type":"function_call","call_id":"t1"},{"type":"function_call_output","call_id":"t1","output":"no such tool"}]}`,
-	} {
-		r := transcript.Run{Requests: []json.RawMessage{json.RawMessage(`{"messages":[]}`), json.RawMessage(next)}, Blocks: calls}
-		got := r.Output()
-		if len(got) != len(want) {
-			t.Fatalf("%s: output = %s", shape, got)
-		}
-		for i := range want {
-			if string(got[i]) != string(want[i]) {
-				t.Errorf("%s: output[%d] = %s, want %s", shape, i, got[i], want[i])
-			}
-		}
+	r := transcript.Run{Requests: []json.RawMessage{json.RawMessage(`{"messages":[]}`)}, Blocks: blocks}
+	if got := r.Output(); fmt.Sprintf("%s", got) != fmt.Sprintf("%s", blocks) {
+		t.Fatalf("output = %s", got)
 	}
 }

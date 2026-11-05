@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -248,8 +249,62 @@ Group's, and exclude --key refuses it.`,
 		cmd.Flags().StringVar(&keyQuery, "key", "", keyEditFlagHelp)
 	}
 
-	root.AddCommand(addCmd, listCmd, showCmd, editCmd, deleteCmd, includeCmd, excludeCmd)
+	grantCmd := &cobra.Command{
+		Use:   "grant <handle> <tool>",
+		Short: "Grant an Agent Profile a built-in Tool, and print the Tools it is granted",
+		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029). An unset
+list is say alone, so granting into it writes say with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `;
+the sign Tools are offered only in a Key's Conversation, never in Group-level talk.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, true) },
+	}
+	revokeCmd := &cobra.Command{
+		Use:   "revoke <handle> <tool>",
+		Short: "Revoke a built-in Tool from an Agent Profile, and print the Tools it is granted",
+		Long: `Take a Tool out of an Agent Profile's tools. Revoking say leaves an agent that cannot post to the talk;
+revoking every Tool leaves an empty list, an agent that can only end its turn.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, false) },
+	}
+
+	root.AddCommand(addCmd, listCmd, showCmd, editCmd, deleteCmd, includeCmd, excludeCmd, grantCmd, revokeCmd)
 	return root
+}
+
+// runAgentGrant grants the Tool args[1] to the Agent Profile args[0], or
+// revokes it, and prints the Tools it is granted. Granting what it has or
+// revoking what it lacks changes nothing.
+func runAgentGrant(g *globals, args []string, grant bool) error {
+	handle, err := handleArg(args)
+	if err != nil {
+		return err
+	}
+	tool := args[1]
+	if err := config.ValidateTool(tool); err != nil {
+		return exitUsagef("%w", err)
+	}
+	p, err := readProfile(g, handle)
+	if err != nil {
+		return err
+	}
+	tools := p.Granted()
+	if grant != contains(tools, tool) {
+		if grant {
+			p.Tools = append(slices.Clone(tools), tool)
+		} else {
+			p.Tools = slices.DeleteFunc(slices.Clone(tools), func(t string) bool { return t == tool })
+		}
+		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
+			return err
+		}
+	}
+	if g.json {
+		return g.emitJSON(p.Granted())
+	}
+	for _, t := range p.Granted() {
+		fmt.Fprintln(g.app.Stdout, t)
+	}
+	return nil
 }
 
 // runAgentInclusion includes handle in, or excludes it from, the Group's
@@ -457,7 +512,11 @@ func runAgentShow(g *globals, handle string) error {
 	if v.MaxTurns != 0 {
 		fmt.Fprintf(g.app.Stdout, "max_turns %d\n", v.MaxTurns)
 	}
-	fmt.Fprintf(g.app.Stdout, "profile_dir %s\n", v.Dir)
+	tools := g.out().caution("none")
+	if len(v.Tools) > 0 {
+		tools = strings.Join(v.Tools, ", ")
+	}
+	fmt.Fprintf(g.app.Stdout, "tools %s\nprofile_dir %s\n", tools, v.Dir)
 	if v.Body != nil {
 		body, err := json.Marshal(v.Body)
 		if err != nil {
@@ -600,12 +659,13 @@ type agentView struct {
 	Provider string         `json:"provider"`
 	Model    string         `json:"model,omitempty"`
 	MaxTurns int            `json:"max_turns,omitempty"`
+	Tools    []string       `json:"tools"` // the Tools it is granted
 	Dir      string         `json:"profile_dir"`
 	Body     map[string]any `json:"body,omitempty"`
 }
 
 func agentViewOf(g *globals, handle string, p config.Profile) agentView {
 	model, _ := p.Body["model"].(string)
-	return agentView{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns,
+	return agentView{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: p.Granted(),
 		Dir: g.paths().AgentProfileDir(handle), Body: p.Body}
 }

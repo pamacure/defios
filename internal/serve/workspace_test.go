@@ -2,6 +2,7 @@ package serve_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,13 @@ import (
 // curve and the first 12 hex characters of its public key.
 func mintKey(t *testing.T, a, b *node, gid group.ID) string {
 	t.Helper()
-	pk := bytes.Repeat([]byte{0x33}, 33)
+	return mintKeyOf(t, a, b, gid, 0x33)
+}
+
+// mintKeyOf is mintKey of the ECDSA Key whose public key is 33 bytes of fill.
+func mintKeyOf(t *testing.T, a, b *node, gid group.ID, fill byte) string {
+	t.Helper()
+	pk := bytes.Repeat([]byte{fill}, 33)
 	var sid [32]byte
 	copy(sid[:], pk)
 	sign := func(n *node, msg proto.Message, typ uint32) cosl.Signed {
@@ -37,7 +44,7 @@ func mintKey(t *testing.T, a, b *node, gid group.ID) string {
 	complete := &coslv1.SessionComplete{SessionId: sid[:], Curve: "ecdsa", PublicKey: pk}
 	commitEnvelope(t, a, b, sign(a, complete, cosl.TypeSessionComplete))
 	commitEnvelope(t, a, b, sign(b, complete, cosl.TypeSessionComplete))
-	return "ecdsa-" + strings.Repeat("33", 6)
+	return "ecdsa-" + strings.Repeat(hex.EncodeToString([]byte{fill}), 6)
 }
 
 // waitWorkspace waits for n's Workspace called name, empty. The deadline is

@@ -263,7 +263,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
 	dir := p.AgentProfileDir("auditor")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "show", "auditor")
-	want := "handle auditor\nprovider claude\nmax_turns 4\nprofile_dir " + dir + "\n" +
+	want := "handle auditor\nprovider claude\nmax_turns 4\ntools say\nprofile_dir " + dir + "\n" +
 		`body {"model":"claude-opus-5-5","stream":true}` + "\nincluded_in default\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("show: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
@@ -273,13 +273,66 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
 		t.Fatalf("show --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
-	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"),
+	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"say"},
 		"included_in": []any{"default/ecdsa-ab1111111111"}}
 	if !reflect.DeepEqual(got, wantJSON) {
 		t.Fatalf("show --json = %v\nwant %v", got, wantJSON)
 	}
 	if r := run(t, nil, "", "--dir", p.Config, "agent", "show", "ghost"); r.code != 1 || !strings.Contains(r.stderr, "ghost") {
 		t.Fatalf("show ghost: exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+// agent grant and revoke edit a profile's tools, the whole list of Tools it
+// may call (ADR 0029), and print it: granting into an unset list first
+// writes say with it, revoking every Tool leaves an empty list, and a Tool
+// granted again or revoked when not granted changes nothing. An unknown Tool
+// or Handle is refused, naming the Tools there are; show prints the list.
+func TestAgentGrantRevokeEditTheTools(t *testing.T) {
+	dir := agentGroup(t)
+	if r := run(t, nil, "", "--dir", dir, "agent", "add", "auditor", "--provider", "claude"); r.code != 0 {
+		t.Fatalf("add: exit %d: %s", r.code, r.stderr)
+	}
+	for _, tc := range []struct {
+		args   []string
+		stdout string
+		tools  []string
+	}{
+		{[]string{"grant", "auditor", "sign_list"}, "say\nsign_list\n", []string{"say", "sign_list"}},
+		{[]string{"grant", "auditor", "sign_list"}, "say\nsign_list\n", []string{"say", "sign_list"}},
+		{[]string{"grant", "auditor", "sign_inspect", "--json"}, "[\n  \"say\",\n  \"sign_list\",\n  \"sign_inspect\"\n]\n", []string{"say", "sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "say"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "say"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "sign_list"}, "sign_inspect\n", []string{"sign_inspect"}},
+		{[]string{"revoke", "auditor", "sign_inspect", "--json"}, "[]\n", []string{}},
+	} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "agent"}, tc.args...)...)
+		if r.code != 0 || r.stdout != tc.stdout {
+			t.Fatalf("%v: exit %d, stdout %q, stderr %q; want %q", tc.args, r.code, r.stdout, r.stderr, tc.stdout)
+		}
+		if got := profile(t, dir, "auditor").Tools; !reflect.DeepEqual(got, tc.tools) {
+			t.Fatalf("%v: tools = %#v, want %#v", tc.args, got, tc.tools)
+		}
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "show", "auditor"); r.code != 0 || !strings.Contains(r.stdout, "\ntools none\n") {
+		t.Fatalf("show: exit %d, stdout %q", r.code, r.stdout)
+	}
+	before := readFile(t, nodedir.Resolve(nodedir.Lookup{Dir: dir}).AgentProfileFile("auditor"))
+	for _, args := range [][]string{
+		{"grant", "auditor", "sign_everything"},
+		{"revoke", "auditor", "sign_everything"},
+		{"grant", "ghost", "say"},
+	} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "agent"}, args...)...)
+		if r.code != 1 || !strings.Contains(r.stderr, args[1]) && !strings.Contains(r.stderr, args[2]) {
+			t.Errorf("%v: exit %d, stderr %q", args, r.code, r.stderr)
+		}
+		if args[2] == "sign_everything" && !strings.Contains(r.stderr, "sign_inspect") {
+			t.Errorf("%v: stderr %q, want the Tools there are", args, r.stderr)
+		}
+	}
+	if got := readFile(t, nodedir.Resolve(nodedir.Lookup{Dir: dir}).AgentProfileFile("auditor")); got != before {
+		t.Fatalf("a refused grant changed the profile:\n%s", got)
 	}
 }
 

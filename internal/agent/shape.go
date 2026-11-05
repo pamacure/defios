@@ -18,8 +18,8 @@ type Shape struct {
 // wire is how a shape writes its request and reads its reply.
 type wire struct {
 	open   func(c *conversation)                                       // the system prompt and turns
-	add    func(c *conversation, blocks []Block, results []toolResult) // a call's output and the answers to its tool calls
-	fields func(c *conversation) map[string]any                        // the body's own fields: the conversation and the say tool
+	add    func(c *conversation, blocks []Block, results []ToolResult) // a call's output and the answers to its tool calls
+	fields func(c *conversation) map[string]any                        // the body's own fields: the conversation and the tools
 	parser func(st *stream) parser                                     // a reader for one call's reply
 }
 

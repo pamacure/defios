@@ -322,30 +322,10 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		_, store, running := s.current()
-		if !running {
-			writeError(w, ErrNoReplica)
-			return
-		}
-		rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
+		list, err := s.signList()
 		if err != nil {
 			writeError(w, err)
 			return
-		}
-		list, err := signreq.List(rows, time.Now())
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		sessions, err := signSessions(rows)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		ob, _, _ := s.writer()
-		for i := range list {
-			list[i].Session = sessions[list[i].MsgID]
-			list[i].Stance = s.stance(ob, list[i])
 		}
 		writeJSON(w, list)
 	})
@@ -354,31 +334,71 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		_, store, running := s.current()
-		if !running {
-			writeError(w, ErrNoReplica)
-			return
-		}
-		rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
+		d, err := s.signInspect(req.MsgID, nil)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
-		d, err := signreq.Inspect(rows, req.MsgID, time.Now())
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		sessions, err := signSessions(rows)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		d.Session = sessions[d.MsgID]
-		ob, _, _ := s.writer()
-		d.Stance = s.stance(ob, d.Summary)
 		writeJSON(w, d)
 	})
+}
+
+// signList is every Sign Request, open and past, with its Session and this
+// Node's stance: `sign list`.
+func (s *server) signList() ([]signreq.Summary, error) {
+	_, store, running := s.current()
+	if !running {
+		return nil, ErrNoReplica
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
+	if err != nil {
+		return nil, err
+	}
+	list, err := signreq.List(rows, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	sessions, err := signSessions(rows)
+	if err != nil {
+		return nil, err
+	}
+	ob, _, _ := s.writer()
+	for i := range list {
+		list[i].Session = sessions[list[i].MsgID]
+		list[i].Stance = s.stance(ob, list[i])
+	}
+	return list, nil
+}
+
+// signInspect is the Sign Request whose msg id starts with msgID, decoded,
+// with its Session and this Node's stance: `sign inspect`. With conv set,
+// only the requests in that Key's Conversation are matched.
+func (s *server) signInspect(msgID string, conv []byte) (signreq.Detail, error) {
+	_, store, running := s.current()
+	if !running {
+		return signreq.Detail{}, ErrNoReplica
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
+	if err != nil {
+		return signreq.Detail{}, err
+	}
+	if conv != nil {
+		rows = slices.DeleteFunc(rows, func(r cosl.Row) bool {
+			return r.MsgType == cosl.TypeSignRequest && !bytes.Equal(r.ConversationID, conv)
+		})
+	}
+	d, err := signreq.Inspect(rows, msgID, time.Now())
+	if err != nil {
+		return signreq.Detail{}, err
+	}
+	sessions, err := signSessions(rows)
+	if err != nil {
+		return signreq.Detail{}, err
+	}
+	d.Session = sessions[d.MsgID]
+	ob, _, _ := s.writer()
+	d.Stance = s.stance(ob, d.Summary)
+	return d, nil
 }
 
 // signSessions maps each Sign Request's msg id to the signing Session started
