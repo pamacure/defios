@@ -1,0 +1,58 @@
+# Plugins bring Skills and MCP Servers
+
+Agents need abilities DeFiOS will not build in: chain reads, explorers,
+audits of contracts. A **Plugin** is a package of **Skills** (instructions)
+and **MCP Servers** (programs) installed Node-wide from a **Registry**, a git
+repository or a local path, under `<data root>/plugins/<plugin>/`. Nothing in
+it reaches an agent until that agent's profile grants the item by name
+([ADR 0029](0029-an-agent-profile-holds-the-whole-agent.md)). A Plugin never
+adds a Tool: only Tools act as the Node.
+
+## Considered options
+
+- **Plugins as code inside the serve** (Go plugins, scripts it loads).
+  Rejected: third-party code in the process that holds the unsealed Vault,
+  and Go plugins are brittle across builds. An MCP Server is a separate
+  process by design and any language can write one.
+- **Granting whole Plugins.** Rejected: a profile names each Skill and MCP
+  Server, qualified by its Plugin, so a grant is never wider than intended
+  and two Plugins may both have an `audit` Skill.
+- **Skills inlined into the system prompt.** Rejected: every Skill would be
+  paid for on every call, and the cached prefix
+  ([ADR 0018](0018-an-agent-says-one-message.md)) would change with each
+  grant. The preamble lists granted Skills by name and description, and the
+  agent reads one with `skill_load` when it needs it.
+- **Plugin files in a Backup.** Rejected: they can be fetched again, as the
+  COSL replica can ([ADR 0027](0027-a-backup-is-the-node-minus-what-peers-give-back.md)).
+  The Backup holds the lock file, which is config.
+
+## Consequences
+
+- **Layout.** `plugins/<plugin>/plugin.toml` gives `name`, `version`,
+  `description`, and `[mcp.<server>]` tables (`command`, `args`, and the env
+  vars it asks for); Skills are `skills/<skill>/SKILL.md` with `name` and
+  `description` frontmatter, beside any files they refer to. Plugin, Skill
+  and server names follow the Handle rule.
+- **Install.** `plugin install <source>` takes `<registry>/<plugin>`, a git
+  URL or a local path; it shows the commands the Plugin's MCP Servers run and
+  asks before installing from anywhere but DeFiOS's own Registry. `plugin
+  list`, `plugin update` and `plugin remove` complete the set; removing a
+  Plugin a profile still grants is refused, naming the profile. The Node's
+  config names its Registries, DeFiOS's own built in.
+- **Lock file.** `<config root>/plugins.lock` records each Plugin's source
+  and pinned commit or hash, so a Backup's restore reinstalls exactly the
+  same code. A Plugin installed from a local path cannot be fetched again; a
+  restore reports it missing and goes on.
+- **MCP Server processes.** The serve starts a server the first time an agent
+  granting it is summoned, shares it between every agent that grants it, and
+  stops it with the serve or a switch of Current Group. Stdio only. It starts
+  with a clean environment: `PATH`, `HOME`, and only the Secrets the granting
+  profile names, never the serve's own environment, which may hold every
+  Secret.
+- **Names to the model.** An MCP Server's tools are offered as
+  `<plugin>__<server>__<tool>`, since providers allow only
+  `[a-zA-Z0-9_-]{1,64}`; a longer name is an error when the agent is
+  summoned. Only tools are used; MCP resources and prompts are not.
+- **Transcripts stay plaintext.** They now hold Tool and MCP results; those
+  came from the plaintext replica or from a program the person granted.
+- **Later.** Remote (HTTP) MCP Servers and signed Registry Plugins.

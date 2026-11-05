@@ -65,12 +65,32 @@ A Node's local directory of settings for one Group, or for one Conversation with
 _Avoid_: profile, project, config dir, profile directory
 
 **Agent Profile**:
-One agent persona a Node can summon into talk: the system prompt in the profile directory named by its Handle, and the Provider and Model ID each Group's config gives it under that Handle. Node-local and never replicated; every Group of the Node that defines the Handle shares its prompt, but it answers only in a Conversation (or Group-level talk) whose config includes its Handle.
+One agent persona a Node can summon into talk, defined once for the whole Node in the profile directory named by its Handle: its system prompt, the Provider alias and request it runs on, and the Tools, Skills and MCP Servers granted to it. Node-local and never replicated; it answers only in a Conversation (or Group-level talk) whose config includes its Handle, and runs on that Group's Provider of that alias.
 _Avoid_: agent (that is the running thing, not its definition), persona, bot, workspace
 
 **Agent**:
 One Node's Handle in one Group: the party that speaks in talk under that Handle from that Node, running whichever Agent Profile the Handle is bound to. The same Handle on two Nodes is two agents.
 _Avoid_: assistant, bot, the agent across Nodes
+
+**Tool**:
+An action built into DeFiOS that an agent may call during a run, such as `say` or `sign_accept`. An agent may call only the Tools its Agent Profile grants; `say` is granted unless the profile says otherwise. Only Tools act as the Node: nothing else an agent is given can write to the COSL.
+_Avoid_: function, command, capability
+
+**Plugin**:
+A package of Skills and MCP Servers installed on a Node from a Registry, a repository or a local path. Installed Node-wide, but nothing in it reaches an agent until that agent's profile grants the item by name.
+_Avoid_: extension, toolset, add-on, package
+
+**Skill**:
+Instructions, with any reference files, that a Plugin offers an agent to read when a task calls for them. Granted per Agent Profile; text only, never code.
+_Avoid_: prompt, recipe, playbook
+
+**MCP Server**:
+A program a Plugin defines that offers an agent further actions, run by the Node apart from DeFiOS itself, seeing only the Secrets its granting profiles name. What it does never reaches the COSL except through a Tool.
+_Avoid_: tool server, toolset, integration
+
+**Registry**:
+An index of Plugins a Node may install by name, DeFiOS's own or a community's.
+_Avoid_: marketplace, store, hub
 
 **Handle**:
 The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
@@ -145,12 +165,16 @@ The provider's own name for one of the models a Provider serves (e.g. `claude-op
 _Avoid_: Model, model alias
 
 **Sign Request**:
-One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several chains of the Key's curve, each naming its chain's identity, but each signed transaction is broadcastable on exactly one chain. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `aborted` or `expired`.
+One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several chains of the Key's curve, each naming its chain's identity, but each signed transaction is broadcastable on exactly one chain. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `refused` (too many Sign Refusals for t accepts ever to exist), `aborted` or `expired`.
 _Avoid_: transaction request, signing job, order
 
 **Sign Accept**:
 A Node's COSL message (`sign.accept`) agreeing to sign one Sign Request. The first t Nodes to accept, the proposer counting first, are its Signers; once they exist one of them starts the signing Session. Later accepts do not count, and a late `sign accept` fails with `signer-set-full`.
 _Avoid_: approval, vote, signature (a Sign Accept is not a signature over a Digest)
+
+**Sign Refusal**:
+A Node's COSL message (`sign.refuse`) declining one Sign Request before signing, with its reason. A Node takes one stance on a request, accept or refuse, and it is final: a Node that refused cannot accept, and one that accepted, the proposer included, cannot refuse. Distinct from declining, which aborts a signing Session already started.
+_Avoid_: rejection, veto, decline, vote
 
 **Digest**:
 The exact bytes a Key signs for one transaction — one per Bitcoin input, one per Ethereum or single-signer Solana transaction (the keccak256 of the Ethereum transaction, the compiled message itself for Solana, which Ed25519 signs unhashed). Every Node derives the same Digests from a Sign Request independently.
