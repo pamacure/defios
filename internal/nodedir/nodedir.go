@@ -114,6 +114,14 @@ func (p Paths) AgentProfileFile(handle string) string {
 	return filepath.Join(p.AgentProfileDir(handle), "config.toml")
 }
 
+// PluginsDir holds one directory per installed Plugin, <data root>/plugins/
+// <plugin>/; built-in Plugins are never written here (ADR 0030).
+func (p Paths) PluginsDir() string { return filepath.Join(p.Data, "plugins") }
+
+// PluginsLockFile is plugins.lock at the config root: each installed
+// Plugin's source and pin, so a restore reinstalls the same code (ADR 0030).
+func (p Paths) PluginsLockFile() string { return filepath.Join(p.Config, "plugins.lock") }
+
 // GroupsConfigDir holds one per-Group config subdirectory under the config
 // tree.
 func (p Paths) GroupsConfigDir() string { return filepath.Join(p.Config, "group") }

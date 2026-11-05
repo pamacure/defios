@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"defios.com/internal/engine/tssl"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
+	"defios.com/internal/plugin"
 	"defios.com/internal/vault"
 	vaultv1 "defios.com/proto/vault/v1"
 )
@@ -33,9 +35,9 @@ With --from-backup, bring back the Node a Backup holds instead: the same Node ID
 keys, Key shares, Secrets, Records and config, under the passphrase the Backup was
 sealed under. The machine it came from must never run that Node again.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if o.fromBackup != "" {
-				return runRestore(g, o)
+				return runRestore(cmd.Context(), g, o)
 			}
 			return runInit(g, o)
 		},
@@ -125,8 +127,9 @@ func runInit(g *globals, o initOptions) error {
 // this machine's paths (ADR 0027). Restore is not a merge: everything that
 // would refuse is checked before the passphrase prompt, and a wrong
 // passphrase or unknown format writes nothing. The Vault's files come back as
-// sealed, so it keeps its passphrase and its ECDSA preparams.
-func runRestore(g *globals, o initOptions) error {
+// sealed, so it keeps its passphrase and its ECDSA preparams. Each git
+// Plugin in the restored lock is fetched again at its pin (ADR 0030).
+func runRestore(ctx context.Context, g *globals, o initOptions) error {
 	if o.name != "" {
 		return exitUsagef("--name does not go with --from-backup: the display name comes from the Backup")
 	}
@@ -167,6 +170,9 @@ func runRestore(g *globals, o initOptions) error {
 	if err := backup.Restore(a, p); err != nil {
 		return exitOperational(err)
 	}
+	// The Node is back whatever becomes of its Plugins: a lock that does not
+	// read is reported, as a Plugin that does not fetch is.
+	plugins, pluginsErr := plugin.NewStore(p).Reinstall(ctx)
 
 	// The steps that are the operator's go to stderr under --json, so they
 	// are never lost behind the JSON on stdout.
@@ -178,11 +184,16 @@ func runRestore(g *globals, o initOptions) error {
 			"groups":     a.Manifest.Groups,
 			"config_dir": p.Config,
 			"data_dir":   p.Data,
+			"plugins":    reinstalledJSON(plugins),
 		}); err != nil {
 			return err
 		}
 	} else {
 		fmt.Fprintf(w, "Node %s restored\n  config: %s\n  data:   %s\n", a.Manifest.NodeID, p.Config, p.Data)
+	}
+	reportPlugins(w, plugins)
+	if pluginsErr != nil {
+		fmt.Fprintf(w, "Plugins not reinstalled: %v\n", pluginsErr)
 	}
 	fmt.Fprintln(w, "The machine this Backup came from must never run this Node again: nothing tells the two copies apart.")
 	fmt.Fprintln(w, "Before `defios serve`, two steps are yours:")

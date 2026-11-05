@@ -252,8 +252,9 @@ func dataTaken(rel string) bool {
 }
 
 // configRoot is what a Backup takes from the root of the config tree. With
-// --dir the data tree is the same directory, so anything else there is data.
-var configRoot = map[string]bool{"display-name": true, "current-group": true, "agents": true, "group": true}
+// --dir the data tree is the same directory, so anything else there is data:
+// the Plugins themselves are fetched again from plugins.lock (ADR 0030).
+var configRoot = map[string]bool{"display-name": true, "current-group": true, "agents": true, "group": true, "plugins.lock": true}
 
 // groupData is what a Group's data directory holds. With --dir it is also
 // the Group's Workspace, and none of it is the Workspace's: the Record is

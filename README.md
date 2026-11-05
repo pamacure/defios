@@ -113,7 +113,7 @@ To bring a lost machine's Node back on a new one, restore the Backup into an emp
 defios init --from-backup ~/defios-2026-11-04.backup
 ```
 
-The restored Node has the same Node ID, keys, Key shares, Secrets, Records, Workspaces and Agent Profiles. The old machine must never run it again. Before `defios serve`, store a fresh preauth key (`defios secret set TS_AUTHKEY`) and remove the old machine's registration in headscale.
+The restored Node has the same Node ID, keys, Key shares, Secrets, Records, Workspaces and Agent Profiles. Each Plugin installed from git is fetched again at the commit `plugins.lock` pins; one installed from a local path is reported missing, and `defios plugin update <plugin>` copies it again once the path is back. The old machine must never run it again. Before `defios serve`, store a fresh preauth key (`defios secret set TS_AUTHKEY`) and remove the old machine's registration in headscale.
 
 To change the Vault passphrase, stop `serve` and run:
 
@@ -327,6 +327,14 @@ defios conversation prune --older-than 30d
 ```
 
 To prune on a schedule, set `prune` at the top of the Group's `config.toml` to an age: whole days like `"90d"`, or a Go duration like `"36h"`. `serve` then prunes every Conversation on start, after a snapshot restore, and once a day. Leave it out on a machine that keeps everything. A restore can bring pruned talk back, so a manual prune warns when no `prune` is set. Either way, pruning warns when it destroys talk your Recap doesn't cover, since this machine's agents then lose it.
+
+Agents can be given more through Plugins: packages of Skills, instructions an agent reads when a task calls for them, and MCP Servers, programs it can call. Install one from a git repository, at a branch, tag or commit with `@<ref>`, or from a local directory:
+
+```bash
+defios plugin install https://github.com/example/audit-plugin@v1.2.0
+```
+
+It shows the Plugin's Skills and the command line of every MCP Server it would run on this machine, and asks first (`--yes` does not). The Plugin goes in `plugins/<plugin>/` in the data directory, pinned to its commit, or to a hash of its files, in `plugins.lock` in the config directory. `defios plugin list` shows every Plugin with its Skills and MCP Servers, `defios plugin update [<plugin>]` fetches it again and shows the change to its `plugin.toml` before asking, and `defios plugin remove <plugin>` takes it away. DeFiOS's own Plugins, marked `built-in`, come with the binary: they need no install and cannot be updated or removed. A Plugin is a directory holding `plugin.toml` (`name`, `version`, `description`, and an `[mcp.<server>]` table per server with its `command`, `args`, and the `env` variables it asks for) and `skills/<skill>/SKILL.md`, whose frontmatter gives the Skill's `name` and `description`. Nothing in a Plugin reaches an agent until its profile grants it.
 
 ### 8. Sign a transaction
 
