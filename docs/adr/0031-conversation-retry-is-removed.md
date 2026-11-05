@@ -17,4 +17,5 @@ wants it again mentions the agent again. This amends ADR 0018 and
 - Provider retries stay: rate limits, overload, 5xx responses and dropped
   connections are retried with backoff inside one run, as ADR 0015 gives.
 - A chain lost to a serve stop is lost, as ADR 0015 first had it.
-- Transcripts written before this, with `attempt` on their lines, still read.
+- Nothing is migrated: this is pre-release, and no Transcript with
+  `attempt` on its lines is kept.

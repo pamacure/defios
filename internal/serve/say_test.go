@@ -30,15 +30,11 @@ func transcript(t *testing.T, n *node, chain string) []map[string]any {
 }
 
 // lineWords is each Transcript line as "<step>/<handle>/<depth>:<kind>",
-// with "=<outcome>" after an outcome, and "!attempt" on a line that has
-// one, which no line written now does (ADR 0031).
+// with "=<outcome>" after an outcome.
 func lineWords(lines []map[string]any) string {
 	var out []string
 	for _, l := range lines {
 		w := fmt.Sprintf("%v/%v/%v:%v", l["step"], l["handle"], l["depth"], l["kind"])
-		if _, ok := l["attempt"]; ok {
-			w += "!attempt"
-		}
 		if o, ok := l["outcome"]; ok {
 			w += "=" + fmt.Sprint(o)
 		}

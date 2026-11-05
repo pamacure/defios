@@ -19,7 +19,7 @@ msg_id, and its seq once it has one; a say may be queued, not committed.*
 *Amended by [ADR 0031](0031-conversation-retry-is-removed.md): there is no
 retry verb. `conversation retry`, outcome reuse and the `attempt` on
 Transcript lines are gone; a chain that fails, is cancelled or is cut off by
-a stop ends there. Transcripts written before still read.*
+a stop ends there.*
 
 ## Considered options
 

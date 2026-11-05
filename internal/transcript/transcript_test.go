@@ -3,7 +3,6 @@ package transcript_test
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -40,7 +39,7 @@ var lines = []transcript.Line{
 }
 
 // Written lines read back as written, in order, one JSON line each in the
-// chain's file in its Conversation's transcripts/, with no attempt.
+// chain's file in its Conversation's transcripts/.
 func TestWrittenLinesReadBack(t *testing.T) {
 	p := paths(t)
 	write(t, p, nil, chainID, lines...)
@@ -96,38 +95,6 @@ func TestRunsByStep(t *testing.T) {
 	}
 	if len(tr.Lines) != len(lines)+1 {
 		t.Fatalf("%d lines, want %d", len(tr.Lines), len(lines)+1)
-	}
-}
-
-// A Transcript written while a chain could be retried still reads: its
-// lines carry an attempt, and a retried step's attempts are runs of their
-// own, by step then attempt (ADR 0031).
-func TestAnOlderTranscriptWithAttemptsReads(t *testing.T) {
-	p := paths(t)
-	path := p.TranscriptFile(group.ImplicitAlias, "group", chainID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	old := `{"step":1,"handle":"auditor","depth":1,"attempt":1,"kind":"request","request":{"model":"m"}}
-{"step":1,"handle":"auditor","depth":1,"attempt":1,"kind":"outcome","outcome":"error","error":"boom"}
-{"step":2,"handle":"scribe","depth":2,"attempt":1,"kind":"outcome","outcome":"silent"}
-{"step":1,"handle":"auditor","depth":1,"attempt":2,"kind":"block","block":{"type":"text","text":"ok @scribe"}}
-{"step":1,"handle":"auditor","depth":1,"attempt":2,"kind":"outcome","outcome":"said","msg_id":"cdcd","seq":7}
-`
-	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	tr, err := transcript.Read(p, group.ImplicitAlias, nil, chainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []transcript.Run{
-		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Requests: []json.RawMessage{json.RawMessage(`{"model":"m"}`)}, Outcome: transcript.OutcomeError, Error: "boom"},
-		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Blocks: []json.RawMessage{json.RawMessage(`{"type":"text","text":"ok @scribe"}`)}, Outcome: transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
-		{Step: 2, Handle: "scribe", Depth: 2, Attempt: 1, Outcome: transcript.OutcomeSilent},
-	}
-	if !reflect.DeepEqual(tr.Runs(), want) {
-		t.Fatalf("runs = %+v", tr.Runs())
 	}
 }
 

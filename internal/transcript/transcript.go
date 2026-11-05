@@ -42,10 +42,6 @@ type Line struct {
 	Step   int    `json:"step"`
 	Handle string `json:"handle"`
 	Depth  uint32 `json:"depth"`
-	// Attempt is only on the lines of a Transcript written while a chain
-	// could be retried, from 1, telling a retried step's runs apart; a
-	// line written now has none (ADR 0031).
-	Attempt int `json:"attempt,omitempty"`
 	// Kind is KindRequest, KindBlock, KindUsage or KindOutcome.
 	Kind    string          `json:"kind"`
 	Request json.RawMessage `json:"request,omitempty"`
@@ -191,9 +187,6 @@ type Run struct {
 	Step   int
 	Handle string
 	Depth  uint32
-	// Attempt is the run's attempt in a Transcript written while a chain
-	// could be retried; 0 otherwise (Line.Attempt).
-	Attempt int
 	// Requests are the request bodies of its model calls as sent, Blocks
 	// its output blocks and Usage each call's usage, in order.
 	Requests []json.RawMessage
@@ -227,18 +220,16 @@ func (r Run) Output() []json.RawMessage {
 	return out
 }
 
-// Runs are t's runs by step, then, in an older Transcript, attempt.
+// Runs are t's runs, one per step, by step.
 func (t Transcript) Runs() []Run {
-	type key struct{ step, attempt int }
 	var runs []Run
-	at := map[key]int{}
+	at := map[int]int{}
 	for _, l := range t.Lines {
-		k := key{l.Step, l.Attempt}
-		i, ok := at[k]
+		i, ok := at[l.Step]
 		if !ok {
 			i = len(runs)
-			at[k] = i
-			runs = append(runs, Run{Step: l.Step, Handle: l.Handle, Depth: l.Depth, Attempt: l.Attempt})
+			at[l.Step] = i
+			runs = append(runs, Run{Step: l.Step, Handle: l.Handle, Depth: l.Depth})
 		}
 		r := &runs[i]
 		switch l.Kind {
@@ -253,7 +244,7 @@ func (t Transcript) Runs() []Run {
 		}
 	}
 	slices.SortStableFunc(runs, func(a, b Run) int {
-		return cmp.Or(cmp.Compare(a.Step, b.Step), cmp.Compare(a.Attempt, b.Attempt))
+		return cmp.Compare(a.Step, b.Step)
 	})
 	return runs
 }

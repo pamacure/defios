@@ -33,15 +33,10 @@ var transcriptLines = []transcript.Line{
 
 func writeTranscript(t *testing.T, dir string, conv []byte, chain string) {
 	t.Helper()
-	writeLines(t, dir, conv, chain, transcriptLines)
-}
-
-func writeLines(t *testing.T, dir string, conv []byte, chain string, lines []transcript.Line) {
-	t.Helper()
 	p := nodedir.Resolve(nodedir.Lookup{Dir: dir})
 	w := transcript.NewWriter(p, group.ImplicitAlias, conv, chain, t.Logf)
 	defer w.Close()
-	for _, l := range lines {
+	for _, l := range transcriptLines {
 		w.Write(l)
 	}
 }
@@ -72,32 +67,6 @@ step 3: @critic, depth 2
 @critic was cut off by a stop
 step 4: @quant, depth 1
 @quant failed: boom
-`
-	if r.stdout != want {
-		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
-	}
-}
-
-// A Transcript written while a chain could be retried shows each run's
-// attempt (ADR 0031).
-func TestConversationTranscriptShowsAnOlderTranscriptsAttempts(t *testing.T) {
-	dir := t.TempDir()
-	groupWithTalk(t, dir)
-	writeLines(t, dir, nil, transcribedChain, []transcript.Line{
-		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
-		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"text","text":"done"}`)},
-		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSaid, MsgID: "cdcdcdcdcdcd", Seq: 7},
-	})
-
-	r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab")
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s", r.code, r.stderr)
-	}
-	want := `step 1: @auditor, depth 1, attempt 1
-@auditor failed: boom
-step 1: @auditor, depth 1, attempt 2
-@auditor (text): done
-@auditor said msg_id cdcdcdcd
 `
 	if r.stdout != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)

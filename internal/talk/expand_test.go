@@ -49,26 +49,24 @@ func blockTexts(es []talk.Expanded) [][]string {
 }
 
 // An agent's message this Node's chain said comes with the blocks of the
-// run that said it, in an older Transcript a retried step's earlier
-// attempt left out (ADR 0031); a
-// person's, another Node's agent's, and one whose Transcript is gone come
-// with none.
+// run that said it, a failed run's left out; a person's, another Node's
+// agent's, and one whose Transcript is gone come with none.
 func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {
 	f := newFixture(t)
 	f.say(f.alice, "check this")
 	fixed := f.agentSays(f.alice, "auditor", "fixed")
 	f.agentSays(f.bob, "critic", "from bob's Node")
 	f.agentSays(f.alice, "scribe", "transcript gone")
-	run := func(attempt int, kind string) transcript.Line {
-		return transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Attempt: attempt, Kind: kind}
+	run := func(step int, handle, kind string) transcript.Line {
+		return transcript.Line{Step: step, Handle: handle, Depth: 1, Kind: kind}
 	}
 	l := func(l transcript.Line, set func(*transcript.Line)) transcript.Line { set(&l); return l }
 	f.transcribe("abab",
-		l(run(1, transcript.KindBlock), func(l *transcript.Line) { l.Block = block("first try") }),
-		l(run(1, transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.Error = transcript.OutcomeError, "boom" }),
-		l(run(2, transcript.KindBlock), func(l *transcript.Line) { l.Block = block("looking") }),
-		l(run(2, transcript.KindBlock), func(l *transcript.Line) { l.Block = block("found it") }),
-		l(run(2, transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeSaid, fixed, 2 }),
+		l(run(1, "auditor", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("looking") }),
+		l(run(1, "auditor", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("found it") }),
+		l(run(1, "auditor", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeSaid, fixed, 2 }),
+		l(run(2, "quant", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("failed try") }),
+		l(run(2, "quant", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.Error = transcript.OutcomeError, "boom" }),
 	)
 
 	got, err := f.reader().Expand(nil, f.read(nil).Chat())
