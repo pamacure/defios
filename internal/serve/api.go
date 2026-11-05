@@ -253,6 +253,16 @@ var errorKinds = []struct {
 	{raftx.ErrNotInserted, "not-inserted", http.StatusUnprocessableEntity},
 }
 
+// errorKind is err's wire kind, as the CLI reports it; "" if it has none.
+func errorKind(err error) string {
+	for _, e := range errorKinds {
+		if errors.Is(err, e.err) {
+			return e.kind
+		}
+	}
+	return ""
+}
+
 // writeError answers err with its kind and status.
 func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError

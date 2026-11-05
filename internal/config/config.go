@@ -68,10 +68,13 @@ const (
 	ToolSay         = agent.SayName
 	ToolSignList    = "sign_list"
 	ToolSignInspect = "sign_inspect"
+	ToolSignPropose = "sign_propose"
+	ToolSignAccept  = "sign_accept"
+	ToolSignRefuse  = "sign_refuse"
 )
 
 // Tools is every built-in Tool, in the order a run offers them.
-var Tools = []string{ToolSay, ToolSignList, ToolSignInspect}
+var Tools = []string{ToolSay, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse}
 
 // Granted is the Tools p grants: its tools, or unset, say alone.
 func (p Profile) Granted() []string {

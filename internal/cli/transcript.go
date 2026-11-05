@@ -55,7 +55,8 @@ func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 
 // printRuns prints each run: its step, Handle and depth; its output as
 // conversation follow labels it, thinking, tool calls and their results
-// dimmed; then how it ended, its outcome colored as a status.
+// dimmed; what its sign Tools did; then how it ended, its outcome colored
+// as a status.
 func printRuns(g *globals, runs []transcript.Run) {
 	p := g.out()
 	out := g.app.Stdout
@@ -63,6 +64,9 @@ func printRuns(g *globals, runs []transcript.Run) {
 		fmt.Fprintf(out, "step %d: %s, depth %d\n", r.Step, p.primary("@"+r.Handle), r.Depth)
 		at := "@" + r.Handle
 		printBlocks(g, "", at, r.Output())
+		for _, a := range r.Acted {
+			fmt.Fprintf(out, "%s %s on Sign Request %s\n", at, a.Tool, shortChain(a.MsgID))
+		}
 		switch r.Outcome {
 		case transcript.OutcomeSaid:
 			fmt.Fprintf(out, "%s said msg_id %s\n", at, shortChain(r.MsgID))

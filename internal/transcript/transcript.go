@@ -32,6 +32,7 @@ const (
 	KindRequest = agent.RecordRequest // request: a request body as sent, never its headers
 	KindBlock   = agent.RecordBlock   // block: one output block, or a tool call's result
 	KindUsage   = agent.RecordUsage   // usage: a model call's usage
+	KindActed   = "acted"             // tool and msg_id: a sign Tool acted on that Sign Request
 	KindOutcome = "outcome"           // outcome, and msg_id and seq or error with it
 )
 
@@ -42,11 +43,12 @@ type Line struct {
 	Step   int    `json:"step"`
 	Handle string `json:"handle"`
 	Depth  uint32 `json:"depth"`
-	// Kind is KindRequest, KindBlock, KindUsage or KindOutcome.
+	// Kind is KindRequest, KindBlock, KindUsage, KindActed or KindOutcome.
 	Kind    string          `json:"kind"`
 	Request json.RawMessage `json:"request,omitempty"`
 	Block   json.RawMessage `json:"block,omitempty"`
 	Usage   json.RawMessage `json:"usage,omitempty"`
+	Tool    string          `json:"tool,omitempty"`
 	Outcome string          `json:"outcome,omitempty"`
 	MsgID   string          `json:"msg_id,omitempty"`
 	Seq     uint64          `json:"seq,omitempty"`
@@ -193,10 +195,19 @@ type Run struct {
 	Requests []json.RawMessage
 	Blocks   []json.RawMessage
 	Usage    []json.RawMessage
-	Outcome  string
-	MsgID    string // with OutcomeSaid: what it said, hex
-	Seq      uint64 // with OutcomeSaid, once it has a row
-	Error    string // with OutcomeError: why
+	// Acted is what its sign Tools did, in order (ADR 0029).
+	Acted   []Acted
+	Outcome string
+	MsgID   string // with OutcomeSaid: what it said, hex
+	Seq     uint64 // with OutcomeSaid, once it has a row
+	Error   string // with OutcomeError: why
+}
+
+// Acted is one successful call of a sign Tool: the Tool, and the Sign
+// Request it acted on, hex.
+type Acted struct {
+	Tool  string
+	MsgID string
 }
 
 // Output is what r generated, in order: each model call's blocks,
@@ -224,6 +235,8 @@ func (t Transcript) Runs() []Run {
 			r.Blocks = append(r.Blocks, l.Block)
 		case KindUsage:
 			r.Usage = append(r.Usage, l.Usage)
+		case KindActed:
+			r.Acted = append(r.Acted, Acted{Tool: l.Tool, MsgID: l.MsgID})
 		case KindOutcome:
 			r.Outcome, r.MsgID, r.Seq, r.Error = l.Outcome, l.MsgID, l.Seq, l.Error
 		}

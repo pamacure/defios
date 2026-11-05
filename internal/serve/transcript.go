@@ -15,6 +15,7 @@ const (
 	KindRequest = transcript.KindRequest
 	KindBlock   = transcript.KindBlock
 	KindUsage   = transcript.KindUsage
+	KindActed   = transcript.KindActed
 	KindOutcome = transcript.KindOutcome
 )
 

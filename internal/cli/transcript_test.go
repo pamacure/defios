@@ -16,7 +16,7 @@ const transcribedChain = "abab0000cdcd"
 
 // transcriptLines are a chain's: @auditor called a tool there is none of
 // and said, summoning @scribe, who stayed silent; @critic was cut off by a
-// stop; @quant failed.
+// stop; @quant refused a Sign Request, then failed.
 var transcriptLines = []transcript.Line{
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"thinking","thinking":"check it"}`)},
@@ -29,6 +29,7 @@ var transcriptLines = []transcript.Line{
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSaid, MsgID: "cdcdcdcdcdcd", Seq: 7},
 	{Step: 2, Handle: "scribe", Depth: 2, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent},
 	{Step: 3, Handle: "critic", Depth: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{}`)},
+	{Step: 4, Handle: "quant", Depth: 1, Kind: transcript.KindActed, Tool: "sign_refuse", MsgID: "efefefefefef"},
 	{Step: 4, Handle: "quant", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
 }
 
@@ -44,7 +45,8 @@ func writeTranscript(t *testing.T, dir string, conv []byte, chain string) {
 
 // conversation transcript shows a chain's Transcript, found by a prefix of
 // its msg_id, with no serve: each run's step, Handle and depth, then its
-// thinking, tool calls and text, then how it ended.
+// thinking, tool calls and text, what its sign Tools did, then how it
+// ended.
 func TestConversationTranscriptShowsEachRun(t *testing.T) {
 	dir := t.TempDir()
 	groupWithTalk(t, dir)
@@ -67,6 +69,7 @@ step 2: @scribe, depth 2
 step 3: @critic, depth 2
 @critic was cut off by a stop
 step 4: @quant, depth 1
+@quant sign_refuse on Sign Request efefefef
 @quant failed: boom
 `
 	if r.stdout != want {

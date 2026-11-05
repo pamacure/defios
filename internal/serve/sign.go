@@ -225,7 +225,7 @@ func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(
 	if !s.readLocal(w, r, &req) {
 		return
 	}
-	err := s.resolveSign(req.MsgID, func(svc *session.Service, id [32]byte) error {
+	err := s.resolveSign(req.MsgID, nil, func(svc *session.Service, id [32]byte) error {
 		return answer(svc, r.Context(), id)
 	})
 	if err != nil {
@@ -239,20 +239,28 @@ func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(
 	writeJSON(w, struct{}{})
 }
 
-// resolveSign runs answer on the Sign Request whose msg id starts with msgID.
-func (s *server) resolveSign(msgID string, answer func(*session.Service, [32]byte) error) error {
+// resolveSign runs answer on the Sign Request whose msg id starts with
+// msgID. With conv set, only the requests in that Key's Conversation are
+// matched.
+func (s *server) resolveSign(msgID string, conv []byte, answer func(*session.Service, [32]byte) error) error {
 	_, store, running := s.current()
-	svc := s.sessionLayer()
-	if !running || svc == nil {
+	if !running {
 		return ErrNoReplica
 	}
 	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeSignRequest}})
 	if err != nil {
 		return err
 	}
+	if conv != nil {
+		rows = slices.DeleteFunc(rows, func(r cosl.Row) bool { return !bytes.Equal(r.ConversationID, conv) })
+	}
 	id, err := signreq.Resolve(rows, msgID)
 	if err != nil {
 		return err
+	}
+	svc := s.sessionLayer()
+	if svc == nil {
+		return ErrNoReplica
 	}
 	return answer(svc, id)
 }
@@ -285,7 +293,7 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			return
 		}
 		var v AcceptView
-		err := s.resolveSign(req.MsgID, func(svc *session.Service, id [32]byte) error {
+		err := s.resolveSign(req.MsgID, nil, func(svc *session.Service, id [32]byte) error {
 			err := s.refuseSign(svc, r.Context(), id, req.Reason, "")
 			if errors.Is(err, session.ErrQueued) {
 				v.Queued, err = true, nil
