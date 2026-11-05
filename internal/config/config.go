@@ -1,8 +1,9 @@
 // Package config reads and writes a Workspace's config.toml (docs/spec/mvp.md
-// §3.3, docs/adr/0013-group-config-workspaces-and-named-secrets.md). The
-// Group's config.toml holds this Node's tailnet presence and the Workspace
-// sections; a Conversation's holds only the Workspace sections, merged over
-// the Group's. A secret-bearing field is always a "$NAME" reference.
+// §3.3, docs/adr/0013-group-config-workspaces-and-named-secrets.md) and an
+// Agent Profile's (ADR 0029). The Group's config.toml holds this Node's
+// tailnet presence and the Workspace sections; a Conversation's holds only
+// the Workspace sections, merged over the Group's. A secret-bearing field is
+// always a "$NAME" reference.
 package config
 
 import (
@@ -38,16 +39,14 @@ type Config struct {
 	// snapshot restore and once a day (ADR 0024). Unset, the Node is
 	// archival.
 	Prune Age `toml:"prune,omitzero"`
-	// Agents are this Node's Agent Profiles for the Group, by Handle (ADR
-	// 0015). Only the Group's config.toml may define them; a Workspace's
-	// [agent] profiles includes them by Handle.
-	Agents map[string]Profile `toml:"agents,omitempty"`
 	Workspace
 }
 
-// Profile is one Agent Profile: the Provider alias it runs on and its
-// request body (ADR 0018, ADR 0019). Its profile directory, holding
-// SYSTEM.md, is agents/<handle> under the config directory (ADR 0026).
+// Profile is one Agent Profile's config.toml: the Provider alias it runs on
+// and its request body (ADR 0018, ADR 0019). It lives beside SYSTEM.md in
+// the profile directory, agents/<handle> under the config directory, one per
+// Handle on the Node (ADR 0026, ADR 0029); a Workspace's [agent] profiles
+// includes it by Handle.
 type Profile struct {
 	// Provider is the alias of the Provider it calls, resolved at summon.
 	Provider string `toml:"provider"`
@@ -150,9 +149,12 @@ func write(path string, v any, a Agent) error {
 		out = agentHeader.ReplaceAll(out, []byte("[agent]\nprofiles = []\n"))
 	}
 	var err error
-	if _, ok := v.(Config); ok {
+	switch v.(type) {
+	case Config:
 		_, err = parseConfig(path, out)
-	} else {
+	case Profile:
+		_, err = parseProfile(path, out)
+	default:
 		_, err = parseWorkspace(path, out)
 	}
 	if err != nil {
@@ -185,10 +187,60 @@ func parseConfig(path string, data []byte) (Config, error) {
 	if err := c.Workspace.validate(md, true); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
-	if err := c.validateAgents(md); err != nil {
-		return Config{}, fmt.Errorf("config: %s: %w", path, err)
-	}
 	return c, nil
+}
+
+// WriteProfile writes an Agent Profile's config.toml, mode 0600, once it
+// reads back.
+func WriteProfile(path string, p Profile) error {
+	return write(path, p, Agent{})
+}
+
+// ReadProfile parses and validates an Agent Profile's config.toml. A missing
+// file is an error wrapping os.ErrNotExist.
+func ReadProfile(path string) (Profile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Profile{}, fmt.Errorf("config: %w", err)
+	}
+	return parseProfile(path, data)
+}
+
+// parseProfile is ReadProfile of data, the contents of path. md tells an
+// explicit max_turns of 0 from an unset one; the body is converted to JSON
+// values.
+func parseProfile(path string, data []byte) (Profile, error) {
+	var p Profile
+	md, err := decode(path, data, &p)
+	if err != nil {
+		return Profile{}, err
+	}
+	fail := func(format string, a ...any) (Profile, error) {
+		return Profile{}, fmt.Errorf("config: %s: "+format, append([]any{path}, a...)...)
+	}
+	if p.Provider == "" {
+		return fail("provider is required: the alias of the Provider it runs on")
+	}
+	if err := group.ValidateAlias(p.Provider); err != nil {
+		return fail("provider: %w", err)
+	}
+	if md.IsDefined("max_turns") && p.MaxTurns < 1 {
+		return fail("max_turns %d must be a positive integer", p.MaxTurns)
+	}
+	if _, ok := p.Body[""]; ok {
+		return fail("body: a key may not be empty")
+	}
+	if t := md.Type("body"); t != "" && t != "Hash" {
+		return fail("body must be a table")
+	}
+	body, err := jsonValue(p.Body)
+	if err != nil {
+		return fail("[body]%w", err)
+	}
+	if p.Body != nil {
+		p.Body = body.(map[string]any)
+	}
+	return p, nil
 }
 
 // ReadWorkspace parses and validates a Conversation's config.toml, which may
@@ -217,20 +269,25 @@ func parseWorkspace(path string, data []byte) (Workspace, error) {
 }
 
 // decode refuses any key that into does not define, so a misplaced or misspelt
-// secret is an error rather than ignored.
+// secret is an error rather than ignored. An [agents.<handle>] table, where a
+// Group's config.toml once held its Agent Profiles, is refused naming the
+// profile's own file (ADR 0029).
 func decode(path string, data []byte, into any) (toml.MetaData, error) {
 	md, err := toml.Decode(string(data), into)
 	if err != nil {
 		return md, fmt.Errorf("config: %w", err)
 	}
-	_, isGroup := into.(*Config)
+	_, isProfile := into.(*Profile)
 	var keys []string
 	for _, k := range md.Undecoded() {
 		// A profile's or Provider's body is free-form: whatever it holds is
 		// decoded into it, though the decoder does not mark nested keys as
 		// such.
-		if len(k) > 3 && k[2] == "body" && (k[0] == "providers" || isGroup && k[0] == "agents") {
+		if (isProfile && len(k) > 1 && k[0] == "body") || (len(k) > 3 && k[2] == "body" && k[0] == "providers") {
 			continue
+		}
+		if !isProfile && len(k) > 1 && k[0] == "agents" {
+			return md, fmt.Errorf("config: %s: [agents.%s] is no longer read here: an Agent Profile is agents/%s/config.toml under the config root, beside its SYSTEM.md (ADR 0029)", path, k[1], k[1])
 		}
 		keys = append(keys, k.String())
 	}
@@ -288,46 +345,6 @@ func (w Workspace) validate(md toml.MetaData, complete bool) error {
 	}
 	if md.IsDefined("agent", "max_depth") && w.Agent.MaxDepth < 1 {
 		return fmt.Errorf("[agent] max_depth %d must be at least 1", w.Agent.MaxDepth)
-	}
-	return nil
-}
-
-// validateAgents checks the Group's Agent Profiles, converting each body to
-// JSON values, and that its own [agent] profiles includes only Handles it
-// defines; md tells an explicit max_turns of 0 from an unset one.
-func (c Config) validateAgents(md toml.MetaData) error {
-	for h, p := range c.Agents {
-		if err := ValidateHandle(h); err != nil {
-			return fmt.Errorf("[agents.%s]: %w", h, err)
-		}
-		if p.Provider == "" {
-			return fmt.Errorf("[agents.%s]: provider is required: the alias of the Provider it runs on", h)
-		}
-		if err := group.ValidateAlias(p.Provider); err != nil {
-			return fmt.Errorf("[agents.%s] provider: %w", h, err)
-		}
-		if md.IsDefined("agents", h, "max_turns") && p.MaxTurns < 1 {
-			return fmt.Errorf("[agents.%s] max_turns %d must be a positive integer", h, p.MaxTurns)
-		}
-		if _, ok := p.Body[""]; ok {
-			return fmt.Errorf("[agents.%s] body: a key may not be empty", h)
-		}
-		if t := md.Type("agents", h, "body"); t != "" && t != "Hash" {
-			return fmt.Errorf("[agents.%s] body must be a table", h)
-		}
-		body, err := jsonValue(p.Body)
-		if err != nil {
-			return fmt.Errorf("[agents.%s.body]%w", h, err)
-		}
-		if p.Body != nil {
-			p.Body = body.(map[string]any)
-			c.Agents[h] = p
-		}
-	}
-	for _, h := range c.Agent.Profiles {
-		if _, ok := c.Agents[h]; !ok {
-			return fmt.Errorf("[agent] profiles: no [agents.%s] is defined", h)
-		}
 	}
 	return nil
 }

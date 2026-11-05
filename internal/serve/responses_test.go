@@ -66,16 +66,15 @@ func openaiAgent(t *testing.T, a *node, reply func(n int, w http.ResponseWriter)
 	}))
 	t.Cleanup(srv.Close)
 	writeSystemPrompt(t, a, "auditor")
-	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), fmt.Sprintf(`[agents.auditor]
-provider = "openai"
+	writeConfig(t, a.paths.AgentProfileFile("auditor"), `provider = "openai"
 
-[agents.auditor.body]
+[body]
 model = "gpt-test"
 stream = true
 store = false
 include = ["reasoning.encrypted_content"]
-
-[agent]
+`)
+	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), fmt.Sprintf(`[agent]
 profiles = ["auditor"]
 
 [providers.openai]

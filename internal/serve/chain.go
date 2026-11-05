@@ -568,7 +568,7 @@ func (s *server) agentRequest(ob *outbox.Outbox, store *cosl.Store, conv []byte,
 	}
 	prov, err := ws.Provider(p.Provider)
 	if err != nil {
-		return agent.Request{}, inc, fmt.Errorf("@%s runs on %w", handle, err)
+		return agent.Request{}, inc, fmt.Errorf("@%s runs on Provider %q, which Group %s must define: %w", handle, p.Provider, s.opts.Alias, err)
 	}
 	at := prov.Endpoint(p.Provider)
 	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns}

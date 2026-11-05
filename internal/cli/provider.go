@@ -72,7 +72,7 @@ the Group's config.toml, which a Conversation's config.toml may override key by 
 LLM API, named by a base URL and an API path whose suffix picks the API Shape (/messages,
 /chat/completions or /responses). Its api_key is a Secret reference (see secret), sent only to its
 base URL, and its body is the base request for every agent on it. The model and every other request
-option are set there or per agent, in [agents.<handle>.body]. These commands need no serve.`,
+option are set there or per agent, in the [body] of its agents/<handle>/config.toml. These commands need no serve.`,
 	}
 
 	var add providerFlags

@@ -39,11 +39,11 @@ func bothWays(t *testing.T, a *node, apiPath string, reply func(n int, w http.Re
 	fmt.Fprintf(&cfg, "[providers.p]\nbase_url = %q\napi_path = %q\n\n", srv.URL, apiPath)
 	for _, h := range []string{"streamed", "whole"} {
 		writeSystemPrompt(t, a, h)
-		fmt.Fprintf(&cfg, "[agents.%s]\nprovider = \"p\"\n\n[agents.%s.body]\nmodel = \"m\"\n", h, h)
+		profile := "provider = \"p\"\n\n[body]\nmodel = \"m\"\n"
 		if h == "streamed" {
-			cfg.WriteString("stream = true\n")
+			profile += "stream = true\n"
 		}
-		cfg.WriteString("\n")
+		writeConfig(t, a.paths.AgentProfileFile(h), profile)
 	}
 	cfg.WriteString("[agent]\nprofiles = [\"streamed\", \"whole\"]\n")
 	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), cfg.String())

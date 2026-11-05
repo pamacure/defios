@@ -201,8 +201,7 @@ func agentNode(t *testing.T, n *node, baseURL string, handles ...string) {
 	var cfg strings.Builder
 	for _, h := range handles {
 		writeSystemPrompt(t, n, h)
-		fmt.Fprintf(&cfg, "[agents.%s]\nprovider = \"claude\"\n\n", h)
-		fmt.Fprintf(&cfg, "[agents.%s.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n\n", h)
+		writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
 	}
 	fmt.Fprintf(&cfg, "[agent]\nprofiles = [\"%s\"]\n\n", strings.Join(handles, `", "`))
 	fmt.Fprintf(&cfg, "[providers.claude]\nbase_url = %q\napi_path = \"/v1/messages\"\napi_key = \"$ANTHROPIC_KEY\"\n", baseURL)
@@ -720,9 +719,8 @@ func TestAProviderEditTakesEffectAtTheNextSummon(t *testing.T) {
 	}
 }
 
-// A Conversation's [agent] profiles naming no [agents.*] table fails the
-// agent with the file to fix; an unknown Provider alias or a missing
-// SYSTEM.md fails it when summoned.
+// An unknown Provider alias fails the agent when summoned, naming the
+// Group, the Handle and the alias (ADR 0029); so does a missing SYSTEM.md.
 func TestSummonErrorsNameWhatToFix(t *testing.T) {
 	a, _, _, _ := agentPair(t, "auditor")
 	s := watch(t, a)
@@ -736,10 +734,10 @@ func TestSummonErrorsNameWhatToFix(t *testing.T) {
 		events := untilEnd(t, s, v.MsgID)
 		return events[len(events)-2]
 	}
-	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	path := a.paths.AgentProfileFile("auditor")
 	cfg := readFile(t, path)
 	writeConfig(t, path, strings.Replace(cfg, `provider = "claude"`, `provider = "gone"`, 1))
-	if ev := send("@auditor"); ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, "gone") || !strings.Contains(ev.Error, "no such provider") {
+	if ev := send("@auditor"); ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, `@auditor runs on Provider "gone", which Group `+group.ImplicitAlias) || !strings.Contains(ev.Error, "no such provider") {
 		t.Errorf("unknown Provider: %+v", ev)
 	}
 	writeConfig(t, path, cfg)
@@ -775,8 +773,8 @@ func readFile(t *testing.T, path string) string {
 	return string(b)
 }
 
-// A Conversation whose [agent] profiles names a Handle no [agents.*] table
-// defines is refused naming the Conversation's config.toml, the file to fix.
+// A Conversation whose [agent] profiles names a Handle with no Agent Profile
+// is refused naming the Conversation's config.toml and the profile's.
 func TestUndefinedProfileNamesTheConversationConfig(t *testing.T) {
 	a, b, gid, _ := agentPair(t, "auditor")
 	name := mintKey(t, a, b, gid)
@@ -785,7 +783,7 @@ func TestUndefinedProfileNamesTheConversationConfig(t *testing.T) {
 	writeConfig(t, path, "[agent]\nprofiles = [\"ghost\"]\n")
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	_, err := a.client().ConversationSend(context.Background(), "@ghost?", id[:])
-	if err == nil || !strings.Contains(err.Error(), "[agents.ghost]") || !strings.Contains(err.Error(), path) {
+	if err == nil || !strings.Contains(err.Error(), a.paths.AgentProfileFile("ghost")) || !strings.Contains(err.Error(), path) {
 		t.Fatalf("send = %v, want the undefined Handle and %s", err, path)
 	}
 }

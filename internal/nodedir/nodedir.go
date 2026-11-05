@@ -98,11 +98,20 @@ func (p Paths) CurrentGroupFile() string { return filepath.Join(p.Config, "curre
 // per-Group display_name default (ADR 0007).
 func (p Paths) DisplayNameFile() string { return filepath.Join(p.Config, "display-name") }
 
+// AgentProfilesDir holds one directory per Agent Profile on this Node.
+func (p Paths) AgentProfilesDir() string { return filepath.Join(p.Config, "agents") }
+
 // AgentProfileDir is an Agent Profile's directory, agents/<handle>/ under
-// the config root, holding its SYSTEM.md: one per Handle, shared by every
-// Group that defines it (ADR 0026).
+// the config root, holding its SYSTEM.md and config.toml: the whole agent,
+// one per Handle on this Node (ADR 0026, ADR 0029).
 func (p Paths) AgentProfileDir(handle string) string {
-	return filepath.Join(p.Config, "agents", handle)
+	return filepath.Join(p.AgentProfilesDir(), handle)
+}
+
+// AgentProfileFile is an Agent Profile's config.toml: its Provider alias,
+// max_turns and body (ADR 0029).
+func (p Paths) AgentProfileFile(handle string) string {
+	return filepath.Join(p.AgentProfileDir(handle), "config.toml")
 }
 
 // GroupsConfigDir holds one per-Group config subdirectory under the config

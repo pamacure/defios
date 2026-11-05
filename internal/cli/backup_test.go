@@ -39,6 +39,7 @@ func backupNode(t *testing.T, dir string) (gid group.ID, pub []byte) {
 	conv := filepath.Join(gdir, "conversations", "group")
 	for path, body := range map[string]string{
 		filepath.Join(dir, "agents", "scout", "SYSTEM.md"):         "You scout.",
+		filepath.Join(dir, "agents", "scout", "config.toml"):       "provider = \"claude\"\n",
 		filepath.Join(gdir, "secp256k1-0202020202", "config.toml"): "",
 		filepath.Join(gdir, "cosl.sqlite"):                         "replica",
 		filepath.Join(gdir, "cosl.sqlite-wal"):                     "wal",
@@ -83,6 +84,7 @@ func TestBackupHoldsTheNodeAndNothingPeersGiveBack(t *testing.T) {
 	got := slices.Sorted(maps.Keys(a.Files))
 	want := []string{
 		"config/agents/scout/SYSTEM.md",
+		"config/agents/scout/config.toml",
 		"config/current-group",
 		"config/display-name",
 		"config/group/default/config.toml",

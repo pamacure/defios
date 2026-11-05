@@ -89,7 +89,7 @@ A program a Plugin defines that offers an agent further actions, run by the Node
 _Avoid_: tool server, toolset, integration
 
 **Handle**:
-The name a Group's config gives an Agent Profile, written `@handle` in talk to summon it. Local to one Node's config for one Group: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
+The name of an Agent Profile on one Node, written `@handle` in talk to summon it where a Group's or Conversation's config includes it. Local to one Node: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
 _Avoid_: agent name, username, alias (that is a Group's, Network's or Provider's local label)
 
 **Chain**:

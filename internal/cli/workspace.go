@@ -25,7 +25,7 @@ func writeGroupConfig(g *globals, change func(*config.Workspace) error) (string,
 
 // writeGroup applies change to the targeted Group's config.toml, an absent
 // one being empty, and writes the file back; it returns the file's path.
-// change sees non-nil Network, Provider and Agent Profile maps and checks
+// change sees non-nil Network and Provider maps and checks
 // what it leaves. A change refused is a usage error, unless it says
 // otherwise, and writes nothing. It
 // needs no serve: the config is this Node's alone (ADR 0022, ADR 0023).
@@ -45,9 +45,6 @@ func writeGroup(g *globals, change func(*config.Config) error) (string, error) {
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.Provider{}
 	}
-	if cfg.Agents == nil {
-		cfg.Agents = map[string]config.Profile{}
-	}
 	if err := change(&cfg); err != nil {
 		var exit *ExitError
 		if errors.As(err, &exit) {
@@ -60,9 +57,6 @@ func writeGroup(g *globals, change func(*config.Config) error) (string, error) {
 	}
 	if len(cfg.Providers) == 0 {
 		cfg.Providers = nil
-	}
-	if len(cfg.Agents) == 0 {
-		cfg.Agents = nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", exitOperational(err)

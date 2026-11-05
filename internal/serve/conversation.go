@@ -108,9 +108,6 @@ func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle st
 	if err != nil {
 		return err
 	}
-	if _, ok := e.Group.Agents[handle]; !ok {
-		return fmt.Errorf("%w: no [agents.%s] is defined in this Group's config.toml", ErrBadHandle, handle)
-	}
 	if !includes(inc, handle) {
 		return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent", ErrBadHandle, handle)
 	}

@@ -26,7 +26,7 @@ type agentFlags struct {
 }
 
 func (f *agentFlags) bind(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.provider, "provider", "", "the alias of the Provider it runs on, a [providers.<alias>] table in the Group's config.toml")
+	cmd.Flags().StringVar(&f.provider, "provider", "", "the alias of the Provider it runs on, a [providers.<alias>] table each Group including it must have")
 	cmd.Flags().StringVar(&f.model, "model", "", "the model it asks for: body.model, over --body")
 	cmd.Flags().StringVar(&f.body, "body", "", "its request body, a JSON object: inline, @path to read a file, or - for stdin")
 	cmd.Flags().IntVar(&f.maxTurns, "max-turns", 0, "model calls a summon may make (default 8)")
@@ -68,19 +68,20 @@ func agentCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "agent",
 		Short: "Configure the Agent Profiles this Node can summon into a Group's talk",
-		Long: `An Agent Profile is this Node's own, never shared with the Group: an [agents.<handle>]
-table in the Group's config.toml naming the Provider it runs on, its request body and max_turns, and
-a system prompt in agents/<handle>/SYSTEM.md under the config root. That directory is named by the
-Handle alone, so every Group on this Node that defines the Handle shares the prompt (ADR 0026). An
-agent answers only where [agent] profiles includes its Handle. These commands need no serve.`,
+		Long: `An Agent Profile is this Node's own, never shared with the Group: a directory agents/<handle>/ under the
+config root holding its system prompt, SYSTEM.md, and its config.toml naming the Provider it runs on,
+its request body and max_turns (ADR 0029). It is the whole Node's, named by its Handle alone, and
+answers only where a Group's or Conversation's [agent] profiles includes its Handle, on that Group's
+Provider of its alias. These commands need no serve.`,
 	}
 
 	var add agentFlags
 	addCmd := &cobra.Command{
 		Use:   "add <handle>",
-		Short: "Add an Agent Profile to the Group's config.toml and scaffold its SYSTEM.md",
-		Long: `Add an Agent Profile on a Provider the Group's config.toml has. Its SYSTEM.md is written with a placeholder
-prompt unless one is already there. It is not included anywhere until you include its Handle.`,
+		Short: "Add an Agent Profile: write agents/<handle>/config.toml and scaffold its SYSTEM.md",
+		Long: `Add an Agent Profile running on a Provider alias. Its SYSTEM.md is written with a placeholder prompt unless
+one is already there. It is not included anywhere until you include its Handle, and each Group that
+includes it must define its Provider.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
@@ -94,78 +95,68 @@ prompt unless one is already there. It is not included anywhere until you includ
 			if err := add.apply(g, cmd, &p); err != nil {
 				return exitUsagef("%w", err)
 			}
-			var system string
-			path, err := writeGroup(g, func(c *config.Config) error {
-				if _, ok := c.Agents[handle]; ok {
-					return fmt.Errorf("Agent Profile %q already exists; change it with `defios agent edit`", handle)
-				}
-				if err := checkProvider(c, p); err != nil {
-					return err
-				}
-				c.Agents[handle] = p
-				system, err = scaffoldSystem(g, handle)
+			path := g.paths().AgentProfileFile(handle)
+			if _, err := os.Stat(path); err == nil {
+				return exitUsagef("Agent Profile %q already exists; change it with `defios agent edit`", handle)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return exitOperational(err)
+			}
+			if err := writeProfile(path, p); err != nil {
 				return err
-			})
+			}
+			system, err := scaffoldSystem(g, handle)
 			if err != nil {
 				return err
 			}
 			if g.json {
-				return g.emitJSON(agentViewOf(g, handle, p, false))
+				return g.emitJSON(agentViewOf(g, handle, p))
 			}
-			fmt.Fprintf(g.app.Stdout, "added %s to %s\n%s\ninclude it with: defios agent include %s\n", handle, path, system, handle)
+			fmt.Fprintf(g.app.Stdout, "added %s\n%s\ninclude it with: defios agent include %s\n", path, system, handle)
 			return nil
 		},
 	}
 	add.bind(addCmd)
-	bindWriteGroupFlag(g, addCmd)
 
 	var edit agentFlags
 	editCmd := &cobra.Command{
 		Use:   "edit <handle>",
 		Short: "Change an Agent Profile's Provider, model, body or max_turns; unspecified fields keep their value",
-		Long: `Change an Agent Profile. --body replaces its body whole; --model sets only body.model, over the new body
-when both are given. A Handle cannot be renamed: add another and remove this one.`,
+		Long: `Change an Agent Profile's config.toml. --body replaces its body whole; --model sets only body.model, over
+the new body when both are given. A Handle cannot be renamed: add another and delete this one.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
 			if err != nil {
 				return err
 			}
-			var p config.Profile
-			var included bool
-			path, err := writeGroup(g, func(c *config.Config) error {
-				included = contains(c.Agent.Profiles, handle)
-				cur, ok := c.Agents[handle]
-				if !ok {
-					return noProfile(handle)
-				}
-				p = cur
-				if err := edit.apply(g, cmd, &p); err != nil {
-					return err
-				}
-				if reflect.DeepEqual(p, cur) {
-					return fmt.Errorf("Agent Profile %q is unchanged: nothing to change", handle)
-				}
-				c.Agents[handle] = p
-				return checkProvider(c, p)
-			})
+			cur, err := readProfile(g, handle)
 			if err != nil {
 				return err
 			}
-			if g.json {
-				return g.emitJSON(agentViewOf(g, handle, p, included))
+			p := cur
+			if err := edit.apply(g, cmd, &p); err != nil {
+				return exitUsagef("%w", err)
 			}
-			fmt.Fprintf(g.app.Stdout, "edited %s in %s\n", handle, path)
+			if reflect.DeepEqual(p, cur) {
+				return exitUsagef("Agent Profile %q is unchanged: nothing to change", handle)
+			}
+			path := g.paths().AgentProfileFile(handle)
+			if err := writeProfile(path, p); err != nil {
+				return err
+			}
+			if g.json {
+				return g.emitJSON(agentViewOf(g, handle, p))
+			}
+			fmt.Fprintf(g.app.Stdout, "edited %s\n", path)
 			return nil
 		},
 	}
 	edit.bind(editCmd)
-	bindWriteGroupFlag(g, editCmd)
 
 	var keyQuery string
 	listCmd := &cobra.Command{
 		Use:   "list",
-		Short: "List the Agent Profiles: Handle, Provider, model, and whether included",
+		Short: "List the Agent Profiles on this Node: Handle, Provider, model, and whether the Group includes it",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runAgentList(g, keyQuery) },
 	}
@@ -173,77 +164,59 @@ when both are given. A Handle cannot be renamed: add another and remove this one
 	listCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
 	showCmd := &cobra.Command{
 		Use:   "show <handle>",
-		Short: "Show one Agent Profile",
+		Short: "Show one Agent Profile and the Groups and Conversations on this Node that include it",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
 			if err != nil {
 				return err
 			}
-			return runAgentShow(g, keyQuery, handle)
+			return runAgentShow(g, handle)
 		},
 	}
-	bindGroupFlag(g, showCmd)
-	showCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
-
-	removeCmd := &cobra.Command{
-		Use:   "remove <handle>",
-		Short: "Remove an Agent Profile from the Group's config.toml and every list that includes it",
-		Long: `Remove an Agent Profile's [agents.<handle>] table, and take its Handle out of the Group's [agent] profiles
-and out of every Conversation config.toml in the Group that lists it. Its profile directory stays:
-see delete.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			handle, err := handleArg(args)
-			if err != nil {
-				return err
-			}
-			changed, err := removeAgent(g, handle)
-			if err != nil {
-				return err
-			}
-			return agentRemoved(g, handle, changed, "")
-		},
-	}
-	bindWriteGroupFlag(g, removeCmd)
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete <handle>",
-		Short: "Remove an Agent Profile and delete its profile directory",
-		Long: `Remove an Agent Profile as remove does, then delete agents/<handle>/ under the config root, its SYSTEM.md
-with it. The directory is shared by every Group on this Node that defines the Handle (ADR 0026), so
-delete refuses, changing nothing, while another Group does: remove it there first.`,
+		Short: "Delete an Agent Profile's directory, its config.toml and SYSTEM.md",
+		Long: `Delete agents/<handle>/ under the config root. The profile is the whole Node's, so delete refuses, changing
+nothing, while any Group or Conversation on this Node includes its Handle: exclude it there first.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
-			if err != nil {
-				return err
-			}
-			shared, err := groupsDefining(g, handle)
-			if err != nil {
-				return err
-			}
-			if len(shared) > 0 {
-				return exitUsagef("Agent Profile %q is also defined in Group %s, which shares its profile directory; remove it there, or remove it here and keep the directory",
-					handle, strings.Join(shared, ", "))
-			}
-			changed, err := removeAgent(g, handle)
 			if err != nil {
 				return err
 			}
 			dir := g.paths().AgentProfileDir(handle)
+			if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+				return exitUsagef("%w", noProfile(handle))
+			} else if err != nil {
+				return exitOperational(err)
+			}
+			in, err := includers(g, handle)
+			if err != nil {
+				return err
+			}
+			if len(in) > 0 {
+				return exitUsagef("Agent Profile %q is included in %s; exclude it there first", handle, strings.Join(in, ", "))
+			}
 			if err := os.RemoveAll(dir); err != nil {
 				return exitOperational(err)
 			}
-			return agentRemoved(g, handle, changed, dir)
+			if g.json {
+				return g.emitJSON(struct {
+					Handle  string `json:"handle"`
+					Deleted string `json:"deleted"`
+				}{handle, dir})
+			}
+			fmt.Fprintf(g.app.Stdout, "deleted %s\n", dir)
+			return nil
 		},
 	}
-	bindWriteGroupFlag(g, deleteCmd)
 
 	includeCmd := &cobra.Command{
 		Use:   "include <handle>",
 		Short: "Include an agent in Group-level talk, or with --key in that Conversation, and print who is mentionable there",
-		Long: `Add a Handle the Group's config.toml defines to [agent] profiles: the Group's, or with --key the Conversation's.
+		Long: `Add the Handle of an Agent Profile on this Node to [agent] profiles: the Group's, or with --key the Conversation's.
 A Conversation with no list of its own follows the Group's; including one there gives it a list of
 that Handle alone, and it no longer follows the Group's until its profiles line is deleted by hand.`,
 		Args: cobra.ExactArgs(1),
@@ -275,7 +248,7 @@ Group's, and exclude --key refuses it.`,
 		cmd.Flags().StringVar(&keyQuery, "key", "", keyEditFlagHelp)
 	}
 
-	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd, deleteCmd, includeCmd, excludeCmd)
+	root.AddCommand(addCmd, listCmd, showCmd, editCmd, deleteCmd, includeCmd, excludeCmd)
 	return root
 }
 
@@ -294,11 +267,13 @@ func runAgentInclusion(g *globals, keyQuery, handle string, include bool) error 
 	}
 	var list []string
 	var err error
+	if include {
+		if _, err := readProfile(g, handle); err != nil {
+			return err
+		}
+	}
 	if keyQuery == "" {
 		_, err = writeGroup(g, func(c *config.Config) error {
-			if _, ok := c.Agents[handle]; !ok {
-				return noProfile(handle)
-			}
 			c.Agent.Profiles = edit(c.Agent.Profiles)
 			list = c.Agent.Profiles
 			return nil
@@ -326,13 +301,6 @@ func runAgentInclusion(g *globals, keyQuery, handle string, include bool) error 
 // returns the list. A Conversation with no list follows the Group's: an
 // include gives it its own, and warns so; an exclude is refused.
 func editConversationList(g *globals, keyQuery, handle string, include bool, edit func([]string) []string) ([]string, error) {
-	e, err := load(g, "")
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := e.Group.Agents[handle]; !ok {
-		return nil, exitUsagef("%w", noProfile(handle))
-	}
 	path, err := conversationConfigFile(g, keyQuery)
 	if err != nil {
 		return nil, err
@@ -359,88 +327,40 @@ func editConversationList(g *globals, keyQuery, handle string, include bool, edi
 	return w.Agent.Profiles, nil
 }
 
-// groupsDefining is every Group on this Node but the targeted one whose
-// config.toml defines handle, sorted.
-func groupsDefining(g *globals, handle string) ([]string, error) {
-	alias, err := g.resolveAlias()
-	if err != nil {
-		return nil, err
-	}
+// includers is every place on this Node that includes handle, sorted: each
+// Group whose [agent] profiles lists it, by alias, and each Conversation
+// whose own list does, as <alias>/<workspace>.
+func includers(g *globals, handle string) ([]string, error) {
 	p := g.paths()
-	aliases, err := configGroupAliases(p)
+	aliases, err := groupAliases(p)
 	if err != nil {
 		return nil, exitOperational(err)
 	}
 	var out []string
 	for _, a := range aliases {
-		if a == alias {
-			continue
-		}
 		c, err := config.ReadFile(p.GroupConfigFile(a))
-		if err != nil {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, exitOperational(err)
 		}
-		if _, ok := c.Agents[handle]; ok {
+		if contains(c.Agent.Profiles, handle) {
 			out = append(out, a)
 		}
-	}
-	return out, nil
-}
-
-// removeAgent deletes handle's table from the targeted Group's config.toml
-// and its Handle from every [agent] profiles in the Group: each
-// Conversation's that lists it, which keeps its list even emptied, then the
-// Group's. It reads every file before it writes any, and writes the Group's
-// last, so a failed write leaves the Handle included in fewer places and
-// remove can run again. It returns the paths it changed.
-func removeAgent(g *globals, handle string) ([]string, error) {
-	alias, err := g.resolveAlias()
-	if err != nil {
-		return nil, err
-	}
-	e, err := load(g, "")
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := e.Group.Agents[handle]; !ok {
-		return nil, exitUsagef("%w", noProfile(handle))
-	}
-	convs, err := config.ConversationFiles(g.paths(), alias)
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	var changed []string
-	over := map[string]config.Workspace{}
-	for _, path := range convs {
-		w, err := config.ReadWorkspace(path)
+		convs, err := config.ConversationFiles(p, a)
 		if err != nil {
 			return nil, exitOperational(err)
 		}
-		if contains(w.Agent.Profiles, handle) {
-			w.Agent.Profiles = without(w.Agent.Profiles, handle)
-			over[path] = w
-			changed = append(changed, path)
+		for _, path := range convs {
+			w, err := config.ReadWorkspace(path)
+			if err != nil {
+				return nil, exitOperational(err)
+			}
+			if contains(w.Agent.Profiles, handle) {
+				out = append(out, a+"/"+filepath.Base(filepath.Dir(path)))
+			}
 		}
 	}
-	for _, path := range changed {
-		if err := config.WriteWorkspace(path, over[path]); err != nil {
-			return nil, exitOperational(err)
-		}
-	}
-	path, err := writeGroup(g, func(c *config.Config) error {
-		if _, ok := c.Agents[handle]; !ok {
-			return noProfile(handle)
-		}
-		delete(c.Agents, handle)
-		if c.Agent.Profiles = without(c.Agent.Profiles, handle); len(c.Agent.Profiles) == 0 {
-			c.Agent.Profiles = nil
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return append([]string{path}, changed...), nil
+	sort.Strings(out)
+	return out, nil
 }
 
 // without is list less every h, never nil when list is not.
@@ -457,24 +377,22 @@ func without(list []string, h string) []string {
 	return out
 }
 
-// agentRemoved reports a removed agent: the files changed and, when it was
-// deleted, its profile directory.
-func agentRemoved(g *globals, handle string, changed []string, deleted string) error {
-	if g.json {
-		return g.emitJSON(struct {
-			Handle  string   `json:"handle"`
-			Changed []string `json:"changed"`
-			Deleted string   `json:"deleted,omitempty"`
-		}{handle, changed, deleted})
+// profileHandles is the Handle of every Agent Profile on this Node, sorted:
+// each directory under agents/ named by a valid Handle and holding a
+// config.toml.
+func profileHandles(g *globals) ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(g.paths().AgentProfilesDir(), "*", "config.toml"))
+	if err != nil {
+		return nil, exitOperational(err)
 	}
-	fmt.Fprintf(g.app.Stdout, "removed %s\n", handle)
-	for _, path := range changed {
-		fmt.Fprintf(g.app.Stdout, "changed %s\n", path)
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if h := filepath.Base(filepath.Dir(m)); config.ValidateHandle(h) == nil {
+			out = append(out, h)
+		}
 	}
-	if deleted != "" {
-		fmt.Fprintf(g.app.Stdout, "deleted %s\n", deleted)
-	}
-	return nil
+	sort.Strings(out)
+	return out, nil
 }
 
 func runAgentList(g *globals, keyQuery string) error {
@@ -482,14 +400,21 @@ func runAgentList(g *globals, keyQuery string) error {
 	if err != nil {
 		return err
 	}
-	handles := make([]string, 0, len(e.Group.Agents))
-	for h := range e.Group.Agents {
-		handles = append(handles, h)
+	handles, err := profileHandles(g)
+	if err != nil {
+		return err
 	}
-	sort.Strings(handles)
-	views := make([]agentView, len(handles))
+	type listed struct {
+		agentView
+		Included bool `json:"included"`
+	}
+	views := make([]listed, len(handles))
 	for i, h := range handles {
-		views[i] = agentViewOf(g, h, e.Group.Agents[h], contains(e.Workspace.Agent.Profiles, h))
+		p, err := readProfile(g, h)
+		if err != nil {
+			return err
+		}
+		views[i] = listed{agentViewOf(g, h, p), contains(e.Workspace.Agent.Profiles, h)}
 	}
 	if g.json {
 		return g.emitJSON(views)
@@ -509,16 +434,22 @@ func runAgentList(g *globals, keyQuery string) error {
 	return nil
 }
 
-func runAgentShow(g *globals, keyQuery, handle string) error {
-	e, err := load(g, keyQuery)
+func runAgentShow(g *globals, handle string) error {
+	p, err := readProfile(g, handle)
 	if err != nil {
 		return err
 	}
-	p, ok := e.Group.Agents[handle]
-	if !ok {
-		return exitUsagef("%w", noProfile(handle))
+	in, err := includers(g, handle)
+	if err != nil {
+		return err
 	}
-	v := agentViewOf(g, handle, p, contains(e.Workspace.Agent.Profiles, handle))
+	if in == nil {
+		in = []string{}
+	}
+	v := struct {
+		agentView
+		IncludedIn []string `json:"included_in"`
+	}{agentViewOf(g, handle, p), in}
 	if g.json {
 		return g.emitJSON(v)
 	}
@@ -534,7 +465,16 @@ func runAgentShow(g *globals, keyQuery, handle string) error {
 		}
 		fmt.Fprintf(g.app.Stdout, "body %s\n", body)
 	}
-	fmt.Fprintf(g.app.Stdout, "included %s\n", g.out().yesNo(v.Included))
+	out := g.out()
+	where := out.caution("none")
+	if len(in) > 0 {
+		names := make([]string, len(in))
+		for i, x := range in {
+			names[i] = out.primary(x)
+		}
+		where = strings.Join(names, ", ")
+	}
+	fmt.Fprintf(g.app.Stdout, "included_in %s\n", where)
 	return nil
 }
 
@@ -546,16 +486,40 @@ func handleArg(args []string) (string, error) {
 	return args[0], nil
 }
 
-// noProfile is the refusal of a Handle the Group's config.toml does not
-// define.
+// noProfile is the refusal of a Handle with no Agent Profile on this Node.
 func noProfile(handle string) error {
-	return fmt.Errorf("no Agent Profile %q in the Group's config.toml", handle)
+	return fmt.Errorf("no Agent Profile %q on this Node; add it with `defios agent add`", handle)
 }
 
-// checkProvider refuses p unless the Group's config.toml has its Provider.
-func checkProvider(c *config.Config, p config.Profile) error {
-	if _, ok := c.Providers[p.Provider]; !ok {
-		return fmt.Errorf("no Provider %s; add it with `defios provider add`", p.Provider)
+// readProfile is handle's Agent Profile config.toml, a usage error when it
+// has none.
+func readProfile(g *globals, handle string) (config.Profile, error) {
+	p, err := config.ReadProfile(g.paths().AgentProfileFile(handle))
+	if errors.Is(err, os.ErrNotExist) {
+		return config.Profile{}, exitUsagef("%w", noProfile(handle))
+	} else if err != nil {
+		return config.Profile{}, exitOperational(err)
+	}
+	return p, nil
+}
+
+// writeProfile writes p as the Agent Profile config.toml at path, making
+// its directory and removing it again, if it made it, when the write is
+// refused; a profile that would not read back is a usage error.
+func writeProfile(path string, p config.Profile) error {
+	dir := filepath.Dir(path)
+	_, statErr := os.Stat(dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return exitOperational(err)
+	}
+	err := config.WriteProfile(path, p)
+	if err != nil && errors.Is(statErr, os.ErrNotExist) {
+		os.Remove(dir)
+	}
+	if errors.Is(err, config.ErrNotWritten) {
+		return exitUsagef("%w", err)
+	} else if err != nil {
+		return exitOperational(err)
 	}
 	return nil
 }
@@ -630,8 +594,7 @@ func wholeNumbers(v any) any {
 	return v
 }
 
-// agentView is one agent, human or JSON: whether it is included is in the
-// Group's [agent] profiles, or the Conversation's merged over it.
+// agentView is one Agent Profile, human or JSON.
 type agentView struct {
 	Handle   string         `json:"handle"`
 	Provider string         `json:"provider"`
@@ -639,11 +602,10 @@ type agentView struct {
 	MaxTurns int            `json:"max_turns,omitempty"`
 	Dir      string         `json:"profile_dir"`
 	Body     map[string]any `json:"body,omitempty"`
-	Included bool           `json:"included"`
 }
 
-func agentViewOf(g *globals, handle string, p config.Profile, included bool) agentView {
+func agentViewOf(g *globals, handle string, p config.Profile) agentView {
 	model, _ := p.Body["model"].(string)
 	return agentView{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns,
-		Dir: g.paths().AgentProfileDir(handle), Body: p.Body, Included: included}
+		Dir: g.paths().AgentProfileDir(handle), Body: p.Body}
 }

@@ -190,14 +190,25 @@ defios agent add auditor --provider anthropic --model claude-opus-5-5 \
   --body '{"stream": true, "max_tokens": 8192}'
 ```
 
-`--body` is the rest of the request as a JSON object; `--body @body.json` reads it from a file and `--body -` from stdin. `agent add` writes the `[agents.auditor]` table to the Group's `config.toml` and a placeholder system prompt to `~/.config/defios/agents/auditor/SYSTEM.md`, the agent's profile directory. Replace it with the agent's own:
+`--body` is the rest of the request as a JSON object; `--body @body.json` reads it from a file and `--body -` from stdin. `agent add` writes the agent's profile directory, `~/.config/defios/agents/auditor/`: its `config.toml` and a placeholder system prompt in `SYSTEM.md`. Replace the prompt with the agent's own:
 
 ```bash
 echo "You review proposed transactions and point out anything risky." \
   > ~/.config/defios/agents/auditor/SYSTEM.md
 ```
 
-The profile directory is named by the Handle, so every Group on this machine that defines `@auditor` shares its prompt; each Group's `config.toml` still gives it its own Provider and body.
+The profile is the whole agent and belongs to the machine, not to one Group: every Group on this machine that includes `@auditor` runs the same profile. `~/.config/defios/agents/auditor/config.toml` reads:
+
+```toml
+provider = "anthropic"
+
+[body]
+model = "claude-opus-5-5"
+stream = true
+max_tokens = 8192
+```
+
+`provider` is an alias. Each Group that includes the agent must have a `[providers.<alias>]` table of that name, and the agent runs on that Group's Provider and key. A Group without it fails the agent when it is mentioned, naming the Group, the Handle and the alias.
 
 An agent answers only where it is included. Include it in Group talk:
 
@@ -211,29 +222,21 @@ It prints the Handles now mentionable there. `~/.config/defios/group/personal/co
 [agent]
 profiles = ["auditor"]
 
-[agents.auditor]
-provider = "anthropic"
-
-[agents.auditor.body]
-model = "claude-opus-5-5"
-stream = true
-max_tokens = 8192
-
 [providers.anthropic]
 base_url = "https://api.anthropic.com"
 api_path = "/v1/messages"
 api_key = "$ANTHROPIC_API_KEY"
 ```
 
-Check it: `defios agent list` shows each agent with its Provider and model, and marks the included ones; `--key <key>` asks about that Key's Conversation instead. `defios agent show auditor` shows every field and the profile directory.
+Check it: `defios agent list` shows every agent on this machine with its Provider and model, and marks the ones the Current Group includes; `--group <alias>` asks about another Group, `--key <key>` about that Key's Conversation. `defios agent show auditor` shows every field, the profile directory, and each Group and Conversation that includes it.
 
 `defios agent include auditor --key ecdsa:<hex>` includes it in that Key's Conversation instead, writing the Conversation's own `config.toml`. A Conversation with no `profiles` of its own follows the Group's list; including one there gives it a list of that Handle alone, and it no longer follows the Group's until you delete its `profiles` line. `defios agent exclude auditor` takes it out again, with `--key` from a Conversation that has its own list; excluding the last leaves `profiles = []`, where no agent answers.
 
-`defios agent edit auditor` changes only what it is given: `--provider`, `--max-turns`, `--model`, or `--body`, which replaces the body whole. `defios agent remove auditor` deletes its table and takes `@auditor` out of the Group's `[agent] profiles` and every Conversation's, keeping its profile directory. `defios agent delete auditor` also deletes the directory, and refuses while another Group on this machine defines `@auditor`.
+`defios agent edit auditor` changes only what it is given: `--provider`, `--max-turns`, `--model`, or `--body`, which replaces the body whole. `defios agent delete auditor` deletes the profile directory, and refuses while any Group or Conversation on this machine includes `@auditor`, naming each: exclude it there first.
 
-The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[agents.auditor.body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `api_key`.
+The `body` table is the rest of the request, in the API's own field names: DeFiOS writes only the conversation and the `say` tool, and the body merges over them. Nested tables become nested JSON, so `[body.thinking]` with `type = "adaptive"` sends `"thinking": {"type": "adaptive"}`. A local server with no key needs no `api_key`.
 
-Fields that every agent on a Provider shares can go in the Provider's own `body` instead. A profile's body merges over its Provider's body, so an agent with no body of its own runs on the Provider's, and one that sets a field overrides only that field. Here both agents stream, and `@auditor` uses a larger model:
+Fields that every agent on a Provider shares can go in the Provider's own `body` instead. A profile's body merges over its Provider's body, so an agent with no body of its own runs on the Provider's, and one that sets a field overrides only that field. Here both agents stream, and `@auditor` uses a larger model. In the Group's `config.toml`:
 
 ```toml
 [providers.anthropic]
@@ -245,35 +248,38 @@ api_key = "$ANTHROPIC_API_KEY"
 model = "claude-sonnet-5-5"
 stream = true
 max_tokens = 8192
+```
 
-[agents.scribe]
+`agents/scribe/config.toml` sets only `provider = "anthropic"`, and `agents/auditor/config.toml`:
+
+```toml
 provider = "anthropic"
 
-[agents.auditor]
-provider = "anthropic"
-
-[agents.auditor.body]
+[body]
 model = "claude-opus-5-5"
 ```
 
 A Conversation's own `config.toml` can override a `[providers.<alias>]` table key by key: one that sets only `base_url` keeps the Group's `api_path`, `api_key` and body, and its own `[providers.<alias>.body]` merges over the Group's.
 
-An agent on the `openai` preset takes the Responses API's own fields:
+An agent on the `openai` preset takes the Responses API's own fields, in its profile's `config.toml`:
 
 ```toml
-[agents.auditor]
 provider = "openai"
 
-[agents.auditor.body]
+[body]
 model = "gpt-5"
 stream = true
 max_output_tokens = 8192
 store = false
 include = ["reasoning.encrypted_content"]
 
-[agents.auditor.body.reasoning]
+[body.reasoning]
 effort = "medium"
+```
 
+and the Group's `config.toml` has the Provider:
+
+```toml
 [providers.openai]
 base_url = "https://api.openai.com"
 api_path = "/v1/responses"
@@ -287,7 +293,7 @@ Each call resends the whole conversation, and the model's reasoning from earlier
 A streamed Chat Completions call (a Provider whose API path ends in `/chat/completions`) reports token usage only when the body asks for it; without this, the Transcript records no usage for its calls:
 
 ```toml
-[agents.auditor.body.stream_options]
+[body.stream_options]
 include_usage = true
 ```
 

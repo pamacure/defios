@@ -280,13 +280,10 @@ func TestConversationSendAsAgent(t *testing.T) {
 	gid := formValid(t, a, b)
 	a.joins(t, gid, 2)
 	b.joins(t, gid, 2)
+	for _, h := range []string{"auditor", "scribe"} {
+		writeConfig(t, a.paths.AgentProfileFile(h), "provider = \"claude\"\n")
+	}
 	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), `
-[agents.auditor]
-provider = "claude"
-
-[agents.scribe]
-provider = "claude"
-
 [agent]
 profiles = ["auditor"]
 max_depth = 2
@@ -354,13 +351,10 @@ func TestConversationSendRefusesUnresolvedMention(t *testing.T) {
 	gid := formValid(t, a, b)
 	a.joins(t, gid, 2)
 	b.joins(t, gid, 2)
+	for _, h := range []string{"auditor", "scribe"} {
+		writeConfig(t, a.paths.AgentProfileFile(h), "provider = \"claude\"\n")
+	}
 	writeConfig(t, a.paths.GroupConfigFile(group.ImplicitAlias), `
-[agents.auditor]
-provider = "claude"
-
-[agents.scribe]
-provider = "claude"
-
 [agent]
 profiles = ["auditor"]
 `)

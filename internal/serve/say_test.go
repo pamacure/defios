@@ -153,9 +153,9 @@ func TestRunBoundsAreErrors(t *testing.T) {
 // commits.
 func TestProfileOptionsShapeTheRun(t *testing.T) {
 	a, _, gid, provider := agentPair(t, "auditor")
-	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	path := a.paths.AgentProfileFile("auditor")
 	cfg := strings.Replace(readFile(t, path), "provider = \"claude\"\n", "provider = \"claude\"\nmax_turns = 2\n", 1)
-	writeConfig(t, path, cfg+"\n[agents.auditor.body.thinking]\ntype = \"adaptive\"\n")
+	writeConfig(t, path, cfg+"\n[body.thinking]\ntype = \"adaptive\"\n")
 	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) { streamSay(w, "") })
 	s := watch(t, a)
 	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
@@ -186,11 +186,10 @@ func TestProfileOptionsShapeTheRun(t *testing.T) {
 // field overrides only that field.
 func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
+	writeConfig(t, a.paths.AgentProfileFile("auditor"), "provider = \"claude\"\n")
+	writeConfig(t, a.paths.AgentProfileFile("scribe"), "provider = \"claude\"\n\n[body]\nmodel = \"claude-big\"\n")
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
-	cfg := readFile(t, path)
-	cfg = strings.Replace(cfg, "[agents.auditor.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n", "", 1)
-	cfg = strings.Replace(cfg, "[agents.scribe.body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n", "[agents.scribe.body]\nmodel = \"claude-big\"\n", 1)
-	writeConfig(t, path, cfg+"\n[providers.claude.body]\nmodel = \"claude-base\"\nstream = true\nmax_tokens = 512\n")
+	writeConfig(t, path, readFile(t, path)+"\n[providers.claude.body]\nmodel = \"claude-base\"\nstream = true\nmax_tokens = 512\n")
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		if n == 1 {
 			streamSay(w, "ok")

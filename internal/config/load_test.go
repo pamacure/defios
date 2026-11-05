@@ -42,6 +42,20 @@ func node(t *testing.T, group, conv string) nodedir.Paths {
 	return p
 }
 
+// withProfiles writes each Agent Profile's agents/<handle>/config.toml in p.
+func withProfiles(t *testing.T, p nodedir.Paths, profiles map[string]string) nodedir.Paths {
+	t.Helper()
+	for h, body := range profiles {
+		if err := os.MkdirAll(p.AgentProfileDir(h), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p.AgentProfileFile(h), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return p
+}
+
 const mainnet = "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\"$KEY_ETH\"]\n"
 
 // A Group with no config.toml reads as empty, at any place.
@@ -128,12 +142,13 @@ func TestLoadFailsOnAFileThatDoesNotParse(t *testing.T) {
 // Included, saying which files to fix, but not Load or Networks: signing
 // keeps working with the agent list broken.
 func TestABadProfilesListFailsIncludedButNotNetworks(t *testing.T) {
-	p := node(t, mainnet+"[agents.auditor]\nprovider = \"claude\"\n", "[agent]\nprofiles = [\"ghost\"]\n")
+	p := withProfiles(t, node(t, mainnet+"[agent]\nprofiles = [\"auditor\"]\n", "[agent]\nprofiles = [\"ghost\"]\n"),
+		map[string]string{"auditor": "provider = \"claude\"\n"})
 	e, err := config.Load(p, "home", mainConv(), []key.Key{mainKey})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "fix [agent] profiles in " + p.ConversationConfigFile("home", "ecdsa-02a1b2c3d4e5") + ", or define it in " + p.GroupConfigFile("home")
+	want := "fix [agent] profiles in " + p.ConversationConfigFile("home", "ecdsa-02a1b2c3d4e5") + ", or add " + p.AgentProfileFile("ghost")
 	if _, err := e.Included(); err == nil || !strings.Contains(err.Error(), "ghost") || !strings.Contains(err.Error(), want) {
 		t.Fatalf("included = %v; want it to name ghost and %q", err, want)
 	}

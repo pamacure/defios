@@ -84,10 +84,10 @@ func (e Effective) Networks() ([]network.Network, error) {
 }
 
 // Included is what may answer here: the profiles [agent] profiles lists, in
-// its order, and the depth a chain of them may reach. A profile's directory
-// is its nodedir.Paths.AgentProfileDir; whether it exists is for whoever
-// summons it to find out. A listed Handle the Group defines no profile for
-// is an error saying which file to fix.
+// its order, each read from its config.toml, and the depth a chain of them
+// may reach. Whether a profile's SYSTEM.md exists is for whoever summons it
+// to find out. A listed Handle with no profile config.toml is an error
+// saying which file to fix.
 func (e Effective) Included() (Included, error) {
 	a := e.Workspace.Agent
 	out := Included{MaxDepth: a.MaxDepth}
@@ -95,13 +95,16 @@ func (e Effective) Included() (Included, error) {
 		out.MaxDepth = 1
 	}
 	for _, h := range a.Profiles {
-		p, ok := e.Group.Agents[h]
-		if !ok {
-			err := fmt.Errorf("config: [agent] profiles: no [agents.%s] is defined in the Group config", h)
+		file := e.paths.AgentProfileFile(h)
+		p, err := ReadProfile(file)
+		if errors.Is(err, os.ErrNotExist) {
+			err := fmt.Errorf("config: [agent] profiles: no Agent Profile %q", h)
 			if e.conv.Agent.Profiles != nil {
-				return Included{}, fmt.Errorf("%w: fix [agent] profiles in %s, or define it in %s", err, e.convFile, e.groupFile)
+				return Included{}, fmt.Errorf("%w: fix [agent] profiles in %s, or add %s", err, e.convFile, file)
 			}
-			return Included{}, fmt.Errorf("%w: fix %s", err, e.groupFile)
+			return Included{}, fmt.Errorf("%w: fix [agent] profiles in %s, or add %s", err, e.groupFile, file)
+		} else if err != nil {
+			return Included{}, err
 		}
 		r := ResolvedProfile{Handle: h, Dir: e.paths.AgentProfileDir(h), Provider: p.Provider,
 			MaxTurns: p.MaxTurns, Body: p.Body}

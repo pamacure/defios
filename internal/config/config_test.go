@@ -111,12 +111,6 @@ base_url = "https://api.anthropic.com"
 api_path = "/v1/messages"
 api_key = "$DEFIOS_ANTHROPIC"
 
-[agents.auditor]
-provider = "claude"
-
-[agents.trader]
-provider = "gpt"
-
 [agent]
 profiles = ["auditor"]
 max_depth = 2
@@ -126,9 +120,10 @@ max_depth = 2
 // table under test for something else.
 const endpoint = "base_url = \"https://x.example\"\napi_path = \"/v1/messages\"\n"
 
-// The Group config.toml holds this Node's tailnet presence, its Agent
-// Profiles and the three Workspace sections, every secret as a reference.
-func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
+// The Group config.toml holds this Node's tailnet presence and the three
+// Workspace sections, every secret as a reference. [agent] profiles names
+// Handles whose profiles are found only when they are included.
+func TestGroupConfigReadsTheWorkspaceSections(t *testing.T) {
 	c, err := config.ReadFile(write(t, groupConfig))
 	if err != nil {
 		t.Fatal(err)
@@ -142,10 +137,6 @@ func TestGroupConfigReadsTheWorkspaceSectionsAndAgentProfiles(t *testing.T) {
 		Agent:     config.Agent{Profiles: []string{"auditor"}, MaxDepth: 2},
 	}
 	if !reflect.DeepEqual(c.Workspace, want) || c.TailnetAuthKey != "$TS_AUTHKEY" {
-		t.Fatalf("read %+v", c)
-	}
-	wantAgents := map[string]config.Profile{"auditor": {Provider: "claude"}, "trader": {Provider: "gpt"}}
-	if !reflect.DeepEqual(c.Agents, wantAgents) {
 		t.Fatalf("read %+v", c)
 	}
 }
@@ -404,38 +395,106 @@ func TestPrunePolicyIsAnAge(t *testing.T) {
 	}
 }
 
-// An Agent Profile is defined only in the Group's config.toml, under a Handle
-// that a mention can name (ADR 0016) and is not "user", and names the
-// Provider it runs on; [agent] includes only Handles the Group defines, at a depth of
-// at least 1.
-func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
+// An Agent Profile's config.toml names the Provider it runs on and may set
+// max_turns and a body; any other key is refused, as elsewhere (ADR 0029).
+func TestAProfileFileRefusesMalformedProfiles(t *testing.T) {
 	for name, body := range map[string]string{
-		"bad handle":                 "[agents.Auditor]\nprovider = \"claude\"",
-		"reserved handle":            "[agents.user]\nprovider = \"claude\"",
-		"handle ending in -":         "[agents.auditor-]\nprovider = \"claude\"",
-		"handle ending in _":         "[agents.auditor_]\nprovider = \"claude\"",
-		"handle with --":             "[agents.au--di]\nprovider = \"claude\"",
-		"missing provider":           "[agents.auditor]\nmax_turns = 4",
-		"bad provider alias":         "[agents.auditor]\nprovider = \"Claude!\"",
-		"undefined handle":           "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"trader\"]",
-		"handle listed twice":        "[agents.auditor]\nprovider = \"claude\"\n[agent]\nprofiles = [\"auditor\", \"auditor\"]",
+		"missing provider":    "max_turns = 4",
+		"bad provider alias":  "provider = \"Claude!\"",
+		"unknown profile key": "provider = \"claude\"\nsoul = \"SOUL.md\"",
+		"old dir key":         "provider = \"claude\"\ndir = \"agents/y\"",
+		"old model key":       "provider = \"claude\"\nmodel = \"claude-opus-5-5\"",
+		"old max_tokens key":  "provider = \"claude\"\nmax_tokens = 4000",
+		"old temperature key": "provider = \"claude\"\ntemperature = 0.2",
+		"zero max_turns":      "provider = \"claude\"\nmax_turns = 0",
+		"negative max_turns":  "provider = \"claude\"\nmax_turns = -3",
+		"body not a table":    "provider = \"claude\"\nbody = \"x\"",
+		"date-time in body":   "provider = \"claude\"\n[body]\nsince = 2026-01-01T00:00:00Z",
+		"local date in body":  "provider = \"claude\"\n[body.metadata]\nday = 2026-01-01",
+		"time in an array":    "provider = \"claude\"\n[body]\nat = [07:32:00]",
+		"nan in body":         "provider = \"claude\"\n[body]\ntemperature = nan",
+		"empty key in body":   "provider = \"claude\"\n[body]\n\"\" = 1",
+	} {
+		path := write(t, body)
+		_, err := config.ReadProfile(path)
+		if err == nil {
+			t.Errorf("%s: read without error", name)
+		} else if !strings.Contains(err.Error(), path) {
+			t.Errorf("%s: %v, want it to name %s", name, err, path)
+		} else if strings.Contains(name, "date") || strings.Contains(name, "time in") {
+			if !strings.Contains(err.Error(), "date or time") {
+				t.Errorf("%s: %v, want it to say a date or time has no JSON form", name, err)
+			}
+		}
+	}
+}
+
+// A profile's config.toml reads back as written, its body as JSON values.
+func TestAProfileFileRoundTrips(t *testing.T) {
+	path := write(t, `
+provider = "claude"
+max_turns = 3
+
+[body]
+model = "claude-opus-5-5"
+max_tokens = 4096
+
+[body.thinking]
+type = "adaptive"
+`)
+	got, err := config.ReadProfile(path)
+	want := config.Profile{Provider: "claude", MaxTurns: 3, Body: map[string]any{
+		"model": "claude-opus-5-5", "max_tokens": int64(4096), "thinking": map[string]any{"type": "adaptive"}}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("read %#v, %v\nwant %#v", got, err, want)
+	}
+	out := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.WriteProfile(out, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := config.ReadProfile(out); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("read back %#v, %v", got, err)
+	}
+	if err := config.WriteProfile(out, config.Profile{Provider: "Bad!"}); !errors.Is(err, config.ErrNotWritten) {
+		t.Fatalf("WriteProfile of a bad profile = %v; want ErrNotWritten", err)
+	}
+	if _, err := config.ReadProfile(filepath.Join(t.TempDir(), "config.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadProfile of no file = %v; want os.ErrNotExist", err)
+	}
+}
+
+// An Agent Profile lives in agents/<handle>/config.toml (ADR 0029): an
+// [agents.<handle>] table in a Group's or a Conversation's config.toml is
+// refused, pointing at the profile's file.
+func TestAWorkspaceRefusesAgentsTablesPointingAtTheProfileFile(t *testing.T) {
+	for name, body := range map[string]string{
+		"profile":      "[agents.auditor]\nprovider = \"claude\"",
+		"profile body": "[agents.auditor.body]\nmodel = \"claude-opus-5-5\"",
+	} {
+		_, gerr := config.ReadFile(write(t, body))
+		_, werr := config.ReadWorkspace(write(t, body))
+		for file, err := range map[string]error{"Group": gerr, "Conversation": werr} {
+			if err == nil || !strings.Contains(err.Error(), "agents/auditor/config.toml") {
+				t.Errorf("%s %s: read = %v; want a refusal naming agents/auditor/config.toml", file, name, err)
+			}
+		}
+	}
+}
+
+// [agent] includes only valid Handles, each once, at a depth of at least 1.
+func TestConfigRefusesAMalformedAgentTable(t *testing.T) {
+	for name, body := range map[string]string{
+		"bad handle":                 "[agent]\nprofiles = [\"Auditor\"]",
+		"reserved handle":            "[agent]\nprofiles = [\"user\"]",
+		"handle ending in -":         "[agent]\nprofiles = [\"auditor-\"]",
+		"handle ending in _":         "[agent]\nprofiles = [\"auditor_\"]",
+		"handle with --":             "[agent]\nprofiles = [\"au--di\"]",
+		"handle listed twice":        "[agent]\nprofiles = [\"auditor\", \"auditor\"]",
 		"zero max_depth":             "[agent]\nmax_depth = 0",
 		"negative max_depth":         "[agent]\nmax_depth = -1",
 		"old [agent] model":          "[agent]\nmodel = \"claude\"",
 		"old [agent] window":         "[agent]\ntoken_window = 200000",
-		"unknown profile key":        "[agents.auditor]\nprovider = \"claude\"\nsoul = \"SOUL.md\"",
-		"old model key":              "[agents.auditor]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"",
-		"old max_tokens key":         "[agents.auditor]\nprovider = \"claude\"\nmax_tokens = 4000",
-		"old temperature key":        "[agents.auditor]\nprovider = \"claude\"\ntemperature = 0.2",
-		"zero max_turns":             "[agents.auditor]\nprovider = \"claude\"\nmax_turns = 0",
-		"negative max_turns":         "[agents.auditor]\nprovider = \"claude\"\nmax_turns = -3",
-		"body not a table":           "[agents.auditor]\nprovider = \"claude\"\nbody = \"x\"",
-		"date-time in body":          "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nsince = 2026-01-01T00:00:00Z",
-		"local date in body":         "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body.metadata]\nday = 2026-01-01",
-		"time in an array":           "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\nat = [07:32:00]",
-		"nan in body":                "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\ntemperature = nan",
 		"provider body not a table":  "[providers.claude]\n" + endpoint + "body = \"x\"",
-		"empty key in body":          "[agents.auditor]\nprovider = \"claude\"\n[agents.auditor.body]\n\"\" = 1",
 		"empty key in provider body": "[providers.claude]\n" + endpoint + "[providers.claude.body]\n\"\" = 1",
 		"date-time in provider body": "[providers.claude]\n" + endpoint + "[providers.claude.body]\nsince = 2026-01-01T00:00:00Z",
 		"unknown provider key":       "[providers.claude]\n" + endpoint + "model = \"claude-opus-5-5\"",
@@ -443,15 +502,13 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 		_, err := config.ReadFile(write(t, body))
 		if err == nil {
 			t.Errorf("%s: read without error", name)
-		} else if strings.Contains(name, "date") || strings.Contains(name, "time in") {
+		} else if strings.Contains(name, "date") {
 			if !strings.Contains(err.Error(), "date or time") {
 				t.Errorf("%s: %v, want it to say a date or time has no JSON form", name, err)
 			}
 		}
 	}
 	for name, body := range map[string]string{
-		"profile in a Conversation":  "[agents.auditor]\nprovider = \"claude\"",
-		"body in a Conversation":     "[agents.auditor.body]\nmodel = \"claude-opus-5-5\"",
 		"bad handle in profiles":     "[agent]\nprofiles = [\"Auditor\"]",
 		"zero max_depth":             "[agent]\nmax_depth = 0",
 		"date-time in provider body": "[providers.claude.body.metadata]\nday = 2026-01-01",
@@ -467,30 +524,27 @@ func TestConfigRefusesMalformedAgentProfiles(t *testing.T) {
 // of objects, integers and floats numbers. max_turns resolves with it;
 // unset, it is 8, and an unset body is empty.
 func TestIncludedResolvesTheProfileBody(t *testing.T) {
-	e, err := config.Load(node(t, `
-[agents.auditor]
+	p := withProfiles(t, node(t, "[agent]\nprofiles = [\"auditor\", \"scribe\"]\n", ""), map[string]string{
+		"auditor": `
 provider = "claude"
 max_turns = 3
 
-[agents.auditor.body]
+[body]
 model = "claude-opus-5-5"
 stream = true
 max_tokens = 4096
 temperature = 1
 stop_sequences = ["END"]
 
-[agents.auditor.body.thinking]
+[body.thinking]
 type = "adaptive"
 
-[[agents.auditor.body.metadata.tags]]
+[[body.metadata.tags]]
 name = "a"
-
-[agents.scribe]
-provider = "local"
-
-[agent]
-profiles = ["auditor", "scribe"]
-`, ""), "home", nil, nil)
+`,
+		"scribe": "provider = \"local\"\n",
+	})
+	e, err := config.Load(p, "home", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,25 +587,6 @@ include = ["reasoning.encrypted_content"]
 effort = "low"
 summary = "auto"
 
-[agents.trader]
-provider = "gpt"
-
-[agents.auditor]
-provider = "gpt"
-
-[agents.auditor.body]
-model = "gpt-big"
-include = []
-
-[agents.auditor.body.reasoning]
-effort = "high"
-
-[agents.scribe]
-provider = "claude"
-
-[agents.scribe.body]
-model = "claude-opus-5-5"
-
 [agent]
 profiles = ["trader", "auditor", "scribe"]
 `
@@ -570,7 +605,12 @@ profiles = ["trader", "auditor", "scribe"]
 			`{"model":"claude-opus-5-5"}`,
 		}},
 	} {
-		e, err := config.Load(node(t, group, tc.conv), "home", mainConv(), []key.Key{mainKey})
+		p := withProfiles(t, node(t, group, tc.conv), map[string]string{
+			"trader":  "provider = \"gpt\"\n",
+			"auditor": "provider = \"gpt\"\n\n[body]\nmodel = \"gpt-big\"\ninclude = []\n\n[body.reasoning]\neffort = \"high\"\n",
+			"scribe":  "provider = \"claude\"\n\n[body]\nmodel = \"claude-opus-5-5\"\n",
+		})
+		e, err := config.Load(p, "home", mainConv(), []key.Key{mainKey})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -591,8 +631,8 @@ profiles = ["trader", "auditor", "scribe"]
 		if c.Workspace.Providers["gpt"].Body["stream"] != true || c.Workspace.Providers["gpt"].Body["reasoning"].(map[string]any)["effort"] != "low" {
 			t.Fatalf("Load or Included changed the Group's Provider body: %v", c.Workspace.Providers["gpt"].Body)
 		}
-		if c.Agents["auditor"].Body["reasoning"].(map[string]any)["summary"] != nil {
-			t.Fatalf("Included changed the profile's body: %v", c.Agents["auditor"].Body)
+		if again, err := e.Included(); err != nil || again.Profiles[1].Body["reasoning"].(map[string]any)["summary"] != "auto" {
+			t.Fatalf("Included again = %+v, %v", again, err)
 		}
 	}
 }
@@ -623,11 +663,9 @@ func TestWriteWorkspaceKeepsAnEmptyProfilesList(t *testing.T) {
 }
 
 // WriteFile keeps a Group's [agent] profiles set empty, as WriteWorkspace
-// does, so excluding the last Handle leaves the key; a profile named
-// agents has a table header the [agent] one must not be mistaken for.
+// does, so excluding the last Handle leaves the key.
 func TestWriteFileKeepsAnEmptyProfilesList(t *testing.T) {
 	c := config.Config{
-		Agents:    map[string]config.Profile{"agents": {Provider: "claude"}},
 		Workspace: config.Workspace{Providers: map[string]config.Provider{"claude": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}}, Agent: config.Agent{Profiles: []string{}}},
 	}
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -653,9 +691,9 @@ func TestAWriteThatWouldNotReadBackIsRefused(t *testing.T) {
 	for name, c := range map[string]config.Config{
 		"empty key in a body": {Workspace: config.Workspace{Providers: map[string]config.Provider{
 			"claude": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", Body: map[string]any{"": int64(1)}}}}},
-		"undefined handle":      {Workspace: config.Workspace{Providers: claude, Agent: config.Agent{Profiles: []string{"ghost"}}}},
-		"incomplete provider":   {Workspace: config.Workspace{Providers: map[string]config.Provider{"claude": {BaseURL: "https://api.anthropic.com"}}}},
-		"nil in a body's array": {Agents: map[string]config.Profile{"auditor": {Provider: "claude", Body: map[string]any{"stop": []any{nil}}}}},
+		"incomplete provider": {Workspace: config.Workspace{Providers: map[string]config.Provider{"claude": {BaseURL: "https://api.anthropic.com"}}}},
+		"nil in a body's array": {Workspace: config.Workspace{Providers: map[string]config.Provider{
+			"claude": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages", Body: map[string]any{"stop": []any{nil}}}}}},
 	} {
 		if err := config.WriteFile(path, c); !errors.Is(err, config.ErrNotWritten) {
 			t.Errorf("%s: WriteFile = %v; want ErrNotWritten", name, err)
@@ -673,40 +711,24 @@ func TestAWriteThatWouldNotReadBackIsRefused(t *testing.T) {
 	}
 }
 
-// A profile's directory is named by its Handle (ADR 0026): a Group config
-// that still sets [agents.<handle>] dir is refused as an unknown key.
-func TestConfigRefusesAProfileDir(t *testing.T) {
-	_, err := config.ReadFile(write(t, "[agents.x]\ndir = \"agents/y\"\nprovider = \"claude\""))
-	if err == nil || !strings.Contains(err.Error(), "agents.x.dir") {
-		t.Fatalf("read = %v; want an unknown-key error naming agents.x.dir", err)
-	}
-}
-
 // Included is what may answer in one place: the Group's included profiles, or
 // the Conversation's list in their place, each with its profile directory
 // named by its Handle under the config root (ADR 0026), and the depth a chain
 // may reach.
 func TestIncludedResolvesTheProfiles(t *testing.T) {
 	const group = `
-[agents.auditor]
-provider = "claude"
-
-[agents.trader]
-provider = "gpt"
-
-[agents.scout]
-provider = "claude"
-
-[agents.quant]
-provider = "gpt"
-
 [agent]
 profiles = ["auditor"]
 max_depth = 3
 `
 	included := func(group, conv string) (nodedir.Paths, config.Included, error) {
 		t.Helper()
-		p := node(t, group, conv)
+		p := withProfiles(t, node(t, group, conv), map[string]string{
+			"auditor": "provider = \"claude\"\n",
+			"trader":  "provider = \"gpt\"\n",
+			"scout":   "provider = \"claude\"\n",
+			"quant":   "provider = \"gpt\"\n",
+		})
 		e, err := config.Load(p, "home", mainConv(), []key.Key{mainKey})
 		if err != nil {
 			t.Fatal(err)
@@ -744,6 +766,9 @@ max_depth = 3
 
 	if _, _, err := included(group, "[agent]\nprofiles = [\"ghost\"]\n"); err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("a Conversation including an undefined Handle = %v; want an error naming it", err)
+	}
+	if _, _, err := included("[agent]\nprofiles = [\"ghost\"]\n", ""); err == nil || !strings.Contains(err.Error(), filepath.Join("agents", "ghost", "config.toml")) {
+		t.Fatalf("a Group including a Handle with no profile = %v; want an error naming its config.toml", err)
 	}
 
 	_, none, err := included("", "")
