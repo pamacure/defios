@@ -269,9 +269,7 @@ func parseWorkspace(path string, data []byte) (Workspace, error) {
 }
 
 // decode refuses any key that into does not define, so a misplaced or misspelt
-// secret is an error rather than ignored. An [agents.<handle>] table, where a
-// Group's config.toml once held its Agent Profiles, is refused naming the
-// profile's own file (ADR 0029).
+// secret is an error rather than ignored.
 func decode(path string, data []byte, into any) (toml.MetaData, error) {
 	md, err := toml.Decode(string(data), into)
 	if err != nil {
@@ -285,9 +283,6 @@ func decode(path string, data []byte, into any) (toml.MetaData, error) {
 		// such.
 		if (isProfile && len(k) > 1 && k[0] == "body") || (len(k) > 3 && k[2] == "body" && k[0] == "providers") {
 			continue
-		}
-		if !isProfile && len(k) > 1 && k[0] == "agents" {
-			return md, fmt.Errorf("config: %s: [agents.%s] is no longer read here: an Agent Profile is agents/%s/config.toml under the config root, beside its SYSTEM.md (ADR 0029)", path, k[1], k[1])
 		}
 		keys = append(keys, k.String())
 	}

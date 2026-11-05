@@ -465,17 +465,17 @@ type = "adaptive"
 
 // An Agent Profile lives in agents/<handle>/config.toml (ADR 0029): an
 // [agents.<handle>] table in a Group's or a Conversation's config.toml is
-// refused, pointing at the profile's file.
-func TestAWorkspaceRefusesAgentsTablesPointingAtTheProfileFile(t *testing.T) {
-	for name, body := range map[string]string{
-		"profile":      "[agents.auditor]\nprovider = \"claude\"",
-		"profile body": "[agents.auditor.body]\nmodel = \"claude-opus-5-5\"",
+// an unknown key like any other.
+func TestAWorkspaceRefusesAgentsTablesAsUnknownKeys(t *testing.T) {
+	for name, tc := range map[string]struct{ body, key string }{
+		"profile":      {"[agents.auditor]\nprovider = \"claude\"", "agents.auditor"},
+		"profile body": {"[agents.auditor.body]\nmodel = \"claude-opus-5-5\"", "agents.auditor.body"},
 	} {
-		_, gerr := config.ReadFile(write(t, body))
-		_, werr := config.ReadWorkspace(write(t, body))
+		_, gerr := config.ReadFile(write(t, tc.body))
+		_, werr := config.ReadWorkspace(write(t, tc.body))
 		for file, err := range map[string]error{"Group": gerr, "Conversation": werr} {
-			if err == nil || !strings.Contains(err.Error(), "agents/auditor/config.toml") {
-				t.Errorf("%s %s: read = %v; want a refusal naming agents/auditor/config.toml", file, name, err)
+			if err == nil || !strings.Contains(err.Error(), "unknown key "+tc.key) {
+				t.Errorf("%s %s: read = %v; want an unknown-key error naming %s", file, name, err, tc.key)
 			}
 		}
 	}
