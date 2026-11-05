@@ -37,9 +37,15 @@ adds a Tool: only Tools act as the Node.
 - **Install.** `plugin install <source>` takes a git URL or a local path; it
   shows the commands the Plugin's MCP Servers run and asks first. `plugin
   list`, `plugin update` and `plugin remove` complete the set; removing a
-  Plugin a profile still grants is refused, naming the profile. DeFiOS's own
-  Plugins ship with it, need no install and no prompt, and are not in the
-  lock file.
+  Plugin a profile still grants is refused, naming the profile.
+- **Built-in Plugins.** DeFiOS's own Plugins live in this repository under
+  `plugins/<plugin>/`, in the same layout, and are compiled into the binary
+  and read from it, never written to `<data root>/plugins/`. A built-in
+  Plugin is always the binary's version: it needs no install, no prompt and
+  no lock entry, and cannot be edited, updated or removed. Its MCP Servers
+  run the `defios` binary itself (`defios mcp <plugin>/<server>`), so there
+  is nothing else to ship. An installed Plugin may not take a built-in's
+  name. Built-ins are granted per agent by name like any other Plugin.
 - **No Registries yet.** Installing by name from an index, DeFiOS's or a
   community's, is a later decision; until then a source is a URL or a path.
 - **Lock file.** `<config root>/plugins.lock` records each Plugin's source
