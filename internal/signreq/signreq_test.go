@@ -558,14 +558,20 @@ func rawRow(t *testing.T, seq uint64, sender byte, msgType uint32, created time.
 }
 
 // mintedKey is the rows of a 2-of-2 ECDSA keygen by Nodes 1 and 2.
-func mintedKey(t *testing.T, at time.Time) []cosl.Row {
+func mintedKey(t *testing.T, at time.Time) []cosl.Row { return mintedKeyOf(t, at, 2, 2) }
+
+// mintedKeyOf is the rows of a t-of-n ECDSA keygen by Nodes 1 to n.
+func mintedKeyOf(t *testing.T, at time.Time, tt, n byte) []cosl.Row {
 	t.Helper()
 	sid := bytes32(0x77)
-	nodes := [][]byte{idBytes(1), idBytes(2)}
+	var nodes [][]byte
+	for i := byte(1); i <= n; i++ {
+		nodes = append(nodes, idBytes(i))
+	}
 	rows := []cosl.Row{rawRow(t, 1, 1, cosl.TypeSessionStart, at, nil,
-		&coslv1.SessionStart{SessionId: sid, Curve: "ecdsa", T: 2, N: 2, Participants: nodes})}
-	for i, n := range []byte{1, 2} {
-		rows = append(rows, rawRow(t, uint64(2+i), n, cosl.TypeSessionComplete, at, nil,
+		&coslv1.SessionStart{SessionId: sid, Curve: "ecdsa", T: uint32(tt), N: uint32(n), Participants: nodes})}
+	for i := byte(1); i <= n; i++ {
+		rows = append(rows, rawRow(t, uint64(1+i), i, cosl.TypeSessionComplete, at, nil,
 			&coslv1.SessionComplete{SessionId: sid, Curve: "ecdsa", PublicKey: ecdsaKey.PublicKey}))
 	}
 	return rows
@@ -684,5 +690,177 @@ func TestListAndInspectNeedOnlyMsgTypes(t *testing.T) {
 	}
 	if d.Status != "signed" || len(d.BroadcastReceipts) != 1 || len(d.Details) != 1 || len(d.Details[0].Digests) != 1 {
 		t.Fatalf("detail from MsgTypes rows = %+v", d)
+	}
+}
+
+func refuseRow(t *testing.T, seq uint64, sender byte, created time.Time, conv []byte, request [32]byte, reason, handle string) cosl.Row {
+	t.Helper()
+	return rawRow(t, seq, sender, cosl.TypeSignRefuse, created, conv, &coslv1.SignRefuse{SignRequestId: request[:], Reason: reason, Handle: handle})
+}
+
+func handledAccept(t *testing.T, seq uint64, sender byte, created time.Time, conv []byte, request [32]byte, handle string) cosl.Row {
+	t.Helper()
+	return rawRow(t, seq, sender, cosl.TypeSignAccept, created, conv, &coslv1.SignAccept{SignRequestId: request[:], Handle: handle})
+}
+
+// A Node's first accept or refusal of a request, in log order and within its
+// deadline, is its stance; anything later from it is ignored. The proposer's
+// stance is accept. A row with a malformed Handle, or a refusal with no
+// reason, is not a stance at all.
+func TestStances(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	rq := req(ethTx()) // 300s window
+	rq.Handle = "treasurer"
+	r := rowOf(t, 1, 0xa1, now, conv[:], rq)
+	r.Sender = identity.ID{1}
+	at := func(s int) time.Time { return now.Add(time.Duration(s) * time.Second) }
+	rows := []cosl.Row{
+		r,
+		refuseRow(t, 2, 1, at(1), conv[:], r.MsgID, "changed my mind", ""), // the proposer
+		acceptRow(t, 3, 3, at(1), conv[:], r.MsgID),
+		refuseRow(t, 4, 3, at(2), conv[:], r.MsgID, "too late", ""), // 3 accepted first
+		refuseRow(t, 5, 4, at(2), conv[:], r.MsgID, "unknown payee", "auditor"),
+		acceptRow(t, 6, 4, at(3), conv[:], r.MsgID),                     // 4 refused first
+		refuseRow(t, 7, 5, at(3), conv[:], r.MsgID, "  ", ""),           // no reason
+		handledAccept(t, 8, 5, at(3), conv[:], r.MsgID, "Not A Handle"), // malformed
+		handledAccept(t, 9, 5, at(4), conv[:], r.MsgID, "ops"),
+		refuseRow(t, 10, 6, at(3600), conv[:], r.MsgID, "late", ""), // past the deadline
+		refuseRow(t, 11, 7, at(4), conv[:], [32]byte{0x99}, "another request", ""),
+	}
+	got := Stances(rows, r, rq)
+	want := []Stance{
+		{Node: identity.ID{1}, Seq: 1, Handle: "treasurer"},
+		{Node: identity.ID{3}, Seq: 3},
+		{Node: identity.ID{4}, Seq: 5, Handle: "auditor", Refused: true, Reason: "unknown payee"},
+		{Node: identity.ID{5}, Seq: 9, Handle: "ops"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("stances = %+v\nwant %+v", got, want)
+	}
+	if acc := Accepts(rows, r, rq); len(acc) != 3 || acc[2] != (session.SignAccept{Node: identity.ID{5}, Seq: 9}) {
+		t.Errorf("accepts = %+v", acc)
+	}
+}
+
+// A request is refused once its refusals exceed n − t, so t accepts can no
+// longer exist: with a 2-of-3 Key one refusal leaves it open and two refuse
+// it. A Session's status beats refused, and refused beats expired.
+func TestRefusedStatus(t *testing.T) {
+	start := time.Unix(10_000, 0)
+	within, after := start.Add(10*time.Second), start.Add(time.Hour)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	r := rowOf(t, 10, 0xa1, start, conv[:], req(ethTx()))
+	r.Sender = identity.ID{1}
+	refuse := func(seq uint64, n byte) cosl.Row {
+		return refuseRow(t, seq, n, start.Add(time.Second), conv[:], r.MsgID, "no", "")
+	}
+	sessionStart := rawRow(t, 13, 1, cosl.TypeSessionStart, start.Add(2*time.Second), nil,
+		&coslv1.SessionStart{SessionId: bytes32(0x88), Curve: "ecdsa", T: 2, N: 3, SignRequestId: r.MsgID[:],
+			Participants: [][]byte{idBytes(1), idBytes(2)}})
+	cases := []struct {
+		name string
+		rows []cosl.Row
+		now  time.Time
+		want string
+	}{
+		{"n − t refusals", []cosl.Row{refuse(11, 2)}, within, "open"},
+		{"n − t + 1 refusals", []cosl.Row{refuse(11, 2), refuse(12, 3)}, within, "refused"},
+		{"refused past the deadline", []cosl.Row{refuse(11, 2), refuse(12, 3)}, after, "refused"},
+		{"a Session wins", []cosl.Row{refuse(11, 2), refuse(12, 3), sessionStart}, within, "signing"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rows := append(append(mintedKeyOf(t, start, 2, 3), r), c.rows...)
+			list, err := List(rows, c.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := list[0].Status; got != c.want {
+				t.Errorf("List status = %q, want %q", got, c.want)
+			}
+			d, err := Inspect(rows, "a1", c.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.Status != c.want {
+				t.Errorf("Inspect status = %q, want %q", d.Status, c.want)
+			}
+		})
+	}
+}
+
+// list and inspect show who refused beside who accepted, and the Handle of
+// the agent behind the proposal, each accept and each refusal. A row written
+// before Handles decodes as a person's.
+func TestRefusalsAndHandlesInListAndInspect(t *testing.T) {
+	start := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	rq := req(ethTx())
+	rq.Handle = "treasurer"
+	r := rowOf(t, 10, 0xa1, start, conv[:], rq)
+	r.Sender = identity.ID{1}
+	rows := append(mintedKeyOf(t, start, 3, 4), r,
+		handledAccept(t, 11, 2, start.Add(time.Second), conv[:], r.MsgID, "ops"),
+		refuseRow(t, 12, 3, start.Add(time.Second), conv[:], r.MsgID, "unknown payee", "auditor"),
+		acceptRow(t, 13, 4, start.Add(time.Second), conv[:], r.MsgID))
+	within := start.Add(10 * time.Second)
+	list, err := List(rows, within)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := list[0]
+	if s.ProposerHandle != "treasurer" || len(s.Accepted) != 3 || !slices.Equal(s.Refused, []string{(identity.ID{3}).String()}) ||
+		len(s.Accepts) != 3 || s.Accepts[1].Handle != "ops" || len(s.Refusals) != 1 || s.Refusals[0].Handle != "auditor" {
+		t.Fatalf("summary = %+v", s)
+	}
+	d, err := Inspect(rows, "a1", within)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAccepts := []Actor{{Node: (identity.ID{1}).String(), Handle: "treasurer", Seq: 10}, {Node: (identity.ID{2}).String(), Handle: "ops", Seq: 11}, {Node: (identity.ID{4}).String(), Seq: 13}}
+	if !slices.Equal(d.Accepts, wantAccepts) {
+		t.Errorf("accepts = %+v, want %+v", d.Accepts, wantAccepts)
+	}
+	wantRefusals := []Refusal{{Actor: Actor{Node: (identity.ID{3}).String(), Handle: "auditor", Seq: 12}, Reason: "unknown payee"}}
+	if !slices.Equal(d.Refusals, wantRefusals) {
+		t.Errorf("refusals = %+v, want %+v", d.Refusals, wantRefusals)
+	}
+
+	old := rowOf(t, 20, 0xb2, start, conv[:], req(ethTx())) // no handle field on the wire
+	d, err = Inspect([]cosl.Row{old}, "b2", within)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ProposerHandle != "" || len(d.Accepts) != 1 || d.Accepts[0].Handle != "" || len(d.Refusals) != 0 {
+		t.Errorf("an old row = %+v", d)
+	}
+}
+
+// A sign.request whose Handle is malformed is ignored as malformed: it is
+// not listed, inspected or looked up.
+func TestMalformedHandleRequestIsIgnored(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	rq := req(ethTx())
+	rq.Handle = "Bad Handle"
+	bad := rowOf(t, 10, 0xa1, now, conv[:], rq)
+	good := rowOf(t, 11, 0xa2, now, conv[:], req(ethTx()))
+	rows := append(mintedKey(t, now), bad, good)
+	list, err := List(rows, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].MsgID[:2] != "a2" {
+		t.Fatalf("list = %+v", list)
+	}
+	if d, err := Inspect(rows, "a", now); err != nil || d.MsgID[:2] != "a2" {
+		t.Errorf("inspect by a prefix both share = %+v, %v; want the well-formed one", d.MsgID, err)
+	}
+	if _, err := Lookup(rows, bad.MsgID); !errors.Is(err, ErrUnknown) {
+		t.Errorf("lookup = %v, want ErrUnknown", err)
+	}
+	if _, _, err := Request(rows, bad.MsgID); !errors.Is(err, ErrUnknown) {
+		t.Errorf("request = %v, want ErrUnknown", err)
 	}
 }

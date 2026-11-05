@@ -242,6 +242,8 @@ var errorKinds = []struct {
 	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},
 	{session.ErrNotParticipant, "not-participant", http.StatusForbidden},
 	{session.ErrSignerSetFull, "signer-set-full", http.StatusConflict},
+	{session.ErrAlreadyRefused, "already-refused", http.StatusConflict},
+	{session.ErrAlreadyAccepted, "already-accepted", http.StatusConflict},
 	{session.ErrUnsupported, "signing-unsupported", http.StatusUnprocessableEntity},
 	{session.ErrClosedSession, "closed-session", http.StatusConflict},
 	{outbox.ErrBadMsgID, "bad-msg-id", http.StatusBadRequest},

@@ -1,16 +1,21 @@
 package serve
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
+	"defios.com/internal/outbox"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
+	coslv1 "defios.com/proto/cosl/v1"
 )
 
 type signProposeRequest struct {
@@ -22,13 +27,19 @@ type signInspectRequest struct {
 	MsgID string `json:"msg_id"`
 }
 
+type signRefuseRequest struct {
+	MsgID  string `json:"msg_id"`
+	Reason string `json:"reason"`
+}
+
 // signPropose commits a sign.request scoped to the Key's Conversation. The
 // proposer's envelope signature is its acceptance, so one append is both the
 // proposal and the accept; no Session exists until t Nodes have accepted.
 // The aliases are this Node's Networks for the Key, resolved to the chains
 // the request names (ADR 0023). The writer validates first, so a bad request
-// fails loudly here (ADR 0009).
-func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendView, error) {
+// fails loudly here (ADR 0009). handle is the agent proposing, empty for a
+// person.
+func (s *server) signPropose(ctx context.Context, req signProposeRequest, handle string) (SendView, error) {
 	ob, store, running := s.writer()
 	rec, held := s.slot.Current()
 	if !running || !held {
@@ -55,6 +66,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest) (SendV
 	if err != nil {
 		return SendView{}, err
 	}
+	payload.Handle = handle
 	if err := signreq.Validate(payload, k); err != nil {
 		return SendView{}, err
 	}
@@ -101,13 +113,20 @@ func signInfoFrom(store *cosl.Store) func([32]byte) (session.SignInfo, error) {
 	}
 }
 
-// acceptSign is this Node's accept of a Sign Request, which it gives only
-// when it has a Network for every chain the request names: a Node's
-// Networks are the chains it is willing to sign for.
-func (s *server) acceptSign(svc *session.Service, ctx context.Context, id [32]byte) error {
-	_, store, running := s.current()
+// acceptSign is this Node's accept of a Sign Request, taken by the agent
+// handle or a person, which it gives only when it has a Network for every
+// chain the request names: a Node's Networks are the chains it is willing to
+// sign for. A refusal still in the Outbox is already this Node's stance.
+func (s *server) acceptSign(svc *session.Service, ctx context.Context, id [32]byte, handle string) error {
+	ob, store, running := s.writer()
 	if !running {
 		return ErrNoReplica
+	}
+	if err := signreq.CheckHandle(handle); err != nil {
+		return err
+	}
+	if queuedStance(ob, id) == signreq.StanceRefused {
+		return session.ErrAlreadyRefused
 	}
 	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeSignRequest}})
 	if err != nil {
@@ -128,31 +147,87 @@ func (s *server) acceptSign(svc *session.Service, ctx context.Context, id [32]by
 	if err := signreq.CheckChains(req, nets); err != nil {
 		return err
 	}
-	return svc.AcceptSign(ctx, id)
+	return svc.AcceptSign(ctx, id, handle)
 }
 
-// signAnswer is this Node's accept or decline of a Sign Request.
+// refuseSign is this Node's refusal of a Sign Request, taken by the agent
+// handle or a person. A stance still in the Outbox is already this Node's,
+// as one on the log is.
+func (s *server) refuseSign(svc *session.Service, ctx context.Context, id [32]byte, reason, handle string) error {
+	ob, _, running := s.writer()
+	if !running {
+		return ErrNoReplica
+	}
+	if err := signreq.CheckReason(reason); err != nil {
+		return err
+	}
+	if err := signreq.CheckHandle(handle); err != nil {
+		return err
+	}
+	switch queuedStance(ob, id) {
+	case signreq.StanceRefused:
+		return session.ErrAlreadyRefused
+	case signreq.StanceAccepted:
+		return session.ErrAlreadyAccepted
+	}
+	return svc.RefuseSign(ctx, id, reason, handle)
+}
+
+// queuedStance is this Node's stance on the request id that its replica may
+// not show yet, from what it wrote that waits in its Outbox or has committed
+// unapplied: the first sign.accept or sign.refuse naming it. Empty if none.
+func queuedStance(ob *outbox.Outbox, id [32]byte) string {
+	for _, e := range ob.Unapplied() {
+		env, err := cosl.Unmarshal(e.Bytes)
+		if err != nil || env.MsgType != cosl.TypeSignAccept && env.MsgType != cosl.TypeSignRefuse {
+			continue
+		}
+		msg, err := cosl.DecodePayload(env.MsgType, env.Payload)
+		if err != nil {
+			continue
+		}
+		switch m := msg.(type) {
+		case *coslv1.SignAccept:
+			if bytes.Equal(m.SignRequestId, id[:]) {
+				return signreq.StanceAccepted
+			}
+		case *coslv1.SignRefuse:
+			if bytes.Equal(m.SignRequestId, id[:]) {
+				return signreq.StanceRefused
+			}
+		}
+	}
+	return ""
+}
+
+// stance is this Node's own stance on the request sum, on the log or still
+// in its Outbox.
+func (s *server) stance(ob *outbox.Outbox, sum signreq.Summary) string {
+	me := s.opts.Node.NodeID.String()
+	switch {
+	case slices.Contains(sum.Accepted, me):
+		return signreq.StanceAccepted
+	case slices.Contains(sum.Refused, me):
+		return signreq.StanceRefused
+	}
+	if id, err := hex.DecodeString(sum.MsgID); err == nil && len(id) == 32 {
+		if st := queuedStance(ob, [32]byte(id)); st != "" {
+			return st
+		}
+	}
+	return signreq.StanceUnaddressed
+}
+
+// signAnswer is this Node's accept, refusal or decline of a Sign Request.
 // reply, if set, builds the response body after answer ran.
 func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(*session.Service, context.Context, [32]byte) error, reply func() any) {
 	var req signInspectRequest
 	if !s.readLocal(w, r, &req) {
 		return
 	}
-	_, store, running := s.current()
-	svc := s.sessionLayer()
-	if !running || svc == nil {
-		writeError(w, ErrNoReplica)
-		return
-	}
-	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeSignRequest}})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	id, err := signreq.Resolve(rows, req.MsgID)
-	if err == nil {
-		err = answer(svc, r.Context(), id)
-	}
+	err := s.resolveSign(req.MsgID, func(svc *session.Service, id [32]byte) error {
+		return answer(svc, r.Context(), id)
+	})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -164,8 +239,26 @@ func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(
 	writeJSON(w, struct{}{})
 }
 
-// AcceptView is what `sign accept` did: its sign.accept committed, or is
-// Queued in this Node's Outbox (ADR 0025).
+// resolveSign runs answer on the Sign Request whose msg id starts with msgID.
+func (s *server) resolveSign(msgID string, answer func(*session.Service, [32]byte) error) error {
+	_, store, running := s.current()
+	svc := s.sessionLayer()
+	if !running || svc == nil {
+		return ErrNoReplica
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeSignRequest}})
+	if err != nil {
+		return err
+	}
+	id, err := signreq.Resolve(rows, msgID)
+	if err != nil {
+		return err
+	}
+	return answer(svc, id)
+}
+
+// AcceptView is what `sign accept` or `sign refuse` did: its sign.accept or
+// sign.refuse committed, or is Queued in this Node's Outbox (ADR 0025).
 type AcceptView struct {
 	Queued bool `json:"queued,omitempty"`
 }
@@ -179,12 +272,31 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sign/accept", func(w http.ResponseWriter, r *http.Request) {
 		var v AcceptView
 		s.signAnswer(w, r, func(svc *session.Service, ctx context.Context, id [32]byte) error {
-			err := s.acceptSign(svc, ctx, id)
+			err := s.acceptSign(svc, ctx, id, "")
 			if errors.Is(err, session.ErrQueued) {
 				v.Queued, err = true, nil
 			}
 			return err
 		}, func() any { return v })
+	})
+	mux.HandleFunc("POST /v1/sign/refuse", func(w http.ResponseWriter, r *http.Request) {
+		var req signRefuseRequest
+		if !s.readLocal(w, r, &req) {
+			return
+		}
+		var v AcceptView
+		err := s.resolveSign(req.MsgID, func(svc *session.Service, id [32]byte) error {
+			err := s.refuseSign(svc, r.Context(), id, req.Reason, "")
+			if errors.Is(err, session.ErrQueued) {
+				v.Queued, err = true, nil
+			}
+			return err
+		})
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, v)
 	})
 	mux.HandleFunc("POST /v1/sign/decline", func(w http.ResponseWriter, r *http.Request) {
 		var result session.DeclineResult
@@ -198,7 +310,7 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		v, err := s.signPropose(r.Context(), req)
+		v, err := s.signPropose(r.Context(), req, "")
 		if err != nil {
 			writeError(w, err)
 			return
@@ -230,8 +342,10 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
+		ob, _, _ := s.writer()
 		for i := range list {
 			list[i].Session = sessions[list[i].MsgID]
+			list[i].Stance = s.stance(ob, list[i])
 		}
 		writeJSON(w, list)
 	})
@@ -261,6 +375,8 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			return
 		}
 		d.Session = sessions[d.MsgID]
+		ob, _, _ := s.writer()
+		d.Stance = s.stance(ob, d.Summary)
 		writeJSON(w, d)
 	})
 }
@@ -292,6 +408,13 @@ func (c Client) SignPropose(ctx context.Context, keyQuery string, spec signreq.S
 func (c Client) SignAccept(ctx context.Context, msgID string) (AcceptView, error) {
 	var v AcceptView
 	err := c.do(ctx, "/v1/sign/accept", signInspectRequest{MsgID: msgID}, &v)
+	return v, err
+}
+
+// SignRefuse is `sign refuse`: append this Node's sign.refuse, or queue it.
+func (c Client) SignRefuse(ctx context.Context, msgID, reason string) (AcceptView, error) {
+	var v AcceptView
+	err := c.do(ctx, "/v1/sign/refuse", signRefuseRequest{MsgID: msgID, Reason: reason}, &v)
 	return v, err
 }
 

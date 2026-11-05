@@ -139,7 +139,7 @@ defios conversation send --key ecdsa:<hex> "about this key"
 
 Check it: `defios conversation log` (Group talk) and `defios conversation log --key ecdsa:<hex>` (the Key's talk) show the same messages on both machines, and `defios cosl log` shows every row on the log.
 
-A message is on the log once a majority of the Group commits it, so with two machines both must be up. If the other machine's `serve` is down, a send prints `queued` with its msg id and exits with code `5`: the message waits in this machine's Outbox, and `serve` commits it as soon as the other machine is back, in the order this machine wrote it, even across a restart. While anything is queued, later sends queue behind it. Until then it is not on the log: `cosl log` and `sign list` don't show it, while `conversation log` shows it last, marked `queued` with no seq (`"queued": true` under `--json`). Talk, `sign propose`, `sign accept` and `sign broadcast`'s receipts queue this way; a queued Sign Request whose deadline passes is dropped unsent: for one with a Solana transaction that is 60 seconds by default, about as long as its `recent_blockhash` lives, so the other machine must be back within it. A longer `--deadline` does not help: the cluster refuses a stale blockhash, so the request would be signed but never land.
+A message is on the log once a majority of the Group commits it, so with two machines both must be up. If the other machine's `serve` is down, a send prints `queued` with its msg id and exits with code `5`: the message waits in this machine's Outbox, and `serve` commits it as soon as the other machine is back, in the order this machine wrote it, even across a restart. While anything is queued, later sends queue behind it. Until then it is not on the log: `cosl log` and `sign list` don't show it, while `conversation log` shows it last, marked `queued` with no seq (`"queued": true` under `--json`). Talk, `sign propose`, `sign accept`, `sign refuse` and `sign broadcast`'s receipts queue this way; a queued Sign Request whose deadline passes is dropped unsent: for one with a Solana transaction that is 60 seconds by default, about as long as its `recent_blockhash` lives, so the other machine must be back within it. A longer `--deadline` does not help: the cluster refuses a stale blockhash, so the request would be signed but never land.
 
 `defios outbox list` shows what is queued, in the order it will commit: each message's msg id, time, type, Conversation and, for a Sign Request, its deadline; it reads the Outbox file, so it works with `serve` up or down. `defios outbox drop <msg-id>` (a unique prefix will do) withdraws one queued message. It was never on the log, so it is erased, and nothing else goes with it, not even a queued reply to it; the rest still commit in order. A message that has already committed cannot be dropped: `drop` says so, with its seq. Nor can one that `serve` tried to commit without learning whether it did, since it may yet commit: `drop` says so, and the drain's next attempt settles it.
 
@@ -347,6 +347,12 @@ On B, accept it using the msg id A printed. A machine with no Network for the re
 
 ```bash
 defios sign accept <msg-id>
+```
+
+Or B turns it down, with a reason every machine sees. A machine's first accept or refusal is final, and with two machines one refusal refuses the request:
+
+```bash
+defios sign refuse <msg-id> --reason "unknown payee"
 ```
 
 Once it is signed, either machine broadcasts it through its own endpoints, each checked first to serve the request's chain:

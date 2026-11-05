@@ -90,6 +90,9 @@ message SignRequest {
   uint64 deadline_seconds = 3;                // after the envelope's created_at; > 0
   reserved 4;                                 // was reason_ref (docs/adr/0012-recap-on-the-log-pruning-off-it.md)
   reserved "reason_ref";
+  // handle is the Agent Profile that proposed, empty when a person did
+  // (docs/adr/0028-a-node-refuses-a-sign-request-once.md).
+  string handle = 5;
 }
 
 // SignAccept is the payload of sign.accept (docs/adr/0010-signing-session-semantics.md).
@@ -98,6 +101,17 @@ message SignRequest {
 // sign.request counts as its accept, so it never appends one.
 message SignAccept {
   bytes sign_request_id = 1;          // msg_id of the sign.request; 32
+  string handle = 2;                  // the Agent Profile that accepted, empty for a person
+}
+
+// SignRefuse is the payload of sign.refuse, a Sign Refusal
+// (docs/adr/0028-a-node-refuses-a-sign-request-once.md). Scoped and sent as
+// sign.accept is. A Node's first accept or refusal of a request is its
+// stance; any later one is ignored.
+message SignRefuse {
+  bytes sign_request_id = 1;          // msg_id of the sign.request; 32
+  string reason = 2;                  // UTF-8, required
+  string handle = 3;                  // the Agent Profile that refused, empty for a person
 }
 
 // SignBroadcast is the payload of sign.broadcast, a Broadcast Receipt

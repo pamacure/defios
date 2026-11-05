@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"defios.com/internal/cosl"
+	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // The provider.* ids are retired (ADR 0022): a Provider is Node-local
@@ -36,17 +37,22 @@ func TestProviderIdsAreRetired(t *testing.T) {
 	}
 }
 
-// app.recap (13) is retired (ADR 0024): a Recap is this Node's RECAP.md,
-// never a COSL message. A row under it reads like any unknown type.
-func TestAppRecapIsRetired(t *testing.T) {
-	payload := []byte{0x0a, 0x01, 'x'}
-	if got := cosl.TypeName(13); got != "unknown(13)" {
-		t.Errorf("name %q, want unknown(13)", got)
+// app.recap is retired (ADR 0024) and its id 13 is sign.refuse (ADR 0028).
+// An old app.recap row, pre-release and not migrated, decodes as a refusal
+// whose sign_request_id is no msg id, so no request reads it as its own.
+func TestId13IsSignRefuse(t *testing.T) {
+	if got := cosl.TypeName(13); got != "sign.refuse" {
+		t.Errorf("name %q, want sign.refuse", got)
 	}
 	if _, ok := cosl.TypeByName("app.recap"); ok {
 		t.Error("app.recap still resolves")
 	}
-	if _, err := cosl.DecodePayload(13, payload); !errors.Is(err, cosl.ErrUnknownType) {
-		t.Errorf("decode = %v, want ErrUnknownType", err)
+	oldRecap := []byte{0x0a, 0x01, 'x', 0x10, 0x07} // text "x", base_seq 7
+	msg, err := cosl.DecodePayload(13, oldRecap)
+	if err != nil {
+		t.Fatalf("decode = %v", err)
+	}
+	if r := msg.(*coslv1.SignRefuse); len(r.SignRequestId) == 32 || r.Reason != "" {
+		t.Errorf("an old recap decoded as %+v", r)
 	}
 }

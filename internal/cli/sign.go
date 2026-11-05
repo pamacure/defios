@@ -10,11 +10,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
+	"defios.com/internal/talk"
 )
 
 func signCommand(g *globals) *cobra.Command {
@@ -87,7 +89,7 @@ Every chain must be of the Key's curve.`,
 			}
 			p := g.out()
 			for _, s := range rows {
-				fmt.Fprintf(g.app.Stdout, "%s  %s  %s accepted  txs=%d  broadcasts=%d%s  %s\n", p.primary(s.MsgID[:8]), p.status(s.Status), acceptedOf(s), s.Transactions, s.Broadcasts, p.dim(fully(s.FullyBroadcast)), s.Reason)
+				fmt.Fprintf(g.app.Stdout, "%s  %s  %s  you %s  txs=%d  broadcasts=%d%s  %s\n", p.primary(s.MsgID[:8]), p.status(s.Status), stancesOf(s), p.status(s.Stance), s.Transactions, s.Broadcasts, p.dim(fully(s.FullyBroadcast)), s.Reason)
 			}
 			return nil
 		},
@@ -106,11 +108,15 @@ Every chain must be of the Key's curve.`,
 				return g.emitJSON(d)
 			}
 			out, p := g.app.Stdout, g.out()
-			fmt.Fprintf(out, "sign_request %s\nstatus %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
-				p.primary(d.MsgID), p.status(d.Status), d.Proposer, p.dim(d.CreatedAt), d.DeadlineSeconds, d.Conversation, d.Reason)
+			fmt.Fprintf(out, "sign_request %s\nstatus %s\nstance %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
+				p.primary(d.MsgID), p.status(d.Status), p.status(d.Stance), talk.Speaker(d.Proposer, d.ProposerHandle), p.dim(d.CreatedAt), d.DeadlineSeconds, d.Conversation, d.Reason)
 			fmt.Fprintf(out, "accepted %s\n", acceptedOf(d.Summary))
-			for _, a := range d.Accepted {
-				fmt.Fprintf(out, "  %s\n", a)
+			for _, a := range d.Accepts {
+				fmt.Fprintf(out, "  %s %s\n", talk.Speaker(a.Node, a.Handle), p.dim(fmt.Sprintf("(seq %d)", a.Seq)))
+			}
+			fmt.Fprintf(out, "refused %d\n", len(d.Refusals))
+			for _, a := range d.Refusals {
+				fmt.Fprintf(out, "  %s: %s %s\n", talk.Speaker(a.Node, a.Handle), cosl.EscapeNewlines(a.Reason), p.dim(fmt.Sprintf("(seq %d)", a.Seq)))
 			}
 			if d.Session != "" {
 				fmt.Fprintf(out, "session %s\n", d.Session)
@@ -163,11 +169,50 @@ a request for chains it has a Network for (see network); the refusal names the c
 		},
 	}
 
+	var refuseReason string
+	refuse := &cobra.Command{
+		Use:   "refuse <msg-id> --reason <text>",
+		Short: "Refuse a Sign Request, saying why (requires serve)",
+		Long: `Refusing appends a sign.refuse carrying your reason, so every Node sees that this Node judged the request
+and turned it down. A Node's first accept or refusal of a request is its stance and it is final: a Node
+that refused cannot accept, one that accepted or proposed cannot refuse, and no Node can refuse once t
+Nodes have accepted or the request has closed. A request is refused once more Nodes refuse it than the
+Key can spare (n − t), since t accepts can then never exist.
+
+Refusing is not declining: sign decline aborts a signing Session that has already started, an emergency
+stop, and before one starts it does nothing.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if refuseReason == "" {
+				return exitUsagef("--reason is required")
+			}
+			v, err := serve.Client{Socket: g.paths().Socket}.SignRefuse(cmd.Context(), args[0], refuseReason)
+			if err != nil {
+				return signError(err)
+			}
+			if g.json {
+				if err := g.emitJSON(v); err != nil {
+					return err
+				}
+				return queuedExit(v.Queued)
+			}
+			if v.Queued {
+				fmt.Fprintf(g.app.Stdout, "refusal of %s queued: %s\n", args[0], queuedNote)
+				return exitQueued()
+			}
+			fmt.Fprintf(g.app.Stdout, "refused %s\n", args[0])
+			return nil
+		},
+	}
+	refuse.Flags().StringVar(&refuseReason, "reason", "", "why this Node refuses (required)")
+
 	decline := &cobra.Command{
 		Use:   "decline <msg-id>",
 		Short: "Abort the signing Session for a Sign Request (requires serve)",
-		Long:  `Declining aborts the request's signing Session. Before one has started there is nothing to abort: not accepting is declining, and an accept you already made stays on the log (the output says so).`,
-		Args:  cobra.ExactArgs(1),
+		Long: `Declining aborts the request's signing Session, an emergency stop. Before one has started there is nothing
+to abort and nothing is written: an accept you already made stays on the log (the output says so). To
+turn a request down before its Session, with a reason every Node sees, use sign refuse.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			v, err := serve.Client{Socket: g.paths().Socket}.SignDecline(cmd.Context(), args[0])
 			if err != nil {
@@ -237,7 +282,7 @@ already has a transaction is not an error, the repeat shows as one more receipt,
 		},
 	}
 
-	root.AddCommand(propose, list, inspect, accept, decline, broadcast)
+	root.AddCommand(propose, list, inspect, accept, refuse, decline, broadcast)
 	return root
 }
 
@@ -247,6 +292,11 @@ func acceptedOf(s signreq.Summary) string {
 		return fmt.Sprintf("%d/? (Key not on this log)", len(s.Accepted))
 	}
 	return fmt.Sprintf("%d/%d", len(s.Accepted), s.Needed)
+}
+
+// stancesOf is "n/t accepted, r refused".
+func stancesOf(s signreq.Summary) string {
+	return fmt.Sprintf("%s accepted, %d refused", acceptedOf(s), len(s.Refused))
 }
 
 func fully(b bool) string {
@@ -278,7 +328,7 @@ func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {
 // operational, as the other write verbs do.
 func signError(err error) error {
 	for _, target := range []error{
-		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrSignerSetFull, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
+		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrSignerSetFull, session.ErrAlreadyRefused, session.ErrAlreadyAccepted, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
 		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid, network.ErrNoChain,
 	} {
 		if errors.Is(err, target) {

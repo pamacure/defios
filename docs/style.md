@@ -5,8 +5,8 @@ Human (non-`--json`) output of the read verbs (`list`, `inspect`, `show`, `usage
 | Role | Code | Marks |
 |---|---|---|
 | `primary` | blue (34) | the identity of each record: aliases, IDs, key names, group / serve headings, log seq and author |
-| `caution` | yellow (33) | in progress, may need someone: `open`, `waiting`, `signing`, `pending`, `unformed`, `stale`, serve `down` / not running, `no`, a run `cut off` by a stop |
-| `concern` | red (31) | failed or terminal-bad: `aborted`, `declined`, `expired`, `error`, a run that `failed` or was `cancelled`, `session.abort`, `unknown(...)`, the stderr `defios:` prefix |
+| `caution` | yellow (33) | in progress, may need someone: `open`, `waiting`, `signing`, an `unaddressed` stance, `pending`, `unformed`, `stale`, serve `down` / not running, `no`, a run `cut off` by a stop |
+| `concern` | red (31) | failed or terminal-bad: `aborted`, `declined`, `expired`, `refused`, `error`, a run that `failed` or was `cancelled`, `session.abort`, `unknown(...)`, the stderr `defios:` prefix |
 | `dim` | faint (2) | annotation: paths, timestamps, parentheticals, the `usage` detail column |
 
 Status words go through `palette.status`, which holds the mapping above.

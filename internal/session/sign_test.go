@@ -86,7 +86,7 @@ func (f *signFixture) propose(t *testing.T) {
 
 func (f *signFixture) accept(t *testing.T, n *node) {
 	t.Helper()
-	if err := n.svc.AcceptSign(context.Background(), f.request); err != nil {
+	if err := n.svc.AcceptSign(context.Background(), f.request, ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -204,7 +204,7 @@ func TestFirstToAcceptSignsRegardlessOfRosterOrder(t *testing.T) {
 	if !slices.Equal(d.Participants, want) {
 		t.Fatalf("participants = %v, want alice and carol %v", d.Participants, want)
 	}
-	if err := c.bob.svc.AcceptSign(context.Background(), f.request); !errors.Is(err, session.ErrSignerSetFull) {
+	if err := c.bob.svc.AcceptSign(context.Background(), f.request, ""); !errors.Is(err, session.ErrSignerSetFull) {
 		t.Fatalf("late accept: %v", err)
 	}
 	if got := len(c.alice.ofType(t, cosl.TypeSignAccept)); got != 1 {
@@ -376,7 +376,7 @@ func TestDeclineAbortsTheSigningSession(t *testing.T) {
 		t.Fatalf("decline = %q, %v", res, err)
 	}
 	wait(t, func() bool { return abortedReason(t, c.alice, sum.SessionID, "declined") })
-	if err := c.bob.svc.AcceptSign(context.Background(), f.request); !errors.Is(err, session.ErrClosedSession) {
+	if err := c.bob.svc.AcceptSign(context.Background(), f.request, ""); !errors.Is(err, session.ErrClosedSession) {
 		t.Fatalf("accept after decline: %v", err)
 	}
 }
@@ -416,7 +416,7 @@ func TestNoSessionStartsForAnExpiredRequest(t *testing.T) {
 	c := f.c
 	f.propose(t)
 	c.advance(2 * time.Hour)
-	if err := c.bob.svc.AcceptSign(context.Background(), f.request); !errors.Is(err, session.ErrClosedSession) {
+	if err := c.bob.svc.AcceptSign(context.Background(), f.request, ""); !errors.Is(err, session.ErrClosedSession) {
 		t.Fatalf("accept past the deadline: %v", err)
 	}
 	noSession(t, c.alice, c.bob)

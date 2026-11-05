@@ -116,6 +116,10 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
   append already made cannot be withdrawn. `sign decline` says which happened (the
   Session was aborted; there was nothing to decline; your accept stands; the Session
   had already finished). After a start exists it aborts the Session.
+  *Amended by [ADR 0028](0028-a-node-refuses-a-sign-request-once.md): a Node
+  turns a request down on the log with `sign refuse` and a reason; its first
+  accept or refusal is final, and declining stays the abort of a started
+  Session.*
 - A request whose Key is not on the log shows `key_known: false` and `?` for t in
   `sign list` / `inspect`, not `0`.
 - An aborted Session (timeout, decline, crash) still kills the request: retry is a

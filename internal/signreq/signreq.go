@@ -24,6 +24,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
+	"defios.com/internal/mention"
 	"defios.com/internal/network"
 	"defios.com/internal/session"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -205,13 +206,15 @@ func CheckChains(r *coslv1.SignRequest, nets []network.Network) error {
 // is complete for its chain (every consensus-critical field is inside the
 // Digest and serve does no chain RPC to fill it).
 func Validate(r *coslv1.SignRequest, k key.Key) error {
+	if err := CheckReason(r.Reason); err != nil {
+		return err
+	}
+	if err := CheckHandle(r.Handle); err != nil {
+		return err
+	}
 	switch {
 	case len(r.Transactions) == 0:
 		return invalidf("at least one transaction is required")
-	case strings.TrimSpace(r.Reason) == "":
-		return invalidf("a reason is required")
-	case !utf8.ValidString(r.Reason) || len(r.Reason) > MaxReasonBytes:
-		return invalidf("reason must be UTF-8 of at most %d bytes", MaxReasonBytes)
 	case r.DeadlineSeconds == 0 || r.DeadlineSeconds > MaxDeadlineSeconds:
 		return invalidf("deadline must be 1–%d seconds", MaxDeadlineSeconds)
 	}
@@ -336,15 +339,25 @@ func checkSolana(k key.Key, in *coslv1.SolanaIntent) error {
 // Status of a request, derived from the log: open while it collects accepts,
 // waiting once t Nodes have accepted but no Session has started (for instance
 // while another Session holds the slot), then signing, signed or aborted with
-// its Session. A request with no Session is expired once its deadline passes;
-// a Session outlives the deadline, so signed and aborted beat expired.
+// its Session. A request with no Session is refused once more than n − t
+// Nodes have refused it, so t accepts can no longer exist, and else expired
+// once its deadline passes; a Session outlives the deadline, so signed and
+// aborted beat refused and expired.
 const (
 	Open    = "open"
 	Waiting = "waiting"
 	Signing = "signing"
 	Done    = "signed"
 	Aborted = "aborted"
+	Refused = "refused"
 	Expired = "expired"
+)
+
+// This Node's own stance on a request, as list and inspect show it.
+const (
+	StanceAccepted    = "accepted"
+	StanceRefused     = "refused"
+	StanceUnaddressed = "unaddressed"
 )
 
 // deadline is when a request lapses.
@@ -359,16 +372,29 @@ func Deadline(createdAt int64, req *coslv1.SignRequest) time.Time {
 	return time.Unix(0, createdAt).Add(time.Duration(window) * time.Second)
 }
 
-// Accepts is who has accepted the request at row, in COSL log order with the
-// proposer first (its signature on the request is its accept). Only a Node's
-// first accept counts, and only one made within the request's deadline. The
-// FSM already drops senders that are not on the Roster.
-func Accepts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []session.SignAccept {
-	out := []session.SignAccept{{Node: row.Sender, Seq: row.Seq}}
+// Stance is one Node's final word on a Sign Request: it accepted, or it
+// refused with a Reason (docs/adr/0028-a-node-refuses-a-sign-request-once.md).
+// Handle is the agent that took it, empty for a person.
+type Stance struct {
+	Node    identity.ID
+	Seq     uint64
+	Handle  string
+	Refused bool
+	Reason  string
+}
+
+// Stances are the Nodes' stances on the request at row, in COSL log order
+// with the proposer first (its signature on the request is its accept). A
+// Node's first sign.accept or sign.refuse within the request's deadline is
+// its stance and anything later from it is ignored. A malformed row, one
+// with an invalid Handle or a refusal with no reason, is no stance. The FSM
+// already drops senders that are not on the Roster.
+func Stances(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []Stance {
+	out := []Stance{{Node: row.Sender, Seq: row.Seq, Handle: req.Handle}}
 	end := deadline(row, req)
 	seen := map[identity.ID]struct{}{row.Sender: {}}
 	for _, r := range rows {
-		if r.MsgType != cosl.TypeSignAccept || r.Seq <= row.Seq || !bytes.Equal(r.ConversationID, row.ConversationID) {
+		if r.MsgType != cosl.TypeSignAccept && r.MsgType != cosl.TypeSignRefuse || r.Seq <= row.Seq || !bytes.Equal(r.ConversationID, row.ConversationID) {
 			continue
 		}
 		if _, dup := seen[r.Sender]; dup || time.Unix(0, r.CreatedAt).After(end) {
@@ -378,13 +404,59 @@ func Accepts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []session.S
 		if err != nil {
 			continue
 		}
-		if a := msg.(*coslv1.SignAccept); !bytes.Equal(a.SignRequestId, row.MsgID[:]) {
+		st, id := Stance{Node: r.Sender, Seq: r.Seq}, []byte(nil)
+		switch m := msg.(type) {
+		case *coslv1.SignAccept:
+			id, st.Handle = m.SignRequestId, m.Handle
+		case *coslv1.SignRefuse:
+			if CheckReason(m.Reason) != nil {
+				continue
+			}
+			id, st.Handle, st.Refused, st.Reason = m.SignRequestId, m.Handle, true, m.Reason
+		}
+		if !bytes.Equal(id, row.MsgID[:]) || !validHandle(st.Handle) {
 			continue
 		}
 		seen[r.Sender] = struct{}{}
-		out = append(out, session.SignAccept{Node: r.Sender, Seq: r.Seq})
+		out = append(out, st)
 	}
 	return out
+}
+
+// Accepts is who has accepted the request at row, in COSL log order with the
+// proposer first: the accepting Stances.
+func Accepts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []session.SignAccept {
+	var out []session.SignAccept
+	for _, st := range Stances(rows, row, req) {
+		if !st.Refused {
+			out = append(out, session.SignAccept{Node: st.Node, Seq: st.Seq})
+		}
+	}
+	return out
+}
+
+// CheckReason is the rule for a request's or a refusal's reason: required,
+// UTF-8, at most MaxReasonBytes.
+func CheckReason(reason string) error {
+	switch {
+	case strings.TrimSpace(reason) == "":
+		return invalidf("a reason is required")
+	case !utf8.ValidString(reason) || len(reason) > MaxReasonBytes:
+		return invalidf("reason must be UTF-8 of at most %d bytes", MaxReasonBytes)
+	}
+	return nil
+}
+
+// validHandle is whether h may name who acted on a sign row: empty for a
+// person, else a Handle (docs/adr/0016-what-a-mention-is.md).
+func validHandle(h string) bool { return h == "" || mention.ValidHandle(h) }
+
+// CheckHandle is the writer's check of who acts on a sign row.
+func CheckHandle(h string) error {
+	if !validHandle(h) {
+		return invalidf("handle %q is not a Handle", h)
+	}
+	return nil
 }
 
 // Summary is one `sign list` row.
@@ -393,14 +465,25 @@ type Summary struct {
 	MsgID        string `json:"msg_id"`
 	Conversation string `json:"conversation_id"`
 	Proposer     string `json:"proposer"`
-	CreatedAt    string `json:"created_at"`
-	Status       string `json:"status"`
-	Transactions int    `json:"transactions"`
-	Reason       string `json:"reason"`
+	// ProposerHandle is the agent that proposed, empty for a person.
+	ProposerHandle string `json:"proposer_handle,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	Status         string `json:"status"`
+	Transactions   int    `json:"transactions"`
+	Reason         string `json:"reason"`
 	// Accepted is who has accepted, proposer first; Needed is the Key's t.
 	// Later accepts than the first Needed do not sign.
 	Accepted []string `json:"accepted"`
 	Needed   int      `json:"needed"`
+	// Refused is who has refused, in log order.
+	Refused []string `json:"refused"`
+	// Accepts and Refusals are the same stances in full: each Node's seq
+	// and the Handle of the agent that took it.
+	Accepts  []Actor   `json:"accepts"`
+	Refusals []Refusal `json:"refusals"`
+	// Stance is this Node's own: accepted, refused or unaddressed. The
+	// reader fills it, knowing which Node it is.
+	Stance string `json:"stance,omitempty"`
 	// KeyKnown is false when the request's Key is not on this log, in which
 	// case Needed is 0 and means "unknown", not zero signers.
 	KeyKnown bool `json:"key_known"`
@@ -436,6 +519,20 @@ type TxDetail struct {
 	Digests []string `json:"digests,omitempty"` // hex, one per signature the transaction needs
 }
 
+// Actor is a Node that took a stance on a request, at its seq, and the
+// Handle of the agent that took it, empty for a person.
+type Actor struct {
+	Node   string `json:"node"`
+	Handle string `json:"handle,omitempty"`
+	Seq    uint64 `json:"seq"`
+}
+
+// Refusal is one Node's refusal, with its reason.
+type Refusal struct {
+	Actor
+	Reason string `json:"reason"`
+}
+
 // Detail is `sign inspect`.
 type Detail struct {
 	Summary
@@ -447,7 +544,7 @@ type Detail struct {
 
 // status derives a request's status. sessions are the log's Sessions in start
 // order, of which the first for the request is the one that counts.
-func status(r cosl.Row, req *coslv1.SignRequest, sessions []session.Summary, accepted, needed int, now time.Time) string {
+func status(r cosl.Row, req *coslv1.SignRequest, sessions []session.Summary, accepted, refused int, k threshold, now time.Time) string {
 	id := hex.EncodeToString(r.MsgID[:])
 	for _, s := range sessions {
 		if s.SignRequest != id {
@@ -462,9 +559,11 @@ func status(r cosl.Row, req *coslv1.SignRequest, sessions []session.Summary, acc
 		return Signing
 	}
 	switch {
+	case k.t > 0 && refused > k.n-k.t:
+		return Refused
 	case now.After(deadline(r, req)):
 		return Expired
-	case needed > 0 && accepted >= needed:
+	case k.t > 0 && accepted >= k.t:
 		return Waiting
 	}
 	return Open
@@ -483,23 +582,36 @@ func decodePayload(r cosl.Row) (proto.Message, error) {
 	return msg, nil
 }
 
+// decodeRow is the sign.request at r. One whose Handle is malformed is
+// ignored as malformed: it is ErrUnknown, as if it were not on the log.
 func decodeRow(r cosl.Row) (*coslv1.SignRequest, error) {
 	msg, err := decodePayload(r)
 	if err != nil {
 		return nil, err
 	}
-	return msg.(*coslv1.SignRequest), nil
+	req := msg.(*coslv1.SignRequest)
+	if !validHandle(req.Handle) {
+		return nil, fmt.Errorf("%w: seq %d has a malformed handle", ErrUnknown, r.Seq)
+	}
+	return req, nil
 }
 
-func summarise(rows []cosl.Row, sessions []session.Summary, needed map[string]int, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
+func summarise(rows []cosl.Row, sessions []session.Summary, keys map[string]threshold, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
 	sum := Summary{
 		Seq: r.Seq, MsgID: hex.EncodeToString(r.MsgID[:]), Conversation: hex.EncodeToString(r.ConversationID),
-		Proposer: r.Sender.String(), CreatedAt: time.Unix(0, r.CreatedAt).UTC().Format(time.RFC3339),
+		Proposer: r.Sender.String(), ProposerHandle: req.Handle, CreatedAt: time.Unix(0, r.CreatedAt).UTC().Format(time.RFC3339),
 		Transactions: len(req.Transactions), Reason: req.Reason,
-		Accepted: []string{},
+		Accepted: []string{}, Refused: []string{}, Accepts: []Actor{}, Refusals: []Refusal{},
 	}
-	for _, a := range Accepts(rows, r, req) {
-		sum.Accepted = append(sum.Accepted, a.Node.String())
+	for _, st := range Stances(rows, r, req) {
+		a := Actor{Node: st.Node.String(), Handle: st.Handle, Seq: st.Seq}
+		if st.Refused {
+			sum.Refused = append(sum.Refused, a.Node)
+			sum.Refusals = append(sum.Refusals, Refusal{Actor: a, Reason: st.Reason})
+		} else {
+			sum.Accepted = append(sum.Accepted, a.Node)
+			sum.Accepts = append(sum.Accepts, a)
+		}
 	}
 	receipts := broadcasts(rows, r, req)
 	sum.Broadcasts = len(receipts)
@@ -510,21 +622,25 @@ func summarise(rows []cosl.Row, sessions []session.Summary, needed map[string]in
 		}
 	}
 	sum.FullyBroadcast = len(covered) == len(req.Transactions)
-	sum.Needed, sum.KeyKnown = needed[string(r.ConversationID)]
-	sum.Status = status(r, req, sessions, len(sum.Accepted), sum.Needed, now)
+	k, known := keys[string(r.ConversationID)]
+	sum.Needed, sum.KeyKnown = k.t, known
+	sum.Status = status(r, req, sessions, len(sum.Accepted), len(sum.Refused), k, now)
 	return sum
 }
 
-// neededSigners is each Key's t, by the Key's Conversation ID.
-func neededSigners(rows []cosl.Row) (map[string]int, error) {
+// threshold is a Key's t of n: n is the Roster it was minted by.
+type threshold struct{ t, n int }
+
+// thresholds is each Key's t and n, by the Key's Conversation ID.
+func thresholds(rows []cosl.Row) (map[string]threshold, error) {
 	keys, err := key.List(rows)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]int, len(keys))
+	out := make(map[string]threshold, len(keys))
 	for _, k := range keys {
 		conv := key.ConversationID(k.Curve, k.PublicKey)
-		out[string(conv[:])] = k.T
+		out[string(conv[:])] = threshold{k.T, k.N}
 	}
 	return out, nil
 }
@@ -532,7 +648,7 @@ func neededSigners(rows []cosl.Row) (map[string]int, error) {
 // List reads every Sign Request off rows, in log order.
 func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 	out := []Summary{}
-	needed, err := neededSigners(rows)
+	keys, err := thresholds(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -545,10 +661,13 @@ func List(rows []cosl.Row, now time.Time) ([]Summary, error) {
 			continue
 		}
 		req, err := decodeRow(r)
+		if errors.Is(err, ErrUnknown) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, summarise(rows, sessions, needed, r, req, now))
+		out = append(out, summarise(rows, sessions, keys, r, req, now))
 	}
 	return out, nil
 }
@@ -564,7 +683,7 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
-	needed, err := neededSigners(rows)
+	keys, err := thresholds(rows)
 	if err != nil {
 		return Detail{}, err
 	}
@@ -572,7 +691,7 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
-	d := Detail{Summary: summarise(rows, sessions, needed, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
+	d := Detail{Summary: summarise(rows, sessions, keys, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
 	for _, tx := range req.Transactions {
 		c := ChainOf(tx)
 		td := TxDetail{Chain: c.String(), Type: c.Type}
@@ -681,7 +800,7 @@ func broadcasts(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []receip
 	return out
 }
 
-// match is the one sign.request row whose msg id starts with query.
+// match is the one well-formed sign.request row whose msg id starts with query.
 func match(rows []cosl.Row, query string) (cosl.Row, error) {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
@@ -689,9 +808,13 @@ func match(rows []cosl.Row, query string) (cosl.Row, error) {
 	}
 	var found []cosl.Row
 	for _, r := range rows {
-		if r.MsgType == cosl.TypeSignRequest && strings.HasPrefix(hex.EncodeToString(r.MsgID[:]), query) {
-			found = append(found, r)
+		if r.MsgType != cosl.TypeSignRequest || !strings.HasPrefix(hex.EncodeToString(r.MsgID[:]), query) {
+			continue
 		}
+		if _, err := decodeRow(r); errors.Is(err, ErrUnknown) {
+			continue
+		}
+		found = append(found, r)
 	}
 	switch len(found) {
 	case 0:

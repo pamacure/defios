@@ -68,6 +68,9 @@ tickets to follow.
   `created_at` (the proposer's default of 300 is written into the payload, so
   every Node reads the same value). Status was `open` or
   `expired` by that window alone (superseded by the #43 amendment in ADR 0010).
+  *Amended by [ADR 0028](0028-a-node-refuses-a-sign-request-once.md): a request
+  is also `refused` once more than n − t Nodes refuse it, and `sign.request`
+  carries the proposing agent's `handle`, empty for a person.*
 - `reason_ref` was an optional `{conversation_id, msg_id}` pointer (removed
   and field 4 reserved by [ADR 0012](0012-recap-on-the-log-pruning-off-it.md)).
 - The proposer's envelope signature is its acceptance: one append, no separate

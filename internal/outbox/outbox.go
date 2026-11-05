@@ -198,7 +198,7 @@ func Queueable(s cosl.Signed) bool {
 		return false
 	}
 	switch env.MsgType {
-	case cosl.TypeAppFreeform, cosl.TypeSignRequest, cosl.TypeSignAccept, cosl.TypeSignBroadcast:
+	case cosl.TypeAppFreeform, cosl.TypeSignRequest, cosl.TypeSignAccept, cosl.TypeSignRefuse, cosl.TypeSignBroadcast:
 		return true
 	}
 	return false

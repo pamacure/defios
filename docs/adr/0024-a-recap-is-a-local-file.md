@@ -48,8 +48,10 @@ or the prune policy says. This is pre-release, so nothing is migrated.
 - **`conversation log`** no longer folds: it shows the talk that has not been
   pruned, with pruned rows as placeholders under `--full`. `--lean` is
   `RECAP.md` and the talk after it, as an agent reads it.
-- **`app.recap` (id 13) is retired** and stays reserved, along with the live
-  Recap and the fold's rule that a Recap's `base_seq` must grow.
+- **`app.recap` (id 13) is retired**, along with the live Recap and the
+  fold's rule that a Recap's `base_seq` must grow. Its id was later reused
+  for `sign.refuse` ([ADR 0028](0028-a-node-refuses-a-sign-request-once.md)):
+  pre-release, an old `app.recap` row decodes as a refusal of no request.
 - **Pruning** is `conversation prune --before <seq>` or
   `--older-than <duration>`. Age is the envelope's `created_at`, as its sender
   claims it, so a sender can only change how long its own messages are kept.

@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/sha3"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/identity"
 	"defios.com/internal/key"
 	"defios.com/internal/session"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -88,10 +89,10 @@ func rlpLength(n int, offset byte) []byte {
 }
 
 // LookupMsgTypes are every row Lookup reads: the sign.request and its
-// accepts, and the Session rows that mint its Key. A caller asks the replica
+// accepts and refusals, and the Session rows that mint its Key. A caller asks the replica
 // for these only (cosl.Query.MsgTypes), so talk and round traffic are never
 // read to look up a Sign Request (ADR 0014).
-var LookupMsgTypes = slices.Concat([]uint32{cosl.TypeSignRequest, cosl.TypeSignAccept}, key.MsgTypes)
+var LookupMsgTypes = slices.Concat([]uint32{cosl.TypeSignRequest, cosl.TypeSignAccept, cosl.TypeSignRefuse}, key.MsgTypes)
 
 // MsgTypes are every row this package's readers fold (List, Inspect, Resolve,
 // Signed and Lookup) and the Session fold shown beside them: LookupMsgTypes
@@ -121,11 +122,17 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	if err != nil {
 		return session.SignInfo{}, err
 	}
+	var refused []identity.ID
+	for _, st := range Stances(rows, *row, req) {
+		if st.Refused {
+			refused = append(refused, st.Node)
+		}
+	}
 	k, err := keyOf(rows, row.ConversationID)
 	if err != nil {
 		return session.SignInfo{}, err
 	}
-	out := session.SignInfo{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, req)}
+	out := session.SignInfo{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, req), Refused: refused}
 	for i, tx := range req.Transactions {
 		if err := ChainOf(tx).Validate(); err != nil {
 			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)

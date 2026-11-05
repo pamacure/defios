@@ -17,7 +17,13 @@ var (
 	// ErrSignerSetFull is a sign accept that came after t Nodes had already
 	// accepted: the Node is not a signer for this request, and nothing was appended.
 	ErrSignerSetFull = errors.New("session: t other Nodes accepted first")
-	ErrNoEngine      = errors.New("session: no engine")
+	// ErrAlreadyRefused is an accept or refusal of a request this Node has
+	// refused: its first stance is final (docs/adr/0028-a-node-refuses-a-sign-request-once.md).
+	ErrAlreadyRefused = errors.New("session: this Node already refused the sign request")
+	// ErrAlreadyAccepted is a refusal of a request this Node accepted or
+	// proposed.
+	ErrAlreadyAccepted = errors.New("session: this Node already accepted the sign request")
+	ErrNoEngine        = errors.New("session: no engine")
 	// ErrUnsupported is a signing Session for a curve or transaction that
 	// cannot be signed yet.
 	ErrUnsupported = errors.New("session: signing is not supported for this Key")

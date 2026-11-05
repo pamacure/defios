@@ -57,6 +57,9 @@ type SignInfo struct {
 	// Accepted is who has accepted the request, in log order, the proposer
 	// first. The first T of them are the signers.
 	Accepted []SignAccept
+	// Refused is who has refused it. A Node's first stance is final, so none
+	// of them is in Accepted.
+	Refused []identity.ID
 }
 
 // SignAccept is one Node's accept of a sign.request, at its COSL position.
@@ -72,6 +75,9 @@ func SupportsSigning(curve string) bool { return curve == "ecdsa" || curve == "e
 func (i SignInfo) hasAccepted(node identity.ID) bool {
 	return slices.ContainsFunc(i.Accepted, func(a SignAccept) bool { return a.Node == node })
 }
+
+// hasRefused is whether node has refused the request.
+func (i SignInfo) hasRefused(node identity.ID) bool { return slices.Contains(i.Refused, node) }
 
 // signers are the first t Nodes to have accepted before seq (0 = no bound),
 // or fewer while t have not, in sorted order.
@@ -95,7 +101,7 @@ type Config struct {
 	Roster group.Roster
 	Store  *cosl.Store
 	// Append commits an envelope; ErrQueued means it waits in this Node's
-	// Outbox, which only a sign.accept may.
+	// Outbox, which only a sign.accept or sign.refuse may.
 	Append func(context.Context, cosl.Signed) error
 	// NewEngine is called once per Session, when this Node's engine starts.
 	NewEngine func() Engine
@@ -104,8 +110,8 @@ type Config struct {
 	// SignInfo resolves a sign.request by msg_id. Nil refuses to sign.
 	SignInfo func(requestID [32]byte) (SignInfo, error)
 	// SignInfoReads are the message types SignInfo reads. A commit of one can
-	// change its answer, so it wakes the layer. Nil means sign.request and
-	// sign.accept, which any SignInfo reads.
+	// change its answer, so it wakes the layer. Nil means sign.request,
+	// sign.accept and sign.refuse, which any SignInfo reads.
 	SignInfoReads []uint32
 	// Preparams are this Node's ECDSA preparams, already unlocked. They are
 	// passed through on an ecdsa Start and are not a COSL field.
@@ -253,7 +259,7 @@ func New(cfg Config) (*Service, error) {
 	}
 	reads := cfg.SignInfoReads
 	if reads == nil {
-		reads = []uint32{cosl.TypeSignRequest, cosl.TypeSignAccept}
+		reads = []uint32{cosl.TypeSignRequest, cosl.TypeSignAccept, cosl.TypeSignRefuse}
 	}
 	wakeTypes := slices.Concat(msgTypes, reads)
 	slices.Sort(wakeTypes)

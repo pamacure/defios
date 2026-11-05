@@ -14,18 +14,23 @@ import (
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
-// AcceptSign is this Node's accept of a sign.request. It appends a sign.accept
-// and opens the local gate its engine waits on: the engine runs only for a
-// request this Node accepted. The Node is a signer if it is among the first t
-// to accept; if t others got there first the accept is ignored and nothing is
-// appended. The proposer's accept is implied by proposing (AcceptProposed).
-func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte) error {
+// AcceptSign is this Node's accept of a sign.request, taken by the agent
+// handle or, when it is empty, a person. It appends a sign.accept and opens
+// the local gate its engine waits on: the engine runs only for a request this
+// Node accepted. The Node is a signer if it is among the first t to accept;
+// if t others got there first the accept is ignored and nothing is appended.
+// A Node that refused cannot accept. The proposer's accept is implied by
+// proposing (AcceptProposed).
+func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte, handle string) error {
 	if s.cfg.SignInfo == nil {
 		return ErrNoEngine
 	}
 	info, err := s.cfg.SignInfo(requestID)
 	if err != nil {
 		return err
+	}
+	if info.hasRefused(s.cfg.Node.NodeID) {
+		return ErrAlreadyRefused
 	}
 	if r, err := s.signSession(requestID); err != nil {
 		return err
@@ -41,7 +46,46 @@ func (s *Service) AcceptSign(ctx context.Context, requestID [32]byte) error {
 	if len(info.signers(0)) >= info.T {
 		return ErrSignerSetFull
 	}
-	return s.appendAccept(ctx, requestID, info)
+	return s.appendAccept(ctx, requestID, info, handle)
+}
+
+// RefuseSign is this Node's refusal of a sign.request, with its reason, taken
+// by the agent handle or, when it is empty, a person. It appends a
+// sign.refuse, which may be queued (ErrQueued). A Node's first stance is
+// final, so one that accepted, proposed or refused already cannot; nor can
+// any once t Nodes have accepted or the request has closed. A refused
+// request is one this Node never signs: its accept is never made, so it is
+// never a signer and never starts or joins the Session.
+func (s *Service) RefuseSign(ctx context.Context, requestID [32]byte, reason, handle string) error {
+	if s.cfg.SignInfo == nil {
+		return ErrNoEngine
+	}
+	info, err := s.cfg.SignInfo(requestID)
+	if err != nil {
+		return err
+	}
+	me := s.cfg.Node.NodeID
+	switch {
+	case info.hasRefused(me):
+		return ErrAlreadyRefused
+	case info.hasAccepted(me) || s.acceptedLocally(ID(requestID)):
+		return ErrAlreadyAccepted
+	}
+	r, err := s.signSession(requestID)
+	switch {
+	case err != nil:
+		return err
+	case r != nil && r.status != Open, s.now().After(info.Deadline):
+		return ErrClosedSession
+	case r != nil, len(info.signers(0)) >= info.T:
+		return ErrSignerSetFull
+	}
+	payload := &coslv1.SignRefuse{SignRequestId: append([]byte(nil), requestID[:]...), Reason: reason, Handle: handle}
+	signed, err := s.author().Sign(cosl.TypeSignRefuse, info.Conversation, payload)
+	if err != nil {
+		return err
+	}
+	return s.cfg.Append(ctx, signed)
 }
 
 // acceptStarted is the local accept of a request whose Session already
@@ -60,11 +104,11 @@ func (s *Service) acceptStarted(r *rec, requestID [32]byte) error {
 // appendAccept opens the local gate and appends this Node's sign.accept,
 // closing the gate again if the append fails. A queued accept keeps the
 // gate open and returns ErrQueued.
-func (s *Service) appendAccept(ctx context.Context, requestID [32]byte, info SignInfo) error {
+func (s *Service) appendAccept(ctx context.Context, requestID [32]byte, info SignInfo, handle string) error {
 	if err := s.remember(ID(requestID)); err != nil {
 		return err
 	}
-	payload := &coslv1.SignAccept{SignRequestId: append([]byte(nil), requestID[:]...)}
+	payload := &coslv1.SignAccept{SignRequestId: append([]byte(nil), requestID[:]...), Handle: handle}
 	signed, err := s.author().Sign(cosl.TypeSignAccept, info.Conversation, payload)
 	if err == nil {
 		err = s.cfg.Append(ctx, signed)
@@ -186,8 +230,8 @@ func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 		s.failWake(fmt.Errorf("reading sign request %x: %w", id[:4], err))
 		return
 	}
-	if s.now().After(info.Deadline) {
-		s.forget(id)
+	if s.now().After(info.Deadline) || info.hasRefused(s.cfg.Node.NodeID) {
+		s.forget(id) // a refusal before this Node's accept, in log order, is its stance
 		return
 	}
 	// The accept lapses at the deadline: wake then to forget it.
