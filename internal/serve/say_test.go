@@ -29,12 +29,16 @@ func transcript(t *testing.T, n *node, chain string) []map[string]any {
 	return out
 }
 
-// lineWords is each Transcript line as "<step>/<handle>/<depth>/<attempt>:<kind>",
-// with "=<outcome>" after an outcome.
+// lineWords is each Transcript line as "<step>/<handle>/<depth>:<kind>",
+// with "=<outcome>" after an outcome, and "!attempt" on a line that has
+// one, which no line written now does (ADR 0031).
 func lineWords(lines []map[string]any) string {
 	var out []string
 	for _, l := range lines {
-		w := fmt.Sprintf("%v/%v/%v/%v:%v", l["step"], l["handle"], l["depth"], l["attempt"], l["kind"])
+		w := fmt.Sprintf("%v/%v/%v:%v", l["step"], l["handle"], l["depth"], l["kind"])
+		if _, ok := l["attempt"]; ok {
+			w += "!attempt"
+		}
 		if o, ok := l["outcome"]; ok {
 			w += "=" + fmt.Sprint(o)
 		}
@@ -99,7 +103,7 @@ func TestASilentAgentCommitsNothingAndTheChainGoesOn(t *testing.T) {
 	if n := len(provider.seen()); n != 2 {
 		t.Fatalf("provider called %d times, want 2", n)
 	}
-	if got := lineWords(transcript(t, a, v.MsgID)); !strings.Contains(got, "1/auditor/1/1:outcome=silent") {
+	if got := lineWords(transcript(t, a, v.MsgID)); !strings.Contains(got, "1/auditor/1:outcome=silent") {
 		t.Fatalf("transcript = %s", got)
 	}
 }
@@ -221,7 +225,7 @@ func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
 }
 
 // Each chain's Transcript holds one line per request, output block, usage
-// and outcome, each tagged with its step, Handle, depth and attempt, and
+// and outcome, each tagged with its step, Handle and depth, and
 // never the key.
 func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
@@ -242,9 +246,9 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	}
 	events := untilEnd(t, s, v.MsgID)
 	lines := transcript(t, a, v.MsgID)
-	want := "1/auditor/1/1:request 1/auditor/1/1:block 1/auditor/1/1:block 1/auditor/1/1:usage " +
-		"1/auditor/1/1:request 1/auditor/1/1:block 1/auditor/1/1:block 1/auditor/1/1:usage 1/auditor/1/1:outcome=said " +
-		"2/scribe/1/1:request 2/scribe/1/1:block 2/scribe/1/1:usage 2/scribe/1/1:outcome=silent"
+	want := "1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage " +
+		"1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:outcome=said " +
+		"2/scribe/1:request 2/scribe/1:block 2/scribe/1:usage 2/scribe/1:outcome=silent"
 	if got := lineWords(lines); got != want {
 		t.Fatalf("transcript = %s\nwant         %s", got, want)
 	}
@@ -309,7 +313,7 @@ func TestCancelWritesOutcomeCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	untilEnd(t, s, v.MsgID)
-	if got := lineWords(transcript(t, a, v.MsgID)); got != "1/auditor/1/1:request 1/auditor/1/1:outcome=cancelled" {
+	if got := lineWords(transcript(t, a, v.MsgID)); got != "1/auditor/1:request 1/auditor/1:outcome=cancelled" {
 		t.Fatalf("transcript = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)

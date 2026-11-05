@@ -66,20 +66,6 @@ func conversationCommand(g *globals) *cobra.Command {
 	}
 	cancel.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	root.AddCommand(cancel)
-	var retryChain string
-	var retryDetach bool
-	retry := &cobra.Command{
-		Use:   "retry",
-		Short: "Rerun the agents of a chain that failed, was cancelled or was cut off by a stop, reusing those that said or stayed silent (requires serve); without --chain, the latest such chain. --key scopes it to that Key",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runConversationRetry(cmd, g, keyQuery, retryChain, retryDetach)
-		},
-	}
-	retry.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
-	retry.Flags().StringVar(&retryChain, "chain", "", "the msg id, or a unique prefix of it, of the person's message that started the chain")
-	retry.Flags().BoolVar(&retryDetach, "detach", false, "return once the chain is queued, without streaming it")
-	root.AddCommand(retry)
 	transcriptCmd := &cobra.Command{
 		Use:   "transcript <msg-id>",
 		Short: "Print the Transcript of the chain that the person's message with this msg id (or a unique prefix of it) started: each step's agent at work, then how it ended; --json prints its lines as stored. Needs no serve. --key scopes it to that Key",
@@ -378,43 +364,6 @@ func chainPrefix(chain string) (string, error) {
 
 // shortChain is a chain's msg_id as printed: a prefix that names it.
 func shortChain(chain string) string { return chain[:min(8, len(chain))] }
-
-// runConversationRetry queues a chain again and, unless detached, prints
-// it as an attached send does; Ctrl-C cancels it.
-func runConversationRetry(cmd *cobra.Command, g *globals, keyQuery, chain string, detach bool) error {
-	chain, err := chainPrefix(chain)
-	if err != nil {
-		return err
-	}
-	conv, err := queriedConversation(g, keyQuery)
-	if err != nil {
-		return err
-	}
-	client := serve.Client{Socket: g.paths().Socket}
-	ctx := cmd.Context()
-	var stream *serve.ChainStream
-	if !detach {
-		if stream, err = client.ConversationStream(ctx, conv); err != nil {
-			return serveError(err)
-		}
-		defer stream.Close()
-	}
-	v, err := client.ConversationRetry(ctx, conv, chain)
-	switch {
-	case errors.Is(err, serve.ErrNothingToRetry):
-		if g.json {
-			return g.emitJSON(v)
-		}
-		fmt.Fprintln(g.app.Stdout, err)
-		return nil
-	case errors.Is(err, serve.ErrChainBusy), errors.Is(err, serve.ErrNotAChain), errors.Is(err, serve.ErrAmbiguousChain):
-		return exitUsagef("%w", err)
-	case err != nil:
-		return serveError(err)
-	}
-	att := attached{client: client, conv: conv, stream: stream, chain: v.Chain}
-	return att.run(ctx, g, v, fmt.Sprintf("retrying the chain of msg_id %s", shortChain(v.Chain)))
-}
 
 // isOutput reports whether ev is part of an agent's output as it streams,
 // which only follow prints: an agent's start, a delta or a reset.

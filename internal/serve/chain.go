@@ -38,7 +38,7 @@ const (
 	EventChainStart   = "chain.start"
 	EventAgentStart   = "agent.start"   // handle, depth
 	EventAgentDelta   = "agent.delta"   // kind, text: output as the agent generates it
-	EventAgentReset   = "agent.reset"   // a retry starts the model call over: its deltas are void
+	EventAgentReset   = "agent.reset"   // a provider retry starts the model call over: its deltas are void
 	EventAgentSkipped = "agent.skipped" // handle, reason
 	EventAgentCommit  = "agent.commit"  // msg_id, seq or queued, text: an accepted say was written
 	EventAgentSilent  = "agent.silent"  // handle: it ended without say
@@ -137,9 +137,6 @@ type chain struct {
 	cancel  context.CancelFunc
 	// cancelled tells a cancel from the serve stopping; both end ctx.
 	cancelled atomic.Bool
-	// prior is each step's latest attempt on a retry, from the Transcript;
-	// nil on a first run (ADR 0018).
-	prior plan.Prior
 }
 
 func conversationKey(conv []byte) string { return hex.EncodeToString(conv) }
@@ -201,20 +198,56 @@ func (h *chainHub) enqueue(ctx context.Context, wg *sync.WaitGroup, c *chain, ru
 	return true
 }
 
-// busy reports whether the chain id in the Conversation is running or
-// queued.
-func (h *chainHub) busy(conv []byte, id string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.busyLocked(conversationKey(conv), id)
-}
-
 func (h *chainHub) busyLocked(key, id string) bool {
 	cc := h.conversation(key, false)
 	if cc == nil {
 		return false
 	}
 	return slices.ContainsFunc(cc.queue, func(c *chain) bool { return c.id == id && c.ctx.Err() == nil })
+}
+
+var (
+	// ErrNotAChain means the msg_id prefix names no chain of this Node's in
+	// that Conversation.
+	ErrNotAChain = errors.New("serve: no chain of this Node's starts there")
+	// ErrAmbiguousChain means the msg_id prefix names more than one chain.
+	ErrAmbiguousChain = errors.New("serve: that msg_id prefix names more than one chain")
+)
+
+// ChainPrefix is prefix, a hex prefix of a chain's msg_id, in lower case;
+// "" names no chain.
+func ChainPrefix(prefix string) (string, error) {
+	if prefix == "" {
+		return "", nil
+	}
+	p, err := outbox.MsgIDPrefix(prefix)
+	if err != nil {
+		return "", &requestError{fmt.Sprintf("serve: chain %q is not a hex msg_id prefix", prefix)}
+	}
+	return p, nil
+}
+
+// MatchChain is the one of ids, chains' hex msg_ids, that starts with the
+// hex prefix (ADR 0025). None is ErrNotAChain; more than one is
+// ErrAmbiguousChain, naming them.
+func MatchChain(prefix string, ids []string) (string, error) {
+	p, err := ChainPrefix(prefix)
+	if err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, id := range ids {
+		if strings.HasPrefix(id, p) {
+			matches = append(matches, id)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("%w: no msg_id here starts with %s", ErrNotAChain, p)
+	case 1:
+		return matches[0], nil
+	}
+	return "", fmt.Errorf("%w: %s matches %s", ErrAmbiguousChain, p, strings.Join(matches, ", "))
 }
 
 // cancel cancels the chain in the Conversation, running or queued, whose
@@ -340,8 +373,8 @@ type chainCall struct {
 
 // runChains runs the chain calls of this replica's serve, queuing chains in
 // its own WaitGroup, until ctx ends; then it waits for the chains it
-// queued. A chain cut off by a restart is lost, never replayed (ADR 0015);
-// `conversation retry` recovers it (ADR 0018).
+// queued. A chain cut off by a restart is lost, never replayed (ADR 0015,
+// ADR 0031).
 func (s *server) runChains(ctx context.Context) {
 	var chains sync.WaitGroup
 	defer chains.Wait()
@@ -378,7 +411,7 @@ func (s *server) onChains(ctx context.Context, do func(ctx context.Context, chai
 func (s *server) startChain(conv []byte, id string, handles []string) {
 	c := &chain{id: id, conv: conv, handles: handles}
 	if !s.onChains(s.ctx, func(ctx context.Context, chains *sync.WaitGroup) { s.chains.enqueue(ctx, chains, c, s.runChain) }) {
-		s.opts.Logf("serve: chain %s did not start: the replica stopped; `conversation retry --chain %s` runs it", id, id)
+		s.opts.Logf("serve: chain %s did not start: the replica stopped", id)
 	}
 }
 
@@ -395,21 +428,19 @@ func (s *server) runChain(c *chain) {
 		tr := transcript.NewWriter(s.opts.Paths, s.opts.Alias, c.conv, c.id, s.opts.Logf)
 		defer tr.Close()
 		publish(ChainEvent{Type: EventChainStart})
-		plan.Walk(c.handles, c.prior, func(st plan.Step) plan.Outcome { return s.step(c, tr, st, publish) })
+		plan.Walk(c.handles, func(st plan.Step) plan.Outcome { return s.step(c, tr, st, publish) })
 	}
 	s.chains.end(c)
 }
 
-// step performs st of c: runs its agent, writing the run to tr, reuses its
-// latest attempt, or publishes its skip.
+// step performs st of c: runs its agent, writing the run to tr, or
+// publishes its skip.
 func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) plan.Outcome {
 	switch st.Action {
 	case plan.Skip:
 		s.opts.Logf("serve: chain %s skips @%s: %s", c.id, st.Handle, st.Reason)
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: st.Handle, Reason: st.Reason})
 		return plan.Outcome{}
-	case plan.Reuse:
-		return s.reuse(c, st, publish)
 	}
 	res, inc, err := s.runAgent(c, tr, st, publish)
 	if c.ctx.Err() != nil {
@@ -427,45 +458,6 @@ func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish fun
 		return plan.Outcome{}
 	}
 	return plan.Outcome{Said: res.Said, Included: inc}
-}
-
-// reuse stands in for step st, whose latest attempt said or stayed silent:
-// it is not run again. Its outcome is what it said, "" if it was silent or
-// its message is gone, so the summons in it run as on its first run, with
-// what is included now.
-func (s *server) reuse(c *chain, st plan.Step, publish func(ChainEvent)) plan.Outcome {
-	h, p := st.Handle, st.Prior
-	if p.Outcome == OutcomeSilent {
-		publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: fmt.Sprintf("@%s stayed silent at step %d; not run again", h, st.N)})
-		return plan.Outcome{}
-	}
-	publish(ChainEvent{Type: EventAgentSkipped, Handle: h, Reason: fmt.Sprintf("@%s said msg_id %s at step %d; not run again", h, p.MsgID, st.N)})
-	fail := func(err error) plan.Outcome {
-		s.opts.Logf("serve: retrying chain %s after @%s: %v", c.id, h, err)
-		publish(ChainEvent{Type: EventAgentError, Handle: h, Error: err.Error()})
-		return plan.Outcome{Stop: true}
-	}
-	ob, store, ok := s.writer()
-	if !ok {
-		return fail(ErrNoReplica)
-	}
-	m, ok, err := s.saidIn(ob, store, c.conv, p.MsgID)
-	if err != nil {
-		return fail(err)
-	}
-	if !ok {
-		s.opts.Logf("serve: retrying chain %s: @%s's msg_id %s is pruned or gone; it summons nobody", c.id, h, p.MsgID)
-		return plan.Outcome{}
-	}
-	e, err := s.load(store, c.conv)
-	if err != nil {
-		return fail(err)
-	}
-	inc, err := e.Included()
-	if err != nil {
-		return fail(err)
-	}
-	return plan.Outcome{Said: m.Text, Included: inc}
 }
 
 // errSkipped is an agent the chain passes over because it is no longer
@@ -489,7 +481,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 		return res, inc, err
 	}
 	line := func(l TranscriptLine) {
-		l.Step, l.Handle, l.Depth, l.Attempt = st.N, handle, depth, st.Attempt()
+		l.Step, l.Handle, l.Depth = st.N, handle, depth
 		tr.Write(l)
 	}
 	var said SendView
@@ -534,8 +526,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 	if err != nil {
 		return res, inc, err
 	}
-	// It is posted: whatever fails from here, the Transcript says so, and a
-	// retry does not post it again.
+	// It is posted: whatever fails from here, the Transcript says so.
 	said = v
 	// The next agent reads it from this Node's view of the talk at once,
 	// applied or not (ADR 0025).
@@ -808,7 +799,6 @@ func (s *server) chainRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, CancelView{Cancelled: chain != "", Chain: chain})
 	})
-	s.retryRoutes(mux)
 }
 
 // ChainStream reads chain events from the serve until closed.

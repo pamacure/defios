@@ -11,7 +11,7 @@ import (
 )
 
 // runConversationTranscript prints the Transcript of the chain whose
-// msg_id starts with prefix, matched as conversation retry matches it,
+// msg_id starts with prefix, matched as conversation cancel matches it,
 // among the chains with a Transcript in the Conversation keyQuery names.
 // It reads the files, so it needs no serve.
 func runConversationTranscript(g *globals, keyQuery, prefix string) error {
@@ -53,14 +53,19 @@ func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 	return nil
 }
 
-// printRuns prints each run: its step, Handle, depth and attempt; its
-// output as conversation follow labels it, thinking, tool calls and their
-// results dimmed; then how it ended, its outcome colored as a status.
+// printRuns prints each run: its step, Handle, depth and, in an older
+// Transcript, attempt; its output as conversation follow labels it,
+// thinking, tool calls and their results dimmed; then how it ended, its
+// outcome colored as a status.
 func printRuns(g *globals, runs []transcript.Run) {
 	p := g.out()
 	out := g.app.Stdout
 	for _, r := range runs {
-		fmt.Fprintf(out, "step %d: %s, depth %d, attempt %d\n", r.Step, p.primary("@"+r.Handle), r.Depth, r.Attempt)
+		fmt.Fprintf(out, "step %d: %s, depth %d", r.Step, p.primary("@"+r.Handle), r.Depth)
+		if r.Attempt > 0 {
+			fmt.Fprintf(out, ", attempt %d", r.Attempt)
+		}
+		fmt.Fprintln(out)
 		at := "@" + r.Handle
 		printBlocks(g, "", at, r.Output())
 		switch r.Outcome {

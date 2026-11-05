@@ -49,7 +49,8 @@ func blockTexts(es []talk.Expanded) [][]string {
 }
 
 // An agent's message this Node's chain said comes with the blocks of the
-// attempt that said it, a retried step's earlier attempt left out; a
+// run that said it, in an older Transcript a retried step's earlier
+// attempt left out (ADR 0031); a
 // person's, another Node's agent's, and one whose Transcript is gone come
 // with none.
 func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {

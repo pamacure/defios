@@ -3,6 +3,7 @@ package transcript_test
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,20 +29,18 @@ func write(t *testing.T, p nodedir.Paths, conv []byte, chain string, lines ...tr
 	}
 }
 
-// Step 1 took two attempts: the first failed, the second said. Step 2
-// stayed silent.
+// Step 1 said; step 2 stayed silent; step 3 failed.
 var lines = []transcript.Line{
-	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
-	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
-	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
-	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"text","text":"ok @scribe"}`)},
-	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindUsage, Usage: json.RawMessage(`{"input_tokens":3}`)},
-	{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
-	{Step: 2, Handle: "scribe", Depth: 2, Attempt: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent},
+	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
+	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"text","text":"ok @scribe"}`)},
+	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindUsage, Usage: json.RawMessage(`{"input_tokens":3}`)},
+	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
+	{Step: 2, Handle: "scribe", Depth: 2, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent},
+	{Step: 3, Handle: "critic", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
 }
 
 // Written lines read back as written, in order, one JSON line each in the
-// chain's file in its Conversation's transcripts/.
+// chain's file in its Conversation's transcripts/, with no attempt.
 func TestWrittenLinesReadBack(t *testing.T) {
 	p := paths(t)
 	write(t, p, nil, chainID, lines...)
@@ -59,23 +58,23 @@ func TestWrittenLinesReadBack(t *testing.T) {
 	if got := strings.Count(string(b), "\n"); got != len(lines) {
 		t.Fatalf("%d lines on disk:\n%s", got, b)
 	}
-	if want := `{"step":1,"handle":"auditor","depth":1,"attempt":1,"kind":"request","request":{"model":"m"}}` + "\n"; !strings.HasPrefix(string(b), want) {
+	if want := `{"step":1,"handle":"auditor","depth":1,"kind":"request","request":{"model":"m"}}` + "\n"; !strings.HasPrefix(string(b), want) {
 		t.Fatalf("on disk:\n%s", b)
 	}
 }
 
-// A Transcript's runs come by step, then attempt, each with its
-// requests, blocks, usage and outcome; a run a stop cut off has none, and
-// the line the stop cut in half is passed over.
-func TestRunsByStepAndAttempt(t *testing.T) {
+// A Transcript's runs come by step, each with its requests, blocks, usage
+// and outcome; a run a stop cut off has none, and the line the stop cut in
+// half is passed over.
+func TestRunsByStep(t *testing.T) {
 	p := paths(t)
-	cut := transcript.Line{Step: 3, Handle: "critic", Depth: 2, Attempt: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{}`)}
+	cut := transcript.Line{Step: 4, Handle: "quant", Depth: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{}`)}
 	write(t, p, nil, chainID, append(lines, cut)...)
 	f, err := os.OpenFile(p.TranscriptFile(group.ImplicitAlias, "group", chainID), os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString(`{"step":3,"handle":"critic","depth":2,"attempt":1,"kind":"blo`)
+	f.WriteString(`{"step":4,"handle":"quant","depth":2,"kind":"blo`)
 	f.Close()
 
 	tr, err := transcript.Read(p, group.ImplicitAlias, nil, chainID)
@@ -83,14 +82,14 @@ func TestRunsByStepAndAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []transcript.Run{
-		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Requests: []json.RawMessage{json.RawMessage(`{"model":"m"}`)}, Outcome: transcript.OutcomeError, Error: "boom"},
-		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2,
+		{Step: 1, Handle: "auditor", Depth: 1,
 			Requests: []json.RawMessage{json.RawMessage(`{"model":"m"}`)},
 			Blocks:   []json.RawMessage{json.RawMessage(`{"type":"text","text":"ok @scribe"}`)},
 			Usage:    []json.RawMessage{json.RawMessage(`{"input_tokens":3}`)},
 			Outcome:  transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
-		{Step: 2, Handle: "scribe", Depth: 2, Attempt: 1, Outcome: transcript.OutcomeSilent},
-		{Step: 3, Handle: "critic", Depth: 2, Attempt: 1, Requests: []json.RawMessage{json.RawMessage(`{}`)}},
+		{Step: 2, Handle: "scribe", Depth: 2, Outcome: transcript.OutcomeSilent},
+		{Step: 3, Handle: "critic", Depth: 1, Outcome: transcript.OutcomeError, Error: "boom"},
+		{Step: 4, Handle: "quant", Depth: 2, Requests: []json.RawMessage{json.RawMessage(`{}`)}},
 	}
 	if !reflect.DeepEqual(tr.Runs(), want) {
 		t.Fatalf("runs = %+v", tr.Runs())
@@ -100,32 +99,35 @@ func TestRunsByStepAndAttempt(t *testing.T) {
 	}
 }
 
-// Prior is each step's latest attempt, what a retry reuses or runs again:
-// one that said or stayed silent is finished; one that failed, or that a
-// stop cut off before its outcome, is not.
-func TestPriorIsEachStepsLatestAttempt(t *testing.T) {
+// A Transcript written while a chain could be retried still reads: its
+// lines carry an attempt, and a retried step's attempts are runs of their
+// own, by step then attempt (ADR 0031).
+func TestAnOlderTranscriptWithAttemptsReads(t *testing.T) {
 	p := paths(t)
-	cut := transcript.Line{Step: 3, Handle: "critic", Depth: 2, Attempt: 1, Kind: transcript.KindRequest}
-	failed := transcript.Line{Step: 4, Handle: "quant", Depth: 1, Attempt: 2, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "again"}
-	write(t, p, nil, chainID, append(lines, cut, failed)...)
+	path := p.TranscriptFile(group.ImplicitAlias, "group", chainID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"step":1,"handle":"auditor","depth":1,"attempt":1,"kind":"request","request":{"model":"m"}}
+{"step":1,"handle":"auditor","depth":1,"attempt":1,"kind":"outcome","outcome":"error","error":"boom"}
+{"step":2,"handle":"scribe","depth":2,"attempt":1,"kind":"outcome","outcome":"silent"}
+{"step":1,"handle":"auditor","depth":1,"attempt":2,"kind":"block","block":{"type":"text","text":"ok @scribe"}}
+{"step":1,"handle":"auditor","depth":1,"attempt":2,"kind":"outcome","outcome":"said","msg_id":"cdcd","seq":7}
+`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	tr, err := transcript.Read(p, group.ImplicitAlias, nil, chainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := transcript.Prior{
-		1: {Handle: "auditor", Attempt: 2, Outcome: transcript.OutcomeSaid, MsgID: "cdcd"},
-		2: {Handle: "scribe", Attempt: 1, Outcome: transcript.OutcomeSilent},
-		3: {Handle: "critic", Attempt: 1},
-		4: {Handle: "quant", Attempt: 2, Outcome: transcript.OutcomeError},
+	want := []transcript.Run{
+		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 1, Requests: []json.RawMessage{json.RawMessage(`{"model":"m"}`)}, Outcome: transcript.OutcomeError, Error: "boom"},
+		{Step: 1, Handle: "auditor", Depth: 1, Attempt: 2, Blocks: []json.RawMessage{json.RawMessage(`{"type":"text","text":"ok @scribe"}`)}, Outcome: transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
+		{Step: 2, Handle: "scribe", Depth: 2, Attempt: 1, Outcome: transcript.OutcomeSilent},
 	}
-	got := tr.Prior()
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("prior = %+v", got)
-	}
-	for step, finished := range map[int]bool{1: true, 2: true, 3: false, 4: false} {
-		if got[step].Finished() != finished {
-			t.Errorf("step %d finished = %v", step, !finished)
-		}
+	if !reflect.DeepEqual(tr.Runs(), want) {
+		t.Fatalf("runs = %+v", tr.Runs())
 	}
 }
 
@@ -156,14 +158,14 @@ func TestListFindsExactlyTheTranscripts(t *testing.T) {
 	}
 }
 
-// A chain with no Transcript has no prior steps.
-func TestNoTranscriptHasNoPrior(t *testing.T) {
+// A chain with no Transcript reads as empty.
+func TestNoTranscriptReadsEmpty(t *testing.T) {
 	tr, err := transcript.Read(paths(t), group.ImplicitAlias, nil, chainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tr.Lines != nil || tr.Prior() != nil {
-		t.Fatalf("read %+v, prior %+v", tr, tr.Prior())
+	if tr.Lines != nil || tr.Runs() != nil {
+		t.Fatalf("read %+v", tr)
 	}
 }
 

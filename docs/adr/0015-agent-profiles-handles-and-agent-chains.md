@@ -117,6 +117,8 @@ message too, and is named by msg_id, not seq.*
   never resumed or replayed.
   *Amended by [ADR 0018](0018-an-agent-says-one-message.md): `conversation retry --chain <seq>` reruns
   it on request.*
+  *Amended by [ADR 0031](0031-conversation-retry-is-removed.md): there is no
+  retry; it is lost, as above.*
 - **What an agent sees.** The system prompt is `SYSTEM.md` followed by a
   preamble from the serve: its Handle, the Conversation's Key, its depth, and either the
   Handles it may summon or that it may summon none at its depth. Then come the
@@ -160,6 +162,8 @@ message too, and is named by msg_id, not seq.*
   again.
   *Amended by [ADR 0018](0018-an-agent-says-one-message.md): `conversation retry` reruns the agents of
   a chain that did not say or stay silent.*
+  *Amended by [ADR 0031](0031-conversation-retry-is-removed.md): there is no
+  retry verb, as above.*
 - **Text only.** An agent replies with text. It has no tools: it cannot
   propose a Sign Request or read chain state. Giving it any is a later
   decision with its own ADR.

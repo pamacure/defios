@@ -93,7 +93,7 @@ The name of an Agent Profile on one Node, written `@handle` in talk to summon it
 _Avoid_: agent name, username, alias (that is a Group's, Network's or Provider's local label)
 
 **Chain**:
-The agents one person's message summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id. Each agent reached is one **step**, numbered in that order whether it runs, is reused on a retry, or is skipped.
+The agents one person's message summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id. Each agent reached is one **step**, numbered in that order whether it runs or is skipped.
 _Avoid_: thread, run, cascade
 
 **Transcript**:

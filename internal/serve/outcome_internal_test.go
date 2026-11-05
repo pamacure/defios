@@ -7,8 +7,8 @@ import (
 )
 
 // A run's closing outcome. Once its say has committed, it is `said` with
-// its msg_id and seq whatever fails after, even a stop, so a retry never
-// posts it again; a run cut off by a stop before that has none (ADR 0018).
+// its msg_id and seq whatever fails after, even a stop; a run cut off by a
+// stop before that has none (ADR 0018).
 func TestRunOutcome(t *testing.T) {
 	failed := errors.New("waiting for the replica: deadline exceeded")
 	posted := SendView{Seq: 9, MsgID: strings.Repeat("ab", 32)}

@@ -16,6 +16,11 @@ a chain and its Transcript are named by the msg_id of the message that
 starts it, not its seq; `said` and `agent.commit` carry the said message's
 msg_id, and its seq once it has one; a say may be queued, not committed.*
 
+*Amended by [ADR 0031](0031-conversation-retry-is-removed.md): there is no
+retry verb. `conversation retry`, outcome reuse and the `attempt` on
+Transcript lines are gone; a chain that fails, is cancelled or is cut off by
+a stop ends there. Transcripts written before still read.*
+
 ## Considered options
 
 - **Commit the reply as generated, capped to fit an `app.freeform`.**
@@ -95,7 +100,9 @@ msg_id, and its seq once it has one; a say may be queued, not committed.*
   retries of that step). A run records each request as sent (without
   credentials), each output block, the usage, and one closing **outcome**:
   `said {seq}`, `silent`, `error {error}` or `cancelled`. A run cut off by a
-  serve stop has no outcome. A retry appends to the same file. One chain runs
+  serve stop has no outcome. A retry appends to the same file. *Amended by
+  [ADR 0031](0031-conversation-retry-is-removed.md): lines carry no
+  `attempt`, and nothing appends after a chain ends.* One chain runs
   at a time per Conversation, so a file has one writer. Transcripts are
   plaintext, outside the Vault, and survive a replica wipe or restore;
   Pruning does not touch them, and nothing yet deletes them.
@@ -125,10 +132,14 @@ msg_id, and its seq once it has one; a say may be queued, not committed.*
   chain with no Transcript, such as one still queued when the serve stopped,
   runs from the start. Retrying a chain that is running or queued is refused. Retry appends
   nothing itself, and its errors stay Node-local like any other.
+  *Superseded by [ADR 0031](0031-conversation-retry-is-removed.md): there is
+  no `conversation retry`; provider retries stay.*
 - **A chain lost to a stop is not resumed on its own.** Only chains running
   or queued at that moment are lost, since `send` needs a serve; switching
   the Current Group or a restore counts as a stop. A detached sender learns of
   it only from the missing reply. `conversation retry --chain <seq>` recovers
-  it, and no crash loop ever spends a key unasked.
+  it, and no crash loop ever spends a key unasked. *Amended by
+  [ADR 0031](0031-conversation-retry-is-removed.md): nothing recovers it; a
+  person mentions the agent again.*
 - **What other parties see.** Only the message, never the Transcript. When
   agents can later propose a Sign Request, its `reason` must carry the why.

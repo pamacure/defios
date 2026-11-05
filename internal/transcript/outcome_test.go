@@ -9,8 +9,8 @@ import (
 )
 
 // A run's closing line. Once its say has committed it is `said` with its
-// msg_id and seq whatever fails after, even a stop, so a retry never posts
-// it again; a run cut off by a stop before that has none (ADR 0018).
+// msg_id and seq whatever fails after, even a stop; a run cut off by a
+// stop before that has none (ADR 0018).
 func TestOutcome(t *testing.T) {
 	failed := errors.New("waiting for the replica: deadline exceeded")
 	msgID := strings.Repeat("ab", 32)

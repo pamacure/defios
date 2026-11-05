@@ -19,8 +19,8 @@ type Expanded struct {
 }
 
 // Expand is msgs, from conv's talk (nil for Group-level talk), each with
-// the blocks of the run of this Node's chains that said it: of a retried
-// step, the attempt that said it.
+// the blocks of the run of this Node's chains that said it: in an older
+// Transcript, the attempt of a retried step that said it (ADR 0031).
 func (r Reader) Expand(conv []byte, msgs Messages) ([]Expanded, error) {
 	chains, err := transcript.List(r.Paths, r.Alias, conv)
 	if err != nil {

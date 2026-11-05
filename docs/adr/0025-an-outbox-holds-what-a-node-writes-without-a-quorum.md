@@ -17,6 +17,10 @@ the Roster are unchanged. This Node's agents read its queued messages as if
 they had been said, so a chain runs end to end with no leader. This is
 pre-release, so nothing is migrated.
 
+*Amended by [ADR 0031](0031-conversation-retry-is-removed.md): there is no
+`conversation retry`, so a chain's msg_id names it for its Transcript,
+`conversation cancel` and chain events only.*
+
 ## Considered options
 
 - **A witness voter**: a Raft voter with no keyshare, so 2 of 3 commit while

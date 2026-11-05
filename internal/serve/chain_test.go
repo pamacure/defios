@@ -828,12 +828,34 @@ func TestMentionInAKeysConversation(t *testing.T) {
 	}
 }
 
+// answerAs makes provider answer as each agent its system prompt names, by
+// saying replies[handle].
+func answerAs(provider *fakeProvider, replies map[string]string) {
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		sys := provider.seen()[n-1].System
+		for h, text := range replies {
+			if strings.HasPrefix(sys, "You are "+h+".") {
+				streamSay(w, text)
+				return
+			}
+		}
+		w.WriteHeader(400)
+	})
+}
+
+// maxDepth2 lets a's agents summon one level down.
+func maxDepth2(t *testing.T, a *node) {
+	t.Helper()
+	path := a.paths.GroupConfigFile(group.ImplicitAlias)
+	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
+}
+
 // A chain's Transcript is in its Conversation's data directory: the hex
 // Conversation ID for a Key's, "group" for Group-level talk (ADR 0024).
 // Nothing is written to the Group's old transcripts/.
 func TestTranscriptsAreInTheConversationDir(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe")
-	answerAs(provider, map[string]string{"auditor": "checked"}, nil)
+	answerAs(provider, map[string]string{"auditor": "checked"})
 	waitWorkspace(t, a, mintKey(t, a, b, gid))
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	ctx := context.Background()

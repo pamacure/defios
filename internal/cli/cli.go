@@ -107,5 +107,29 @@ func (a App) rootCommand(g *globals) *cobra.Command {
 	root.AddCommand(outboxCommand(g))
 	root.AddCommand(backupCommand(g))
 	root.AddCommand(passphraseCommand(g))
+	for _, c := range root.Commands() {
+		rejectUnknownVerbs(c)
+	}
 	return root
+}
+
+// rejectUnknownVerbs makes cmd, and each group of verbs under it, refuse a
+// verb it does not have, as the root does; cobra would print the group's
+// help and succeed. A group named alone still prints its help.
+func rejectUnknownVerbs(cmd *cobra.Command) {
+	if !cmd.HasSubCommands() {
+		return
+	}
+	if !cmd.Runnable() {
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return fmt.Errorf("unknown command %q for %q", args[0], c.CommandPath())
+			}
+			return nil
+		}
+		cmd.RunE = func(c *cobra.Command, _ []string) error { return c.Help() }
+	}
+	for _, c := range cmd.Commands() {
+		rejectUnknownVerbs(c)
+	}
 }
