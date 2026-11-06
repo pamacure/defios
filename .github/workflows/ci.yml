@@ -20,7 +20,7 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go vet -tags e2e ./e2e
-      - run: go test ./...
+      - run: go test ./... -timeout 30m
 
   e2e:
     name: e2e (headscale in Docker)

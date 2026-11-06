@@ -5,7 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -95,26 +95,35 @@ func TestCOSLConvergence(t *testing.T) {
 		t.Fatal("no Group-level app.freeform on the converged log")
 	}
 
-	// Bob goes away: alice's send fails clearly and leaves no row.
+	// Bob goes away: with no quorum alice's send is queued in her Outbox
+	// (ADR 0025), answered promptly with the queued exit code, and commits
+	// no row.
 	bob.stopServe(t)
 	start := time.Now()
 	r := alice.run(context.Background(), "conversation", "send", "anyone there?")
-	if r.code != 2 || !strings.Contains(r.stderr, "not reachable") {
-		t.Fatalf("send with bob down: exit %d, stderr %q", r.code, r.stderr)
+	if r.code != 5 {
+		t.Fatalf("send with bob down: exit %d (want 5, queued); stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
 	if took := time.Since(start); took > 20*time.Second {
 		t.Fatalf("send with bob down took %s; want the §4.2 apply timeout", took)
 	}
 	if now, _ := alice.coslLog(t, func([]coslLine) bool { return true }); len(now) != len(rows) {
-		t.Fatalf("failed send left a row: %d rows, had %d", len(now), len(rows))
+		t.Fatalf("queued send left a row: %d rows, had %d", len(now), len(rows))
+	}
+	if q := alice.queuedTexts(t); !slices.Equal(q, []string{"anyone there?"}) {
+		t.Fatalf("queued messages = %q, want the one sent with bob down", q)
 	}
 
-	// Bob returns: sends commit again and both replicas match. The failed
-	// send may land too if alice was leading when it reached her log.
+	// Bob returns: the queued send commits from alice's Outbox, sends commit
+	// again, and both replicas match.
 	bob.startServe(t)
-	alice.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "welcome back")
-	bob.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "thanks")
-	rows = mustConverge(t, alice, bob, len(rows)+2)
+	alice.sendSoon(t, "welcome back")
+	bob.sendSoon(t, "thanks")
+	rows = mustConverge(t, alice, bob, len(rows)+3)
+	// Alice's own view lists a queued message too, so wait for it committed.
+	alice.conversationLog(t, func(rows []messageLine) bool {
+		return slices.ContainsFunc(rows, func(r messageLine) bool { return r.Text == "anyone there?" && !r.Queued })
+	})
 
 	// Beyond the retained log: enough traffic to exceed TrailingLogs, a
 	// snapshot on alice, then bob loses his replica state and comes back.

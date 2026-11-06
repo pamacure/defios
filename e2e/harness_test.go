@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -463,6 +464,35 @@ type messageLine struct {
 	Sender            string `json:"sender"`
 	SenderDisplayName string `json:"sender_display_name"`
 	Text              string `json:"text"`
+	// Queued is a message this Node wrote that waits in its Outbox, with no
+	// seq (ADR 0025).
+	Queued bool `json:"queued"`
+}
+
+// sendSoon sends text to n's Group-level talk just after a peer returns,
+// when Raft may still be electing a leader: it must commit or be queued in
+// n's Outbox, which forwards it once there is a quorum (ADR 0025).
+func (n *node) sendSoon(t *testing.T, text string) {
+	t.Helper()
+	if r := n.run(context.Background(), "conversation", "send", text); r.code != 0 && r.code != 5 {
+		t.Fatalf("%s send %q: exit %d (want committed or queued): %s", n.name, text, r.code, r.stderr)
+	}
+}
+
+// queuedTexts is the texts of n's Group-level messages queued in its
+// Outbox, once there is at least one.
+func (n *node) queuedTexts(t *testing.T) []string {
+	t.Helper()
+	rows, _ := n.conversationLog(t, func(rows []messageLine) bool {
+		return slices.ContainsFunc(rows, func(r messageLine) bool { return r.Queued })
+	})
+	var out []string
+	for _, r := range rows {
+		if r.Queued {
+			out = append(out, r.Text)
+		}
+	}
+	return out
 }
 
 // conversationLog polls `conversation log --json` (no serve needed) until

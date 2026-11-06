@@ -70,14 +70,17 @@ func TestFocusSwitchReconvergence(t *testing.T) {
 	}
 
 	// Unfocused reconvergence, part 1: Group A is offline to bob. With alice's
-	// A-serve down there is no quorum, so bob cannot commit and the committed
-	// prefix is unchanged on his replica.
+	// A-serve down there is no quorum, so bob's send is queued in his Outbox
+	// (ADR 0025) and the committed prefix is unchanged on his replica.
 	before := bob.coslNow(t)
-	if send := bob.run(context.Background(), "conversation", "send", "anyone on A?"); send.code != 2 {
-		t.Fatalf("bob send while A unfocused: exit %d (want 2); stderr %q", send.code, send.stderr)
+	if send := bob.run(context.Background(), "conversation", "send", "anyone on A?"); send.code != 5 {
+		t.Fatalf("bob send while A unfocused: exit %d (want 5, queued); stderr %q", send.code, send.stderr)
 	}
 	if now := bob.coslNow(t); len(now) != len(before) {
 		t.Fatalf("bob committed while A unfocused: %d rows, had %d", len(now), len(before))
+	}
+	if q := bob.queuedTexts(t); !slices.Equal(q, []string{"anyone on A?"}) {
+		t.Fatalf("bob's queued messages = %q, want the one sent while A was unfocused", q)
 	}
 
 	// Refocus to A: stop B's serve, point back at the implicit alias, serve A.
@@ -88,13 +91,14 @@ func TestFocusSwitchReconvergence(t *testing.T) {
 	alice.startServe(t)
 
 	// Unfocused reconvergence, part 2: with no manual resync, A reconverges to
-	// the committed prefix via Raft catch-up, and new appends commit again.
-	bob.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "back on A")
-	rows := mustConverge(t, alice, bob, 5)
+	// the committed prefix via Raft catch-up, bob's queued send commits from
+	// his Outbox, and new appends commit again.
+	bob.sendSoon(t, "back on A")
+	rows := mustConverge(t, alice, bob, 6)
 
 	// The pre-switch committed prefix survived the focus switch intact.
 	texts := conversationTexts(t, alice)
-	for _, want := range []string{"on A before switch", "still on A after group use", "back on A"} {
+	for _, want := range []string{"on A before switch", "still on A after group use", "anyone on A?", "back on A"} {
 		if !slices.Contains(texts, want) {
 			t.Fatalf("message %q missing after reconvergence; converged rows:\n%+v", want, rows)
 		}
