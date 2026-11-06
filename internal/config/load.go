@@ -107,7 +107,7 @@ func (e Effective) Included() (Included, error) {
 			return Included{}, err
 		}
 		r := ResolvedProfile{Handle: h, Dir: e.paths.AgentProfileDir(h), Provider: p.Provider,
-			MaxTurns: p.MaxTurns, Tools: p.Granted(), Skills: p.Skills, Body: p.Body}
+			MaxTurns: p.MaxTurns, Tools: p.Granted(), Skills: p.Skills, MCP: p.MCP, Body: p.Body}
 		if base := e.Workspace.Providers[p.Provider].Body; base != nil {
 			r.Body = agent.MergeBody(base, p.Body)
 		}

@@ -62,10 +62,20 @@ type Profile struct {
 	// That each is installed is checked at summon, so a profile naming a
 	// Plugin a restore could not fetch still reads.
 	Skills []string `toml:"skills,omitempty"`
+	// MCP are the MCP Servers it is granted, by <plugin>/<server> (ADR
+	// 0030). That each is installed is checked at summon, as for Skills.
+	MCP map[string]MCPGrant `toml:"mcp,omitempty"`
 	// Body is the request's other fields, as TOML nests them: whatever the
 	// API shape takes. It merges over its Provider's body, which merges over
 	// what DeFiOS writes. ReadFile converts it to JSON values.
 	Body map[string]any `toml:"body,omitempty"`
+}
+
+// MCPGrant is a profile's grant of one MCP Server.
+type MCPGrant struct {
+	// Secrets are the Secrets the server's process gets, each set under its
+	// own name; it is started with nothing else but PATH and HOME.
+	Secrets []string `toml:"secrets,omitempty"`
 }
 
 // The built-in Tools a profile's tools may grant (ADR 0029).
@@ -292,6 +302,19 @@ func parseProfile(path string, data []byte) (Profile, error) {
 			return fail("skills: %q is listed twice", ref)
 		}
 	}
+	for ref, g := range p.MCP {
+		if _, _, err := plugin.ParseServerRef(ref); err != nil {
+			return fail("mcp: %w", err)
+		}
+		for i, name := range g.Secrets {
+			if err := secret.ValidateName(name); err != nil {
+				return fail("mcp.%q: secrets: %w", ref, err)
+			}
+			if slices.Contains(g.Secrets[:i], name) {
+				return fail("mcp.%q: secrets: %q is listed twice", ref, name)
+			}
+		}
+	}
 	if _, ok := p.Body[""]; ok {
 		return fail("body: a key may not be empty")
 	}
@@ -493,9 +516,10 @@ type ResolvedProfile struct {
 	Dir      string // absolute
 	Provider string // a Provider alias
 	MaxTurns int
-	Tools    []string       // the Tools it grants, never nil
-	Skills   []string       // the Skills it grants, <plugin>/<skill>
-	Body     map[string]any // JSON values; nil when neither body is set
+	Tools    []string            // the Tools it grants, never nil
+	Skills   []string            // the Skills it grants, <plugin>/<skill>
+	MCP      map[string]MCPGrant // the MCP Servers it grants, by <plugin>/<server>
+	Body     map[string]any      // JSON values; nil when neither body is set
 }
 
 // jsonValue is v, a value TOML decoded, as a JSON value: a table is an

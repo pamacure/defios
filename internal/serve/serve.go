@@ -86,6 +86,9 @@ type Options struct {
 	// AgentBackoff is the wait before an agent's first retry, doubling
 	// after each; zero is a second (ADR 0015).
 	AgentBackoff time.Duration
+	// MCPCallTimeout bounds an MCP Server's start and each call of its
+	// tools; zero is DefaultMCPCallTimeout (ADR 0030).
+	MCPCallTimeout time.Duration
 }
 
 // Run binds the socket and answers the local API at once, then joins the
@@ -115,7 +118,8 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), chainCalls: make(chan chainCall)}
+	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), chainCalls: make(chan chainCall),
+		mcp: newMCPServers(o.Logf)}
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()
@@ -152,6 +156,7 @@ func Run(ctx context.Context, o Options) error {
 	formationSrv.Shutdown(shutdownCtx)
 	localSrv.Shutdown(shutdownCtx)
 	s.stopReplica()
+	s.mcp.close() // the chains that use them have ended
 	return err
 }
 
@@ -182,6 +187,8 @@ type server struct {
 
 	chains     chainHub       // this Node's chains of agents, and their watchers
 	chainCalls chan chainCall // to the replica's chain runner
+
+	mcp *mcpServers // the MCP Server processes agents' runs use (ADR 0030)
 }
 
 // bindSocket listens on path with mode 0600. A live listener there means

@@ -229,8 +229,19 @@ func agentNode(t *testing.T, n *node, baseURL string, handles ...string) {
 // "claude". Retries back off by a millisecond.
 func agentPair(t *testing.T, handles ...string) (a, b *node, gid group.ID, provider *fakeProvider) {
 	t.Helper()
+	return agentPairTuned(t, nil, handles...)
+}
+
+// agentPairTuned is agentPair with each serve's Options tuned by tune too.
+func agentPairTuned(t *testing.T, tune func(*serve.Options), handles ...string) (a, b *node, gid group.ID, provider *fakeProvider) {
+	t.Helper()
 	a, b = pairWith(t, func(n *node) {
-		n.tune = func(o *serve.Options) { o.AgentBackoff = time.Millisecond }
+		n.tune = func(o *serve.Options) {
+			o.AgentBackoff = time.Millisecond
+			if tune != nil {
+				tune(o)
+			}
+		}
 	})
 	gid = formValid(t, a, b)
 	a.joins(t, gid, 2)

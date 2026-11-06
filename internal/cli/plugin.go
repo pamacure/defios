@@ -276,7 +276,7 @@ func pluginRemoveCommand(g *globals) *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error {
 			// A built-in is refused by Remove itself, granted or not.
 			_, builtIn, _ := plugin.BuiltIn(args[0])
-			grants, err := skillGrants(g, args[0])
+			grants, err := pluginGrants(g, args[0])
 			if err != nil {
 				return err
 			}

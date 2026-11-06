@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +18,7 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/plugin"
+	"defios.com/internal/secret"
 )
 
 // agentFlags are the fields add and edit take.
@@ -250,25 +252,32 @@ Group's, and exclude --key refuses it.`,
 		cmd.Flags().StringVar(&keyQuery, "key", "", keyEditFlagHelp)
 	}
 
+	var secrets []string
 	grantCmd := &cobra.Command{
-		Use:   "grant <handle> <tool | plugin/skill>",
-		Short: "Grant an Agent Profile a built-in Tool or a Plugin's Skill, and print what it is granted of that kind",
-		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029), or a
-<plugin>/<skill> to its skills, the Skills it may read with skill_load (ADR 0030). An unset tools is say
-alone, so granting into it writes say with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `;
-the sign Tools are offered only in a Key's Conversation, never in Group-level talk. A Skill must be of a
-Plugin installed or built in, and a name that is also one of its MCP Servers is refused as ambiguous.`,
+		Use:   "grant <handle> <tool | plugin/skill | plugin/server> [--secret NAME]...",
+		Short: "Grant an Agent Profile a built-in Tool, a Plugin's Skill or MCP Server, and print what it is granted of that kind",
+		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029), a
+<plugin>/<skill> to its skills, the Skills it may read with skill_load, or a <plugin>/<server> to its mcp,
+the MCP Servers whose tools it may call (ADR 0030). An unset tools is say alone, so granting into it writes
+say with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `; the sign Tools are offered
+only in a Key's Conversation, never in Group-level talk. A Skill or MCP Server must be of a Plugin installed
+or built in, and a name that is both is refused as ambiguous.
+
+An MCP Server runs with PATH, HOME and nothing else of the serve's environment but each --secret, a Secret
+its server asks for, set under its own name. Granting a server again sets its Secrets to those given.`,
 		Args: cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, true) },
+		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, true, secrets) },
 	}
+	grantCmd.Flags().StringArrayVar(&secrets, "secret", nil, "a Secret the MCP Server's process gets, by NAME; repeatable")
 	revokeCmd := &cobra.Command{
-		Use:   "revoke <handle> <tool | plugin/skill>",
-		Short: "Revoke a built-in Tool or a Skill from an Agent Profile, and print what it is granted of that kind",
-		Long: `Take a Tool out of an Agent Profile's tools, or a <plugin>/<skill> out of its skills. Revoking say leaves
-an agent that cannot post to the talk; revoking every Tool leaves an empty list, an agent that can only
-end its turn. A Skill it grants can be revoked though its Plugin is no longer installed.`,
+		Use:   "revoke <handle> <tool | plugin/skill | plugin/server>",
+		Short: "Revoke a built-in Tool, a Skill or an MCP Server from an Agent Profile, and print what it is granted of that kind",
+		Long: `Take a Tool out of an Agent Profile's tools, a <plugin>/<skill> out of its skills, or a <plugin>/<server>
+out of its mcp. Revoking say leaves an agent that cannot post to the talk; revoking every Tool leaves an
+empty list, an agent that can only end its turn. A Skill or MCP Server it grants can be revoked though its
+Plugin is no longer installed.`,
 		Args: cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, false) },
+		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, false, nil) },
 	}
 
 	root.AddCommand(addCmd, listCmd, showCmd, editCmd, deleteCmd, includeCmd, excludeCmd, grantCmd, revokeCmd)
@@ -277,16 +286,20 @@ end its turn. A Skill it grants can be revoked though its Plugin is no longer in
 
 // runAgentGrant grants the item args[1] to the Agent Profile args[0], or
 // revokes it, and prints what it is granted of that kind: a Tool, or a
-// Skill when it is <plugin>/<skill>. Granting what it has or revoking what
-// it lacks changes nothing.
-func runAgentGrant(g *globals, args []string, grant bool) error {
+// Skill or MCP Server when it is <plugin>/<name>, which secrets, its
+// Secrets, are only for. Granting what it has or revoking what it lacks
+// changes nothing.
+func runAgentGrant(g *globals, args []string, grant bool, secrets []string) error {
 	handle, err := handleArg(args)
 	if err != nil {
 		return err
 	}
 	item := args[1]
 	if strings.Contains(item, "/") {
-		return runSkillGrant(g, handle, item, grant)
+		return runPluginGrant(g, handle, item, grant, secrets)
+	}
+	if secrets != nil {
+		return exitUsagef("--secret is only for an MCP Server, not the Tool %q", item)
 	}
 	if err := config.ValidateTool(item); err != nil {
 		return exitUsagef("%w", err)
@@ -309,22 +322,43 @@ func runAgentGrant(g *globals, args []string, grant bool) error {
 	return printList(g, p.Granted())
 }
 
-// runSkillGrant grants the Skill ref, <plugin>/<skill>, to handle's
-// profile, or revokes it, and prints the Skills it is granted. A grant
-// must name a Skill installed or built in; a revoke of one the profile
-// grants needs no Plugin, so a Skill whose Plugin is gone can be revoked.
-func runSkillGrant(g *globals, handle, ref string, grant bool) error {
+// runPluginGrant grants ref, a Skill or MCP Server as <plugin>/<name>, to
+// handle's profile, or revokes it, and prints what it is granted of that
+// kind. A grant must name one installed or built in; a revoke of one the
+// profile grants needs no Plugin, so one whose Plugin is gone can be
+// revoked.
+func runPluginGrant(g *globals, handle, ref string, grant bool, secrets []string) error {
 	p, err := readProfile(g, handle)
 	if err != nil {
 		return err
 	}
-	has := contains(p.Skills, ref)
-	if grant || !has {
-		if err := checkSkillRef(g, ref); err != nil {
+	_, hasMCP := p.MCP[ref]
+	hasSkill := contains(p.Skills, ref)
+	var kind grantKind
+	var srv plugin.Server
+	switch {
+	case !grant && hasSkill:
+		kind = kindSkill
+	case !grant && hasMCP:
+		kind = kindServer
+	default:
+		if kind, srv, err = pluginGrantKind(g, ref); err != nil {
 			return err
 		}
 	}
-	if grant != has {
+	if kind == kindSkill {
+		if secrets != nil {
+			return exitUsagef("--secret is only for an MCP Server, and %q is a Skill", ref)
+		}
+		return runSkillGrant(g, handle, p, ref, grant)
+	}
+	return runServerGrant(g, handle, p, ref, srv, grant, secrets)
+}
+
+// runSkillGrant grants the Skill ref to handle's profile p, or revokes it,
+// and prints the Skills it is granted.
+func runSkillGrant(g *globals, handle string, p config.Profile, ref string, grant bool) error {
+	if grant != contains(p.Skills, ref) {
 		if grant {
 			p.Skills = append(slices.Clone(p.Skills), ref)
 		} else {
@@ -340,31 +374,121 @@ func runSkillGrant(g *globals, handle, ref string, grant bool) error {
 	return printList(g, p.Skills)
 }
 
-// checkSkillRef refuses ref unless it names a Skill of a Plugin this Node
-// has, and nothing else of it: a name that is also one of its MCP Servers
-// is ambiguous.
-func checkSkillRef(g *globals, ref string) error {
-	pname, name, err := plugin.ParseSkillRef(ref)
+// runServerGrant grants the MCP Server ref, srv, to handle's profile p
+// with secrets, each a Secret srv asks for, or revokes it, and prints the
+// MCP Servers it is granted.
+func runServerGrant(g *globals, handle string, p config.Profile, ref string, srv plugin.Server, grant bool, secrets []string) error {
+	for i, name := range secrets {
+		if err := secret.ValidateName(name); err != nil {
+			return exitUsagef("--secret: %w", err)
+		}
+		if slices.Contains(secrets[:i], name) {
+			return exitUsagef("--secret %s is given twice", name)
+		}
+	}
+	if grant {
+		if err := srv.CheckSecrets(secrets); err != nil {
+			return exitUsagef("MCP Server %s: %w", ref, err)
+		}
+	}
+	old, has := p.MCP[ref]
+	want := config.MCPGrant{Secrets: secrets}
+	if grant != has || (grant && !slices.Equal(old.Secrets, want.Secrets)) {
+		p.MCP = maps.Clone(p.MCP)
+		if grant {
+			if p.MCP == nil {
+				p.MCP = map[string]config.MCPGrant{}
+			}
+			p.MCP[ref] = want
+		} else {
+			delete(p.MCP, ref)
+			if len(p.MCP) == 0 {
+				p.MCP = nil
+			}
+		}
+		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
+			return err
+		}
+	}
+	return printMCP(g, p.MCP)
+}
+
+// grantKind is what a <plugin>/<name> grant names.
+type grantKind int
+
+const (
+	kindSkill grantKind = iota
+	kindServer
+)
+
+// pluginGrantKind is what ref names in a Plugin this Node has, a Skill or
+// an MCP Server, and that server; a name that is both is ambiguous.
+func pluginGrantKind(g *globals, ref string) (grantKind, plugin.Server, error) {
+	pname, name, err := plugin.ParseRef(ref)
 	if err != nil {
-		return exitUsagef("%w", err)
+		return 0, plugin.Server{}, exitUsagef("%w", err)
 	}
 	p, err := plugin.Find(g.paths().PluginsDir(), pname)
 	if errors.Is(err, plugin.ErrNotFound) {
-		return exitUsagef("no Plugin %q is installed or built in; see `defios plugin list`", pname)
+		return 0, plugin.Server{}, exitUsagef("no Plugin %q is installed or built in; see `defios plugin list`", pname)
 	} else if err != nil {
-		return exitOperational(err)
+		return 0, plugin.Server{}, exitOperational(err)
 	}
 	_, skill := p.Skill(name)
-	_, server := p.Servers[name]
+	srv, server := p.Servers[name]
 	switch {
 	case skill && server:
-		return exitUsagef("%q is both a Skill and an MCP Server of Plugin %s, so which to grant is ambiguous", ref, pname)
+		return 0, plugin.Server{}, exitUsagef("%q is both a Skill and an MCP Server of Plugin %s, so which to grant is ambiguous", ref, pname)
 	case server:
-		return exitUsagef("%q is an MCP Server of Plugin %s; granting MCP Servers is not supported yet", ref, pname)
+		return kindServer, srv, nil
 	case !skill:
-		return exitUsagef("%q: Plugin %s has no Skill %q", ref, pname, name)
+		return 0, plugin.Server{}, exitUsagef("%q: Plugin %s has no Skill or MCP Server %q", ref, pname, name)
+	}
+	return kindSkill, plugin.Server{}, nil
+}
+
+// printMCP prints the MCP Server grants mcp, one a line as
+// "<plugin>/<server>" with its Secrets in parentheses, or as a JSON object
+// as the profile holds them.
+func printMCP(g *globals, mcp map[string]config.MCPGrant) error {
+	if g.json {
+		return g.emitJSON(mcpView(mcp))
+	}
+	for _, line := range mcpLines(mcp, func(s string) string { return s }) {
+		fmt.Fprintln(g.app.Stdout, line)
 	}
 	return nil
+}
+
+// mcpLines are the MCP Server grants mcp, sorted, each "<plugin>/<server>"
+// with its Secrets in parentheses, styled by paren.
+func mcpLines(mcp map[string]config.MCPGrant, paren func(string) string) []string {
+	var out []string
+	for _, ref := range slices.Sorted(maps.Keys(mcp)) {
+		if s := mcp[ref].Secrets; len(s) > 0 {
+			ref += " " + paren("("+strings.Join(s, ", ")+")")
+		}
+		out = append(out, ref)
+	}
+	return out
+}
+
+// mcpGrantView is one MCP Server grant as JSON.
+type mcpGrantView struct {
+	Secrets []string `json:"secrets"`
+}
+
+// mcpView is the MCP Server grants mcp as JSON, never null.
+func mcpView(mcp map[string]config.MCPGrant) map[string]mcpGrantView {
+	out := map[string]mcpGrantView{}
+	for ref, gr := range mcp {
+		s := gr.Secrets
+		if s == nil {
+			s = []string{}
+		}
+		out[ref] = mcpGrantView{Secrets: s}
+	}
+	return out
 }
 
 // printList prints list one a line, or as a JSON array.
@@ -381,9 +505,9 @@ func printList(g *globals, list []string) error {
 	return nil
 }
 
-// skillGrants is every grant on this Node of a Skill of Plugin name, sorted
-// by Handle, as "<handle> (<plugin>/<skill>, ...)".
-func skillGrants(g *globals, name string) ([]string, error) {
+// pluginGrants is every grant on this Node of a Skill or MCP Server of
+// Plugin name, sorted by Handle, as "<handle> (<plugin>/<name>, ...)".
+func pluginGrants(g *globals, name string) ([]string, error) {
 	handles, err := profileHandles(g)
 	if err != nil {
 		return nil, err
@@ -395,7 +519,7 @@ func skillGrants(g *globals, name string) ([]string, error) {
 			return nil, err
 		}
 		var refs []string
-		for _, ref := range p.Skills {
+		for _, ref := range append(slices.Clone(p.Skills), slices.Sorted(maps.Keys(p.MCP))...) {
 			if pname, _, _ := strings.Cut(ref, "/"); pname == name {
 				refs = append(refs, ref)
 			}
@@ -620,7 +744,11 @@ func runAgentShow(g *globals, handle string) error {
 	if len(v.Skills) > 0 {
 		skills = strings.Join(v.Skills, ", ")
 	}
-	fmt.Fprintf(g.app.Stdout, "tools %s\nskills %s\nprofile_dir %s\n", tools, skills, v.Dir)
+	mcp := g.out().caution("none")
+	if lines := mcpLines(p.MCP, g.out().dim); len(lines) > 0 {
+		mcp = strings.Join(lines, ", ")
+	}
+	fmt.Fprintf(g.app.Stdout, "tools %s\nskills %s\nmcp %s\nprofile_dir %s\n", tools, skills, mcp, v.Dir)
 	if v.Body != nil {
 		body, err := json.Marshal(v.Body)
 		if err != nil {
@@ -759,14 +887,15 @@ func wholeNumbers(v any) any {
 
 // agentView is one Agent Profile, human or JSON.
 type agentView struct {
-	Handle   string         `json:"handle"`
-	Provider string         `json:"provider"`
-	Model    string         `json:"model,omitempty"`
-	MaxTurns int            `json:"max_turns,omitempty"`
-	Tools    []string       `json:"tools"`  // the Tools it is granted
-	Skills   []string       `json:"skills"` // the Skills it is granted, <plugin>/<skill>
-	Dir      string         `json:"profile_dir"`
-	Body     map[string]any `json:"body,omitempty"`
+	Handle   string                  `json:"handle"`
+	Provider string                  `json:"provider"`
+	Model    string                  `json:"model,omitempty"`
+	MaxTurns int                     `json:"max_turns,omitempty"`
+	Tools    []string                `json:"tools"`  // the Tools it is granted
+	Skills   []string                `json:"skills"` // the Skills it is granted, <plugin>/<skill>
+	MCP      map[string]mcpGrantView `json:"mcp"`    // the MCP Servers it is granted, by <plugin>/<server>
+	Dir      string                  `json:"profile_dir"`
+	Body     map[string]any          `json:"body,omitempty"`
 }
 
 func agentViewOf(g *globals, handle string, p config.Profile) agentView {
@@ -776,5 +905,5 @@ func agentViewOf(g *globals, handle string, p config.Profile) agentView {
 		skills = []string{}
 	}
 	return agentView{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: p.Granted(), Skills: skills,
-		Dir: g.paths().AgentProfileDir(handle), Body: p.Body}
+		MCP: mcpView(p.MCP), Dir: g.paths().AgentProfileDir(handle), Body: p.Body}
 }

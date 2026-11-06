@@ -14,20 +14,38 @@ import (
 // skillFile is a Skill's instructions, in its directory.
 const skillFile = "SKILL.md"
 
+// ParseRef splits a grant of a Skill or MCP Server, <plugin>/<name>,
+// refusing one that is not two valid names.
+func ParseRef(ref string) (plugin, name string, err error) {
+	return parseRef(ref, "name")
+}
+
 // ParseSkillRef splits a Skill's grant, <plugin>/<skill>, refusing one that
 // is not two valid names.
 func ParseSkillRef(ref string) (plugin, skill string, err error) {
-	plugin, skill, ok := strings.Cut(ref, "/")
+	return parseRef(ref, "skill")
+}
+
+// ParseServerRef splits an MCP Server's grant, <plugin>/<server>, refusing
+// one that is not two valid names.
+func ParseServerRef(ref string) (plugin, server string, err error) {
+	return parseRef(ref, "server")
+}
+
+// parseRef splits ref, <plugin>/<kind>, refusing one that is not two valid
+// names.
+func parseRef(ref, kind string) (plugin, name string, err error) {
+	plugin, name, ok := strings.Cut(ref, "/")
 	if !ok {
-		return "", "", fmt.Errorf("%q is not <plugin>/<skill>", ref)
+		return "", "", fmt.Errorf("%q is not <plugin>/<%s>", ref, kind)
 	}
 	if err := ValidateName(plugin); err != nil {
 		return "", "", fmt.Errorf("%q: plugin: %w", ref, err)
 	}
-	if err := ValidateName(skill); err != nil {
-		return "", "", fmt.Errorf("%q: skill: %w", ref, err)
+	if err := ValidateName(name); err != nil {
+		return "", "", fmt.Errorf("%q: %s: %w", ref, kind, err)
 	}
-	return plugin, skill, nil
+	return plugin, name, nil
 }
 
 // Skill is p's Skill name.

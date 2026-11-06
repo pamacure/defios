@@ -56,6 +56,21 @@ func (s Server) CommandLine() string {
 	return strings.Join(append([]string{s.Command}, s.Args...), " ")
 }
 
+// CheckSecrets refuses a grant of the Secrets names to s unless s asks for
+// each.
+func (s Server) CheckSecrets(names []string) error {
+	for _, name := range names {
+		if !slices.Contains(s.Env, name) {
+			asked := "none"
+			if len(s.Env) > 0 {
+				asked = "$" + strings.Join(s.Env, ", $")
+			}
+			return fmt.Errorf("it does not ask for $%s; it asks for %s", name, asked)
+		}
+	}
+	return nil
+}
+
 // ServerNames are its MCP Servers' names, sorted.
 func (p Plugin) ServerNames() []string { return slices.Sorted(maps.Keys(p.Servers)) }
 
