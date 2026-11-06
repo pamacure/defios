@@ -19,10 +19,10 @@ headscale preauthkeys create --user <id> --reusable --expiration 24h -o json   #
 
 ## Building
 
-Build a static binary on each machine (or build once and copy it over) and put it on `PATH`:
+Build a static binary on each machine (or build once and copy it over) into `~/.local/bin`, which should be on `PATH`:
 
 ```bash
-CGO_ENABLED=0 go build -o defios ./cmd/defios
+CGO_ENABLED=0 go build -o ~/.local/bin/defios ./cmd/defios
 ```
 
 ## Usage
