@@ -17,8 +17,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
-	"defios.com/internal/plugin"
-	"defios.com/internal/secret"
 )
 
 // agentFlags are the fields add and edit take.
@@ -285,166 +283,41 @@ Plugin is no longer installed.`,
 }
 
 // runAgentGrant grants the item args[1] to the Agent Profile args[0], or
-// revokes it, and prints what it is granted of that kind: a Tool, or a
-// Skill or MCP Server when it is <plugin>/<name>, which secrets, its
-// Secrets, are only for. Granting what it has or revoking what it lacks
-// changes nothing.
+// revokes it, with secrets for an MCP Server, and prints what it is granted
+// of that kind (config.Profile.Grant and Revoke).
 func runAgentGrant(g *globals, args []string, grant bool, secrets []string) error {
 	handle, err := handleArg(args)
 	if err != nil {
 		return err
 	}
-	item := args[1]
-	if strings.Contains(item, "/") {
-		return runPluginGrant(g, handle, item, grant, secrets)
-	}
-	if secrets != nil {
-		return exitUsagef("--secret is only for an MCP Server, not the Tool %q", item)
-	}
-	if err := config.ValidateTool(item); err != nil {
-		return exitUsagef("%w", err)
-	}
 	p, err := readProfile(g, handle)
 	if err != nil {
 		return err
 	}
-	tools := p.Granted()
-	if grant != contains(tools, item) {
-		if grant {
-			p.Tools = append(slices.Clone(tools), item)
-		} else {
-			p.Tools = slices.DeleteFunc(slices.Clone(tools), func(t string) bool { return t == item })
-		}
+	var kind config.GrantKind
+	var changed bool
+	if grant {
+		p, kind, changed, err = p.Grant(g.paths().PluginsDir(), args[1], secrets)
+	} else {
+		p, kind, changed, err = p.Revoke(g.paths().PluginsDir(), args[1])
+	}
+	if errors.Is(err, config.ErrGrantRefused) {
+		return exitUsagef("%w", err)
+	} else if err != nil {
+		return exitOperational(err)
+	}
+	if changed {
 		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
 			return err
 		}
+	}
+	switch kind {
+	case config.GrantSkill:
+		return printList(g, p.Skills)
+	case config.GrantMCP:
+		return printMCP(g, p.MCP)
 	}
 	return printList(g, p.Granted())
-}
-
-// runPluginGrant grants ref, a Skill or MCP Server as <plugin>/<name>, to
-// handle's profile, or revokes it, and prints what it is granted of that
-// kind. A grant must name one installed or built in; a revoke of one the
-// profile grants needs no Plugin, so one whose Plugin is gone can be
-// revoked.
-func runPluginGrant(g *globals, handle, ref string, grant bool, secrets []string) error {
-	p, err := readProfile(g, handle)
-	if err != nil {
-		return err
-	}
-	_, hasMCP := p.MCP[ref]
-	hasSkill := contains(p.Skills, ref)
-	var kind grantKind
-	var srv plugin.Server
-	switch {
-	case !grant && hasSkill:
-		kind = kindSkill
-	case !grant && hasMCP:
-		kind = kindServer
-	default:
-		if kind, srv, err = pluginGrantKind(g, ref); err != nil {
-			return err
-		}
-	}
-	if kind == kindSkill {
-		if secrets != nil {
-			return exitUsagef("--secret is only for an MCP Server, and %q is a Skill", ref)
-		}
-		return runSkillGrant(g, handle, p, ref, grant)
-	}
-	return runServerGrant(g, handle, p, ref, srv, grant, secrets)
-}
-
-// runSkillGrant grants the Skill ref to handle's profile p, or revokes it,
-// and prints the Skills it is granted.
-func runSkillGrant(g *globals, handle string, p config.Profile, ref string, grant bool) error {
-	if grant != contains(p.Skills, ref) {
-		if grant {
-			p.Skills = append(slices.Clone(p.Skills), ref)
-		} else {
-			p.Skills = slices.DeleteFunc(slices.Clone(p.Skills), func(s string) bool { return s == ref })
-			if len(p.Skills) == 0 {
-				p.Skills = nil
-			}
-		}
-		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
-			return err
-		}
-	}
-	return printList(g, p.Skills)
-}
-
-// runServerGrant grants the MCP Server ref, srv, to handle's profile p
-// with secrets, each a Secret srv asks for, or revokes it, and prints the
-// MCP Servers it is granted.
-func runServerGrant(g *globals, handle string, p config.Profile, ref string, srv plugin.Server, grant bool, secrets []string) error {
-	for i, name := range secrets {
-		if err := secret.ValidateName(name); err != nil {
-			return exitUsagef("--secret: %w", err)
-		}
-		if slices.Contains(secrets[:i], name) {
-			return exitUsagef("--secret %s is given twice", name)
-		}
-	}
-	if grant {
-		if err := srv.CheckSecrets(secrets); err != nil {
-			return exitUsagef("MCP Server %s: %w", ref, err)
-		}
-	}
-	old, has := p.MCP[ref]
-	want := config.MCPGrant{Secrets: secrets}
-	if grant != has || (grant && !slices.Equal(old.Secrets, want.Secrets)) {
-		p.MCP = maps.Clone(p.MCP)
-		if grant {
-			if p.MCP == nil {
-				p.MCP = map[string]config.MCPGrant{}
-			}
-			p.MCP[ref] = want
-		} else {
-			delete(p.MCP, ref)
-			if len(p.MCP) == 0 {
-				p.MCP = nil
-			}
-		}
-		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
-			return err
-		}
-	}
-	return printMCP(g, p.MCP)
-}
-
-// grantKind is what a <plugin>/<name> grant names.
-type grantKind int
-
-const (
-	kindSkill grantKind = iota
-	kindServer
-)
-
-// pluginGrantKind is what ref names in a Plugin this Node has, a Skill or
-// an MCP Server, and that server; a name that is both is ambiguous.
-func pluginGrantKind(g *globals, ref string) (grantKind, plugin.Server, error) {
-	pname, name, err := plugin.ParseRef(ref)
-	if err != nil {
-		return 0, plugin.Server{}, exitUsagef("%w", err)
-	}
-	p, err := plugin.Find(g.paths().PluginsDir(), pname)
-	if errors.Is(err, plugin.ErrNotFound) {
-		return 0, plugin.Server{}, exitUsagef("no Plugin %q is installed or built in; see `defios plugin list`", pname)
-	} else if err != nil {
-		return 0, plugin.Server{}, exitOperational(err)
-	}
-	_, skill := p.Skill(name)
-	srv, server := p.Servers[name]
-	switch {
-	case skill && server:
-		return 0, plugin.Server{}, exitUsagef("%q is both a Skill and an MCP Server of Plugin %s, so which to grant is ambiguous", ref, pname)
-	case server:
-		return kindServer, srv, nil
-	case !skill:
-		return 0, plugin.Server{}, exitUsagef("%q: Plugin %s has no Skill or MCP Server %q", ref, pname, name)
-	}
-	return kindSkill, plugin.Server{}, nil
 }
 
 // printMCP prints the MCP Server grants mcp, one a line as
@@ -518,13 +391,7 @@ func pluginGrants(g *globals, name string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		var refs []string
-		for _, ref := range append(slices.Clone(p.Skills), slices.Sorted(maps.Keys(p.MCP))...) {
-			if pname, _, _ := strings.Cut(ref, "/"); pname == name {
-				refs = append(refs, ref)
-			}
-		}
-		if len(refs) > 0 {
+		if refs := p.PluginGrants(name); len(refs) > 0 {
 			out = append(out, fmt.Sprintf("%s (%s)", h, strings.Join(refs, ", ")))
 		}
 	}

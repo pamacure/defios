@@ -67,8 +67,8 @@ func TestAgentGrantRevokeEditTheMCPServers(t *testing.T) {
 	}{
 		{[]string{"grant", "auditor", "audit/scanner", "--secret", "OTHER_KEY"}, "does not ask for $OTHER_KEY"},
 		{[]string{"grant", "auditor", "audit/scanner", "--secret", "lower"}, "lower"},
-		{[]string{"grant", "auditor", "audit/review", "--secret", "ETHERSCAN_KEY"}, "--secret"},
-		{[]string{"grant", "auditor", "say", "--secret", "ETHERSCAN_KEY"}, "--secret"},
+		{[]string{"grant", "auditor", "audit/review", "--secret", "ETHERSCAN_KEY"}, "only for an MCP Server"},
+		{[]string{"grant", "auditor", "say", "--secret", "ETHERSCAN_KEY"}, "only for an MCP Server"},
 		{[]string{"revoke", "auditor", "audit/scanner", "--secret", "ETHERSCAN_KEY"}, "--secret"},
 		{[]string{"grant", "auditor", "audit/nope"}, "audit/nope"},
 	} {
