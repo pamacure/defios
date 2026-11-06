@@ -29,6 +29,29 @@ func HTTPURLs(urls []string) []string {
 	return out
 }
 
+// ErrResponse is a JSON-RPC error response: the node answered and refused,
+// as opposed to not being reached.
+var ErrResponse = errors.New("json-rpc error response")
+
+// Failover runs try on each http(s) endpoint among urls in order until one
+// succeeds. Each caller's try checks that the endpoint serves its chain
+// before using it (ADR 0023). The error joins every endpoint's failure, each named by its
+// redacted URL; pkg prefixes the error when urls holds no http(s) endpoint.
+func Failover(pkg string, urls []string, try func(endpoint string) error) error {
+	var errs []error
+	for _, u := range HTTPURLs(urls) {
+		err := try(u)
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", Redact(u), err))
+	}
+	if len(errs) == 0 {
+		return fmt.Errorf("%s: the network has no http(s) rpc url", pkg)
+	}
+	return errors.Join(errs...)
+}
+
 // Call is one JSON-RPC request; a null result leaves out untouched.
 func Call(ctx context.Context, endpoint, method string, params []any, out any) error {
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
@@ -59,10 +82,15 @@ func Call(ctx context.Context, endpoint, method string, params []any, out any) e
 		return fmt.Errorf("%s: http %d, not a JSON-RPC response", method, resp.StatusCode)
 	}
 	if env.Error != nil {
-		return fmt.Errorf("%s: %s", method, env.Error.Message)
+		return &responseError{method: method, msg: env.Error.Message}
 	}
 	return json.Unmarshal(env.Result, out)
 }
+
+type responseError struct{ method, msg string }
+
+func (e *responseError) Error() string        { return e.method + ": " + e.msg }
+func (e *responseError) Is(target error) bool { return target == ErrResponse }
 
 // Redact drops the path and query of an endpoint, where providers put API keys.
 func Redact(endpoint string) string {

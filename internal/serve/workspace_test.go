@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +26,12 @@ func mintKey(t *testing.T, a, b *node, gid group.ID) string {
 // mintKeyOf is mintKey of the ECDSA Key whose public key is 33 bytes of fill.
 func mintKeyOf(t *testing.T, a, b *node, gid group.ID, fill byte) string {
 	t.Helper()
-	pk := bytes.Repeat([]byte{fill}, 33)
+	return mintPublicKey(t, a, b, gid, bytes.Repeat([]byte{fill}, 33))
+}
+
+// mintPublicKey is mintKey of the ECDSA Key whose public key is pk, 33 bytes.
+func mintPublicKey(t *testing.T, a, b *node, gid group.ID, pk []byte) string {
+	t.Helper()
 	var sid [32]byte
 	copy(sid[:], pk)
 	sign := func(n *node, msg proto.Message, typ uint32) cosl.Signed {
@@ -44,7 +48,7 @@ func mintKeyOf(t *testing.T, a, b *node, gid group.ID, fill byte) string {
 	complete := &coslv1.SessionComplete{SessionId: sid[:], Curve: "ecdsa", PublicKey: pk}
 	commitEnvelope(t, a, b, sign(a, complete, cosl.TypeSessionComplete))
 	commitEnvelope(t, a, b, sign(b, complete, cosl.TypeSessionComplete))
-	return "ecdsa-" + strings.Repeat(hex.EncodeToString([]byte{fill}), 6)
+	return "ecdsa-" + hex.EncodeToString(pk[:6])
 }
 
 // waitWorkspace waits for n's Workspace called name, empty. The deadline is

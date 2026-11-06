@@ -86,6 +86,7 @@ const (
 	ToolSignPropose = "sign_propose"
 	ToolSignAccept  = "sign_accept"
 	ToolSignRefuse  = "sign_refuse"
+	ToolChainFill   = "chain_fill"
 )
 
 // ToolSkillLoad reads a granted Skill (ADR 0030). It is offered whenever a
@@ -93,7 +94,7 @@ const (
 const ToolSkillLoad = "skill_load"
 
 // Tools is every built-in Tool, in the order a run offers them.
-var Tools = []string{ToolSay, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse}
+var Tools = []string{ToolSay, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill}
 
 // Granted is the Tools p grants: its tools, or unset, say alone.
 func (p Profile) Granted() []string {

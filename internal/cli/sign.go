@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/chainfill"
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
@@ -282,7 +284,66 @@ already has a transaction is not an error, the repeat shows as one more receipt,
 		},
 	}
 
-	root.AddCommand(propose, list, inspect, accept, refuse, decline, broadcast)
+	var fillKey, fillFile string
+	fill := &cobra.Command{
+		Use:   "fill --key <key> --transactions <file>",
+		Short: "Complete transactions from this Node's Networks, for sign propose (requires serve)",
+		Long: `--transactions is read as sign propose reads it (a file, or - for stdin). Each field a transaction's
+intent leaves out is filled from this Node's Network for its alias; a field present is never changed,
+whatever its value (nonce 0 is kept). Nothing is proposed or written.
+
+  ethereum  chainId, nonce (pending; one chain's transactions get consecutive nonces in order, after
+            any given), maxPriorityFeePerGas, maxFeePerGas (2 x base fee + tip), gasLimit (estimated
+            from the Key's address; a revert is an error). to, value and data are yours; to is required.
+  solana    feePayer (the Key's address), recentBlockhash (finalized; it expires in about 60-90 s, so
+            propose promptly), cluster and genesisHash. The instructions are yours.
+  bitcoin   refused: choosing inputs and a fee needs an indexer, which is a Plugin's job.
+
+Each endpoint is checked to serve the chain first, as broadcast does. The completed transactions go to
+stdout, ready for sign propose --transactions -; what was filled, and from where, goes to stderr.
+--json prints both as one object instead.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if fillKey == "" || fillFile == "" {
+				return exitUsagef("--key and --transactions are required")
+			}
+			txs, err := readTransactions(g, fillFile)
+			if err != nil {
+				return err
+			}
+			v, err := serve.Client{Socket: g.paths().Socket}.SignFill(cmd.Context(), fillKey, txs)
+			if err != nil {
+				return signError(err)
+			}
+			if g.json {
+				return g.emitJSON(v)
+			}
+			out, err := json.MarshalIndent(v.Transactions, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(g.app.Stdout, "%s\n", out)
+			for _, n := range v.Notes {
+				filled := "nothing"
+				if len(n.Filled) > 0 {
+					filled = strings.Join(n.Filled, ", ")
+				}
+				from := ""
+				if n.Endpoint != "" {
+					from = " from " + n.Endpoint
+				}
+				fmt.Fprintf(g.app.Stderr, "transaction %d (%s, %s): filled %s%s\n", n.Index, n.Network, n.Chain, filled, from)
+				if n.Warning != "" {
+					fmt.Fprintf(g.app.Stderr, "transaction %d: %s\n", n.Index, n.Warning)
+				}
+			}
+			return nil
+		},
+	}
+	fill.Flags().StringVar(&fillKey, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
+	fill.Flags().StringVar(&fillFile, "transactions", "", "JSON file of transactions, or - for stdin")
+
+	root.AddCommand(propose, fill, list, inspect, accept, refuse, decline, broadcast)
 	return root
 }
 
@@ -328,7 +389,7 @@ func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {
 // operational, as the other write verbs do.
 func signError(err error) error {
 	for _, target := range []error{
-		signreq.ErrInvalid, signreq.ErrCurveMismatch, session.ErrUnknownSession, session.ErrSignerSetFull, session.ErrAlreadyRefused, session.ErrAlreadyAccepted, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
+		signreq.ErrInvalid, signreq.ErrCurveMismatch, chainfill.ErrBitcoin, session.ErrUnknownSession, session.ErrSignerSetFull, session.ErrAlreadyRefused, session.ErrAlreadyAccepted, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
 		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid, network.ErrNoChain,
 	} {
 		if errors.Is(err, target) {

@@ -12,6 +12,7 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
+	"defios.com/internal/network"
 	"defios.com/internal/outbox"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -45,20 +46,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest, handle
 	if !running || !held {
 		return SendView{}, ErrNoReplica
 	}
-	keys, err := key.Read(store)
-	if err != nil {
-		return SendView{}, err
-	}
-	k, err := key.Resolve(keys, req.Key)
-	if err != nil {
-		return SendView{}, err
-	}
-	conv := key.ConversationID(k.Curve, k.PublicKey)
-	e, err := s.load(store, conv[:])
-	if err != nil {
-		return SendView{}, err
-	}
-	nets, err := e.Networks()
+	k, conv, nets, err := s.keyNetworks(store, req.Key)
 	if err != nil {
 		return SendView{}, err
 	}
@@ -88,6 +76,29 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest, handle
 		}
 	}
 	return v, nil
+}
+
+// keyNetworks is the Key query names, its Conversation ID, and this Node's
+// Networks as that Conversation's settings give them.
+func (s *server) keyNetworks(store *cosl.Store, query string) (key.Key, [32]byte, []network.Network, error) {
+	keys, err := key.Read(store)
+	if err != nil {
+		return key.Key{}, [32]byte{}, nil, err
+	}
+	k, err := key.Resolve(keys, query)
+	if err != nil {
+		return key.Key{}, [32]byte{}, nil, err
+	}
+	conv := key.ConversationID(k.Curve, k.PublicKey)
+	e, err := s.load(store, conv[:])
+	if err != nil {
+		return key.Key{}, [32]byte{}, nil, err
+	}
+	nets, err := e.Networks()
+	if err != nil {
+		return key.Key{}, [32]byte{}, nil, err
+	}
+	return k, conv, nets, nil
 }
 
 // signInfoFrom is the Session layer's view of a sign.request, read off the log.

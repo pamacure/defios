@@ -25,6 +25,14 @@ const (
 		"Give your own reason. Returns its msg_id, and its seq or queued."
 	signAcceptDescription = "Accept a Sign Request of this Conversation's Key, as your Node and under your Handle: it counts toward the Key's threshold, " +
 		"and your Node's stance is final. Returns queued if it waits in your Node's Outbox."
+	chainFillDescription = "Complete transactions of this Conversation's Key from your Node's Networks, before sign_propose. Read-only: it proposes nothing. " +
+		"Give the transactions as sign_propose takes them, each naming one of your Node's Networks by alias and exactly one intent in protobuf-JSON form, " +
+		"and leave out each field you want filled: only an absent field is filled, a present one is never changed (nonce 0 is kept). " +
+		"Ethereum: you give to (base64 20 bytes; contract creation is not supported), value (decimal wei) and data (base64) yourself; " +
+		"chainId, nonce (consecutive across one chain's transactions), maxPriorityFeePerGas, maxFeePerGas (2 × base fee + tip) and gasLimit (estimated; a revert is an error) are filled, the sender being the Key's address. " +
+		"Solana: you give the instructions; feePayer (the Key's address), recentBlockhash, cluster and genesisHash are filled. A filled blockhash expires in about 60–90 seconds, so propose promptly. " +
+		"Bitcoin is refused: its inputs and fee need an indexer. Returns the completed transactions, ready for sign_propose, " +
+		"and per transaction the fields filled and the endpoint read. Check them before you propose."
 	signRefuseDescription = "Refuse a Sign Request of this Conversation's Key, as your Node and under your Handle, giving your own reason: " +
 		"your Node's stance is final. Returns queued if it waits in your Node's Outbox."
 )
@@ -39,6 +47,11 @@ var (
 		`"ethereum":{"type":"object"},"bitcoin":{"type":"object"},"solana":{"type":"object"}},"required":["network"]}},` +
 		`"deadline_seconds":{"type":"integer","description":"Seconds the request stays open; unset is the default."}},` +
 		`"required":["reason","transactions"],"additionalProperties":false}`)
+	chainFillSchema = json.RawMessage(`{"type":"object","properties":{` +
+		`"transactions":{"type":"array","description":"The transactions, each leaving out the fields to fill.","items":{"type":"object","properties":{` +
+		`"network":{"type":"string","description":"One of your Node's Networks, by alias."},` +
+		`"ethereum":{"type":"object"},"bitcoin":{"type":"object"},"solana":{"type":"object"}},"required":["network"]}}},` +
+		`"required":["transactions"],"additionalProperties":false}`)
 	signRefuseSchema = json.RawMessage(`{"type":"object","properties":{"msg_id":{"type":"string","description":"The Sign Request's hex msg_id, or a unique prefix of it."},` +
 		`"reason":{"type":"string","description":"Why your Node refuses, in your own words."}},"required":["msg_id","reason"],"additionalProperties":false}`)
 )
@@ -79,6 +92,10 @@ func (s *server) agentTools(handle string, granted []string, conv []byte, did ac
 		case config.ToolSignRefuse:
 			if conv != nil {
 				out = append(out, agent.Tool{Name: name, Description: signRefuseDescription, Schema: signRefuseSchema, Call: s.signStanceTool(name, conv, handle, did)})
+			}
+		case config.ToolChainFill:
+			if conv != nil {
+				out = append(out, agent.Tool{Name: name, Description: chainFillDescription, Schema: chainFillSchema, Call: s.chainFillTool(conv)})
 			}
 		}
 	}
@@ -182,6 +199,24 @@ func (s *server) signStanceTool(tool string, conv []byte, handle string, did act
 			return "", toolError(err)
 		}
 		did(tool, msgID)
+		return toolJSON(v)
+	}
+}
+
+// chainFillTool is chain_fill in conv: transactions of its Key, completed
+// from this Node's Networks. It writes nothing, so nothing is recorded.
+func (s *server) chainFillTool(conv []byte) func(context.Context, json.RawMessage) (string, error) {
+	return func(ctx context.Context, input json.RawMessage) (string, error) {
+		var in struct {
+			Transactions []signreq.TxSpec `json:"transactions"`
+		}
+		if err := json.Unmarshal(input, &in); err != nil {
+			return "", errors.New(`its input must be {"transactions": [...]}`)
+		}
+		v, err := s.signFill(ctx, conversationKey(conv), in.Transactions)
+		if err != nil {
+			return "", toolError(err)
+		}
 		return toolJSON(v)
 	}
 }

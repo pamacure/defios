@@ -5,7 +5,6 @@ package btcrpc
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -19,21 +18,14 @@ import (
 // transaction (in its mempool, or mined) is success with known set:
 // identical bytes give an identical txid, so submitting twice is harmless.
 func Send(ctx context.Context, urls []string, network string, raw []byte, txid [32]byte) (known bool, err error) {
-	var errs []error
-	for _, u := range jsonrpc.HTTPURLs(urls) {
-		known, err := false, serves(ctx, u, network)
-		if err == nil {
-			known, err = send(ctx, u, raw, txid)
+	err = jsonrpc.Failover("btcrpc", urls, func(u string) error {
+		if err := serves(ctx, u, network); err != nil {
+			return err
 		}
-		if err == nil {
-			return known, nil
-		}
-		errs = append(errs, fmt.Errorf("%s: %w", jsonrpc.Redact(u), err))
-	}
-	if len(errs) == 0 {
-		return false, errors.New("btcrpc: the network has no http(s) rpc url to broadcast to")
-	}
-	return false, errors.Join(errs...)
+		known, err = send(ctx, u, raw, txid)
+		return err
+	})
+	return known, err
 }
 
 // chains are the names Bitcoin Core's getblockchaininfo gives each network.

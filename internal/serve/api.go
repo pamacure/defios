@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"defios.com/internal/chainfill"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
@@ -174,6 +175,7 @@ func (s *server) localHandler() http.Handler {
 	s.chainRoutes(mux)
 	s.signRoutes(mux)
 	s.broadcastRoutes(mux)
+	s.fillRoutes(mux)
 	s.sessionRoutes(mux)
 	s.snapshotRoutes(mux)
 	s.usageRoutes(mux)
@@ -230,6 +232,7 @@ var errorKinds = []struct {
 	{network.ErrNoChain, "no-chain", http.StatusUnprocessableEntity},
 	{signreq.ErrInvalid, "bad-sign-request", http.StatusBadRequest},
 	{signreq.ErrCurveMismatch, "curve-mismatch", http.StatusUnprocessableEntity},
+	{chainfill.ErrBitcoin, "bitcoin-unfillable", http.StatusUnprocessableEntity},
 	{signreq.ErrUnknown, "no-sign-request", http.StatusNotFound},
 	{signreq.ErrNotSigned, "not-signed", http.StatusConflict},
 	{signreq.ErrAmbiguous, "ambiguous-sign-request", http.StatusConflict},

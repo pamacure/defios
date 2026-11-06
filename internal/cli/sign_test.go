@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -23,6 +24,9 @@ var (
 		`"refusals":[{"node":"` + nodeB + `","handle":"auditor","seq":11,"reason":"unknown payee"}],"details":[],"broadcast_receipts":[]}`
 )
 
+const filled = `{"transactions":[{"network":"sol","solana":{"feePayer":"F","recentBlockhash":"H"}}],` +
+	`"notes":[{"index":0,"network":"sol","chain":"solana devnet","endpoint":"https://rpc.example","filled":["feePayer","recentBlockhash"],"warning":"recentBlockhash expires in about 60–90 seconds: propose promptly"}]}`
+
 // signServe is a fake serve for the sign verbs. A refusal answers with
 // refuseKind as its error, if set, or as queued.
 type signServe struct {
@@ -31,6 +35,7 @@ type signServe struct {
 
 	mu      sync.Mutex
 	refuses []string
+	fills   []string
 }
 
 func newSignServe(t *testing.T, dir string, ss *signServe) *signServe {
@@ -42,6 +47,18 @@ func newSignServe(t *testing.T, dir string, ss *signServe) *signServe {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/sign/list", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(signList)) })
 	mux.HandleFunc("POST /v1/sign/inspect", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(signDetail)) })
+	mux.HandleFunc("POST /v1/sign/fill", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		ss.mu.Lock()
+		ss.fills = append(ss.fills, string(b))
+		ss.mu.Unlock()
+		if strings.Contains(string(b), `"bitcoin"`) {
+			w.Header().Set("X-DeFiOS-Error", "bitcoin-unfillable")
+			http.Error(w, "transaction 0 (bitcoin mainnet): a bitcoin transaction cannot be filled", http.StatusUnprocessableEntity)
+			return
+		}
+		w.Write([]byte(filled))
+	})
 	mux.HandleFunc("POST /v1/sign/refuse", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		ss.mu.Lock()
@@ -132,5 +149,38 @@ func TestSignRefuseAndDeclineHelp(t *testing.T) {
 	r = run(t, nil, "", "sign", "decline", "--help")
 	if r.code != 0 || !strings.Contains(r.stdout, "sign refuse") {
 		t.Errorf("decline help:\n%s", r.stdout)
+	}
+}
+
+// sign fill sends the Key and the transactions read from stdin, prints the
+// completed transactions alone to stdout, as sign propose reads them, and
+// what was filled to stderr. Bitcoin, refused, is a usage error.
+func TestSignFill(t *testing.T) {
+	dir := t.TempDir()
+	ss := newSignServe(t, dir, &signServe{})
+	if r := run(t, nil, "", "--dir", dir, "sign", "fill", "--transactions", "-"); r.code != 1 || !strings.Contains(r.stderr, "--key") {
+		t.Fatalf("no key: exit %d, stderr %q", r.code, r.stderr)
+	}
+	r := run(t, nil, `[{"network":"sol","solana":{}}]`, "--dir", dir, "sign", "fill", "--key", "eddsa:ab", "--transactions", "-")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	var txs []map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &txs); err != nil || len(txs) != 1 || txs[0]["network"] != "sol" {
+		t.Fatalf("stdout %q is not the transactions: %v", r.stdout, err)
+	}
+	if !strings.Contains(r.stderr, "transaction 0 (sol, solana devnet): filled feePayer, recentBlockhash from https://rpc.example") || !strings.Contains(r.stderr, "propose promptly") {
+		t.Errorf("stderr %q", r.stderr)
+	}
+	if len(ss.fills) != 1 || !strings.Contains(ss.fills[0], `"key":"eddsa:ab"`) || !strings.Contains(ss.fills[0], `"network":"sol"`) {
+		t.Fatalf("fill bodies = %v", ss.fills)
+	}
+	r = run(t, nil, `[{"network":"sol","solana":{}}]`, "--dir", dir, "--json", "sign", "fill", "--key", "eddsa:ab", "--transactions", "-")
+	if r.code != 0 || !strings.Contains(r.stdout, `"notes"`) {
+		t.Errorf("--json: exit %d, stdout %q", r.code, r.stdout)
+	}
+	r = run(t, nil, `[{"network":"btc","bitcoin":{}}]`, "--dir", dir, "sign", "fill", "--key", "ecdsa:ab", "--transactions", "-")
+	if r.code != 1 || !strings.Contains(r.stderr, "cannot be filled") {
+		t.Errorf("bitcoin: exit %d, stderr %q", r.code, r.stderr)
 	}
 }

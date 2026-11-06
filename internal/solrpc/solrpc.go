@@ -1,12 +1,12 @@
-// Package solrpc submits a signed Solana transaction to a Network's JSON-RPC
-// endpoint.
+// Package solrpc reaches a Solana Network's JSON-RPC endpoints: it submits a
+// signed transaction, and reads what chain_fill needs, each through the same
+// failover and genesis-hash check.
 package solrpc
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"defios.com/internal/base58"
@@ -20,21 +20,35 @@ import (
 // transaction is success with known set: identical bytes give an identical
 // signature, so submitting twice is harmless.
 func Send(ctx context.Context, urls []string, genesis string, raw, sig []byte) (known bool, err error) {
-	var errs []error
-	for _, u := range jsonrpc.HTTPURLs(urls) {
-		known, err := false, serves(ctx, u, genesis)
-		if err == nil {
-			known, err = send(ctx, u, raw, sig)
+	err = Use(ctx, urls, genesis, func(e Endpoint) error {
+		known, err = send(ctx, e.URL, raw, sig)
+		return err
+	})
+	return known, err
+}
+
+// Endpoint is one endpoint checked to serve the cluster it was used for.
+type Endpoint struct{ URL string }
+
+// Call is one JSON-RPC request to e.
+func (e Endpoint) Call(ctx context.Context, method string, params []any, out any) error {
+	return jsonrpc.Call(ctx, e.URL, method, params, out)
+}
+
+// String is e's URL without the path and query, where API keys ride.
+func (e Endpoint) String() string { return jsonrpc.Redact(e.URL) }
+
+// Use runs fn on the first of urls that serves the cluster and on which fn
+// succeeds, in failover order. When genesis is set, an endpoint whose
+// getGenesisHash is another is skipped (ADR 0023). Only http(s) endpoints
+// are used.
+func Use(ctx context.Context, urls []string, genesis string, fn func(Endpoint) error) error {
+	return jsonrpc.Failover("solrpc", urls, func(u string) error {
+		if err := serves(ctx, u, genesis); err != nil {
+			return err
 		}
-		if err == nil {
-			return known, nil
-		}
-		errs = append(errs, fmt.Errorf("%s: %w", jsonrpc.Redact(u), err))
-	}
-	if len(errs) == 0 {
-		return false, errors.New("solrpc: the network has no http(s) rpc url to broadcast to")
-	}
-	return false, errors.Join(errs...)
+		return fn(Endpoint{URL: u})
+	})
 }
 
 // serves checks that endpoint's cluster has genesis hash genesis, when one
