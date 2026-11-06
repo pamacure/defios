@@ -5,7 +5,6 @@
 package plugin
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -39,6 +38,8 @@ type Plugin struct {
 	BuiltIn bool
 	// FS holds its files.
 	FS fs.FS
+	// Dir is where an installed Plugin's files are; empty for a built-in.
+	Dir string
 }
 
 // Server is an MCP Server a Plugin runs over stdio.
@@ -171,16 +172,9 @@ func loadSkills(fsys fs.FS) ([]Skill, error) {
 // parseSkill reads a SKILL.md's YAML frontmatter, between --- lines at its
 // top. Keys other than name and description are left alone.
 func parseSkill(raw []byte) (Skill, error) {
-	raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
-	rest, ok := bytes.CutPrefix(raw, []byte("---\n"))
-	if !ok {
-		return Skill{}, errors.New("no frontmatter: it must open with a --- line")
-	}
-	front, _, ok := bytes.Cut(rest, []byte("\n---\n"))
-	if !ok {
-		if front, ok = bytes.CutSuffix(rest, []byte("\n---")); !ok {
-			return Skill{}, errors.New("frontmatter is not closed by a --- line")
-		}
+	front, _, err := splitFrontmatter(raw)
+	if err != nil {
+		return Skill{}, err
 	}
 	var fm struct {
 		Name        string `yaml:"name"`

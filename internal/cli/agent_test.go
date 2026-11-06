@@ -263,7 +263,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
 	dir := p.AgentProfileDir("auditor")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "show", "auditor")
-	want := "handle auditor\nprovider claude\nmax_turns 4\ntools say\nprofile_dir " + dir + "\n" +
+	want := "handle auditor\nprovider claude\nmax_turns 4\ntools say\nskills none\nprofile_dir " + dir + "\n" +
 		`body {"model":"claude-opus-5-5","stream":true}` + "\nincluded_in default\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("show: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
@@ -273,7 +273,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
 		t.Fatalf("show --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
-	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"say"},
+	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"say"}, "skills": []any{},
 		"included_in": []any{"default/ecdsa-ab1111111111"}}
 	if !reflect.DeepEqual(got, wantJSON) {
 		t.Fatalf("show --json = %v\nwant %v", got, wantJSON)

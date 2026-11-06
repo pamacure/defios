@@ -23,6 +23,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/mention"
 	"defios.com/internal/network"
+	"defios.com/internal/plugin"
 	"defios.com/internal/provider"
 	"defios.com/internal/secret"
 )
@@ -57,6 +58,10 @@ type Profile struct {
 	// Tools is the whole list of built-in Tools it may call (ADR 0029): nil
 	// is unset, say alone; empty grants none.
 	Tools []string `toml:"tools,omitempty"`
+	// Skills are the Skills it may load, each <plugin>/<skill> (ADR 0030).
+	// That each is installed is checked at summon, so a profile naming a
+	// Plugin a restore could not fetch still reads.
+	Skills []string `toml:"skills,omitempty"`
 	// Body is the request's other fields, as TOML nests them: whatever the
 	// API shape takes. It merges over its Provider's body, which merges over
 	// what DeFiOS writes. ReadFile converts it to JSON values.
@@ -73,6 +78,10 @@ const (
 	ToolSignRefuse  = "sign_refuse"
 )
 
+// ToolSkillLoad reads a granted Skill (ADR 0030). It is offered whenever a
+// profile's skills is set, after its tools, and is never itself in tools.
+const ToolSkillLoad = "skill_load"
+
 // Tools is every built-in Tool, in the order a run offers them.
 var Tools = []string{ToolSay, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse}
 
@@ -86,6 +95,9 @@ func (p Profile) Granted() []string {
 
 // ValidateTool refuses a name that is no built-in Tool.
 func ValidateTool(name string) error {
+	if name == ToolSkillLoad {
+		return fmt.Errorf("%s is not granted as a Tool: it is offered whenever skills grants a Skill", name)
+	}
 	if !slices.Contains(Tools, name) {
 		return fmt.Errorf("no Tool %q: the Tools are %s", name, strings.Join(Tools, ", "))
 	}
@@ -270,6 +282,14 @@ func parseProfile(path string, data []byte) (Profile, error) {
 		}
 		if slices.Contains(p.Tools[:i], t) {
 			return fail("tools: %q is listed twice", t)
+		}
+	}
+	for i, ref := range p.Skills {
+		if _, _, err := plugin.ParseSkillRef(ref); err != nil {
+			return fail("skills: %w", err)
+		}
+		if slices.Contains(p.Skills[:i], ref) {
+			return fail("skills: %q is listed twice", ref)
 		}
 	}
 	if _, ok := p.Body[""]; ok {
@@ -474,6 +494,7 @@ type ResolvedProfile struct {
 	Provider string // a Provider alias
 	MaxTurns int
 	Tools    []string       // the Tools it grants, never nil
+	Skills   []string       // the Skills it grants, <plugin>/<skill>
 	Body     map[string]any // JSON values; nil when neither body is set
 }
 

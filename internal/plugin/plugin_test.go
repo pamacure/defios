@@ -129,3 +129,27 @@ func TestParseSource(t *testing.T) {
 		}
 	}
 }
+
+// A Skill of a Plugin read from an fs.FS, as a built-in is, gives its
+// SKILL.md without frontmatter and the files beside it; a path leaving its
+// directory and a Skill it lacks are refused.
+func TestSkillBodyAndFileFromAnFS(t *testing.T) {
+	p, err := plugin.Load(files(map[string]string{"secret.txt": "outside"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := p.SkillBody("review"); err != nil || body != "Read the contract first.\n" {
+		t.Fatalf("SkillBody = %q, %v", body, err)
+	}
+	if got, err := p.SkillFile("review", "notes.txt"); err != nil || got != "beside it" {
+		t.Fatalf("SkillFile = %q, %v", got, err)
+	}
+	for _, file := range []string{"../../secret.txt", "/secret.txt", ".", ""} {
+		if got, err := p.SkillFile("review", file); err == nil {
+			t.Errorf("SkillFile(%q) = %q, want an error", file, got)
+		}
+	}
+	if _, err := p.SkillBody("other"); err == nil {
+		t.Error("SkillBody of a Skill it lacks: no error")
+	}
+}

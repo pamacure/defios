@@ -274,6 +274,15 @@ func pluginRemoveCommand(g *globals) *cobra.Command {
 		Short: "Remove an installed Plugin and its lock entry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			// A built-in is refused by Remove itself, granted or not.
+			_, builtIn, _ := plugin.BuiltIn(args[0])
+			grants, err := skillGrants(g, args[0])
+			if err != nil {
+				return err
+			}
+			if len(grants) > 0 && !builtIn {
+				return exitUsagef("Plugin %s is granted by %s; revoke it there first with `defios agent revoke`", args[0], strings.Join(grants, ", "))
+			}
 			if err := plugin.NewStore(g.paths()).Remove(args[0]); err != nil {
 				return exitOperational(err)
 			}

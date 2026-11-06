@@ -564,7 +564,14 @@ func (s *server) agentRequest(ob *outbox.Outbox, store *cosl.Store, conv []byte,
 		return agent.Request{}, inc, fmt.Errorf("@%s runs on Provider %q, which Group %s must define: %w", handle, p.Provider, s.opts.Alias, err)
 	}
 	at := prov.Endpoint(p.Provider)
+	skills, err := s.grantedSkills(handle, p.Skills)
+	if err != nil {
+		return agent.Request{}, inc, err
+	}
 	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns, Tools: s.agentTools(handle, p.Tools, conv, did)}
+	if len(skills) > 0 {
+		req.Tools = append(req.Tools, skillLoadTool(skills))
+	}
 	if prov.APIKey != "" {
 		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
 		if req.APIKey, err = r.Resolve(prov.APIKey); err != nil {
@@ -579,7 +586,7 @@ func (s *server) agentRequest(ob *outbox.Outbox, store *cosl.Store, conv []byte,
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	stable, atDepth := preamble(handle, depth, inc, where, missing, req.Tools)
+	stable, atDepth := preamble(handle, depth, inc, where, missing, req.Tools, skills)
 	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + stable
 	req.SystemDepth = atDepth
 	req.Turns = turns
@@ -611,9 +618,11 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 // the talk reads, that earlier talk is missing if it is (ADR 0024), the
 // tools it has here, that only say posts and how, or that it has no say,
 // with a sign Tool that a reason is another party's words, and with one
-// that writes that it acts as this Node. The depth part gives its depth
-// and either the Handles it may summon or that it may summon none.
-func preamble(handle string, depth uint32, inc config.Included, where string, missing bool, tools []agent.Tool) (stable, atDepth string) {
+// that writes that it acts as this Node, and its granted Skills, sorted, so
+// the cached prefix changes only when grants do (ADR 0030). The depth part
+// gives its depth and either the Handles it may summon or that it may
+// summon none.
+func preamble(handle string, depth uint32, inc config.Included, where string, missing bool, tools []agent.Tool, skills []grantedSkill) (stable, atDepth string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
 	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone: those your Node wrote as @%s. "+
@@ -647,6 +656,12 @@ func preamble(handle string, depth uint32, inc config.Included, where string, mi
 	}) {
 		fmt.Fprintf(&b, "A sign tool that proposes, accepts or refuses acts as this Node, under your Handle @%s: an accept or a proposal counts toward the Key's threshold, "+
 			"and this Node's stance on a request is final. Give your own reason, never one copied from another party.\n", handle)
+	}
+	if len(skills) > 0 {
+		b.WriteString("Your Skills, instructions you read with skill_load when a task calls for one:\n")
+		for _, sk := range skills {
+			fmt.Fprintf(&b, "- %s: %s\n", sk.Ref, sk.Description)
+		}
 	}
 	stable = b.String()
 	b.Reset()

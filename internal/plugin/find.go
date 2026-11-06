@@ -98,5 +98,6 @@ func loadInstalled(dir, name string) (Plugin, error) {
 	if p.Name != name {
 		return Plugin{}, fmt.Errorf("plugin: %s: its plugin.toml names it %q", filepath.Join(dir, name), p.Name)
 	}
+	p.Dir = filepath.Join(dir, name)
 	return p, nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
+	"defios.com/internal/plugin"
 )
 
 // agentFlags are the fields add and edit take.
@@ -250,19 +251,22 @@ Group's, and exclude --key refuses it.`,
 	}
 
 	grantCmd := &cobra.Command{
-		Use:   "grant <handle> <tool>",
-		Short: "Grant an Agent Profile a built-in Tool, and print the Tools it is granted",
-		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029). An unset
-list is say alone, so granting into it writes say with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `;
-the sign Tools are offered only in a Key's Conversation, never in Group-level talk.`,
+		Use:   "grant <handle> <tool | plugin/skill>",
+		Short: "Grant an Agent Profile a built-in Tool or a Plugin's Skill, and print what it is granted of that kind",
+		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029), or a
+<plugin>/<skill> to its skills, the Skills it may read with skill_load (ADR 0030). An unset tools is say
+alone, so granting into it writes say with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `;
+the sign Tools are offered only in a Key's Conversation, never in Group-level talk. A Skill must be of a
+Plugin installed or built in, and a name that is also one of its MCP Servers is refused as ambiguous.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, true) },
 	}
 	revokeCmd := &cobra.Command{
-		Use:   "revoke <handle> <tool>",
-		Short: "Revoke a built-in Tool from an Agent Profile, and print the Tools it is granted",
-		Long: `Take a Tool out of an Agent Profile's tools. Revoking say leaves an agent that cannot post to the talk;
-revoking every Tool leaves an empty list, an agent that can only end its turn.`,
+		Use:   "revoke <handle> <tool | plugin/skill>",
+		Short: "Revoke a built-in Tool or a Skill from an Agent Profile, and print what it is granted of that kind",
+		Long: `Take a Tool out of an Agent Profile's tools, or a <plugin>/<skill> out of its skills. Revoking say leaves
+an agent that cannot post to the talk; revoking every Tool leaves an empty list, an agent that can only
+end its turn. A Skill it grants can be revoked though its Plugin is no longer installed.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, false) },
 	}
@@ -271,16 +275,20 @@ revoking every Tool leaves an empty list, an agent that can only end its turn.`,
 	return root
 }
 
-// runAgentGrant grants the Tool args[1] to the Agent Profile args[0], or
-// revokes it, and prints the Tools it is granted. Granting what it has or
-// revoking what it lacks changes nothing.
+// runAgentGrant grants the item args[1] to the Agent Profile args[0], or
+// revokes it, and prints what it is granted of that kind: a Tool, or a
+// Skill when it is <plugin>/<skill>. Granting what it has or revoking what
+// it lacks changes nothing.
 func runAgentGrant(g *globals, args []string, grant bool) error {
 	handle, err := handleArg(args)
 	if err != nil {
 		return err
 	}
-	tool := args[1]
-	if err := config.ValidateTool(tool); err != nil {
+	item := args[1]
+	if strings.Contains(item, "/") {
+		return runSkillGrant(g, handle, item, grant)
+	}
+	if err := config.ValidateTool(item); err != nil {
 		return exitUsagef("%w", err)
 	}
 	p, err := readProfile(g, handle)
@@ -288,23 +296,115 @@ func runAgentGrant(g *globals, args []string, grant bool) error {
 		return err
 	}
 	tools := p.Granted()
-	if grant != contains(tools, tool) {
+	if grant != contains(tools, item) {
 		if grant {
-			p.Tools = append(slices.Clone(tools), tool)
+			p.Tools = append(slices.Clone(tools), item)
 		} else {
-			p.Tools = slices.DeleteFunc(slices.Clone(tools), func(t string) bool { return t == tool })
+			p.Tools = slices.DeleteFunc(slices.Clone(tools), func(t string) bool { return t == item })
 		}
 		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
 			return err
 		}
 	}
-	if g.json {
-		return g.emitJSON(p.Granted())
+	return printList(g, p.Granted())
+}
+
+// runSkillGrant grants the Skill ref, <plugin>/<skill>, to handle's
+// profile, or revokes it, and prints the Skills it is granted. A grant
+// must name a Skill installed or built in; a revoke of one the profile
+// grants needs no Plugin, so a Skill whose Plugin is gone can be revoked.
+func runSkillGrant(g *globals, handle, ref string, grant bool) error {
+	p, err := readProfile(g, handle)
+	if err != nil {
+		return err
 	}
-	for _, t := range p.Granted() {
-		fmt.Fprintln(g.app.Stdout, t)
+	has := contains(p.Skills, ref)
+	if grant || !has {
+		if err := checkSkillRef(g, ref); err != nil {
+			return err
+		}
+	}
+	if grant != has {
+		if grant {
+			p.Skills = append(slices.Clone(p.Skills), ref)
+		} else {
+			p.Skills = slices.DeleteFunc(slices.Clone(p.Skills), func(s string) bool { return s == ref })
+			if len(p.Skills) == 0 {
+				p.Skills = nil
+			}
+		}
+		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
+			return err
+		}
+	}
+	return printList(g, p.Skills)
+}
+
+// checkSkillRef refuses ref unless it names a Skill of a Plugin this Node
+// has, and nothing else of it: a name that is also one of its MCP Servers
+// is ambiguous.
+func checkSkillRef(g *globals, ref string) error {
+	pname, name, err := plugin.ParseSkillRef(ref)
+	if err != nil {
+		return exitUsagef("%w", err)
+	}
+	p, err := plugin.Find(g.paths().PluginsDir(), pname)
+	if errors.Is(err, plugin.ErrNotFound) {
+		return exitUsagef("no Plugin %q is installed or built in; see `defios plugin list`", pname)
+	} else if err != nil {
+		return exitOperational(err)
+	}
+	_, skill := p.Skill(name)
+	_, server := p.Servers[name]
+	switch {
+	case skill && server:
+		return exitUsagef("%q is both a Skill and an MCP Server of Plugin %s, so which to grant is ambiguous", ref, pname)
+	case server:
+		return exitUsagef("%q is an MCP Server of Plugin %s; granting MCP Servers is not supported yet", ref, pname)
+	case !skill:
+		return exitUsagef("%q: Plugin %s has no Skill %q", ref, pname, name)
 	}
 	return nil
+}
+
+// printList prints list one a line, or as a JSON array.
+func printList(g *globals, list []string) error {
+	if list == nil {
+		list = []string{}
+	}
+	if g.json {
+		return g.emitJSON(list)
+	}
+	for _, x := range list {
+		fmt.Fprintln(g.app.Stdout, x)
+	}
+	return nil
+}
+
+// skillGrants is every grant on this Node of a Skill of Plugin name, sorted
+// by Handle, as "<handle> (<plugin>/<skill>, ...)".
+func skillGrants(g *globals, name string) ([]string, error) {
+	handles, err := profileHandles(g)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, h := range handles {
+		p, err := readProfile(g, h)
+		if err != nil {
+			return nil, err
+		}
+		var refs []string
+		for _, ref := range p.Skills {
+			if pname, _, _ := strings.Cut(ref, "/"); pname == name {
+				refs = append(refs, ref)
+			}
+		}
+		if len(refs) > 0 {
+			out = append(out, fmt.Sprintf("%s (%s)", h, strings.Join(refs, ", ")))
+		}
+	}
+	return out, nil
 }
 
 // runAgentInclusion includes handle in, or excludes it from, the Group's
@@ -516,7 +616,11 @@ func runAgentShow(g *globals, handle string) error {
 	if len(v.Tools) > 0 {
 		tools = strings.Join(v.Tools, ", ")
 	}
-	fmt.Fprintf(g.app.Stdout, "tools %s\nprofile_dir %s\n", tools, v.Dir)
+	skills := g.out().caution("none")
+	if len(v.Skills) > 0 {
+		skills = strings.Join(v.Skills, ", ")
+	}
+	fmt.Fprintf(g.app.Stdout, "tools %s\nskills %s\nprofile_dir %s\n", tools, skills, v.Dir)
 	if v.Body != nil {
 		body, err := json.Marshal(v.Body)
 		if err != nil {
@@ -659,13 +763,18 @@ type agentView struct {
 	Provider string         `json:"provider"`
 	Model    string         `json:"model,omitempty"`
 	MaxTurns int            `json:"max_turns,omitempty"`
-	Tools    []string       `json:"tools"` // the Tools it is granted
+	Tools    []string       `json:"tools"`  // the Tools it is granted
+	Skills   []string       `json:"skills"` // the Skills it is granted, <plugin>/<skill>
 	Dir      string         `json:"profile_dir"`
 	Body     map[string]any `json:"body,omitempty"`
 }
 
 func agentViewOf(g *globals, handle string, p config.Profile) agentView {
 	model, _ := p.Body["model"].(string)
-	return agentView{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: p.Granted(),
+	skills := p.Skills
+	if skills == nil {
+		skills = []string{}
+	}
+	return agentView{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: p.Granted(), Skills: skills,
 		Dir: g.paths().AgentProfileDir(handle), Body: p.Body}
 }

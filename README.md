@@ -334,7 +334,13 @@ Agents can be given more through Plugins: packages of Skills, instructions an ag
 defios plugin install https://github.com/example/audit-plugin@v1.2.0
 ```
 
-It shows the Plugin's Skills and the command line of every MCP Server it would run on this machine, and asks first (`--yes` does not). The Plugin goes in `plugins/<plugin>/` in the data directory, pinned to its commit, or to a hash of its files, in `plugins.lock` in the config directory. `defios plugin list` shows every Plugin with its Skills and MCP Servers, `defios plugin update [<plugin>]` fetches it again and shows the change to its `plugin.toml` before asking, and `defios plugin remove <plugin>` takes it away. DeFiOS's own Plugins, marked `built-in`, come with the binary: they need no install and cannot be updated or removed. A Plugin is a directory holding `plugin.toml` (`name`, `version`, `description`, and an `[mcp.<server>]` table per server with its `command`, `args`, and the `env` variables it asks for) and `skills/<skill>/SKILL.md`, whose frontmatter gives the Skill's `name` and `description`. Nothing in a Plugin reaches an agent until its profile grants it.
+It shows the Plugin's Skills and the command line of every MCP Server it would run on this machine, and asks first (`--yes` does not). The Plugin goes in `plugins/<plugin>/` in the data directory, pinned to its commit, or to a hash of its files, in `plugins.lock` in the config directory. `defios plugin list` shows every Plugin with its Skills and MCP Servers, `defios plugin update [<plugin>]` fetches it again and shows the change to its `plugin.toml` before asking, and `defios plugin remove <plugin>` takes it away, refused while an Agent Profile grants one of its Skills. DeFiOS's own Plugins, marked `built-in`, come with the binary: they need no install and cannot be updated or removed. A Plugin is a directory holding `plugin.toml` (`name`, `version`, `description`, and an `[mcp.<server>]` table per server with its `command`, `args`, and the `env` variables it asks for) and `skills/<skill>/SKILL.md`, whose frontmatter gives the Skill's `name` and `description`. Nothing in a Plugin reaches an agent until its profile grants it.
+
+```sh
+defios agent grant auditor defios/review-sign-request
+```
+
+grants a Skill, writing `skills = ["defios/review-sign-request"]` to the profile's `config.toml`, and `defios agent revoke` takes it away. A granted Skill is listed by name and description in what the agent is told, and the agent reads it, or a file beside its `SKILL.md`, with the `skill_load` Tool, offered whenever `skills` is set without being listed in `tools`. A Skill whose Plugin is not installed fails the summon, naming the agent and the Skill.
 
 ### 8. Sign a transaction
 
