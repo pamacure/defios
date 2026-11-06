@@ -371,7 +371,7 @@ On A, propose that the Key sign a transaction, written to `tx.json` as:
 defios sign propose --key ecdsa:<hex> --reason "pay the invoice" --transactions tx.json
 ```
 
-Or leave out what the chain knows and let `sign fill` complete it from the Network's endpoints: for Ethereum the `chainId`, `nonce`, fees and `gasLimit`, for Solana the `feePayer`, `recentBlockhash` and cluster. Only a field that is absent is filled, so `"nonce": "0"` stays 0. The completed transactions go to stdout and what was filled to stderr; check them, then pipe them on. Bitcoin is refused: picking its inputs and fee needs an indexer.
+Or leave out what the chain knows and let `sign fill` complete it from the Network's endpoints: for Ethereum the `chainId`, `nonce`, fees and `gasLimit` (one chain's nonces rise in the list's order, the order the transactions execute in), for Solana the `feePayer`, `recentBlockhash` and cluster. Only a field that is absent is filled, so `"nonce": "0"` stays 0. The completed transactions go to stdout and what was filled to stderr; check them, then pipe them on. Bitcoin is refused: picking its inputs and fee needs an indexer.
 
 ```bash
 echo '[{"network": "mainnet", "ethereum": {"to": "<base64 20 bytes>", "value": "1000"}}]' \

@@ -211,9 +211,11 @@ func TestEthereumFeeCapUsesTheGivenTip(t *testing.T) {
 	}
 }
 
-// Transactions for one chain get consecutive nonces in input order, after
-// the pending nonce and after any given explicitly; another chain counts apart.
-func TestEthereumConsecutiveNonces(t *testing.T) {
+// One chain's transactions get nonces that rise in input order, the order
+// they execute in: a filled one is one past the transaction before it,
+// given or filled, and never below the pending nonce. Another chain counts
+// apart.
+func TestEthereumNoncesRiseInInputOrder(t *testing.T) {
 	eth, _ := ethNode(t)
 	other, _ := rpc(t, func(m string, p []any) (any, string) {
 		switch m {
@@ -244,12 +246,13 @@ func TestEthereumConsecutiveNonces(t *testing.T) {
 	for _, tx := range res.Transactions {
 		got = append(got, intent(t, tx.Ethereum)["nonce"])
 	}
-	if want := []any{"10", "0", "9", "11", "1"}; !slices.Equal(got, want) {
+	if want := []any{"5", "0", "9", "10", "1"}; !slices.Equal(got, want) {
 		t.Errorf("nonces %v, want %v", got, want)
 	}
 }
 
-// When the pending nonce is past every explicit one, it is where filling starts.
+// A given nonce below the pending one is the caller's (a replacement, say);
+// the next filled one is still not below pending.
 func TestEthereumNoncesStartAtPending(t *testing.T) {
 	url, _ := ethNode(t)
 	full := `"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","gasLimit":"21000","maxFeePerGas":"9","maxPriorityFeePerGas":"1"`
@@ -263,6 +266,35 @@ func TestEthereumNoncesStartAtPending(t *testing.T) {
 	}
 }
 
+// Given nonces that do not rise in input order are refused, not reordered:
+// the list is the order the transactions execute in.
+func TestEthereumRefusesGivenNoncesOutOfOrder(t *testing.T) {
+	full := `"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","gasLimit":"21000","maxFeePerGas":"9","maxPriorityFeePerGas":"1"`
+	in := txs(t, `[{"network":"eth","ethereum":{`+full+`,"nonce":"9"}},{"network":"base","ethereum":{`+full+`,"nonce":"1"}},{"network":"eth","ethereum":{`+full+`,"nonce":"9"}}]`)
+	_, err := chainfill.Fill(context.Background(), ethKey, nets, in, at())
+	if err == nil || !strings.HasPrefix(err.Error(), "transaction 2 (ethereum chain 1): ") || !strings.Contains(err.Error(), "transaction 0") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A filled nonce must fit below the next given one; when the first free
+// nonce does not, it is an error naming the transaction, not a reorder.
+func TestEthereumRefusesANonceThatDoesNotFit(t *testing.T) {
+	url, _ := ethNode(t)
+	full := `"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","gasLimit":"21000","maxFeePerGas":"9","maxPriorityFeePerGas":"1"`
+	res, err := chainfill.Fill(context.Background(), ethKey, nets, txs(t, `[{"network":"eth","ethereum":{`+full+`}},{"network":"eth","ethereum":{`+full+`,"nonce":"6"}}]`), at(url))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := intent(t, res.Transactions[0].Ethereum)["nonce"]; got != "5" {
+		t.Errorf("nonce %v, want 5", got)
+	}
+	_, err = chainfill.Fill(context.Background(), ethKey, nets, txs(t, `[{"network":"eth","ethereum":{`+full+`}},{"network":"eth","ethereum":{`+full+`,"nonce":"5"}}]`), at(url))
+	if err == nil || !strings.HasPrefix(err.Error(), "transaction 0 (ethereum chain 1): ") || !strings.Contains(err.Error(), "transaction 1") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestEthereumEstimateFailureNamesTheTransaction(t *testing.T) {
 	url, _ := rpc(t, func(m string, p []any) (any, string) {
 		switch m {
@@ -273,8 +305,8 @@ func TestEthereumEstimateFailureNamesTheTransaction(t *testing.T) {
 		}
 		return nil, "unexpected " + m
 	})
-	full := `"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","nonce":"1","maxFeePerGas":"9","maxPriorityFeePerGas":"1"`
-	in := txs(t, `[{"network":"eth","ethereum":{`+full+`,"gasLimit":"21000"}},{"network":"eth","ethereum":{`+full+`}}]`)
+	full := `"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","maxFeePerGas":"9","maxPriorityFeePerGas":"1"`
+	in := txs(t, `[{"network":"eth","ethereum":{`+full+`,"nonce":"1","gasLimit":"21000"}},{"network":"eth","ethereum":{`+full+`,"nonce":"2"}}]`)
 	res, err := chainfill.Fill(context.Background(), ethKey, nets, in, at(url))
 	if err == nil || !strings.Contains(err.Error(), "transaction 1 (ethereum chain 1)") || !strings.Contains(err.Error(), "execution reverted") {
 		t.Fatalf("err = %v", err)
@@ -312,8 +344,8 @@ func TestEthereumRevertDoesNotFailOver(t *testing.T) {
 		return nil, "unexpected " + m
 	})
 	next, calls := ethNode(t)
-	full := `"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","nonce":"1","maxFeePerGas":"9","maxPriorityFeePerGas":"1"`
-	in := txs(t, `[{"network":"eth","ethereum":{`+full+`,"gasLimit":"21000"}},{"network":"eth","ethereum":{`+full+`}}]`)
+	full := `"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","maxFeePerGas":"9","maxPriorityFeePerGas":"1"`
+	in := txs(t, `[{"network":"eth","ethereum":{`+full+`,"nonce":"1","gasLimit":"21000"}},{"network":"eth","ethereum":{`+full+`,"nonce":"2"}}]`)
 	_, err := chainfill.Fill(context.Background(), ethKey, nets, in, at(reverts, next))
 	if err == nil || !strings.HasPrefix(err.Error(), "transaction 1 (ethereum chain 1): ") || !strings.Contains(err.Error(), "execution reverted") {
 		t.Fatalf("err = %v", err)

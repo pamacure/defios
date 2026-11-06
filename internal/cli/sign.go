@@ -292,9 +292,12 @@ already has a transaction is not an error, the repeat shows as one more receipt,
 intent leaves out is filled from this Node's Network for its alias; a field present is never changed,
 whatever its value (nonce 0 is kept). Nothing is proposed or written.
 
-  ethereum  chainId, nonce (pending; one chain's transactions get consecutive nonces in order, after
-            any given), maxPriorityFeePerGas, maxFeePerGas (2 x base fee + tip), gasLimit (estimated
-            from the Key's address; a revert is an error). to, value and data are yours; to is required.
+  ethereum  chainId, nonce, maxPriorityFeePerGas, maxFeePerGas (2 x base fee + tip), gasLimit
+            (estimated from the Key's address; a revert is an error). to, value and data are yours;
+            to is required. One chain's nonces rise in the list's order, the order they execute in:
+            a filled one is one past the transaction before it, given or filled, and never below
+            the pending nonce. Given nonces out of order, or a filled one that cannot fit below the
+            next given one, are an error.
   solana    feePayer (the Key's address), recentBlockhash (finalized; it expires in about 60-90 s, so
             propose promptly), cluster and genesisHash. The instructions are yours.
   bitcoin   refused: choosing inputs and a fee needs an indexer, which is a Plugin's job.

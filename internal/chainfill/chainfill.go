@@ -112,7 +112,8 @@ func snakeCase(s string) string {
 // Fill completes txs for Key k from Networks nets, reaching each Network
 // through endpoints. Each transaction's network alias picks the Network and
 // its type the rules; the sender is k's address on that chain. Several
-// Ethereum transactions for one chain get consecutive nonces in input order.
+// Ethereum transactions for one chain get nonces rising in input order, the
+// order they execute in (sequence).
 // An error names the transaction and its chain, and nothing is returned
 // with it.
 func Fill(ctx context.Context, k key.Key, nets []network.Network, txs []signreq.TxSpec, endpoints Endpoints) (Result, error) {
@@ -229,8 +230,9 @@ func fillEthereum(ctx context.Context, k key.Key, g []*tx, endpoints Endpoints) 
 	if err != nil {
 		return g[0].wrap(err)
 	}
-	var reads []*tx // the transactions that need the chain
-	next := uint64(0)
+	var reads []*tx   // the transactions that need the chain
+	var given *tx     // the last transaction before t that gives its nonce
+	var filling []*tx // the transactions whose nonce is filled
 	for _, t := range g {
 		if !t.has("to") {
 			return t.errorf("to is required: contract creation is not supported")
@@ -239,7 +241,12 @@ func fillEthereum(ctx context.Context, k key.Key, g []*tx, endpoints Endpoints) 
 			t.set("chainId", fmt.Sprint(n.ChainID))
 		}
 		if t.has("nonce") {
-			next = max(next, t.eth.Nonce+1)
+			if given != nil && t.eth.Nonce <= given.eth.Nonce {
+				return t.errorf("nonce %d does not follow transaction %d's nonce %d: one chain's nonces must rise in input order, the order the transactions execute in", t.eth.Nonce, given.index, given.eth.Nonce)
+			}
+			given = t
+		} else {
+			filling = append(filling, t)
 		}
 		if !t.has("nonce") || !t.has("maxPriorityFeePerGas") || !t.has("maxFeePerGas") || !t.has("gasLimit") {
 			reads = append(reads, t)
@@ -254,24 +261,31 @@ func fillEthereum(ctx context.Context, k key.Key, g []*tx, endpoints Endpoints) 
 	}
 	at := reads[0] // the transaction an error is about
 	var filled map[*tx]map[string]json.RawMessage
-	var refused error // an estimate the chain refused: no endpoint will differ
+	var final error // what the chain answered, which no other endpoint will change
 	err = ethrpc.Use(ctx, urls, n.ChainID, func(e ethrpc.Endpoint) error {
 		filled = map[*tx]map[string]json.RawMessage{}
-		var nonce, tip, baseFee *big.Int
+		var tip, baseFee *big.Int
+		nonces := map[*tx]uint64{}
+		if len(filling) > 0 {
+			at = filling[0]
+			pending, err := quantity(ctx, e, "eth_getTransactionCount", []any{sender, "pending"})
+			if err != nil {
+				return err
+			}
+			if !pending.IsUint64() {
+				return fmt.Errorf("eth_getTransactionCount: %s is not a nonce", pending)
+			}
+			if nonces, final = sequence(g, pending.Uint64()); final != nil {
+				return nil
+			}
+		}
 		var err error
 		for _, t := range reads {
 			at = t
 			f := map[string]json.RawMessage{}
 			put := func(field string, v string) { f[field], _ = json.Marshal(v) }
-			if !t.has("nonce") {
-				if nonce == nil {
-					if nonce, err = quantity(ctx, e, "eth_getTransactionCount", []any{sender, "pending"}); err != nil {
-						return err
-					}
-					nonce = bigMax(nonce, new(big.Int).SetUint64(next))
-				}
-				put("nonce", nonce.String())
-				nonce = new(big.Int).Add(nonce, big.NewInt(1))
+			if nonce, ok := nonces[t]; ok {
+				put("nonce", fmt.Sprint(nonce))
 			}
 			txTip, ok := new(big.Int).SetString(t.eth.MaxPriorityFeePerGas, 10)
 			if !t.has("maxPriorityFeePerGas") {
@@ -298,7 +312,7 @@ func fillEthereum(ctx context.Context, k key.Key, g []*tx, endpoints Endpoints) 
 			if !t.has("gasLimit") {
 				gas, err := quantity(ctx, e, "eth_estimateGas", []any{estimate(sender, t.eth)})
 				if errors.Is(err, jsonrpc.ErrResponse) {
-					refused = t.wrap(fmt.Errorf("%s: %w", e, err))
+					final = t.wrap(fmt.Errorf("%s: %w", e, err))
 					return nil
 				}
 				if err != nil {
@@ -316,8 +330,8 @@ func fillEthereum(ctx context.Context, k key.Key, g []*tx, endpoints Endpoints) 
 	if err != nil {
 		return at.wrap(err)
 	}
-	if refused != nil {
-		return refused
+	if final != nil {
+		return final
 	}
 	for _, t := range reads {
 		for _, field := range []string{"nonce", "maxPriorityFeePerGas", "maxFeePerGas", "gasLimit"} {
@@ -329,6 +343,37 @@ func fillEthereum(ctx context.Context, k key.Key, g []*tx, endpoints Endpoints) 
 		}
 	}
 	return nil
+}
+
+// sequence is the nonce of each transaction of one chain, g, that gives
+// none: in input order, one past the transaction before it, given or
+// filled, and never below pending. It must stay below the next given
+// nonce, so that nonces rise in input order; when it cannot, the error
+// names the transaction.
+func sequence(g []*tx, pending uint64) (map[*tx]uint64, error) {
+	out := map[*tx]uint64{}
+	var prev *uint64
+	for i, t := range g {
+		if t.has("nonce") {
+			prev = &t.eth.Nonce
+			continue
+		}
+		nonce := pending
+		if prev != nil {
+			nonce = max(nonce, *prev+1)
+		}
+		for _, later := range g[i+1:] {
+			if later.has("nonce") {
+				if nonce >= later.eth.Nonce {
+					return nil, t.errorf("its nonce must be below transaction %d's nonce %d, which follows it, but the first free nonce is %d (pending %d): give its nonce, or list the transactions in nonce order", later.index, later.eth.Nonce, nonce, pending)
+				}
+				break
+			}
+		}
+		out[t] = nonce
+		prev = &nonce
+	}
+	return out, nil
 }
 
 // estimate is eth_estimateGas's call object for in, sent from sender.
@@ -373,13 +418,6 @@ func latestBaseFee(ctx context.Context, e ethrpc.Endpoint) (*big.Int, error) {
 		return nil, errors.New("eth_getBlockByNumber: the latest block has no baseFeePerGas (not an EIP-1559 chain?)")
 	}
 	return hexQuantity("baseFeePerGas", block.BaseFee)
-}
-
-func bigMax(a, b *big.Int) *big.Int {
-	if a.Cmp(b) >= 0 {
-		return a
-	}
-	return b
 }
 
 // fillSolana fills one cluster's transactions, reading one blockhash for

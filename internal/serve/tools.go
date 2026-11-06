@@ -29,7 +29,7 @@ const (
 		"Give the transactions as sign_propose takes them, each naming one of your Node's Networks by alias and exactly one intent in protobuf-JSON form, " +
 		"and leave out each field you want filled: only an absent field is filled, a present one is never changed (nonce 0 is kept). " +
 		"Ethereum: you give to (base64 20 bytes; contract creation is not supported), value (decimal wei) and data (base64) yourself; " +
-		"chainId, nonce (consecutive across one chain's transactions), maxPriorityFeePerGas, maxFeePerGas (2 × base fee + tip) and gasLimit (estimated; a revert is an error) are filled, the sender being the Key's address. " +
+		"chainId, nonce (one chain's nonces rise in your list's order, the order they execute in: each filled one is one past the transaction before it and never below pending; nonces you give must rise too), maxPriorityFeePerGas, maxFeePerGas (2 × base fee + tip) and gasLimit (estimated; a revert is an error) are filled, the sender being the Key's address. " +
 		"Solana: you give the instructions; feePayer (the Key's address), recentBlockhash, cluster and genesisHash are filled. A filled blockhash expires in about 60–90 seconds, so propose promptly. " +
 		"Bitcoin is refused: its inputs and fee need an indexer. Returns the completed transactions, ready for sign_propose, " +
 		"and per transaction the fields filled and the endpoint read. Check them before you propose."
