@@ -173,6 +173,7 @@ func (s *server) localHandler() http.Handler {
 	})
 	s.conversationRoutes(mux)
 	s.chainRoutes(mux)
+	s.jobRoutes(mux)
 	s.signRoutes(mux)
 	s.broadcastRoutes(mux)
 	s.fillRoutes(mux)
@@ -223,6 +224,7 @@ var errorKinds = []struct {
 	{group.ErrBadDecline, "bad-decline", http.StatusBadRequest},
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
 	{ErrNoReplica, "no-replica", http.StatusConflict},
+	{ErrNoJob, "no-job", http.StatusNotFound},
 	{ErrNoConversation, "no-conversation", http.StatusUnprocessableEntity},
 	{ErrBadHandle, "bad-handle", http.StatusBadRequest},
 	{ErrNotAChain, "not-a-chain", http.StatusBadRequest},
@@ -361,6 +363,19 @@ func (c Client) http() *http.Client {
 
 // do sends a GET (body nil) or a JSON POST and decodes the JSON reply.
 func (c Client) do(ctx context.Context, path string, body, out any) error {
+	return c.send(ctx, c.http(), path, body, out)
+}
+
+// doUntimed is do for a call that lasts as long as the work it waits for,
+// which ctx alone bounds.
+func (c Client) doUntimed(ctx context.Context, path string, body, out any) error {
+	hc := c.http()
+	hc.Timeout = 0
+	return c.send(ctx, hc, path, body, out)
+}
+
+// send is do and doUntimed, by hc.
+func (c Client) send(ctx context.Context, hc *http.Client, path string, body, out any) error {
 	method, payload := http.MethodGet, io.Reader(nil)
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -376,7 +391,7 @@ func (c Client) do(ctx context.Context, path string, body, out any) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.http().Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		var opErr *net.OpError
 		if errors.As(err, &opErr) {

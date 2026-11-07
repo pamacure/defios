@@ -87,7 +87,6 @@ func (s *server) caughtUp(ctx context.Context, replica *raftx.Replica) (uint64, 
 // hookLoop is keepHooks' state between wakes.
 type hookLoop struct {
 	*triggers
-	store     *cosl.Store
 	baselined bool
 	restores  uint64            // the Store's restore count as of the baseline
 	seen      uint64            // the last seq handled: statuses are read as of it
@@ -100,7 +99,6 @@ type hookLoop struct {
 func (s *server) newHookLoop(ctx context.Context, store *cosl.Store) *hookLoop {
 	return &hookLoop{
 		triggers: s.newTriggers(ctx, store, "hook"),
-		store:    store,
 		errs:     errlog.New(s.opts.Logf, "serve: hooks"),
 	}
 }
@@ -114,7 +112,7 @@ type triggers struct {
 	cfg        config.Config // the Jobs, Triggers and max_depth in force
 	mtime      time.Time     // config.toml's as last read; zero while it is missing
 	queues     *firingQueues
-	runner     trigger.Runner
+	store      *cosl.Store // where agent Jobs answer
 	configErrs *errlog.Reporter
 }
 
@@ -122,31 +120,37 @@ type triggers struct {
 func (s *server) newTriggers(ctx context.Context, store *cosl.Store, kind string) *triggers {
 	o := s.opts
 	t := &triggers{
-		s: s, ctx: ctx, kind: kind, cfg: o.Config,
+		s: s, ctx: ctx, kind: kind, cfg: o.Config, store: store,
 		queues:     &firingQueues{},
 		configErrs: errlog.New(o.Logf, "serve: "+kind+"s: reading config.toml"),
-		runner: trigger.Runner{
-			Group: o.Alias,
-			Dir:   o.Paths.GroupConfigDir(o.Alias),
-			Env: map[string]string{
-				"DEFIOS_CONFIG_DIR": o.Paths.Config,
-				"DEFIOS_DATA_DIR":   o.Paths.Data,
-				"DEFIOS_SOCKET":     o.Paths.Socket,
-			},
-			Secrets: func() *secret.Resolver {
-				return &secret.Resolver{Group: o.Alias, Getenv: o.Getenv, Vault: o.Secrets}
-			},
-			Getenv: o.Getenv,
-			Logf:   o.Logf,
-			Agent: func(ctx context.Context, name string, j config.Job, ev trigger.Event) error {
-				return s.runAgentJob(ctx, store, name, j, ev)
-			},
-		},
 	}
 	if info, err := os.Stat(o.Paths.GroupConfigFile(o.Alias)); err == nil {
 		t.mtime = info.ModTime()
 	}
 	return t
+}
+
+// jobRunner runs this Group's Jobs, agent Jobs in store's Conversations,
+// logging their output to the serve log behind prefix.
+func (s *server) jobRunner(store *cosl.Store, prefix string) trigger.Runner {
+	o := s.opts
+	return trigger.Runner{
+		Group: o.Alias,
+		Dir:   o.Paths.GroupConfigDir(o.Alias),
+		Env: map[string]string{
+			"DEFIOS_CONFIG_DIR": o.Paths.Config,
+			"DEFIOS_DATA_DIR":   o.Paths.Data,
+			"DEFIOS_SOCKET":     o.Paths.Socket,
+		},
+		Secrets: func() *secret.Resolver {
+			return &secret.Resolver{Group: o.Alias, Getenv: o.Getenv, Vault: o.Secrets}
+		},
+		Getenv: o.Getenv,
+		Logf:   func(format string, args ...any) { o.Logf(prefix+format, args...) },
+		Agent: func(ctx context.Context, name string, j config.Job, ev trigger.Event) error {
+			return s.runAgentJob(ctx, store, name, j, ev)
+		},
+	}
 }
 
 // reread takes up config.toml's Jobs, Triggers and max_depth if the file's
@@ -186,18 +190,39 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 	logf := t.s.opts.Logf
 	prefix := "serve: " + t.kind + " " + name + ": "
 	logf("%sfired %s", prefix, cause)
-	r := t.runner
-	r.Logf = func(format string, args ...any) { logf(prefix+format, args...) }
+	t.s.chains.publish(eventConversation(ev), ChainEvent{Type: EventTriggerFire, Trigger: name, Event: &ev})
+	r := t.s.jobRunner(t.store, prefix)
 	for _, job := range jobs {
 		if t.ctx.Err() != nil {
 			return
 		}
-		if err := r.Run(t.ctx, job, defs[job], ev); err != nil {
-			logf("%sjob %s failed: %v", prefix, job, err)
+		if v := runJob(t.ctx, &t.s.chains, r, job, defs[job], ev); !v.OK {
+			logf("%sjob %s failed: %s", prefix, job, v.Error)
 			return
 		}
 		logf("%sjob %s done", prefix, job)
 	}
+}
+
+// runJob runs Job name, j, on ev with r, shows its job.end on the stream
+// of ev's Conversation, and returns how it ended.
+func runJob(ctx context.Context, chains *chainHub, r trigger.Runner, name string, j config.Job, ev trigger.Event) JobView {
+	v := JobView{Job: name, OK: true}
+	if err := r.Run(ctx, name, j, ev); err != nil {
+		v.OK, v.Error = false, err.Error()
+	}
+	chains.publish(eventConversation(ev), ChainEvent{Type: EventJobEnd, Job: v.Job, OK: &v.OK, Error: v.Error})
+	return v
+}
+
+// eventConversation is ev's Conversation ID, nil for Group-level talk or
+// a Schedule's firing.
+func eventConversation(ev trigger.Event) []byte {
+	conv, err := hex.DecodeString(ev.ConversationID)
+	if err != nil || len(conv) == 0 {
+		return nil
+	}
+	return conv
 }
 
 // baseline takes the log up to seq as the startup backlog, which fires

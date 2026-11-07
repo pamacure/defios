@@ -29,11 +29,13 @@ import (
 	"defios.com/internal/secret"
 	"defios.com/internal/talk"
 	"defios.com/internal/transcript"
+	"defios.com/internal/trigger"
 )
 
 // Chain events on GET /v1/conversation/stream, one JSON object per line
 // (ADR 0015, ADR 0018). Every event names its chain by the hex msg_id of the
-// person's message that started it (ADR 0025).
+// person's message that started it (ADR 0025), but a Trigger's and a
+// Job's, which name none (ADR 0032).
 const (
 	EventChainStart   = "chain.start"
 	EventAgentStart   = "agent.start"   // handle, depth
@@ -44,6 +46,13 @@ const (
 	EventAgentSilent  = "agent.silent"  // handle: it ended without say
 	EventAgentError   = "agent.error"   // handle, error
 	EventChainEnd     = "chain.end"     // cancelled
+	// EventTriggerFire is a Hook or Schedule of this Node's firing: trigger,
+	// event. It shows on the stream of its event's Conversation, Group-level
+	// talk for a Schedule.
+	EventTriggerFire = "trigger.fire"
+	// EventJobEnd is a Job a Trigger or job run ran ending: job, ok, error.
+	// It shows where its trigger.fire does.
+	EventJobEnd = "job.end"
 )
 
 // ChainEvent is one event of a chain of agents answering a mention.
@@ -64,6 +73,14 @@ type ChainEvent struct {
 	// Cancelled, on chain.end, means the chain was cut short by a cancel.
 	// Error, on chain.end, means the serve stopped and the chain is lost.
 	Cancelled bool `json:"cancelled,omitempty"`
+	// Trigger and Event, on trigger.fire, are the Trigger that fired and
+	// what it fired on, as its Jobs are given it.
+	Trigger string         `json:"trigger,omitempty"`
+	Event   *trigger.Event `json:"event,omitempty"`
+	// Job and OK, on job.end, are the Job and whether it succeeded; Error
+	// then says why it failed.
+	Job string `json:"job,omitempty"`
+	OK  *bool  `json:"ok,omitempty"`
 }
 
 // watcherBuffer is how many events a watcher may fall behind by before it

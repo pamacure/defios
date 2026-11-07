@@ -47,7 +47,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	root.AddCommand(send)
 	follow := &cobra.Command{
 		Use:   "follow",
-		Short: "Stream the whole output of agents in a Conversation, then their messages, on this Node, chain after chain (requires serve); Ctrl-C detaches and cancels nothing. --key scopes it to that Key",
+		Short: "Stream the whole output of agents in a Conversation, then their messages, on this Node, chain after chain, and the Triggers firing there with how their Jobs end (requires serve); Ctrl-C detaches and cancels nothing. --key scopes it to that Key",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runConversationFollow(cmd, g, keyQuery) },
 	}
@@ -292,7 +292,8 @@ func followChain(g *globals, stream *serve.ChainStream, chain string) error {
 }
 
 // runConversationFollow prints every chain in the Conversation as it
-// streams, until Ctrl-C, which only detaches: the chain runs on and its
+// streams, and the Triggers firing there with the Jobs they run, until
+// Ctrl-C, which only detaches: the chain runs on and its
 // replies still commit (ADR 0015).
 func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) error {
 	conv, err := queriedConversation(g, keyQuery)
@@ -322,6 +323,8 @@ func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) erro
 			continue
 		}
 		switch ev.Type {
+		case serve.EventTriggerFire, serve.EventJobEnd:
+			fmt.Fprintln(g.app.Stdout, triggerLine(p, ev))
 		case serve.EventChainStart:
 			fmt.Fprintln(g.app.Stdout, p.dim(fmt.Sprintf("[agents answering msg_id %s]", shortChain(ev.Chain))))
 		case serve.EventAgentError:

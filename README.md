@@ -361,6 +361,12 @@ tz = "Europe/Paris"
 jobs = ["daily_summary"]
 ```
 
+Triggers and Jobs are edited in `config.toml` only. `defios hook list` and `defios schedule list` show them, a Schedule with its next firing, and `defios job run <name>` runs a Job now through `serve`, as no Trigger, on the event in `--event file.json` (the JSON a Job is given) or none, and exits as the Job ended; what it writes is one deeper than the event's depth, 1 with none. `conversation follow` shows a Trigger firing there, a Schedule's in Group-level talk, as `trigger.fire`, and each Job it runs ending as `job.end`:
+
+```sh
+defios job run notify --event event.json
+```
+
 Agents can be given more through Plugins: packages of Skills, instructions an agent reads when a task calls for them, and MCP Servers, programs it can call. Install one from a git repository, at a branch, tag or commit with `@<ref>`, or from a local directory:
 
 ```bash
