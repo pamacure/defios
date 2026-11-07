@@ -95,38 +95,44 @@ func TestJobsAndHooksRoundTrip(t *testing.T) {
 // A malformed Job or Hook stops the file reading, as any config error does.
 func TestConfigRefusesMalformedJobsAndHooks(t *testing.T) {
 	for name, body := range map[string]string{
-		"job with no kind":           "[jobs.j]\ntimeout = \"1s\"",
-		"job with two kinds":         "[jobs.j]\nexec = [\"true\"]\nwebhook = \"https://x.example\"",
-		"bad job name":               "[jobs.Notify]\nexec = [\"true\"]",
-		"empty exec":                 "[jobs.j]\nexec = []",
-		"exec with an empty program": "[jobs.j]\nexec = [\"\"]",
-		"bad agent handle":           "[jobs.j]\nagent = \"Auditor\"",
-		"prompt on an exec job":      "[jobs.j]\nexec = [\"true\"]\nprompt = \"x\"",
-		"secrets on a webhook":       "[jobs.j]\nwebhook = \"https://x.example\"\nsecrets = [\"A\"]",
-		"headers on an exec job":     "[jobs.j]\nexec = [\"true\"]\nheaders = { A = \"b\" }",
-		"timeout on an agent job":    "[jobs.j]\nagent = \"auditor\"\ntimeout = \"1s\"",
-		"bad secret name":            "[jobs.j]\nexec = [\"true\"]\nsecrets = [\"lower\"]",
-		"webhook not a url":          "[jobs.j]\nwebhook = \"ftp://x.example\"",
-		"webhook bad reference":      "[jobs.j]\nwebhook = \"$lower\"",
-		"header bad reference":       "[jobs.j]\nwebhook = \"https://x.example\"\nheaders = { A = \"$lower\" }",
-		"zero timeout":               "[jobs.j]\nexec = [\"true\"]\ntimeout = \"0s\"",
-		"unknown job key":            "[jobs.j]\nexec = [\"true\"]\nshell = true",
-		"hook with no jobs":          "[hooks.h]\nevents = [\"app.freeform\"]",
-		"hook naming no job":         "[hooks.h]\njobs = [\"missing\"]",
-		"hook naming a job twice":    "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\njobs = [\"j\", \"j\"]",
-		"bad hook name":              "[jobs.j]\nexec = [\"true\"]\n[hooks.H]\njobs = [\"j\"]",
-		"unknown event":              "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nevents = [\"app.recap\"]\njobs = [\"j\"]",
-		"unknown status":             "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nevents = [\"request.lost\"]\njobs = [\"j\"]",
-		"bad from":                   "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nfrom = \"me\"\njobs = [\"j\"]",
-		"bad handle":                 "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nhandles = [\"Auditor\"]\njobs = [\"j\"]",
-		"bad conversation":           "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nconversation = \"../x\"\njobs = [\"j\"]",
-		"bad text":                   "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\ntext = \"(\"\njobs = [\"j\"]",
-		"from not a string":          "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nfrom = 1\njobs = [\"j\"]",
-		"unknown hook key":           "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\njobs = [\"j\"]\nwhen = \"x\"",
+		"job with no kind":             "[jobs.j]\ntimeout = \"1s\"",
+		"job with two kinds":           "[jobs.j]\nexec = [\"true\"]\nwebhook = \"https://x.example\"",
+		"bad job name":                 "[jobs.Notify]\nexec = [\"true\"]",
+		"empty exec":                   "[jobs.j]\nexec = []",
+		"exec with an empty program":   "[jobs.j]\nexec = [\"\"]",
+		"bad agent handle":             "[jobs.j]\nagent = \"Auditor\"",
+		"prompt on an exec job":        "[jobs.j]\nexec = [\"true\"]\nprompt = \"x\"",
+		"secrets on a webhook":         "[jobs.j]\nwebhook = \"https://x.example\"\nsecrets = [\"A\"]",
+		"headers on an exec job":       "[jobs.j]\nexec = [\"true\"]\nheaders = { A = \"b\" }",
+		"timeout on an agent job":      "[jobs.j]\nagent = \"auditor\"\ntimeout = \"1s\"",
+		"group agent not in profiles":  "[agent]\nprofiles = [\"scribe\"]\n[jobs.j]\nagent = \"auditor\"\ntarget = \"group\"",
+		"group agent with no profiles": "[jobs.j]\nagent = \"auditor\"\ntarget = \"group\"",
+		"bad secret name":              "[jobs.j]\nexec = [\"true\"]\nsecrets = [\"lower\"]",
+		"webhook not a url":            "[jobs.j]\nwebhook = \"ftp://x.example\"",
+		"webhook bad reference":        "[jobs.j]\nwebhook = \"$lower\"",
+		"header bad reference":         "[jobs.j]\nwebhook = \"https://x.example\"\nheaders = { A = \"$lower\" }",
+		"zero timeout":                 "[jobs.j]\nexec = [\"true\"]\ntimeout = \"0s\"",
+		"unknown job key":              "[jobs.j]\nexec = [\"true\"]\nshell = true",
+		"hook with no jobs":            "[hooks.h]\nevents = [\"app.freeform\"]",
+		"hook naming no job":           "[hooks.h]\njobs = [\"missing\"]",
+		"hook naming a job twice":      "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\njobs = [\"j\", \"j\"]",
+		"bad hook name":                "[jobs.j]\nexec = [\"true\"]\n[hooks.H]\njobs = [\"j\"]",
+		"unknown event":                "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nevents = [\"app.recap\"]\njobs = [\"j\"]",
+		"unknown status":               "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nevents = [\"request.lost\"]\njobs = [\"j\"]",
+		"bad from":                     "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nfrom = \"me\"\njobs = [\"j\"]",
+		"bad handle":                   "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nhandles = [\"Auditor\"]\njobs = [\"j\"]",
+		"bad conversation":             "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nconversation = \"../x\"\njobs = [\"j\"]",
+		"bad text":                     "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\ntext = \"(\"\njobs = [\"j\"]",
+		"from not a string":            "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nfrom = 1\njobs = [\"j\"]",
+		"unknown hook key":             "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\njobs = [\"j\"]\nwhen = \"x\"",
 	} {
 		if _, err := config.ReadFile(write(t, body)); err == nil {
 			t.Errorf("%s: read without error", name)
 		}
+	}
+	// An agent Job in Group-level talk names a Handle the Group includes.
+	if _, err := config.ReadFile(write(t, "[agent]\nprofiles = [\"auditor\"]\n[jobs.j]\nagent = \"auditor\"\ntarget = \"group\"")); err != nil {
+		t.Errorf("an included Handle: %v", err)
 	}
 	// Jobs and Hooks are the Group's: a Conversation's config.toml may not
 	// hold them.

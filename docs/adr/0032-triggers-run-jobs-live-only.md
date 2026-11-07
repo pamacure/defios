@@ -93,8 +93,12 @@ made up later.
   prompt and the Trigger's event (or firing time) form the last user turn
   and are never committed. The target defaults to the event's Conversation
   (a Sign Request's Key), and a Schedule's Jobs must name one. The usual
-  one-chain-per-Conversation rule, Transcript and stream apply. A Schedule's
-  chain is named by a random id.
+  one-chain-per-Conversation rule, Transcript and stream apply. A Job's
+  chain is named by a random id, a Hook's too: the event's msg_id may
+  already name a person's chain, two Jobs may answer one event, and a
+  status change has no message. The Handle must be in the target's
+  profiles: checked as the config is read for `target = "group"`, and as
+  the Job runs elsewhere, where a Conversation's Workspace may replace them.
 - **`exec` Jobs** take an argument list, not a shell string, with the event
   as JSON on stdin. Their environment holds `PATH`, the `DEFIOS_*` variables
   (Group alias, Trigger, event type, msg id, Sign Request id, Conversation,

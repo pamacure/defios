@@ -25,8 +25,10 @@ import (
 type Job struct {
 	// Agent is the Handle of the agent an agent Job summons, with Prompt as
 	// its instruction, in Target: "group", a Conversation's Workspace name,
-	// or unset for the event's Conversation. Parsed now; run by a later
-	// issue (#126).
+	// or unset for the event's Conversation. The Handle must be in the
+	// target's [agent] profiles: checked here for "group", whose profiles
+	// are this file's, and where the Job runs for a Conversation, whose
+	// Workspace may replace them.
 	Agent  string `toml:"agent,omitempty"`
 	Prompt string `toml:"prompt,omitempty"`
 	Target string `toml:"target,omitempty"`
@@ -154,6 +156,9 @@ func (c Config) validateTriggers(md toml.MetaData) error {
 		}
 		if err := j.validate(md, name); err != nil {
 			return fmt.Errorf("[jobs.%s]: %w", name, err)
+		}
+		if j.Kind() == JobAgent && j.Target == ConversationGroup && !slices.Contains(c.Agent.Profiles, j.Agent) {
+			return fmt.Errorf("[jobs.%s]: agent: @%s is not in [agent] profiles, so cannot answer in Group-level talk", name, j.Agent)
 		}
 	}
 	for name, h := range c.Hooks {

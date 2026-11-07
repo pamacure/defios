@@ -122,6 +122,9 @@ func (s *server) newHookLoop(ctx context.Context, store *cosl.Store) *hookLoop {
 			},
 			Getenv: o.Getenv,
 			Logf:   o.Logf,
+			Agent: func(ctx context.Context, name string, j config.Job, ev trigger.Event) error {
+				return s.runAgentJob(ctx, store, name, j, ev)
+			},
 		},
 	}
 	if info, err := os.Stat(o.Paths.GroupConfigFile(o.Alias)); err == nil {

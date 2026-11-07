@@ -1,5 +1,5 @@
 // Package trigger matches live COSL events against this Node's Hooks and
-// runs the exec and webhook Jobs they name (docs/adr/0032-triggers-run-jobs-live-only.md).
+// runs the Jobs they name, agent Jobs through serve (docs/adr/0032-triggers-run-jobs-live-only.md).
 // Which events are live, and when a Hook fires, is serve's to decide.
 package trigger
 
@@ -85,7 +85,8 @@ func Matches(h config.Hook, ev Event, self identity.ID) bool {
 	return true
 }
 
-// Runner runs exec and webhook Jobs for one Group.
+// Runner runs Jobs for one Group: exec and webhook Jobs itself, agent Jobs
+// by Agent.
 type Runner struct {
 	Group string // the Group's alias
 	// Dir is the Group Workspace, where an exec Job runs.
@@ -102,6 +103,9 @@ type Runner struct {
 	Logf func(format string, args ...any)
 	// Client calls webhooks; nil is a plain client.
 	Client *http.Client
+	// Agent runs agent Job name, j, on ev, and returns once its chain has
+	// ended; nil runs none.
+	Agent func(ctx context.Context, name string, j config.Job, ev Event) error
 	// Backoff is the wait before a webhook's first retry, doubling after
 	// each; zero is a second.
 	Backoff time.Duration
@@ -118,12 +122,16 @@ func (r Runner) Run(ctx context.Context, name string, j config.Job, ev Event) er
 		return err
 	}
 	switch j.Kind() {
+	case config.JobAgent:
+		if r.Agent != nil {
+			return r.Agent(ctx, name, j, ev)
+		}
 	case config.JobExec:
 		return r.exec(ctx, name, j, ev, body)
 	case config.JobWebhook:
 		return r.webhook(ctx, j, body)
 	}
-	return fmt.Errorf("%s Jobs do not run yet", j.Kind())
+	return fmt.Errorf("%s Jobs do not run here", j.Kind())
 }
 
 // Vars are the DEFIOS_* variables an exec Job is given for ev. DEFIOS_DEPTH

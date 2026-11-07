@@ -128,17 +128,25 @@ func (sh *shown) events() []ChainEvent {
 	return append(out, sh.output...)
 }
 
-// chain is the agents one person's message summons, in mention order.
+// chain is the agents one person's message summons, in mention order, or
+// the one agent a Job summons (ADR 0032).
 type chain struct {
-	id      string // the hex msg_id of the person's message that starts it
+	id      string // the hex msg_id of the person's message that starts it; random for a Job's (ADR 0032)
 	conv    []byte
 	handles []string
 	// depth is its message's, 0 for a person's, and inc what was included
 	// where it was written, by which a Job's message summons (ADR 0032).
-	depth  uint32
-	inc    config.Included
-	ctx    context.Context
-	cancel context.CancelFunc
+	depth uint32
+	inc   config.Included
+	// lastTurn, for a Job's chain, is its first agent's last user turn:
+	// the Job's prompt and event, never committed. done, if set, closes
+	// when the chain has ended, err then saying why it stopped short, or
+	// why the Job's agent did not answer, if it did not.
+	lastTurn string
+	done     chan struct{}
+	err      error
+	ctx      context.Context
+	cancel   context.CancelFunc
 	// cancelled tells a cancel from the serve stopping; both end ctx.
 	cancelled atomic.Bool
 }
@@ -435,7 +443,19 @@ func (s *server) runChain(c *chain) {
 		publish(ChainEvent{Type: EventChainStart})
 		plan.WalkFrom(c.depth, c.inc, c.handles, func(st plan.Step) plan.Outcome { return s.step(c, tr, st, publish) })
 	}
+	stopped := c.ctx.Err() != nil
 	s.chains.end(c)
+	if c.done == nil {
+		return
+	}
+	switch {
+	case c.err != nil:
+	case c.cancelled.Load():
+		c.err = errors.New("the chain was cancelled")
+	case stopped:
+		c.err = errors.New("the serve stopped; the chain is lost")
+	}
+	close(c.done)
 }
 
 // step performs st of c: runs its agent, writing the run to tr, or
@@ -452,10 +472,14 @@ func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish fun
 		return plan.Outcome{Stop: true}
 	}
 	if errors.Is(err, errSkipped) {
+		if st.N == 1 && c.lastTurn != "" {
+			c.err = fmt.Errorf("@%s did not answer: it is no longer in [agent] profiles here", st.Handle)
+		}
 		return plan.Outcome{}
 	}
 	if err != nil {
 		s.opts.Logf("serve: @%s answering chain %s: %v", st.Handle, c.id, err)
+		c.err = fmt.Errorf("@%s: %w", st.Handle, err)
 		publish(ChainEvent{Type: EventAgentError, Handle: st.Handle, Error: err.Error()})
 		return plan.Outcome{Stop: true}
 	}
@@ -485,7 +509,11 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 		tr.Write(l)
 	}
 	did := func(tool, msgID string) { line(TranscriptLine{Kind: KindActed, Tool: tool, MsgID: msgID}) }
-	req, inc, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, did)
+	var last string
+	if st.N == 1 {
+		last = c.lastTurn // the Job's agent; those its reply summons read the talk alone
+	}
+	req, inc, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, last, did)
 	if errors.Is(err, errSkipped) {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
 		return res, inc, err
@@ -543,9 +571,10 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 // agentRequest is the call to the Provider that answers as handle: its
 // SYSTEM.md and the serve's preamble, then the talk so far as turns by
 // Handle (ADR 0018), sent with this Node's key to the Provider as this
-// Node's merged Workspace configures it, and nowhere else (ADR 0022). Each
-// sign Tool that acts is told to did.
-func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32, did acted) (agent.Request, config.Included, error) {
+// Node's merged Workspace configures it, and nowhere else (ADR 0022). A
+// non-empty last ends the talk as the last user turn: a Job's prompt and
+// event (ADR 0032). Each sign Tool that acts is told to did.
+func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32, last string, did acted) (agent.Request, config.Included, error) {
 	e, err := s.load(store, conv)
 	if err != nil {
 		return agent.Request{}, config.Included{}, err
@@ -596,6 +625,7 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
+	turns = endWith(turns, last)
 	stable, atDepth := preamble(handle, depth, inc, where, missing, req.Tools, skills)
 	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + stable
 	req.SystemDepth = atDepth
@@ -774,6 +804,23 @@ func talkTurns(opening string, said []talk.Message, name func(talk.Message) stri
 	}
 	if len(turns) == 0 || turns[len(turns)-1].Role != agent.User {
 		add(agent.User, talkEndsWithYou, "")
+	}
+	return turns
+}
+
+// endWith is turns, which end with a user turn, with last ending that
+// turn, a blank line after the talk, or standing in for the fixed turn
+// that says the agent was summoned again; turns as they are if last is
+// empty.
+func endWith(turns []agent.Turn, last string) []agent.Turn {
+	if last == "" {
+		return turns
+	}
+	end := &turns[len(turns)-1]
+	if end.Text == talkEndsWithYou {
+		end.Text = last
+	} else {
+		end.Text += "\n\n" + last
 	}
 	return turns
 }
