@@ -1,7 +1,9 @@
 package serve_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,7 +13,9 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/group"
+	"defios.com/internal/key"
 	"defios.com/internal/serve"
+	"defios.com/internal/signreq"
 )
 
 // readLines is the file's lines, none if it is missing.
@@ -127,4 +131,81 @@ func TestAHookFiresOnLiveTalkOnly(t *testing.T) {
 	if got := readLines(t, out); len(got) != 8 {
 		t.Errorf("the removed Hook still fired: %v", got)
 	}
+}
+
+// A sign.* event has its request's depth, and a request.<status> event
+// too, so a Hook answering a Job's proposal sees how deep it already is;
+// a message a Job writes at a depth, though no agent's, keeps it.
+func TestSignEventsHaveTheirRequestsDepth(t *testing.T) {
+	out, ready := filepath.Join(t.TempDir(), "depths"), filepath.Join(t.TempDir(), "ready")
+	a, b := pairWith(t, func(n *node) {
+		recordsStances(n)
+		stances := n.tune
+		n.tune = func(o *serve.Options) { stances(o); o.Getenv = os.Getenv }
+	})
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	mintKey(t, a, b, gid)
+	pk := bytes.Repeat([]byte{0x33}, 33)
+	conv := key.ConversationID("ecdsa", pk)
+	eth := "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n"
+	for _, n := range []*node{a, b} {
+		waitMinted(t, n, gid, conv[:])
+	}
+	setNetworks(t, b, eth)
+	// Alice's config.toml, which serve rereads, holds her Hook.
+	setNetworks(t, a, eth+fmt.Sprintf(`
+[agent]
+max_depth = 3
+
+[jobs.depth]
+exec = ["sh", "-c", "echo \"$DEFIOS_EVENT:$DEFIOS_DEPTH\" >> \"$0\"", %q]
+
+[jobs.ready]
+exec = ["touch", %q]
+
+[hooks.signs]
+events = ["sign.request", "sign.refuse", "request.open", "request.refused"]
+jobs = ["depth"]
+
+[hooks.job_talk]
+text = "^from a Job$"
+jobs = ["depth"]
+
+[hooks.ready]
+text = "^ready[?]$"
+jobs = ["ready"]
+`, out, ready))
+	ctx := context.Background()
+	// Bob's request lands once alice's Hook is taken up: talk first, until
+	// it fires.
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("alice's Hook never fired")
+		}
+		if _, err := b.client().ConversationSend(ctx, "ready?", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: payEth, Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLines(t, out, []string{"sign.request:2", "request.open:2"})
+	if d := waitSign(t, a, v.MsgID, func(signreq.Detail) bool { return true }); d.Depth != 1 {
+		t.Errorf("inspect depth %d, want 1", d.Depth)
+	}
+	if _, err := a.client().SignRefuse(ctx, v.MsgID, "no"); err != nil {
+		t.Fatal(err)
+	}
+	waitLines(t, out, []string{"sign.request:2", "request.open:2", "sign.refuse:2", "request.refused:2"})
+
+	if _, err := b.client().ConversationSendAs(ctx, "from a Job", "", 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitLines(t, out, []string{"sign.request:2", "request.open:2", "sign.refuse:2", "request.refused:2", "app.freeform:3"})
 }

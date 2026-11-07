@@ -643,7 +643,12 @@ type SignRequest struct {
 	DeadlineSeconds uint64                 `protobuf:"varint,3,opt,name=deadline_seconds,json=deadlineSeconds,proto3" json:"deadline_seconds,omitempty"` // after the envelope's created_at; > 0
 	// handle is the Agent Profile that proposed, empty when a person did
 	// (docs/adr/0028-a-node-refuses-a-sign-request-once.md).
-	Handle        string `protobuf:"bytes,5,opt,name=handle,proto3" json:"handle,omitempty"`
+	Handle string `protobuf:"bytes,5,opt,name=handle,proto3" json:"handle,omitempty"`
+	// depth is its place in a chain of agents, as an app.freeform's: the
+	// proposing agent's own, an exec Job's DEFIOS_DEPTH, or 0 for a person
+	// (docs/adr/0032-triggers-run-jobs-live-only.md). A sign.* event a Hook
+	// sees has its request's depth.
+	Depth         uint32 `protobuf:"varint,6,opt,name=depth,proto3" json:"depth,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -704,6 +709,13 @@ func (x *SignRequest) GetHandle() string {
 		return x.Handle
 	}
 	return ""
+}
+
+func (x *SignRequest) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
 }
 
 // SignAccept is the payload of sign.accept (docs/adr/0010-signing-session-semantics.md).
@@ -1590,12 +1602,13 @@ const file_cosl_v1_cosl_proto_rawDesc = "" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x16\n" +
 	"\x06handle\x18\x03 \x01(\tR\x06handle\x12\x14\n" +
-	"\x05depth\x18\x04 \x01(\rR\x05depth\"\xbf\x01\n" +
+	"\x05depth\x18\x04 \x01(\rR\x05depth\"\xd5\x01\n" +
 	"\vSignRequest\x12C\n" +
 	"\ftransactions\x18\x01 \x03(\v2\x1f.defios.cosl.v1.SignTransactionR\ftransactions\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
 	"\x10deadline_seconds\x18\x03 \x01(\x04R\x0fdeadlineSeconds\x12\x16\n" +
-	"\x06handle\x18\x05 \x01(\tR\x06handleJ\x04\b\x04\x10\x05R\n" +
+	"\x06handle\x18\x05 \x01(\tR\x06handle\x12\x14\n" +
+	"\x05depth\x18\x06 \x01(\rR\x05depthJ\x04\b\x04\x10\x05R\n" +
 	"reason_ref\"L\n" +
 	"\n" +
 	"SignAccept\x12&\n" +

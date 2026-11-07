@@ -205,7 +205,11 @@ func (h *hookLoop) wake(wk cosl.Wake) error {
 			return err
 		}
 	}
+	depths := requestDepths(st.list)
 	for _, ev := range evs {
+		if d, ok := depths[ev.SignRequestID]; ok {
+			ev.Depth = d // a sign.* event has its request's depth
+		}
 		h.fire(ev)
 	}
 	if !signs {
@@ -214,6 +218,15 @@ func (h *hookLoop) wake(wk cosl.Wake) error {
 	}
 	h.commit(upTo, h.fireStatusChanges(names, st), st.deadline)
 	return nil
+}
+
+// requestDepths is each Sign Request's depth in list, by msg id.
+func requestDepths(list []signreq.Summary) map[string]uint32 {
+	out := make(map[string]uint32, len(list))
+	for _, s := range list {
+		out[s.MsgID] = s.Depth
+	}
+	return out
 }
 
 // expire fires the status changes a passing deadline made, as of the last
@@ -405,7 +418,7 @@ func rowEvent(r cosl.Row) (trigger.Event, bool) {
 	case *coslv1.AppFreeform:
 		ev.Text, ev.Handle, ev.Depth = m.Text, user(m.Handle), m.Depth
 	case *coslv1.SignRequest:
-		ev.Handle, ev.SignRequestID = user(m.Handle), ev.MsgID
+		ev.Handle, ev.SignRequestID, ev.Depth = user(m.Handle), ev.MsgID, m.Depth
 	case *coslv1.SignAccept:
 		ev.Handle, ev.SignRequestID = user(m.Handle), hex.EncodeToString(m.SignRequestId)
 	case *coslv1.SignRefuse:

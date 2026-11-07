@@ -790,14 +790,15 @@ func TestRefusedStatus(t *testing.T) {
 	}
 }
 
-// list and inspect show who refused beside who accepted, and the Handle of
-// the agent behind the proposal, each accept and each refusal. A row written
-// before Handles decodes as a person's.
+// list and inspect show who refused beside who accepted, the Handle of
+// the agent behind the proposal, each accept and each refusal, and the
+// proposal's depth. A row written before Handles and depths decodes as a
+// person's, at depth 0.
 func TestRefusalsAndHandlesInListAndInspect(t *testing.T) {
 	start := time.Unix(10_000, 0)
 	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
 	rq := req(ethTx())
-	rq.Handle = "treasurer"
+	rq.Handle, rq.Depth = "treasurer", 2
 	r := rowOf(t, 10, 0xa1, start, conv[:], rq)
 	r.Sender = identity.ID{1}
 	rows := append(mintedKeyOf(t, start, 3, 4), r,
@@ -810,7 +811,7 @@ func TestRefusalsAndHandlesInListAndInspect(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := list[0]
-	if s.ProposerHandle != "treasurer" || len(s.Accepted) != 3 || !slices.Equal(s.Refused, []string{(identity.ID{3}).String()}) ||
+	if s.ProposerHandle != "treasurer" || s.Depth != 2 || len(s.Accepted) != 3 || !slices.Equal(s.Refused, []string{(identity.ID{3}).String()}) ||
 		len(s.Accepts) != 3 || s.Accepts[1].Handle != "ops" || len(s.Refusals) != 1 || s.Refusals[0].Handle != "auditor" {
 		t.Fatalf("summary = %+v", s)
 	}
@@ -832,7 +833,7 @@ func TestRefusalsAndHandlesInListAndInspect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.ProposerHandle != "" || len(d.Accepts) != 1 || d.Accepts[0].Handle != "" || len(d.Refusals) != 0 {
+	if d.ProposerHandle != "" || d.Depth != 0 || len(d.Accepts) != 1 || d.Accepts[0].Handle != "" || len(d.Refusals) != 0 {
 		t.Errorf("an old row = %+v", d)
 	}
 }

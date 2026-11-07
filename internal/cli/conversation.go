@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,7 +42,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	}
 	send.Flags().StringVar(&keyQuery, "key", "", "curve:hex, a unique public-key prefix, or the Conversation ID")
 	send.Flags().StringVar(&as.handle, "handle", "", "@handle: post as that agent, for an external runner; it must be included here")
-	send.Flags().Uint32Var(&as.depth, "depth", 1, "with --handle, the reply's depth in its chain: 1 to max_depth")
+	send.Flags().Uint32Var(&as.depth, "depth", 1, "with --handle, the reply's depth in its chain: 1 to max_depth; unset, DEFIOS_DEPTH if set")
 	send.Flags().BoolVar(&as.detach, "detach", false, "return once the message commits, without streaming the agents it mentions")
 	root.AddCommand(send)
 	follow := &cobra.Command{
@@ -132,34 +133,57 @@ type sendAs struct {
 	detach   bool
 }
 
-// parseHandle is the Handle the flags name, without its "@", or "" for a
-// person. Whether it may answer here, and at that depth, is serve's to check
-// against config.toml.
-func (a sendAs) parseHandle() (string, error) {
+// handleAndDepth is the Handle the flags name, without its "@", or "" for no
+// agent's message, and the depth it is written at: --depth, else
+// DEFIOS_DEPTH under an exec Job (ADR 0032), else 1 for an agent and 0 for
+// a person. Whether it may answer here, and at that depth, is serve's to
+// check against config.toml.
+func (a sendAs) handleAndDepth(g *globals) (string, uint32, error) {
+	depth, isJob, err := jobDepth(g)
+	if err != nil {
+		return "", 0, err
+	}
 	if a.handle == "" {
 		if a.depthSet {
-			return "", exitUsagef("--depth is only for an agent's message; pass --handle @handle")
+			return "", 0, exitUsagef("--depth is only for an agent's message; pass --handle @handle")
 		}
-		return "", nil
+		return "", depth, nil
 	}
 	h, ok := strings.CutPrefix(a.handle, "@")
 	if !ok {
-		return "", exitUsagef("--handle %q must be @handle", a.handle)
+		return "", 0, exitUsagef("--handle %q must be @handle", a.handle)
 	}
 	if err := config.ValidateHandle(h); err != nil {
-		return "", exitUsagef("--handle: %w", err)
+		return "", 0, exitUsagef("--handle: %w", err)
 	}
-	if a.depth < 1 {
-		return "", exitUsagef("--depth %d must be at least 1", a.depth)
+	if a.depthSet || !isJob {
+		depth = a.depth
 	}
-	return h, nil
+	if depth < 1 {
+		return "", 0, exitUsagef("--depth %d must be at least 1", depth)
+	}
+	return h, depth, nil
+}
+
+// jobDepth is DEFIOS_DEPTH, the depth serve gives an exec Job to write at
+// (ADR 0032), and whether it is set.
+func jobDepth(g *globals) (uint32, bool, error) {
+	v := g.app.Getenv("DEFIOS_DEPTH")
+	if v == "" {
+		return 0, false, nil
+	}
+	d, err := strconv.ParseUint(v, 10, 32)
+	if err != nil {
+		return 0, false, exitUsagef("DEFIOS_DEPTH %q must be a depth: 0 or more", v)
+	}
+	return uint32(d), true, nil
 }
 
 func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sendAs, text string) error {
 	if _, err := cosl.Freeform(text); err != nil {
 		return exitUsagef("%w", err)
 	}
-	handle, err := as.parseHandle()
+	handle, depth, err := as.handleAndDepth(g)
 	if err != nil {
 		return err
 	}
@@ -178,12 +202,7 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 		}
 		defer stream.Close()
 	}
-	var v serve.SendView
-	if handle == "" {
-		v, err = client.ConversationSend(ctx, text, conv)
-	} else {
-		v, err = client.ConversationSendAs(ctx, text, handle, as.depth, conv)
-	}
+	v, err := client.ConversationSendAs(ctx, text, handle, depth, conv)
 	if err != nil {
 		return sendError(err)
 	}

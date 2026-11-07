@@ -90,3 +90,31 @@ func TestWalkStopsAtAStop(t *testing.T) {
 		t.Fatal("finished = true after a stop, want false")
 	}
 }
+
+// A message a Job writes at a depth, as DEFIOS_DEPTH gives it, summons
+// its mentions one deeper, as an agent's would, so Hooks answering their
+// own Jobs' talk cannot loop past max_depth.
+func TestWalkFromADepthSummonsOneDeeper(t *testing.T) {
+	inc := included(2, "a", "b")
+	var lines []string
+	do := func(s chain.Step) chain.Outcome {
+		line := fmt.Sprintf("%d %s @%s d%d", s.N, s.Action, s.Handle, s.Depth)
+		if s.Action == chain.Skip {
+			line += ": " + s.Reason
+		}
+		lines = append(lines, line)
+		if s.Handle == "a" && s.Action == chain.Run {
+			return chain.Outcome{Said: "@b", Included: inc}
+		}
+		return chain.Outcome{}
+	}
+	chain.WalkFrom(1, inc, []string{"a"}, do)
+	check(t, lines, []string{"1 run @a d2", "2 skip @b d3: @a replied at depth 2, which is max_depth 2"})
+
+	lines = nil
+	chain.WalkFrom(2, inc, []string{"a", "x"}, do)
+	check(t, lines, []string{
+		"1 skip @a d3: the message was written at depth 2, which is max_depth 2",
+		"2 skip @x d3: @x is not in [agent] profiles here",
+	})
+}

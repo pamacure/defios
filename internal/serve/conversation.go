@@ -68,79 +68,82 @@ func requestConversation(hexID string) ([]byte, error) {
 
 // conversationSend is `conversation send` (§8): author an app.freeform and
 // commit it, or queue it in the Outbox when no leader is known (ADR 0025).
-// A nil conversationID is Group-level. An empty handle is a person's
+// A nil conversationID is Group-level. An empty handle is no agent's
 // message, whose mentions start its chain of agents as soon as it is
-// written; otherwise it is that agent's at depth, and this Node's config
-// must include the Handle there (ADR 0015).
+// written: a person's at depth 0, or an exec Job's at its DEFIOS_DEPTH,
+// whose chain starts one deeper (ADR 0032). Otherwise it is that agent's at
+// depth, and this Node's config must include the Handle there (ADR 0015).
 func (s *server) conversationSend(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
 	payload, err := cosl.AgentFreeform(text, handle, depth)
 	if err != nil {
 		return SendView{}, err
 	}
+	var inc config.Included
 	v, err := s.conversationAppend(ctx, cosl.TypeAppFreeform, conversationID, payload, func(store *cosl.Store) error {
-		return s.checkHandle(store, conversationID, handle, depth, text)
+		var err error
+		inc, err = s.checkHandle(store, conversationID, handle, depth, text)
+		return err
 	})
 	if err != nil {
 		return v, err
 	}
 	m := talk.Message{Row: cosl.Row{Sender: s.opts.Node.NodeID}, Handle: handle, Text: text}
 	if handles := plan.Summons(m, s.opts.Node.NodeID); len(handles) > 0 {
-		s.startChain(conversationID, v.MsgID, handles)
+		s.startChain(conversationID, v.MsgID, depth, inc, handles)
 	}
 	return v, nil
 }
 
-// checkHandle allows a person's message at depth 0 whose mentions all name
-// Handles included where it is sent, and an agent's whose Handle is included
-// there, at a depth from 1 to max_depth. An agent's mentions are not checked:
-// the chain skips those it cannot summon (ADR 0015). Like requireConversation
-// it is the writer's check, not the FSM's: another Node's config is not this
-// Node's to know.
-func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle string, depth uint32, text string) error {
+// checkHandle allows no agent's message whose mentions all name Handles
+// included where it is sent, and an agent's whose Handle is included there,
+// at a depth from 1 to max_depth, and returns what is included there. An
+// agent's mentions are not checked: the chain skips those it cannot summon
+// (ADR 0015). Like requireConversation it is the writer's check, not the
+// FSM's: another Node's config is not this Node's to know.
+func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle string, depth uint32, text string) (config.Included, error) {
 	if handle == "" {
-		return s.checkMentions(store, conversationID, depth, mention.Handles(text))
+		return s.checkMentions(store, conversationID, mention.Handles(text))
 	}
 	e, err := s.load(store, conversationID)
 	if err != nil {
-		return err
+		return config.Included{}, err
 	}
 	inc, err := e.Included()
 	if err != nil {
-		return err
+		return inc, err
 	}
 	if !includes(inc, handle) {
-		return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent", ErrBadHandle, handle)
+		return inc, fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent", ErrBadHandle, handle)
 	}
 	if depth < 1 || depth > uint32(inc.MaxDepth) {
-		return fmt.Errorf("%w: depth %d is outside 1 to max_depth %d", ErrBadHandle, depth, inc.MaxDepth)
+		return inc, fmt.Errorf("%w: depth %d is outside 1 to max_depth %d", ErrBadHandle, depth, inc.MaxDepth)
 	}
-	return nil
+	return inc, nil
 }
 
-// checkMentions refuses a person's message with a depth, or one that
-// mentions a Handle not included where it is sent, naming it and what is.
-// A message that mentions nobody reads no config.
-func (s *server) checkMentions(store *cosl.Store, conversationID []byte, depth uint32, mentions []string) error {
-	if depth != 0 {
-		return fmt.Errorf("%w: a person's message has no depth; name the agent", ErrBadHandle)
-	}
+// checkMentions refuses no agent's message that mentions a Handle not
+// included where it is sent, naming it and what is, and returns what is
+// included there. A message that mentions nobody reads no config. Its
+// depth is not checked: one a Job writes at max_depth or past it summons
+// nobody, and the chain says so.
+func (s *server) checkMentions(store *cosl.Store, conversationID []byte, mentions []string) (config.Included, error) {
 	if len(mentions) == 0 {
-		return nil
+		return config.Included{}, nil
 	}
 	e, err := s.load(store, conversationID)
 	if err != nil {
-		return err
+		return config.Included{}, err
 	}
 	inc, err := e.Included()
 	if err != nil {
-		return err
+		return inc, err
 	}
 	for _, m := range mentions {
 		if !includes(inc, m) {
-			return fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent; included: %s", ErrBadHandle, m, listHandles(inc.Profiles))
+			return inc, fmt.Errorf("%w: @%s is not in [agent] profiles where this is sent; included: %s", ErrBadHandle, m, listHandles(inc.Profiles))
 		}
 	}
-	return nil
+	return inc, nil
 }
 
 func includes(inc config.Included, handle string) bool {
@@ -259,7 +262,8 @@ func (c Client) ConversationSend(ctx context.Context, text string, conversationI
 
 // ConversationSendAs is `conversation send --handle`: as ConversationSend,
 // written by the agent with this Handle at depth in its chain. An empty
-// handle, at depth 0, is a person's message.
+// handle is no agent's: a person's message at depth 0, or an exec Job's at
+// its DEFIOS_DEPTH (ADR 0032).
 func (c Client) ConversationSendAs(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
 	var v SendView
 	req := sendRequest{Text: text, Handle: handle, Depth: depth}

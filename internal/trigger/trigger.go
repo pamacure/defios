@@ -322,7 +322,7 @@ func StatusChanges(prev map[string]string, list []signreq.Summary) ([]Event, map
 		}
 		out = append(out, Event{
 			Type: config.RequestEventPrefix + s.Status, Seq: s.Seq, MsgID: s.MsgID, SignRequestID: s.MsgID,
-			From: s.Proposer, Handle: handle, ConversationID: s.Conversation, Status: s.Status,
+			From: s.Proposer, Handle: handle, Depth: s.Depth, ConversationID: s.Conversation, Status: s.Status,
 		})
 	}
 	return out, cur

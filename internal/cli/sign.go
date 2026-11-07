@@ -49,11 +49,15 @@ Every chain must be of the Key's curve.`,
 			if keyQuery == "" || txFile == "" {
 				return exitUsagef("--key and --transactions are required")
 			}
+			depth, _, err := jobDepth(g)
+			if err != nil {
+				return err
+			}
 			txs, err := readTransactions(g, txFile)
 			if err != nil {
 				return err
 			}
-			spec := signreq.Spec{Reason: reason, DeadlineSeconds: deadline, Transactions: txs}
+			spec := signreq.Spec{Reason: reason, DeadlineSeconds: deadline, Transactions: txs, Depth: depth}
 			v, err := serve.Client{Socket: g.paths().Socket}.SignPropose(cmd.Context(), keyQuery, spec)
 			if err != nil {
 				return signError(err)

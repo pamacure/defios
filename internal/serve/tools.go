@@ -62,9 +62,9 @@ type acted func(tool, msgID string)
 // agentTools are the Tools granted that handle's run in conv may call, in
 // the order config.Tools lists them: the sign Tools only in a Key's
 // Conversation, never in Group-level talk (nil conv), and scoped to that
-// Key's Sign Requests. Those that write act as this Node under handle, and
-// each that succeeds is told to did.
-func (s *server) agentTools(handle string, granted []string, conv []byte, did acted) []agent.Tool {
+// Key's Sign Requests. Those that write act as this Node under handle, a
+// proposal at the run's depth, and each that succeeds is told to did.
+func (s *server) agentTools(handle string, depth uint32, granted []string, conv []byte, did acted) []agent.Tool {
 	var out []agent.Tool
 	for _, name := range config.Tools {
 		if !slices.Contains(granted, name) {
@@ -83,7 +83,7 @@ func (s *server) agentTools(handle string, granted []string, conv []byte, did ac
 			}
 		case config.ToolSignPropose:
 			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: signProposeDescription, Schema: signProposeSchema, Call: s.signProposeTool(conv, handle, did)})
+				out = append(out, agent.Tool{Name: name, Description: signProposeDescription, Schema: signProposeSchema, Call: s.signProposeTool(conv, handle, depth, did)})
 			}
 		case config.ToolSignAccept:
 			if conv != nil {
@@ -142,14 +142,15 @@ func (s *server) signInspectTool(conv []byte) func(context.Context, json.RawMess
 }
 
 // signProposeTool is sign_propose in conv: a request of its Key, proposed
-// by handle. A cancel of the run does not cut a proposal it has begun, so
-// what landed is recorded.
-func (s *server) signProposeTool(conv []byte, handle string, did acted) func(context.Context, json.RawMessage) (string, error) {
+// by handle at its own depth, whatever the input says. A cancel of the run
+// does not cut a proposal it has begun, so what landed is recorded.
+func (s *server) signProposeTool(conv []byte, handle string, depth uint32, did acted) func(context.Context, json.RawMessage) (string, error) {
 	return func(ctx context.Context, input json.RawMessage) (string, error) {
 		var spec signreq.Spec
 		if err := json.Unmarshal(input, &spec); err != nil {
 			return "", errors.New(`its input must be {"reason": "<why>", "transactions": [...], "deadline_seconds": <optional seconds>}`)
 		}
+		spec.Depth = depth
 		v, err := s.signPropose(context.WithoutCancel(ctx), signProposeRequest{Key: conversationKey(conv), Spec: spec}, handle)
 		if err != nil {
 			return "", toolError(err)

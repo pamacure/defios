@@ -72,6 +72,30 @@ func Walk(start []string, do func(Step) Outcome) bool {
 	return w.walk(sums, 1)
 }
 
+// WalkFrom is Walk for a message written at depth by no agent, such as an
+// exec Job's at DEFIOS_DEPTH (ADR 0032): it summons start at depth+1 under
+// inc, what was included where it was written, as an agent's message
+// would, so a Hook answering its own Jobs' talk stops at max_depth. At
+// depth 0 it is Walk.
+func WalkFrom(depth uint32, inc config.Included, start []string, do func(Step) Outcome) bool {
+	if depth == 0 {
+		return Walk(start, do)
+	}
+	w := walker{do: do}
+	sums := make([]summons, 0, len(start))
+	for _, h := range start {
+		sm := summons{handle: h}
+		switch {
+		case !includes(inc, h):
+			sm.skip = fmt.Sprintf("@%s is not in [agent] profiles here", h)
+		case !inc.Summons(depth):
+			sm.skip = fmt.Sprintf("the message was written at depth %d, which is max_depth %d", depth, inc.MaxDepth)
+		}
+		sums = append(sums, sm)
+	}
+	return w.walk(sums, depth+1)
+}
+
 type walker struct {
 	do func(Step) Outcome
 	n  int

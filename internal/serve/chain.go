@@ -133,8 +133,12 @@ type chain struct {
 	id      string // the hex msg_id of the person's message that starts it
 	conv    []byte
 	handles []string
-	ctx     context.Context
-	cancel  context.CancelFunc
+	// depth is its message's, 0 for a person's, and inc what was included
+	// where it was written, by which a Job's message summons (ADR 0032).
+	depth  uint32
+	inc    config.Included
+	ctx    context.Context
+	cancel context.CancelFunc
 	// cancelled tells a cancel from the serve stopping; both end ctx.
 	cancelled atomic.Bool
 }
@@ -405,11 +409,12 @@ func (s *server) onChains(ctx context.Context, do func(ctx context.Context, chai
 	return true
 }
 
-// startChain queues the chain of the person's message with hex msg_id id,
+// startChain queues the chain of the message with hex msg_id id, no
+// agent's, written at depth (0 for a person's) where inc was included,
 // which mentions handles, as soon as it is written, committed or queued; it
 // never starts again when a queued message commits (ADR 0025).
-func (s *server) startChain(conv []byte, id string, handles []string) {
-	c := &chain{id: id, conv: conv, handles: handles}
+func (s *server) startChain(conv []byte, id string, depth uint32, inc config.Included, handles []string) {
+	c := &chain{id: id, conv: conv, handles: handles, depth: depth, inc: inc}
 	if !s.onChains(s.ctx, func(ctx context.Context, chains *sync.WaitGroup) { s.chains.enqueue(ctx, chains, c, s.runChain) }) {
 		s.opts.Logf("serve: chain %s did not start: the replica stopped", id)
 	}
@@ -428,7 +433,7 @@ func (s *server) runChain(c *chain) {
 		tr := transcript.NewWriter(s.opts.Paths, s.opts.Alias, c.conv, c.id, s.opts.Logf)
 		defer tr.Close()
 		publish(ChainEvent{Type: EventChainStart})
-		plan.Walk(c.handles, func(st plan.Step) plan.Outcome { return s.step(c, tr, st, publish) })
+		plan.WalkFrom(c.depth, c.inc, c.handles, func(st plan.Step) plan.Outcome { return s.step(c, tr, st, publish) })
 	}
 	s.chains.end(c)
 }
@@ -568,7 +573,7 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns, Tools: s.agentTools(handle, p.Tools, conv, did)}
+	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns, Tools: s.agentTools(handle, depth, p.Tools, conv, did)}
 	if len(skills) > 0 {
 		req.Tools = append(req.Tools, skillLoadTool(skills))
 	}

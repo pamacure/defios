@@ -292,16 +292,17 @@ func TestHooksFireBelowMaxDepthOnly(t *testing.T) {
 
 // A Sign Request's status change is a request.<status> event: one first
 // seen is a change from nothing, and one that keeps its status is none.
+// It has the request's depth.
 func TestStatusChangesAreRequestEvents(t *testing.T) {
 	list := []signreq.Summary{
 		{Seq: 3, MsgID: "aa", Conversation: "c1", Proposer: other.String(), Status: signreq.Open},
-		{Seq: 5, MsgID: "bb", Conversation: "c1", Proposer: self.String(), ProposerHandle: "auditor", Status: signreq.Expired},
+		{Seq: 5, MsgID: "bb", Conversation: "c1", Proposer: self.String(), ProposerHandle: "auditor", Depth: 2, Status: signreq.Expired},
 		{Seq: 8, MsgID: "cc", Conversation: "c1", Proposer: self.String(), Status: signreq.Open},
 	}
 	prev := map[string]string{"aa": signreq.Open, "bb": signreq.Open}
 	evs, cur := trigger.StatusChanges(prev, list)
 	want := []trigger.Event{
-		{Type: "request.expired", Seq: 5, MsgID: "bb", SignRequestID: "bb", From: self.String(), Handle: "auditor", ConversationID: "c1", Status: signreq.Expired},
+		{Type: "request.expired", Seq: 5, MsgID: "bb", SignRequestID: "bb", From: self.String(), Handle: "auditor", Depth: 2, ConversationID: "c1", Status: signreq.Expired},
 		{Type: "request.open", Seq: 8, MsgID: "cc", SignRequestID: "cc", From: self.String(), Handle: "user", ConversationID: "c1", Status: signreq.Open},
 	}
 	if !slices.Equal(evs, want) {

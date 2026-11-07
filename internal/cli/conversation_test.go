@@ -636,6 +636,12 @@ func fakeConversationSend(t *testing.T, dir string) *atomic.Value {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"seq":9,"term":1,"msg_id":"` + strings.Repeat("ab", 32) + `"}`))
 	})
+	mux.HandleFunc("POST /v1/sign/propose", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body.Store(string(b))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"seq":9,"term":1,"msg_id":"` + strings.Repeat("ab", 32) + `"}`))
+	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
@@ -973,6 +979,66 @@ func TestConversationSendHandle(t *testing.T) {
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "send"}, args...)...)
 		if r.code != 1 || body.Load() != "" {
+			t.Errorf("%v: exit %d, posted %q; stderr %q", args, r.code, body.Load(), r.stderr)
+		}
+	}
+}
+
+// Under an exec Job, DEFIOS_DEPTH is the depth conversation send and sign
+// propose write at, an agent's or not, unless --depth says otherwise; one
+// that is no depth is refused before serve is asked.
+func TestDefiosDepthIsTheDepthAJobWritesAt(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	body := fakeConversationSend(t, dir)
+	posted := func() map[string]any {
+		t.Helper()
+		var m map[string]any
+		if err := json.Unmarshal([]byte(body.Load().(string)), &m); err != nil {
+			t.Fatal(err)
+		}
+		body.Store("")
+		return m
+	}
+	job := map[string]string{"DEFIOS_DEPTH": "2"}
+	send := func(env map[string]string, args ...string) {
+		t.Helper()
+		if r := run(t, env, "", append([]string{"--dir", dir, "conversation", "send"}, args...)...); r.code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, r.code, r.stderr)
+		}
+	}
+	send(job, "hi")
+	if m := posted(); m["handle"] != nil || m["depth"] != float64(2) {
+		t.Errorf("a Job's send posted %v", m)
+	}
+	send(job, "--handle", "@auditor", "hi")
+	if m := posted(); m["handle"] != "auditor" || m["depth"] != float64(2) {
+		t.Errorf("a Job's send --handle posted %v", m)
+	}
+	send(job, "--handle", "@auditor", "--depth", "3", "hi")
+	if m := posted(); m["depth"] != float64(3) {
+		t.Errorf("--depth 3 under a Job posted %v", m)
+	}
+
+	txs := `[{"network": "eth", "ethereum": {"to": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "value": "1"}}]`
+	propose := []string{"--dir", dir, "sign", "propose", "--key", "ecdsa:02", "--reason", "pay", "--transactions", "-"}
+	if r := run(t, job, txs, propose...); r.code != 0 {
+		t.Fatalf("propose: exit %d: %s", r.code, r.stderr)
+	}
+	if m := posted(); m["depth"] != float64(2) {
+		t.Errorf("a Job's propose posted %v", m)
+	}
+	if r := run(t, nil, txs, propose...); r.code != 0 {
+		t.Fatalf("propose: exit %d: %s", r.code, r.stderr)
+	}
+	if m := posted(); m["depth"] != nil {
+		t.Errorf("a person's propose posted %v", m)
+	}
+
+	bad := map[string]string{"DEFIOS_DEPTH": "deep"}
+	for _, args := range [][]string{{"conversation", "send", "hi"}, propose[2:]} {
+		r := run(t, bad, txs, append([]string{"--dir", dir}, args...)...)
+		if r.code != 1 || body.Load() != "" || !strings.Contains(r.stderr, "DEFIOS_DEPTH") {
 			t.Errorf("%v: exit %d, posted %q; stderr %q", args, r.code, body.Load(), r.stderr)
 		}
 	}

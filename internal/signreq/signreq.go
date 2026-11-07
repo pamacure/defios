@@ -84,6 +84,9 @@ type Spec struct {
 	Reason          string   `json:"reason"`
 	DeadlineSeconds uint64   `json:"deadline_seconds,omitempty"`
 	Transactions    []TxSpec `json:"transactions"`
+	// Depth is the proposal's place in a chain of agents: the proposing
+	// agent's, an exec Job's DEFIOS_DEPTH, or 0 for a person (ADR 0032).
+	Depth uint32 `json:"depth,omitempty"`
 }
 
 type rawJSON = json.RawMessage
@@ -93,7 +96,7 @@ type rawJSON = json.RawMessage
 // An intent may name its chain itself, but only its alias's. It does not
 // otherwise validate the request.
 func Build(spec Spec, nets []network.Network) (*coslv1.SignRequest, error) {
-	out := &coslv1.SignRequest{Reason: spec.Reason, DeadlineSeconds: spec.DeadlineSeconds}
+	out := &coslv1.SignRequest{Reason: spec.Reason, DeadlineSeconds: spec.DeadlineSeconds, Depth: spec.Depth}
 	if out.DeadlineSeconds == 0 {
 		out.DeadlineSeconds = DefaultDeadlineSeconds
 	}
@@ -470,10 +473,13 @@ type Summary struct {
 	Proposer     string `json:"proposer"`
 	// ProposerHandle is the agent that proposed, empty for a person.
 	ProposerHandle string `json:"proposer_handle,omitempty"`
-	CreatedAt      string `json:"created_at"`
-	Status         string `json:"status"`
-	Transactions   int    `json:"transactions"`
-	Reason         string `json:"reason"`
+	// Depth is the proposal's place in a chain of agents, 0 for a person's
+	// (ADR 0032).
+	Depth        uint32 `json:"depth,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	Status       string `json:"status"`
+	Transactions int    `json:"transactions"`
+	Reason       string `json:"reason"`
 	// Accepted is who has accepted, proposer first; Needed is the Key's t.
 	// Later accepts than the first Needed do not sign.
 	Accepted []string `json:"accepted"`
@@ -602,7 +608,7 @@ func decodeRow(r cosl.Row) (*coslv1.SignRequest, error) {
 func summarise(rows []cosl.Row, sessions []session.Summary, keys map[string]threshold, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
 	sum := Summary{
 		Seq: r.Seq, MsgID: hex.EncodeToString(r.MsgID[:]), Conversation: hex.EncodeToString(r.ConversationID),
-		Proposer: r.Sender.String(), ProposerHandle: req.Handle, CreatedAt: time.Unix(0, r.CreatedAt).UTC().Format(time.RFC3339),
+		Proposer: r.Sender.String(), ProposerHandle: req.Handle, Depth: req.Depth, CreatedAt: time.Unix(0, r.CreatedAt).UTC().Format(time.RFC3339),
 		Transactions: len(req.Transactions), Reason: req.Reason,
 		Accepted: []string{}, Refused: []string{}, Accepts: []Actor{}, Refusals: []Refusal{},
 	}

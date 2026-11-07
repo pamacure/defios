@@ -93,6 +93,11 @@ message SignRequest {
   // handle is the Agent Profile that proposed, empty when a person did
   // (docs/adr/0028-a-node-refuses-a-sign-request-once.md).
   string handle = 5;
+  // depth is its place in a chain of agents, as an app.freeform's: the
+  // proposing agent's own, an exec Job's DEFIOS_DEPTH, or 0 for a person
+  // (docs/adr/0032-triggers-run-jobs-live-only.md). A sign.* event a Hook
+  // sees has its request's depth.
+  uint32 depth = 6;
 }
 
 // SignAccept is the payload of sign.accept (docs/adr/0010-signing-session-semantics.md).
