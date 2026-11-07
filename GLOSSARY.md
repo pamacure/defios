@@ -93,7 +93,7 @@ The name of an Agent Profile on one Node, written `@handle` in talk to summon it
 _Avoid_: agent name, username, alias (that is a Group's, Network's or Provider's local label)
 
 **Chain**:
-The agents one person's message summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id. Each agent reached is one **step**, numbered in that order whether it runs or is skipped.
+The agents one person's message, or one Trigger's firing, summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id. Each agent reached is one **step**, numbered in that order whether it runs or is skipped.
 _Avoid_: thread, run, cascade
 
 **Transcript**:
@@ -103,6 +103,22 @@ _Avoid_: work log, trace, output log, reply (that is the message it says)
 **Mention**:
 `@` and a Handle in talk, which summons that agent where the message is sent. Found from the text alone, case-insensitively and at a word boundary, never by matching against the Handles that exist; `\@` writes one without summoning. A person's mention that names no included Handle is refused; an agent's is skipped.
 _Avoid_: tag, ping, at-reference
+
+**Trigger**:
+Either a Hook or a Schedule: something in a Node's Group config that, when it fires, runs a Job as that Node. Schedules are how a Node starts things unprompted, Hooks how it answers what others do. Meant for an always-on Node, such as one in the cloud, rather than a laptop or phone. Node-local and never replicated, and stateless: a Trigger fires only on what happens live while `serve` serves its Group, never for what it missed.
+_Avoid_: automation, rule, event handler
+
+**Hook**:
+A Trigger that fires when a live COSL event matching its filter appears in this Node's replica, whichever Node wrote it. An event is a COSL message or a change in a Sign Request's status, including ones no message marks, such as `expired`.
+_Avoid_: listener, subscription, watcher, callback
+
+**Schedule**:
+A Trigger that fires at a set time, once or on a repeat. A firing that falls while `serve` is not serving its Group is skipped, never made up.
+_Avoid_: cron job, timer, routine
+
+**Job**:
+What a Trigger runs when it fires, defined once by name so any number of Hooks and Schedules can name it: summoning one of this Node's agents, running a local command, or calling a webhook.
+_Avoid_: action (that is how a Tool is described), task, effect
 
 **Key**:
 One threshold public key held jointly by a Group, together with the per-Node shares of it. Identified by its curve and that public key, not by the Session that minted it; exists for ECDSA or Ed25519 signing.
