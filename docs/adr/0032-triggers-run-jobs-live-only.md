@@ -27,8 +27,10 @@ made up later.
   ship as ordinary `exec` tables in each new Group's config, where the
   operator can read, change or delete them, rather than as behaviour an
   upgrade could change unseen.
-- **Gating Hooks**, which run before this Node's own accept and can veto it.
-  Deferred: a different concept, with its own failure semantics.
+- **Hooks that gate this Node's own accept**, running before it, whoever
+  starts it (a person, an agent or a Job), and able to veto it. Deferred, not
+  a Hook: a guardrail rather than a Trigger, with its own failure semantics,
+  kept as a possible future **Policy**.
 - **Branching on a Job's outcome.** Rejected as a workflow engine. A Hook
   runs its Jobs in order and stops at the first that fails, as `&&` does.
 
