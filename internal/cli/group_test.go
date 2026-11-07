@@ -6,13 +6,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"defios.com/internal/config"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/nodedir"
 	groupv1 "defios.com/proto/group/v1"
 )
 
@@ -439,5 +442,24 @@ func TestGroupVerbExitCodesFromServe(t *testing.T) {
 		if r.code != c.code {
 			t.Errorf("%s: exit %d, stderr %q; want %d", c.name, r.code, r.stderr, c.code)
 		}
+	}
+}
+
+// A new Group's config.toml holds two Jobs and no Trigger: sign_accept and
+// sign_refuse, which act on the Sign Request an event names (ADR 0032).
+func TestGroupNewWritesTheSignJobsOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "node")
+	mustInit(t, dir)
+	mustGroupNew(t, dir)
+	cfg, err := config.ReadFile(nodedir.Resolve(nodedir.Lookup{Dir: dir}).GroupConfigFile(group.ImplicitAlias))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]config.Job{
+		"sign_accept": {Exec: []string{"defios", "sign", "accept", "$DEFIOS_SIGN_REQUEST_ID"}},
+		"sign_refuse": {Exec: []string{"defios", "sign", "refuse", "$DEFIOS_SIGN_REQUEST_ID", "--reason", "refused by this Node's sign_refuse Job"}},
+	}
+	if !reflect.DeepEqual(cfg.Jobs, want) || len(cfg.Hooks) != 0 {
+		t.Errorf("jobs %+v, hooks %+v; want %+v and no Hooks", cfg.Jobs, cfg.Hooks, want)
 	}
 }

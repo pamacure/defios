@@ -127,7 +127,7 @@ func runGroupNew(g *globals, alias string, o groupNewOptions) error {
 			return exitOperational(err)
 		}
 	}
-	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname, TailnetAuthKey: "$TS_AUTHKEY"}
+	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname, TailnetAuthKey: "$TS_AUTHKEY", Jobs: config.DefaultJobs()}
 	if err := config.WriteFile(p.GroupConfigFile(alias), cfg); err != nil {
 		return exitOperational(err)
 	}

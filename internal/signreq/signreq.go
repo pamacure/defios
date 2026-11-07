@@ -353,6 +353,9 @@ const (
 	Expired = "expired"
 )
 
+// Statuses is every status a Sign Request may have.
+var Statuses = []string{Open, Waiting, Signing, Done, Aborted, Refused, Expired}
+
 // This Node's own stance on a request, as list and inspect show it.
 const (
 	StanceAccepted    = "accepted"

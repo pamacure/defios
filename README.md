@@ -328,6 +328,21 @@ defios conversation prune --older-than 30d
 
 To prune on a schedule, set `prune` at the top of the Group's `config.toml` to an age: whole days like `"90d"`, or a Go duration like `"36h"`. `serve` then prunes every Conversation on start, after a snapshot restore, and once a day. Leave it out on a machine that keeps everything. A restore can bring pruned talk back, so a manual prune warns when no `prune` is set. Either way, pruning warns when it destroys talk your Recap doesn't cover, since this machine's agents then lose it.
 
+A machine that runs `serve` around the clock can answer what happens in the Group with Hooks. A Hook, in the Group's `config.toml` only, names the Jobs it runs when a matching event is applied while `serve` is running: talk or a sign message from any machine, or a Sign Request's status changing, as `request.<status>`. It never fires on what `serve` catches up on as it starts, or on a snapshot restore. Its filters, all optional and all of which must match, are `events`, `from` (`"self"`, `"others"` or Node IDs), `handles` (`"user"` for a person), `conversation` (a Workspace name or `"group"`) and `text`, a regular expression over the talk. A Job is an `exec` argument list, run with no shell in the Group's Workspace, given the event as JSON on stdin and an environment of `PATH`, the `DEFIOS_*` variables and the `secrets` it names; `$DEFIOS_*` in its arguments is expanded. Or it is a `webhook`, which POSTs the same JSON and retries a 5xx up to 3 times. A Hook runs its Jobs in order, stopping at the first that fails, and one firing at a time; it fires only on events below `[agent] max_depth`. A new Group's `config.toml` comes with two Jobs, `sign_accept` and `sign_refuse`, and no Hook:
+
+```toml
+[jobs.notify]
+webhook = "$NTFY_URL"                  # or an https URL
+headers = { Authorization = "$NTFY_TOKEN" }
+
+[hooks.review_requests]
+events = ["sign.request"]
+from = "others"
+jobs = ["notify"]
+```
+
+Edit `config.toml` and the next event uses it; a Job's output goes to the `serve` log.
+
 Agents can be given more through Plugins: packages of Skills, instructions an agent reads when a task calls for them, and MCP Servers, programs it can call. Install one from a git repository, at a branch, tag or commit with `@<ref>`, or from a local directory:
 
 ```bash

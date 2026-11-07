@@ -41,6 +41,10 @@ type Config struct {
 	// snapshot restore and once a day (ADR 0024). Unset, the Node is
 	// archival.
 	Prune Age `toml:"prune,omitzero"`
+	// Jobs and Hooks are this Node's Triggers and what they run, by name
+	// (ADR 0032): the Group's only, never a Conversation's.
+	Jobs  map[string]Job  `toml:"jobs,omitempty"`
+	Hooks map[string]Hook `toml:"hooks,omitempty"`
 	Workspace
 }
 
@@ -244,6 +248,9 @@ func parseConfig(path string, data []byte) (Config, error) {
 		}
 	}
 	if err := c.Workspace.validate(md, true); err != nil {
+		return Config{}, fmt.Errorf("config: %s: %w", path, err)
+	}
+	if err := c.validateTriggers(md); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return c, nil

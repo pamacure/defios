@@ -170,3 +170,13 @@ func TestVaultSecretsFileIsPerGroupInTheVault(t *testing.T) {
 		t.Fatalf("secrets file = %q", got)
 	}
 }
+
+// DEFIOS_SOCKET, which serve sets for the Jobs it runs (ADR 0032), names
+// the socket over XDG_RUNTIME_DIR.
+func TestDefiosSocketWins(t *testing.T) {
+	env := map[string]string{"DEFIOS_SOCKET": "/run/x/serve.sock", "XDG_RUNTIME_DIR": "/run/user/1"}
+	p := nodedir.Resolve(nodedir.Lookup{Getenv: func(k string) string { return env[k] }, Home: "/home/x"})
+	if p.Socket != "/run/x/serve.sock" {
+		t.Fatalf("socket %s, want DEFIOS_SOCKET's", p.Socket)
+	}
+}

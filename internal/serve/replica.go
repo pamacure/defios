@@ -91,20 +91,21 @@ func (s *server) startReplica() {
 	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(s.opts.Alias))
 	s.startOutbox(replica, ob)
 	s.startSessions(store, ob, rec.Roster())
-	s.startWatchers(store)
+	s.startWatchers(replica, store)
 	go s.join(s.ctx, replica, store, gid)
 }
 
 // startWatchers runs what follows the replica on this Node's behalf: the
 // Conversation Workspaces, the prune policy, which follows config.toml
-// and does nothing while there is none, and the chains of agents this
-// Node's mentions summon.
-func (s *server) startWatchers(store *cosl.Store) {
+// and does nothing while there is none, the chains of agents this Node's
+// mentions summon, and this Node's Hooks.
+func (s *server) startWatchers(replica *raftx.Replica, store *cosl.Store) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() { s.watchWorkspaces(ctx, store) })
 	wg.Go(func() { s.keepPruned(ctx, store) })
 	wg.Go(func() { s.runChains(ctx) })
+	wg.Go(func() { s.keepHooks(ctx, replica, store) })
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	s.watchCancel, s.watchDone = cancel, done

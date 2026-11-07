@@ -382,27 +382,35 @@ func (r *Replica) committed(msgID [32]byte) (Position, bool, error) {
 // (§4.4) reads its own history before acting on it. The leader is caught
 // up by definition. ErrNoLeader if none is known before ctx ends.
 func (r *Replica) WaitCaughtUp(ctx context.Context) error {
+	_, err := r.CaughtUp(ctx)
+	return err
+}
+
+// CaughtUp is WaitCaughtUp, returning the index it caught up to: the
+// leader's applied index when asked, or this replica's own if it is the
+// leader. A COSL row at a seq above it was applied after the catch-up.
+func (r *Replica) CaughtUp(ctx context.Context) (uint64, error) {
 	for {
 		if r.raft.State() == raft.Leader {
-			return nil
+			return r.raft.AppliedIndex(), nil
 		}
 		target, err := r.leaderApplied(ctx)
 		if err == nil {
 			for r.raft.AppliedIndex() < target {
 				select {
 				case <-ctx.Done():
-					return ErrNotCaughtUp
+					return 0, ErrNotCaughtUp
 				case <-time.After(commitTimeout):
 				}
 			}
-			return nil
+			return target, nil
 		}
 		if !errors.Is(err, errRetry) {
-			return err
+			return 0, err
 		}
 		select {
 		case <-ctx.Done():
-			return ErrNoLeader
+			return 0, ErrNoLeader
 		case <-time.After(heartbeatTimeout):
 		}
 	}
