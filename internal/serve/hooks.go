@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"slices"
@@ -85,30 +86,45 @@ func (s *server) caughtUp(ctx context.Context, replica *raftx.Replica) (uint64, 
 
 // hookLoop is keepHooks' state between wakes.
 type hookLoop struct {
-	s          *server
-	ctx        context.Context
-	store      *cosl.Store
-	cfg        config.Config // the Jobs, Hooks and max_depth in force
-	mtime      time.Time     // config.toml's as last read; zero while it is missing
-	baselined  bool
-	restores   uint64            // the Store's restore count as of the baseline
-	seen       uint64            // the last seq handled: statuses are read as of it
-	statuses   map[string]string // each Sign Request's, by hex msg_id, as of seen
-	deadline   time.Time         // the next open request's deadline; zero for none
-	queues     *hookQueues
-	runner     trigger.Runner
-	errs       *errlog.Reporter
-	configErrs *errlog.Reporter
+	*triggers
+	store     *cosl.Store
+	baselined bool
+	restores  uint64            // the Store's restore count as of the baseline
+	seen      uint64            // the last seq handled: statuses are read as of it
+	statuses  map[string]string // each Sign Request's, by hex msg_id, as of seen
+	deadline  time.Time         // the next open request's deadline; zero for none
+	errs      *errlog.Reporter
 }
 
 // newHookLoop starts from the config serve read as it started.
 func (s *server) newHookLoop(ctx context.Context, store *cosl.Store) *hookLoop {
+	return &hookLoop{
+		triggers: s.newTriggers(ctx, store, "hook"),
+		store:    store,
+		errs:     errlog.New(s.opts.Logf, "serve: hooks"),
+	}
+}
+
+// triggers is what a loop of Triggers (Hooks or Schedules) keeps: the
+// Group config in force, and how the Jobs its firings run are run.
+type triggers struct {
+	s          *server
+	ctx        context.Context
+	kind       string        // "hook" or "schedule", as the log names one
+	cfg        config.Config // the Jobs, Triggers and max_depth in force
+	mtime      time.Time     // config.toml's as last read; zero while it is missing
+	queues     *firingQueues
+	runner     trigger.Runner
+	configErrs *errlog.Reporter
+}
+
+// newTriggers starts from the config serve read as it started.
+func (s *server) newTriggers(ctx context.Context, store *cosl.Store, kind string) *triggers {
 	o := s.opts
-	h := &hookLoop{
-		s: s, ctx: ctx, store: store, cfg: o.Config,
-		queues:     &hookQueues{},
-		errs:       errlog.New(o.Logf, "serve: hooks"),
-		configErrs: errlog.New(o.Logf, "serve: hooks: reading config.toml"),
+	t := &triggers{
+		s: s, ctx: ctx, kind: kind, cfg: o.Config,
+		queues:     &firingQueues{},
+		configErrs: errlog.New(o.Logf, "serve: "+kind+"s: reading config.toml"),
 		runner: trigger.Runner{
 			Group: o.Alias,
 			Dir:   o.Paths.GroupConfigDir(o.Alias),
@@ -128,34 +144,59 @@ func (s *server) newHookLoop(ctx context.Context, store *cosl.Store) *hookLoop {
 		},
 	}
 	if info, err := os.Stat(o.Paths.GroupConfigFile(o.Alias)); err == nil {
-		h.mtime = info.ModTime()
+		t.mtime = info.ModTime()
 	}
-	return h
+	return t
 }
 
-// reread takes up config.toml's Jobs, Hooks and max_depth if the file's
+// reread takes up config.toml's Jobs, Triggers and max_depth if the file's
 // modification time changed since it was last read. A file that does not
 // parse is reported, and the last good config stays in force; a missing
 // file has none.
-func (h *hookLoop) reread() {
-	path := h.s.opts.Paths.GroupConfigFile(h.s.opts.Alias)
+func (t *triggers) reread() {
+	path := t.s.opts.Paths.GroupConfigFile(t.s.opts.Alias)
 	var mtime time.Time
 	info, err := os.Stat(path)
 	switch {
 	case err == nil:
 		mtime = info.ModTime()
 	case !errors.Is(err, fs.ErrNotExist):
-		h.configErrs.Report(err)
+		t.configErrs.Report(err)
 		return
 	}
-	if mtime.Equal(h.mtime) {
+	if mtime.Equal(t.mtime) {
 		return
 	}
-	h.mtime = mtime
-	e, err := config.Load(h.s.opts.Paths, h.s.opts.Alias, nil, nil)
-	h.configErrs.Report(err)
+	t.mtime = mtime
+	e, err := config.Load(t.s.opts.Paths, t.s.opts.Alias, nil, nil)
+	t.configErrs.Report(err)
 	if err == nil {
-		h.cfg = e.Group
+		t.cfg = e.Group
+	}
+}
+
+// queue runs a firing of Trigger name on ev behind its earlier firings:
+// jobs in order, as defs defines them, until one fails. cause is what the
+// log says it fired on.
+func (t *triggers) queue(name, cause string, jobs []string, defs map[string]config.Job, ev trigger.Event) {
+	t.queues.add(name, func() { t.run(name, cause, jobs, defs, ev) })
+}
+
+func (t *triggers) run(name, cause string, jobs []string, defs map[string]config.Job, ev trigger.Event) {
+	logf := t.s.opts.Logf
+	prefix := "serve: " + t.kind + " " + name + ": "
+	logf("%sfired %s", prefix, cause)
+	r := t.runner
+	r.Logf = func(format string, args ...any) { logf(prefix+format, args...) }
+	for _, job := range jobs {
+		if t.ctx.Err() != nil {
+			return
+		}
+		if err := r.Run(t.ctx, job, defs[job], ev); err != nil {
+			logf("%sjob %s failed: %v", prefix, job, err)
+			return
+		}
+		logf("%sjob %s done", prefix, job)
 	}
 }
 
@@ -333,42 +374,23 @@ func (h *hookLoop) fire(ev trigger.Event) {
 	}
 	ev.Group = h.s.opts.Alias
 	for _, name := range trigger.Firing(h.cfg.Hooks, ev, h.s.opts.Node.NodeID, maxDepth) {
-		jobs, defs := h.cfg.Hooks[name].Jobs, h.cfg.Jobs // a reread replaces the map, never changes it
 		ev := ev
 		ev.Trigger = name
-		h.queues.add(name, func() { h.run(name, jobs, defs, ev) })
+		// A reread replaces the maps, never changes them.
+		h.queue(name, fmt.Sprintf("on %s at seq %d", ev.Type, ev.Seq), h.cfg.Hooks[name].Jobs, h.cfg.Jobs, ev)
 	}
 }
 
-// run is one firing of Hook name: its jobs in order, defined in defs,
-// until one fails.
-func (h *hookLoop) run(name string, jobs []string, defs map[string]config.Job, ev trigger.Event) {
-	logf := h.s.opts.Logf
-	logf("serve: hook %s: fired on %s at seq %d", name, ev.Type, ev.Seq)
-	r := h.runner
-	r.Logf = func(format string, args ...any) { logf("serve: hook %s: "+format, append([]any{name}, args...)...) }
-	for _, job := range jobs {
-		if h.ctx.Err() != nil {
-			return
-		}
-		if err := r.Run(h.ctx, job, defs[job], ev); err != nil {
-			logf("serve: hook %s: job %s failed: %v", name, job, err)
-			return
-		}
-		logf("serve: hook %s: job %s done", name, job)
-	}
-}
-
-// hookQueues runs each Hook's firings one at a time, in order; different
-// Hooks' run side by side.
-type hookQueues struct {
+// firingQueues runs each Trigger's firings one at a time, in order;
+// different Triggers' run side by side.
+type firingQueues struct {
 	mu     sync.Mutex
 	queues map[string][]func()
 	wg     sync.WaitGroup
 }
 
-// add queues run behind Hook name's firings, starting its worker if idle.
-func (q *hookQueues) add(name string, run func()) {
+// add queues run behind Trigger name's firings, starting its worker if idle.
+func (q *firingQueues) add(name string, run func()) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.queues == nil {
@@ -397,8 +419,16 @@ func (q *hookQueues) add(name string, run func()) {
 	})
 }
 
+// idle reports whether Trigger name has no firing queued or running.
+func (q *firingQueues) idle(name string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	_, busy := q.queues[name]
+	return !busy
+}
+
 // wait waits for every queued firing; ctx ending cuts them short.
-func (q *hookQueues) wait() { q.wg.Wait() }
+func (q *firingQueues) wait() { q.wg.Wait() }
 
 // rowEvent is the event a COSL row is, without its Conversation's name:
 // false for a row that does not decode.

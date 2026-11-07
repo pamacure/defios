@@ -82,6 +82,10 @@ made up later.
   fires. A Schedule fires only if the serve is serving its Group as the
   Current Group at that time, so an always-on Node in several Groups runs
   only the Current Group's Triggers.
+  serve checks its Schedules by the wall clock every second; a firing more
+  than 10s behind when checked, as when the machine slept through it, is
+  missed, and so is one that falls while the Schedule's last firing still
+  runs. A Schedule's event is `schedule`, with the `time` it fired for.
 - **Depth bounds loops**, as for mentions. A Hook fires only on an event
   below the Group's `[agent] max_depth`. An agent a Hook runs writes at the
   triggering depth + 1; one a Schedule runs, at depth 1. `SignRequest` gains

@@ -12,6 +12,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/cron"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/secret"
@@ -105,6 +106,82 @@ type Hook struct {
 	Jobs []string `toml:"jobs"`
 }
 
+// Schedule is a Trigger that fires at set times while serve serves its
+// Group, running its Jobs in order until one fails (ADR 0032): on a
+// five-field Cron spec read in TZ, or once At an RFC 3339 time. A firing
+// that falls while serve is not serving is skipped, never made up.
+type Schedule struct {
+	Cron string `toml:"cron,omitempty"`
+	// TZ is the IANA zone Cron is read in; unset, the Node's local zone.
+	TZ string `toml:"tz,omitempty"`
+	At string `toml:"at,omitempty"`
+	// Jobs are the Jobs it runs, by name, in order. An agent Job among
+	// them names its target, for a Schedule has no event to take one from.
+	Jobs []string `toml:"jobs"`
+}
+
+// Next is the first time after after that s fires; zero if it never does
+// again, as an At time once passed. s must have passed validation.
+func (s Schedule) Next(after time.Time) time.Time {
+	if s.At != "" {
+		at, err := time.Parse(time.RFC3339, s.At)
+		if err != nil || !at.After(after) {
+			return time.Time{}
+		}
+		return at
+	}
+	spec, err := cron.Parse(s.Cron)
+	if err != nil {
+		return time.Time{}
+	}
+	loc, err := s.location()
+	if err != nil {
+		return time.Time{}
+	}
+	return spec.Next(after, loc)
+}
+
+func (s Schedule) location() (*time.Location, error) {
+	if s.TZ == "" {
+		return time.Local, nil
+	}
+	return time.LoadLocation(s.TZ)
+}
+
+func (s Schedule) validate(jobs map[string]Job) error {
+	switch {
+	case (s.Cron == "") == (s.At == ""):
+		return errors.New("a Schedule has exactly one of cron or at")
+	case s.At != "":
+		if s.TZ != "" {
+			return errors.New("tz is for cron only: an at time carries its own offset")
+		}
+		if _, err := time.Parse(time.RFC3339, s.At); err != nil {
+			return fmt.Errorf("at %q is not an RFC 3339 time with an offset, such as 2026-12-01T09:00:00Z", s.At)
+		}
+	default:
+		spec, err := cron.Parse(s.Cron)
+		if err != nil {
+			return err
+		}
+		if spec.Never() {
+			return fmt.Errorf("cron %q never fires", s.Cron)
+		}
+		if _, err := s.location(); err != nil {
+			return fmt.Errorf("tz: %w", err)
+		}
+	}
+	if err := validateJobList(s.Jobs, jobs); err != nil {
+		return err
+	}
+	for _, name := range s.Jobs {
+		if j := jobs[name]; j.Kind() == JobAgent && j.Target == "" {
+			return fmt.Errorf("jobs: agent Job %q has no target, and a Schedule has no event to answer in: set its target to %q or a Workspace name", name, ConversationGroup)
+		}
+	}
+	return nil
+}
+
 // Names is a list a config.toml may write as one string.
 type Names []string
 
@@ -148,7 +225,7 @@ const RequestEventPrefix = "request."
 // hex prefix of its public key (key.WorkspaceNames).
 var workspaceName = regexp.MustCompile(`^[a-z0-9]+-[0-9a-f]+$`)
 
-// validateTriggers checks c's Jobs and Hooks.
+// validateTriggers checks c's Jobs, Hooks and Schedules.
 func (c Config) validateTriggers(md toml.MetaData) error {
 	for name, j := range c.Jobs {
 		if err := group.ValidateAlias(name); err != nil {
@@ -167,6 +244,14 @@ func (c Config) validateTriggers(md toml.MetaData) error {
 		}
 		if err := h.validate(c.Jobs); err != nil {
 			return fmt.Errorf("[hooks.%s]: %w", name, err)
+		}
+	}
+	for name, s := range c.Schedules {
+		if err := group.ValidateAlias(name); err != nil {
+			return fmt.Errorf("[schedules.%s]: name: %w", name, err)
+		}
+		if err := s.validate(c.Jobs); err != nil {
+			return fmt.Errorf("[schedules.%s]: %w", name, err)
 		}
 	}
 	return nil
@@ -247,16 +332,8 @@ func validateURLOrRef(v string) error {
 }
 
 func (h Hook) validate(jobs map[string]Job) error {
-	if len(h.Jobs) == 0 {
-		return errors.New("jobs must name at least one Job")
-	}
-	for i, name := range h.Jobs {
-		if _, ok := jobs[name]; !ok {
-			return fmt.Errorf("jobs: no [jobs.%s]", name)
-		}
-		if slices.Contains(h.Jobs[:i], name) {
-			return fmt.Errorf("jobs: %q is listed twice", name)
-		}
+	if err := validateJobList(h.Jobs, jobs); err != nil {
+		return err
 	}
 	for _, ev := range h.Events {
 		if err := ValidateEvent(ev); err != nil {
@@ -286,6 +363,23 @@ func (h Hook) validate(jobs map[string]Job) error {
 	}
 	if _, err := regexp.Compile(h.Text); err != nil {
 		return fmt.Errorf("text: %w", err)
+	}
+	return nil
+}
+
+// validateJobList checks a Trigger's jobs: at least one, each defined in
+// jobs, none twice.
+func validateJobList(list []string, jobs map[string]Job) error {
+	if len(list) == 0 {
+		return errors.New("jobs must name at least one Job")
+	}
+	for i, name := range list {
+		if _, ok := jobs[name]; !ok {
+			return fmt.Errorf("jobs: no [jobs.%s]", name)
+		}
+		if slices.Contains(list[:i], name) {
+			return fmt.Errorf("jobs: %q is listed twice", name)
+		}
 	}
 	return nil
 }

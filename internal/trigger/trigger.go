@@ -1,6 +1,7 @@
-// Package trigger matches live COSL events against this Node's Hooks and
-// runs the Jobs they name, agent Jobs through serve (docs/adr/0032-triggers-run-jobs-live-only.md).
-// Which events are live, and when a Hook fires, is serve's to decide.
+// Package trigger matches live COSL events against this Node's Hooks,
+// finds when its Schedules are due, and runs the Jobs they name, agent
+// Jobs through serve (docs/adr/0032-triggers-run-jobs-live-only.md).
+// Which events are live, and when a Trigger fires, is serve's to decide.
 package trigger
 
 import (
@@ -25,12 +26,14 @@ import (
 	"defios.com/internal/signreq"
 )
 
-// Event is what a Hook fires on, as a Job is given it: as JSON on an exec
-// Job's stdin or a webhook's body. It is a COSL message, Type its message
-// type, or a change in a Sign Request's status, Type "request.<status>".
+// Event is what a Trigger fires on, as a Job is given it: as JSON on an
+// exec Job's stdin or a webhook's body. For a Hook it is a COSL message,
+// Type its message type, or a change in a Sign Request's status, Type
+// "request.<status>"; for a Schedule, Type "schedule" and the Time it
+// fired for, from this Node at depth 0.
 type Event struct {
 	Type    string `json:"type"`
-	Trigger string `json:"trigger"` // the Hook that fired
+	Trigger string `json:"trigger"` // the Hook or Schedule that fired
 	Group   string `json:"group"`   // the Group's alias on this Node
 	Seq     uint64 `json:"seq,omitempty"`
 	// MsgID is the message's hex msg_id; for a status, the request's.
@@ -51,6 +54,33 @@ type Event struct {
 	SignRequestID string `json:"sign_request_id,omitempty"`
 	// Status is a request.<status> event's new status.
 	Status string `json:"status,omitempty"`
+	// Time is the RFC 3339 time a Schedule fired for.
+	Time string `json:"time,omitempty"`
+}
+
+// ScheduleEvent is the Type of a Schedule's firing.
+const ScheduleEvent = "schedule"
+
+// Due is the firing of s that a check at now runs, if any: the latest
+// time s fires after last, the previous check, and no more than slack
+// before now. A firing before that was missed, or run already, and is
+// never made up.
+func Due(s config.Schedule, last, now time.Time, slack time.Duration) (time.Time, bool) {
+	from := now.Add(-slack)
+	if last.After(from) {
+		from = last
+	}
+	t := s.Next(from)
+	if t.IsZero() || t.After(now) {
+		return time.Time{}, false
+	}
+	for {
+		n := s.Next(t)
+		if n.IsZero() || n.After(now) {
+			return t, true
+		}
+		t = n
+	}
 }
 
 // Matches reports whether every filter h sets allows ev, which self, this

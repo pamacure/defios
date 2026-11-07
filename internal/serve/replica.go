@@ -98,7 +98,7 @@ func (s *server) startReplica() {
 // startWatchers runs what follows the replica on this Node's behalf: the
 // Conversation Workspaces, the prune policy, which follows config.toml
 // and does nothing while there is none, the chains of agents this Node's
-// mentions summon, and this Node's Hooks.
+// mentions summon, and this Node's Hooks and Schedules.
 func (s *server) startWatchers(replica *raftx.Replica, store *cosl.Store) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	var wg sync.WaitGroup
@@ -106,6 +106,7 @@ func (s *server) startWatchers(replica *raftx.Replica, store *cosl.Store) {
 	wg.Go(func() { s.keepPruned(ctx, store) })
 	wg.Go(func() { s.runChains(ctx) })
 	wg.Go(func() { s.keepHooks(ctx, replica, store) })
+	wg.Go(func() { s.keepSchedules(ctx, store) })
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	s.watchCancel, s.watchDone = cancel, done

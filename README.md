@@ -347,6 +347,20 @@ prompt = "Review this Sign Request. Call sign_accept, sign_refuse, or neither."
 
 Edit `config.toml` and the next event uses it; a Job's output goes to the `serve` log.
 
+A Schedule runs Jobs at set times instead: on a five-field `cron` spec (minute, hour, day of month, month, day of week), read in its `tz` or this machine's local zone, or once `at` an RFC 3339 time. It fires only while `serve` is serving the Group; a time that passes while it is not, or while the machine sleeps, or while the Schedule's last firing still runs, is skipped, never made up. Its Jobs get the time it fired for in the event, at depth 0, so an `agent` Job answers at depth 1; with no event to take a Conversation from, an `agent` Job a Schedule runs names its `target`:
+
+```toml
+[jobs.daily_summary]
+agent = "auditor"
+target = "group"
+prompt = "Summarise yesterday's talk and any open Sign Requests."
+
+[schedules.morning]
+cron = "0 9 * * 1-5"                   # or at = "2026-12-01T09:00:00Z"
+tz = "Europe/Paris"
+jobs = ["daily_summary"]
+```
+
 Agents can be given more through Plugins: packages of Skills, instructions an agent reads when a task calls for them, and MCP Servers, programs it can call. Install one from a git repository, at a branch, tag or commit with `@<ref>`, or from a local directory:
 
 ```bash

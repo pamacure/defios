@@ -142,3 +142,84 @@ func TestConfigRefusesMalformedJobsAndHooks(t *testing.T) {
 		}
 	}
 }
+
+// A Schedule fires its Jobs on a cron spec, read in its tz or the Node's
+// local zone, or once at a time (ADR 0032).
+func TestAGroupConfigReadsSchedules(t *testing.T) {
+	c, err := config.ReadFile(write(t, `
+[agent]
+profiles = ["auditor"]
+
+[jobs.daily_summary]
+agent = "auditor"
+target = "group"
+prompt = "Summarise yesterday's talk."
+
+[jobs.ping]
+exec = ["true"]
+
+[schedules.morning]
+cron = "0 9 * * 1-5"
+tz = "Europe/Paris"
+jobs = ["daily_summary", "ping"]
+
+[schedules.launch]
+at = "2026-12-01T09:00:00Z"
+jobs = ["ping"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]config.Schedule{
+		"morning": {Cron: "0 9 * * 1-5", TZ: "Europe/Paris", Jobs: []string{"daily_summary", "ping"}},
+		"launch":  {At: "2026-12-01T09:00:00Z", Jobs: []string{"ping"}},
+	}
+	if !reflect.DeepEqual(c.Schedules, want) {
+		t.Fatalf("schedules %+v, want %+v", c.Schedules, want)
+	}
+	friday := time.Date(2026, 11, 6, 8, 0, 0, 0, time.UTC) // 9:00 in Paris
+	if got, want := c.Schedules["morning"].Next(friday), time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Errorf("morning after Friday 9:00 Paris: %s, want Monday's %s", got.UTC(), want)
+	}
+	launch := time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+	if got := c.Schedules["launch"].Next(friday); !got.Equal(launch) {
+		t.Errorf("launch: %s, want %s", got, launch)
+	}
+	if got := c.Schedules["launch"].Next(launch); !got.IsZero() {
+		t.Errorf("launch after it fired: %s, want none", got)
+	}
+	// Unset, tz is the Node's local zone.
+	local := config.Schedule{Cron: "0 9 * * *", Jobs: []string{"ping"}}
+	if got := local.Next(friday).In(time.Local); got.Hour() != 9 || got.Minute() != 0 {
+		t.Errorf("no tz: %s, want 9:00 local", got.In(time.Local))
+	}
+}
+
+// A malformed Schedule stops the file reading.
+func TestConfigRefusesMalformedSchedules(t *testing.T) {
+	const ping = "[jobs.ping]\nexec = [\"true\"]\n"
+	for name, body := range map[string]string{
+		"no time":               ping + "[schedules.s]\njobs = [\"ping\"]",
+		"cron and at":           ping + "[schedules.s]\ncron = \"* * * * *\"\nat = \"2026-12-01T09:00:00Z\"\njobs = [\"ping\"]",
+		"bad cron":              ping + "[schedules.s]\ncron = \"0 9 * *\"\njobs = [\"ping\"]",
+		"cron that never fires": ping + "[schedules.s]\ncron = \"0 0 30 2 *\"\njobs = [\"ping\"]",
+		"at with no zone":       ping + "[schedules.s]\nat = \"2026-12-01T09:00:00\"\njobs = [\"ping\"]",
+		"tz with at":            ping + "[schedules.s]\nat = \"2026-12-01T09:00:00Z\"\ntz = \"UTC\"\njobs = [\"ping\"]",
+		"unknown tz":            ping + "[schedules.s]\ncron = \"* * * * *\"\ntz = \"Mars/Olympus\"\njobs = [\"ping\"]",
+		"no jobs":               ping + "[schedules.s]\ncron = \"* * * * *\"",
+		"naming no job":         ping + "[schedules.s]\ncron = \"* * * * *\"\njobs = [\"missing\"]",
+		"naming a job twice":    ping + "[schedules.s]\ncron = \"* * * * *\"\njobs = [\"ping\", \"ping\"]",
+		"bad name":              ping + "[schedules.Morning]\ncron = \"* * * * *\"\njobs = [\"ping\"]",
+		"unknown key":           ping + "[schedules.s]\ncron = \"* * * * *\"\njobs = [\"ping\"]\nevents = [\"app.freeform\"]",
+		// An agent Job a Schedule runs has no event to take a Conversation
+		// from, so names its target.
+		"agent job with no target": "[jobs.a]\nagent = \"auditor\"\n[schedules.s]\ncron = \"* * * * *\"\njobs = [\"a\"]",
+	} {
+		if _, err := config.ReadFile(write(t, body)); err == nil {
+			t.Errorf("%s: read without error", name)
+		}
+	}
+	if _, err := config.ReadWorkspace(write(t, ping+"[schedules.s]\ncron = \"* * * * *\"\njobs = [\"ping\"]")); err == nil || !strings.Contains(err.Error(), "unknown key") {
+		t.Errorf("a Conversation's Schedule: %v, want an unknown key", err)
+	}
+}

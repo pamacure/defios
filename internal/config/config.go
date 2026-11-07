@@ -41,10 +41,11 @@ type Config struct {
 	// snapshot restore and once a day (ADR 0024). Unset, the Node is
 	// archival.
 	Prune Age `toml:"prune,omitzero"`
-	// Jobs and Hooks are this Node's Triggers and what they run, by name
-	// (ADR 0032): the Group's only, never a Conversation's.
-	Jobs  map[string]Job  `toml:"jobs,omitempty"`
-	Hooks map[string]Hook `toml:"hooks,omitempty"`
+	// Jobs, Hooks and Schedules are this Node's Triggers and what they run,
+	// by name (ADR 0032): the Group's only, never a Conversation's.
+	Jobs      map[string]Job      `toml:"jobs,omitempty"`
+	Hooks     map[string]Hook     `toml:"hooks,omitempty"`
+	Schedules map[string]Schedule `toml:"schedules,omitempty"`
 	Workspace
 }
 

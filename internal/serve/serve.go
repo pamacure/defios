@@ -182,7 +182,7 @@ type server struct {
 	sessionCancel context.CancelFunc
 	sessionDone   chan struct{}
 
-	watchCancel context.CancelFunc // stops watchWorkspaces, keepPruned, runChains and keepHooks
+	watchCancel context.CancelFunc // stops watchWorkspaces, keepPruned, runChains, keepHooks and keepSchedules
 	watchDone   chan struct{}
 
 	chains     chainHub       // this Node's chains of agents, and their watchers
