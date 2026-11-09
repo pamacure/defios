@@ -90,7 +90,7 @@ _Avoid_: tool server, toolset, integration
 
 **Handle**:
 The name of an Agent Profile on one Node, written `@handle` in talk to summon it where a Group's or Conversation's config includes it. Local to one Node: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
-_Avoid_: agent name, username, alias (that is a Group's, Network's or Provider's local label)
+_Avoid_: agent name, username, alias (that is a Group's, Key's, Network's or Provider's local label)
 
 **Chain**:
 The agents one person's message, or one Trigger's firing, summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id, or a random id for a Job's. Each agent reached is one **step**, numbered in that order whether it runs or is skipped.
@@ -123,6 +123,10 @@ _Avoid_: action (that is how a Tool is described), task, effect
 **Key**:
 One threshold public key held jointly by a Group, together with the per-Node shares of it. Identified by its curve and that public key, not by the Session that minted it; exists for ECDSA or Ed25519 signing.
 _Avoid_: keypair, wallet, wallet key
+
+**Key alias**:
+A human-chosen label a Node gives one Key, used to name and select that Key on this machine. It starts as the label proposed when the Key's keygen Session began, unless this Node chose its own, and is this Node's alone from then on, so two Nodes may label the same Key differently. A Key with none goes by its curve and public key.
+_Avoid_: key name, label, nickname
 
 **Session**:
 One run of a threshold protocol (keygen or signing) coordinated among a Group's Nodes over the COSL. A signing Session signs one Sign Request's Digests; it completes as soon as a signature verifies against the Key, not when every Node agrees.
