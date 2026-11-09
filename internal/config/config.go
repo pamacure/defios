@@ -21,7 +21,7 @@ import (
 
 	"defios.com/internal/agent"
 	"defios.com/internal/group"
-	"defios.com/internal/key"
+	"defios.com/internal/keyalias"
 	"defios.com/internal/mention"
 	"defios.com/internal/network"
 	"defios.com/internal/plugin"
@@ -403,7 +403,7 @@ func (w Workspace) validate(md toml.MetaData, complete bool) error {
 		if complete {
 			return errors.New("alias names one Key, so it belongs in that Key's Conversation config.toml, not the Group's")
 		}
-		if _, err := key.NormalizeAlias(w.Alias); err != nil {
+		if _, err := keyalias.Normalize(w.Alias); err != nil {
 			return err
 		}
 	}

@@ -227,6 +227,7 @@ var errorKinds = []struct {
 	{ErrNoJob, "no-job", http.StatusNotFound},
 	{ErrNoConversation, "no-conversation", http.StatusUnprocessableEntity},
 	{ErrBadHandle, "bad-handle", http.StatusBadRequest},
+	{ErrBadAlias, "bad-alias", http.StatusBadRequest},
 	{ErrNotAChain, "not-a-chain", http.StatusBadRequest},
 	{ErrAmbiguousChain, "ambiguous-chain", http.StatusConflict},
 	{network.ErrInvalid, "bad-network", http.StatusBadRequest},

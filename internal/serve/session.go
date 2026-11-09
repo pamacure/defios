@@ -3,15 +3,25 @@ package serve
 import (
 	"context"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/http"
 
+	"defios.com/internal/config"
+	"defios.com/internal/key"
+	"defios.com/internal/keyalias"
 	"defios.com/internal/session"
 )
+
+// ErrBadAlias is a Key alias refused because it is invalid or taken here.
+var ErrBadAlias = errors.New("serve: key alias refused")
 
 type (
 	sessionStartRequest struct {
 		Curve string `json:"curve"`
 		T     int    `json:"t"`
+		// Alias is the Key alias to propose; empty proposes none.
+		Alias string `json:"alias,omitempty"`
 	}
 	sessionIDRequest struct {
 		SessionID string `json:"session_id"`
@@ -50,7 +60,12 @@ func (s *server) sessionRoutes(mux *http.ServeMux) {
 			writeError(w, ErrNoReplica)
 			return
 		}
-		sum, err := svc.Start(r.Context(), req.Curve, req.T)
+		alias, err := s.storedProposal(req.Alias)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		sum, err := svc.Start(r.Context(), req.Curve, req.T, alias)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -110,6 +125,35 @@ func (s *server) sessionID(w http.ResponseWriter, r *http.Request) (session.ID, 
 	return id, true
 }
 
+// storedProposal is alias in stored form if this Node can propose it: valid, and
+// on no Key of this Group here. A config.toml that did not read fails it, for
+// the alias might be in that file (ADR 0033). Empty proposes none.
+func (s *server) storedProposal(alias string) (string, error) {
+	if alias == "" {
+		return "", nil
+	}
+	stored, err := keyalias.Normalize(alias)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrBadAlias, err)
+	}
+	_, store, ok := s.current()
+	if !ok {
+		return "", ErrNoReplica
+	}
+	keys, err := key.Read(store)
+	if err != nil {
+		return "", err
+	}
+	holders, err := config.AliasHolders(keys, config.ReadKeyAliases(s.opts.Paths, s.opts.Alias, keys), stored)
+	if err != nil {
+		return "", err
+	}
+	if len(holders) > 0 {
+		return "", fmt.Errorf("%w: key alias %q is already on %s in this Group", ErrBadAlias, stored, holders[0].Ref())
+	}
+	return stored, nil
+}
+
 func (s *server) sessionLayer() *session.Service {
 	s.replicaMu.Lock()
 	defer s.replicaMu.Unlock()
@@ -117,9 +161,9 @@ func (s *server) sessionLayer() *session.Service {
 }
 
 // SessionStart is `session start`.
-func (c Client) SessionStart(ctx context.Context, curve string, t int) (session.Summary, error) {
+func (c Client) SessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error) {
 	var sum session.Summary
-	err := c.do(ctx, "/v1/session/start", sessionStartRequest{Curve: curve, T: t}, &sum)
+	err := c.do(ctx, "/v1/session/start", sessionStartRequest{Curve: curve, T: t, Alias: alias}, &sum)
 	return sum, err
 }
 

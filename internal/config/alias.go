@@ -3,9 +3,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"defios.com/internal/key"
+	"defios.com/internal/keyalias"
 	"defios.com/internal/nodedir"
 )
 
@@ -35,6 +38,20 @@ func ReadKeyAliases(p nodedir.Paths, groupAlias string, keys []key.Key) map[stri
 	return out
 }
 
+// WriteKeyAlias sets alias in the Conversation config.toml at path, keeping
+// the rest of it. An empty alias removes it.
+func WriteKeyAlias(path, alias string) error {
+	w, err := ReadWorkspace(path)
+	if err != nil {
+		return err
+	}
+	w.Alias = alias
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return WriteWorkspace(path, w)
+}
+
 // AliasHolders is each Key in keys holding alias, compared as Key aliases
 // are: normally one or none, two only by a hand-edit. It fails on the first
 // Key whose config.toml did not read, for that Key might hold it.
@@ -50,7 +67,7 @@ func AliasHolders(keys []key.Key, aliases map[string]KeyAlias, alias string) ([]
 		if a.Err != nil {
 			return nil, a.Err
 		}
-		if a.Alias != "" && key.SameAlias(a.Alias, alias) {
+		if a.Alias != "" && keyalias.Same(a.Alias, alias) {
 			out = append(out, k)
 		}
 	}
@@ -69,7 +86,7 @@ func FindKey(p nodedir.Paths, groupAlias string, keys []key.Key, query string) (
 
 // ResolveKey finds the Key query names: a whole curve:hex or Conversation ID,
 // which need no Workspace, or else a Key alias. Anything that could not be an
-// alias, a query over key.MaxAliasLen among them, is never looked up as one.
+// alias, a query over keyalias.MaxLen among them, is never looked up as one.
 // A broken config.toml fails only the alias lookup; an alias on two Keys is
 // key.ErrAmbiguous naming both.
 func ResolveKey(keys []key.Key, aliases map[string]KeyAlias, query string) (key.Key, error) {
@@ -77,7 +94,7 @@ func ResolveKey(keys []key.Key, aliases map[string]KeyAlias, query string) (key.
 	if !errors.Is(err, key.ErrUnknown) {
 		return k, err
 	}
-	if _, invalid := key.NormalizeAlias(query); invalid != nil {
+	if _, invalid := keyalias.Normalize(query); invalid != nil {
 		return key.Key{}, err
 	}
 	holders, unread := AliasHolders(keys, aliases, query)

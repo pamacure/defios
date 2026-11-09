@@ -32,6 +32,12 @@ func mintKeyOf(t *testing.T, a, b *node, gid group.ID, fill byte) string {
 // mintPublicKey is mintKey of the ECDSA Key whose public key is pk, 33 bytes.
 func mintPublicKey(t *testing.T, a, b *node, gid group.ID, pk []byte) string {
 	t.Helper()
+	return mintProposing(t, a, b, gid, pk, "")
+}
+
+// mintProposing is mintPublicKey of a keygen whose session.start proposes alias.
+func mintProposing(t *testing.T, a, b *node, gid group.ID, pk []byte, alias string) string {
+	t.Helper()
 	var sid [32]byte
 	copy(sid[:], pk)
 	sign := func(n *node, msg proto.Message, typ uint32) cosl.Signed {
@@ -44,6 +50,7 @@ func mintPublicKey(t *testing.T, a, b *node, gid group.ID, pk []byte) string {
 	}
 	commitEnvelope(t, a, b, sign(a, &coslv1.SessionStart{
 		SessionId: sid[:], Curve: "ecdsa", T: 2, N: 2, Participants: [][]byte{a.id.NodeID[:], b.id.NodeID[:]},
+		ProposedAlias: []byte(alias),
 	}, cosl.TypeSessionStart))
 	complete := &coslv1.SessionComplete{SessionId: sid[:], Curve: "ecdsa", PublicKey: pk}
 	commitEnvelope(t, a, b, sign(a, complete, cosl.TypeSessionComplete))

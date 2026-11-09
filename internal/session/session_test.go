@@ -587,7 +587,7 @@ func TestListAndInspectReportStatusParticipantsAndCompletes(t *testing.T) {
 
 func TestStartSealsTheNonceToEachParticipant(t *testing.T) {
 	c := newPair(t, time.Hour)
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +660,7 @@ func TestStartSealsTheNonceToEachParticipant(t *testing.T) {
 		t.Fatal("plaintext nonce is a COSL field")
 	}
 
-	_, err = c.alice.svc.Start(context.Background(), "rsa", 2)
+	_, err = c.alice.svc.Start(context.Background(), "rsa", 2, "")
 	if !errors.Is(err, session.ErrBadCurve) {
 		t.Fatalf("bad curve: %v", err)
 	}
@@ -680,7 +680,7 @@ func openBox(b *coslv1.SealedBox, priv []byte) ([]byte, bool) {
 
 func TestOtherNodeDoesNotStartUntilLocalAccept(t *testing.T) {
 	c := newPair(t, time.Hour)
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +719,7 @@ func TestOtherNodeDoesNotStartUntilLocalAccept(t *testing.T) {
 
 func TestOutOfRangeTIsAbortedWithoutStartingTheEngine(t *testing.T) {
 	c := newPair(t, time.Hour)
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 1)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +736,7 @@ func TestOutOfRangeTIsAbortedWithoutStartingTheEngine(t *testing.T) {
 
 func TestLaterStartWhileOneIsOpenIsAborted(t *testing.T) {
 	c := newPair(t, time.Hour)
-	first, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	first, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +744,7 @@ func TestLaterStartWhileOneIsOpenIsAborted(t *testing.T) {
 		es := c.alice.engines()
 		return len(es) == 1 && len(es[0].started()) == 1
 	})
-	second, err := c.bob.svc.Start(context.Background(), "eddsa", 2)
+	second, err := c.bob.svc.Start(context.Background(), "eddsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,7 +772,7 @@ func TestPointToPointIsSealedAndBroadcastIsPlaintextOnEveryReplica(t *testing.T)
 		dst := to
 		out <- session.Outgoing{To: &dst, Data: []byte("secret-for-bob")}
 	})
-	if _, err := c.alice.svc.Start(context.Background(), "ecdsa", 2); err != nil {
+	if _, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, ""); err != nil {
 		t.Fatal(err)
 	}
 	wait(t, func() bool {
@@ -819,7 +819,7 @@ func TestPointToPointIsSealedAndBroadcastIsPlaintextOnEveryReplica(t *testing.T)
 
 func TestReplayDeliversCommittedRoundsBeforeLiveOutgoing(t *testing.T) {
 	c := newPair(t, time.Hour)
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -880,7 +880,7 @@ func TestReplayDeliversCommittedRoundsBeforeLiveOutgoing(t *testing.T) {
 
 func TestSilenceAbortsWhenTheWaitExpires(t *testing.T) {
 	c := newPair(t, time.Hour)
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +913,7 @@ func TestSilenceAbortsWhenTheWaitExpires(t *testing.T) {
 
 func TestRestartAbortsASessionWhosePartyIsGone(t *testing.T) {
 	c := newPair(t, time.Hour)
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -932,7 +932,7 @@ func TestRestartAbortsASessionWhosePartyIsGone(t *testing.T) {
 	}
 
 	c2 := newPair(t, time.Hour)
-	sum, err = c2.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err = c2.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +954,7 @@ func TestRestartAbortsASessionWhosePartyIsGone(t *testing.T) {
 
 func TestOperatorAbortAppendsTheReasonOnce(t *testing.T) {
 	c := newPair(t, time.Hour)
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1000,7 +1000,7 @@ func TestLiveWaitAbortIsRetriedWhenAppendFails(t *testing.T) {
 	})
 	c.alice.setWaiting([][32]byte{[32]byte(c.bob.id.NodeID)})
 
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1036,7 +1036,7 @@ func TestLiveWaitAbortIsRetriedWhenAppendFails(t *testing.T) {
 func TestStallTimeoutRestartsOnEachEngineOutput(t *testing.T) {
 	c := newPair(t, time.Hour)
 	c.alice.setWaiting([][32]byte{[32]byte(c.bob.id.NodeID)})
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1089,7 +1089,7 @@ func TestPersistentFailureIsLoggedOnce(t *testing.T) {
 		}
 		return c.fan.Append(ctx, signed)
 	})
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1189,7 +1189,7 @@ func TestShareIsWrittenBeforeCompleteAndRemovedWhenCompletesDisagree(t *testing.
 	c.alice.finish = &session.Result{PublicKey: pk, SaveData: []byte("alice-share")}
 	c.bob.finish = &session.Result{PublicKey: other, SaveData: []byte("bob-share")}
 
-	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2)
+	sum, err := c.alice.svc.Start(context.Background(), "ecdsa", 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/engine/tssl"
 	"defios.com/internal/identity"
+	"defios.com/internal/keyalias"
 	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
@@ -25,17 +26,19 @@ func sessionCommand(g *globals) *cobra.Command {
 	var (
 		curve string
 		t     int
+		alias string
 	)
 	start := &cobra.Command{
 		Use:   "start",
 		Short: "Start a keygen Session (requires serve); this Node accepts it",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSessionStart(cmd, g, curve, t)
+			return runSessionStart(cmd, g, curve, t, alias)
 		},
 	}
 	start.Flags().StringVar(&curve, "curve", "", "ecdsa or eddsa")
 	start.Flags().IntVar(&t, "t", 2, "min signers; n is the Roster")
+	start.Flags().StringVar(&alias, "alias", "", "Key alias to propose to every Node party to the Key")
 	root.AddCommand(start)
 
 	root.AddCommand(&cobra.Command{
@@ -78,22 +81,28 @@ func sessionCommand(g *globals) *cobra.Command {
 	return root
 }
 
-func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int) error {
+func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int, alias string) error {
 	if curve != "ecdsa" && curve != "eddsa" {
 		return exitUsagef("--curve must be ecdsa or eddsa")
 	}
 	if t < 1 {
 		return exitUsagef("--t must be >= 1")
 	}
+	if cmd.Flags().Changed("alias") { // so that --alias "" is refused, not ignored
+		var err error
+		if alias, err = keyalias.Normalize(alias); err != nil {
+			return exitUsagef("%w", err)
+		}
+	}
 	client := serve.Client{Socket: g.paths().Socket}
-	sum, err := client.SessionStart(cmd.Context(), curve, t)
+	sum, err := client.SessionStart(cmd.Context(), curve, t, alias)
 	if err != nil {
 		return sessionCallError(err)
 	}
 	if g.json {
 		return g.emitJSON(sum)
 	}
-	fmt.Fprintf(g.app.Stdout, "started %s  %s  t=%d n=%d\n", sum.SessionID, sum.Curve, sum.T, sum.N)
+	fmt.Fprintf(g.app.Stdout, "started %s  %s  t=%d n=%d%s\n", sum.SessionID, sum.Curve, sum.T, sum.N, proposedSuffix(palette{}, sum)) // a mutating verb's confirmation stays plain
 	return nil
 }
 
@@ -153,7 +162,7 @@ func runSessionList(g *globals) error {
 	}
 	p := g.out()
 	for _, s := range list {
-		fmt.Fprintf(g.app.Stdout, "%s  %s  %s  t=%d n=%d\n", p.primary(s.SessionID), p.status(s.Status), s.Curve, s.T, s.N)
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s  t=%d n=%d%s\n", p.primary(s.SessionID), p.status(s.Status), s.Curve, s.T, s.N, proposedSuffix(p, s))
 	}
 	return nil
 }
@@ -184,6 +193,9 @@ func runSessionInspect(g *globals, hexID string) error {
 	}
 	p := g.out()
 	fmt.Fprintf(g.app.Stdout, "session %s\nstatus %s\ncurve %s\nt %d\nn %d\n", p.primary(detail.SessionID), p.status(detail.Status), detail.Curve, detail.T, detail.N)
+	if detail.ProposedAlias != "" {
+		fmt.Fprintf(g.app.Stdout, "proposed_alias %s\n", p.primary(detail.ProposedAlias))
+	}
 	if detail.Reason != "" {
 		fmt.Fprintf(g.app.Stdout, "reason %s\n", detail.Reason)
 	}
@@ -202,6 +214,14 @@ func runSessionInspect(g *globals, hexID string) error {
 	return nil
 }
 
+// proposedSuffix ends a one-line Session with the Key alias it proposes.
+func proposedSuffix(p palette, s session.Summary) string {
+	if s.ProposedAlias == "" {
+		return ""
+	}
+	return "  proposed_alias=" + p.primary(s.ProposedAlias)
+}
+
 func parseSessionID(s string) (session.ID, error) {
 	id, err := session.ParseID(strings.ToLower(s))
 	if err != nil {
@@ -213,7 +233,7 @@ func parseSessionID(s string) (session.ID, error) {
 // sessionCallError maps a serve failure onto an exit code.
 func sessionCallError(err error) error {
 	switch {
-	case errors.Is(err, session.ErrBadCurve):
+	case errors.Is(err, session.ErrBadCurve), errors.Is(err, serve.ErrBadAlias):
 		return exitUsagef("%w", err)
 	case errors.Is(err, raftx.ErrNotInserted):
 		return &ExitError{Code: ExitProtocol, Err: err}

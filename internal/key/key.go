@@ -26,6 +26,11 @@ type Key struct {
 	Curve     string
 	PublicKey []byte
 	T, N      int
+	// ProposedAlias and ProposalInvalid are what its keygen's session.start
+	// proposed. They matter only when this Node first creates the Key's
+	// Workspace; from then on config.toml alone decides (ADR 0033).
+	ProposedAlias   string
+	ProposalInvalid bool
 }
 
 // Ref is the CLI form curve:hex.
@@ -81,7 +86,10 @@ func List(rows []cosl.Row) ([]Key, error) {
 	}
 	out := make([]Key, len(minted))
 	for i, m := range minted {
-		out[i] = Key{SessionID: m.SessionID, Curve: m.Curve, PublicKey: m.PublicKey, T: m.T, N: m.N}
+		out[i] = Key{
+			SessionID: m.SessionID, Curve: m.Curve, PublicKey: m.PublicKey, T: m.T, N: m.N,
+			ProposedAlias: m.ProposedAlias, ProposalInvalid: m.ProposalInvalid,
+		}
 	}
 	return out, nil
 }

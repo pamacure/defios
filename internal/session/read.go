@@ -10,6 +10,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/keyalias"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -22,6 +23,9 @@ type Summary struct {
 	N         uint32 `json:"n"`
 	// SignRequest is the msg_id of the sign.request a signing Session signs.
 	SignRequest string `json:"sign_request,omitempty"`
+	// ProposedAlias is the Key alias a keygen Session proposes, if valid. It
+	// comes from another Node, so an invalid one is never shown (ADR 0033).
+	ProposedAlias string `json:"proposed_alias,omitempty"`
 }
 
 // Completion is one participant's session.complete, as `session inspect` shows it.
@@ -124,6 +128,7 @@ type rec struct {
 	isSign       bool // a signing Session; signReq is the sign.request's msg_id
 	signReq      [32]byte
 	dup          bool // a signing start for a request that already has one
+	proposal     proposal
 	abortAt      []uint64
 	abortReason  string
 	completes    []seen
@@ -163,7 +168,7 @@ func (r *rec) gate() ID {
 }
 
 func (r *rec) summary() Summary {
-	sum := Summary{SessionID: r.id.String(), Status: r.status, Curve: r.curve, T: r.t, N: r.n}
+	sum := Summary{SessionID: r.id.String(), Status: r.status, Curve: r.curve, T: r.t, N: r.n, ProposedAlias: r.proposal.alias}
 	if r.isSign {
 		sum.SignRequest = hex.EncodeToString(r.signReq[:])
 	}
@@ -247,6 +252,8 @@ func (f *fold) add(rows []cosl.Row) error {
 			}
 			if req, ok := idBytes(p.SignRequestId); ok {
 				r.isSign, r.signReq = true, req
+			} else {
+				r.proposal = proposalOf(string(p.ProposedAlias))
 			}
 			for _, raw := range p.Participants {
 				pid, ok := idBytes(raw)
@@ -395,6 +402,21 @@ func agreement(r *rec) (agreed bool, at uint64, conflict bool) {
 	return len(seen) == int(r.n), at, false
 }
 
+// proposal is what a keygen session.start says of a Key alias: alias in the
+// form it is stored, or invalid when it held something that cannot be one.
+type proposal struct {
+	alias   string
+	invalid bool
+}
+
+func proposalOf(raw string) proposal {
+	if raw == "" {
+		return proposal{}
+	}
+	alias, err := keyalias.Normalize(raw)
+	return proposal{alias: alias, invalid: err != nil}
+}
+
 // Completed is a Key the replica has minted: n session.complete rows agree
 // on curve and canonical public key.
 type Completed struct {
@@ -402,6 +424,10 @@ type Completed struct {
 	Curve     string
 	PublicKey []byte
 	T, N      int
+	// ProposedAlias is the valid Key alias its keygen proposed, if any.
+	// ProposalInvalid is a proposal that could not be one, which is not shown.
+	ProposedAlias   string
+	ProposalInvalid bool
 }
 
 // CompletedSessions reads minted Keys off the replica. There is no keys table.
@@ -421,6 +447,9 @@ func CompletedSessions(rows []cosl.Row) ([]Completed, error) {
 			PublicKey: append([]byte(nil), r.completes[0].publicKey...),
 			T:         int(r.t),
 			N:         int(r.n),
+
+			ProposedAlias:   r.proposal.alias,
+			ProposalInvalid: r.proposal.invalid,
 		})
 	}
 	return out, nil

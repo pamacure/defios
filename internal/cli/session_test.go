@@ -155,3 +155,104 @@ func seedSessions(t *testing.T, dir string) (alice, bob *identity.Node, aborted,
 	apply(bob, cosl.TypeSessionComplete, &coslv1.SessionComplete{SessionId: bID[:], Curve: "eddsa", PublicKey: []byte{0x02, 0xaa}})
 	return alice, bob, aID.String(), bID.String()
 }
+
+// seedProposals is a replica holding one open keygen Session per alias, in
+// order, and returns their IDs.
+func seedProposals(t *testing.T, dir string, aliases ...string) []string {
+	t.Helper()
+	alice, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster := group.NewRoster(group.RosterNode{Public: alice.Public, DisplayName: "alice", TsnetHostname: "defios-alice"})
+	path := filepath.Join(dir, "group", group.ImplicitAlias, "cosl.sqlite")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := cosl.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fsm := cosl.NewFSM(store, roster)
+	ids := make([]string, len(aliases))
+	for i, alias := range aliases {
+		id := session.ID{byte(i + 1)}
+		ids[i] = id.String()
+		signed, err := (cosl.Author{Node: alice, GroupID: roster.GroupID()}).Sign(cosl.TypeSessionStart, nil, &coslv1.SessionStart{
+			SessionId: id[:], Curve: "ecdsa", T: 1, N: 1, Participants: [][]byte{alice.NodeID[:]}, ProposedAlias: []byte(alias),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := fsm.Apply(uint64(i+1), 1, signed.Bytes); err != nil || !res.Inserted {
+			t.Fatalf("apply: %v %+v", err, res)
+		}
+	}
+	return ids
+}
+
+// session list and inspect show a valid proposal; one that is invalid, or
+// none at all, leaves no trace in text or --json.
+func TestSessionListAndInspectShowOnlyAValidProposal(t *testing.T) {
+	dir := t.TempDir()
+	ids := seedProposals(t, dir, "Cold", "\x1b[31mevil", "")
+
+	r := run(t, nil, "", "--dir", dir, "session", "list")
+	if r.code != 0 {
+		t.Fatalf("list exit %d: %s", r.code, r.stderr)
+	}
+	want := []string{
+		ids[0] + "  open  ecdsa  t=1 n=1  proposed_alias=Cold",
+		ids[1] + "  open  ecdsa  t=1 n=1",
+		ids[2] + "  open  ecdsa  t=1 n=1",
+	}
+	if got := strings.Split(strings.TrimSpace(r.stdout), "\n"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("list:\n%s", r.stdout)
+	}
+
+	r = run(t, nil, "", "--dir", dir, "session", "list", "--json")
+	var raw []map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &raw); err != nil || len(raw) != 3 {
+		t.Fatalf("list --json %q: %v", r.stdout, err)
+	}
+	if raw[0]["proposed_alias"] != "Cold" {
+		t.Errorf("proposal = %v", raw[0])
+	}
+	for _, row := range raw[1:] {
+		if _, ok := row["proposed_alias"]; ok {
+			t.Errorf("field present: %v", row)
+		}
+	}
+
+	r = run(t, nil, "", "--dir", dir, "session", "inspect", ids[0])
+	if r.code != 0 || !strings.Contains(r.stdout, "\nproposed_alias Cold\n") {
+		t.Fatalf("inspect exit %d:\n%s", r.code, r.stdout)
+	}
+	r = run(t, nil, "", "--dir", dir, "session", "inspect", ids[1])
+	if r.code != 0 || strings.Contains(r.stdout, "proposed_alias") || strings.Contains(r.stdout, "evil") {
+		t.Fatalf("inspect of invalid:\n%s", r.stdout)
+	}
+	r = run(t, nil, "", "--dir", dir, "session", "inspect", ids[1], "--json")
+	if r.code != 0 || strings.Contains(r.stdout, "proposed_alias") || strings.Contains(r.stdout, "evil") {
+		t.Fatalf("inspect --json of invalid:\n%s", r.stdout)
+	}
+}
+
+// An alias that can never be valid is a usage error before serve is asked,
+// even when it is empty.
+func TestSessionStartRefusesAnInvalidAliasAsUsage(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	for _, bad := range []string{"", " spaced", strings.Repeat("x", 64)} {
+		r := run(t, nil, "", "--dir", dir, "session", "start", "--curve", "ecdsa", "--alias", bad)
+		if r.code != 1 || !strings.Contains(r.stderr, "key alias") {
+			t.Errorf("%q: exit %d, stderr %q", bad, r.code, r.stderr)
+		}
+	}
+	// A valid one reaches for serve, which is not running.
+	r := run(t, nil, "", "--dir", dir, "session", "start", "--curve", "ecdsa", "--alias", "cold")
+	if r.code != 2 || !strings.Contains(r.stderr, "serve") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+}

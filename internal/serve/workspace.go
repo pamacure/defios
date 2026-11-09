@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
@@ -34,7 +35,8 @@ func (s *server) load(store *cosl.Store, conversation []byte) (config.Effective,
 // while this serve was down, or brought by catch-up or a snapshot restore,
 // is covered too. It wakes when the replica changes, or at the fallback
 // tick (ADR 0014). Its markdown is not read yet; its config.toml is read
-// where a Key-scoped action uses it.
+// where a Key-scoped action uses it. Creating the Workspace is the one time
+// the alias proposed on the Key's keygen is applied (ADR 0033).
 func (s *server) watchWorkspaces(ctx context.Context, store *cosl.Store) {
 	w := s.newWorkspaceWatcher(store)
 	for {
@@ -86,17 +88,65 @@ func (w *workspaceWatcher) catchUp(wk cosl.Wake) error {
 	}
 	names := key.WorkspaceNames(keys)
 	var errs []error
-	for _, k := range keys { // in mint order, so a repeated error reads alike
+	var aliases map[string]config.KeyAlias // read only if a proposal needs them
+	for _, k := range keys {               // in mint order, so a repeated error reads alike
 		id := key.ConversationID(k.Curve, k.PublicKey)
 		name := names[id]
 		if w.made[id] {
 			continue
 		}
-		if err := os.MkdirAll(w.s.opts.Paths.ConversationWorkspace(w.s.opts.Alias, name), 0o700); err != nil {
+		created, err := createDir(w.s.opts.Paths.ConversationWorkspace(w.s.opts.Alias, name))
+		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 			continue
 		}
 		w.made[id] = true
+		if !created || (k.ProposedAlias == "" && !k.ProposalInvalid) {
+			continue
+		}
+		if aliases == nil {
+			aliases = config.ReadKeyAliases(w.s.opts.Paths, w.s.opts.Alias, keys)
+		}
+		if err := applyProposal(k, keys, aliases); err != nil {
+			w.s.opts.Logf("serve: warning: Key %s keeps no alias on this Node: %v", k.Ref(), err)
+		}
 	}
 	return errors.Join(errs...)
+}
+
+// createDir makes dir and reports whether this call is what created it, so
+// that only one caller, once, acts on its being new.
+func createDir(dir string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return false, err
+	}
+	err := os.Mkdir(dir, 0o700)
+	if errors.Is(err, os.ErrExist) {
+		return false, os.MkdirAll(dir, 0o700) // fails if the name is not a directory
+	}
+	return err == nil, err
+}
+
+// applyProposal writes k's proposed alias into its new Workspace's config.toml
+// and records it in aliases, for the next Key this wake. An error says why the
+// proposal does not apply here, which never stops the Key: a proposal comes
+// from another Node and cannot block a keygen (ADR 0033).
+func applyProposal(k key.Key, keys []key.Key, aliases map[string]config.KeyAlias) error {
+	if k.ProposalInvalid {
+		return errors.New("the alias proposed at keygen is invalid") // and not repeated here
+	}
+	holders, err := config.AliasHolders(keys, aliases, k.ProposedAlias)
+	if err != nil {
+		return err
+	}
+	if len(holders) > 0 {
+		return fmt.Errorf("the alias %q proposed at keygen is already on %s", k.ProposedAlias, holders[0].Ref())
+	}
+	own := aliases[k.Ref()]
+	if err := config.WriteKeyAlias(own.File, k.ProposedAlias); err != nil {
+		return err
+	}
+	own.Alias = k.ProposedAlias
+	aliases[k.Ref()] = own
+	return nil
 }

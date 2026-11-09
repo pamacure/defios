@@ -70,6 +70,42 @@ func TestKeygenEd25519_2of2(t *testing.T) {
 	}
 }
 
+// TestKeygenProposedAliasNamesTheKeyOnBothNodes: one session start --alias
+// names the Key on both Nodes, without bob being asked for one (ADR 0033).
+func TestKeygenProposedAliasNamesTheKeyOnBothNodes(t *testing.T) {
+	hs := startHeadscale(t)
+	alice, bob := initKeygenNodes(t, hs)
+	startKeygenGroup(t, alice, bob)
+	sessionID, pub := mintCurve(t, alice, bob, "eddsa", "--alias", "Cold")
+	for _, n := range []*node{alice, bob} {
+		v := waitKeyByAlias(t, n, "Cold")
+		if v.Key != "eddsa:"+pub || v.Alias != "Cold" || v.SessionID != sessionID {
+			t.Fatalf("%s inspect = %+v", n.name, v)
+		}
+	}
+}
+
+// waitKeyByAlias waits for n to know a Key by alias: its Workspace is made
+// shortly after the Key mints.
+func waitKeyByAlias(t *testing.T, n *node, alias string) keyView {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		r := n.run(context.Background(), "key", "inspect", alias, "--json")
+		if r.code == 0 {
+			var v keyView
+			if err := json.Unmarshal([]byte(r.stdout), &v); err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: key inspect %s: exit %d %s", n.name, alias, r.code, r.stderr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func initKeygenNodes(t *testing.T, hs *headscale) (alice, bob *node) {
 	t.Helper()
 	alice = newNodeOpts(t, hs, "alice", false)
@@ -105,10 +141,10 @@ func startKeygenGroup(t *testing.T, alice, bob *node) {
 
 // mintCurve runs one t=2 Session to two agreeing completes and returns the
 // Session ID and the canonical public-key hex.
-func mintCurve(t *testing.T, alice, bob *node, curve string) (sessionID, pub string) {
+func mintCurve(t *testing.T, alice, bob *node, curve string, startFlags ...string) (sessionID, pub string) {
 	t.Helper()
 	var started sessionView
-	alice.mustJSONVerb(t, &started, "session", "start", "--curve", curve, "--t", "2")
+	alice.mustJSONVerb(t, &started, append([]string{"session", "start", "--curve", curve, "--t", "2"}, startFlags...)...)
 	bob.coslLog(t, func(rows []coslLine) bool { return hasStart(rows, started.SessionID) })
 	bob.mustJSONVerb(t, &sessionView{}, "session", "accept", started.SessionID)
 
@@ -163,6 +199,7 @@ func assertMintedKey(t *testing.T, alice, bob *node, curve, sessionID, pub strin
 
 type keyView struct {
 	Key            string `json:"key"`
+	Alias          string `json:"alias"`
 	ConversationID string `json:"conversation_id"`
 	SessionID      string `json:"session_id"`
 	T              int    `json:"t"`

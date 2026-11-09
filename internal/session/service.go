@@ -401,8 +401,9 @@ func (s *Service) wakeAt(t time.Time) {
 
 // Start appends session.start. n is the Roster. The plaintext nonce is
 // sealed to each participant and is not a COSL field. This call is the
-// initiator's local accept.
-func (s *Service) Start(ctx context.Context, curve string, t int) (Summary, error) {
+// initiator's local accept. alias is the Key alias to propose, already
+// normalized, or empty for none (ADR 0033).
+func (s *Service) Start(ctx context.Context, curve string, t int, alias string) (Summary, error) {
 	if curve != "ecdsa" && curve != "eddsa" {
 		return Summary{}, ErrBadCurve
 	}
@@ -440,6 +441,8 @@ func (s *Service) Start(ctx context.Context, curve string, t int) (Summary, erro
 		N:            uint32(len(nodes)),
 		Participants: parts,
 		NonceBoxes:   boxes,
+
+		ProposedAlias: []byte(alias),
 	}
 	if err := s.remember(id); err != nil {
 		return Summary{}, err
@@ -448,7 +451,7 @@ func (s *Service) Start(ctx context.Context, curve string, t int) (Summary, erro
 		s.forget(id)
 		return Summary{}, err
 	}
-	return Summary{SessionID: id.String(), Status: Open, Curve: curve, T: uint32(t), N: uint32(len(nodes))}, nil
+	return Summary{SessionID: id.String(), Status: Open, Curve: curve, T: uint32(t), N: uint32(len(nodes)), ProposedAlias: alias}, nil
 }
 
 // Accept is this Node's local engine gate for a Session it did not start.

@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
 	"defios.com/internal/key"
+	"defios.com/internal/keyalias"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
 )
@@ -133,7 +133,7 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 func runKeyAlias(g *globals, query, alias string, remove bool) error {
 	if !remove {
 		var err error
-		if alias, err = key.NormalizeAlias(alias); err != nil {
+		if alias, err = keyalias.Normalize(alias); err != nil {
 			return exitUsagef("%w", err)
 		}
 	}
@@ -170,7 +170,7 @@ func runKeyAlias(g *globals, query, alias string, remove bool) error {
 		return exitOperational(own.Err)
 	}
 	if own.Alias != alias {
-		if err := writeKeyAlias(own.File, alias); err != nil {
+		if err := config.WriteKeyAlias(own.File, alias); err != nil {
 			return exitOperational(err)
 		}
 	}
@@ -183,19 +183,6 @@ func runKeyAlias(g *globals, query, alias string, remove bool) error {
 	}
 	fmt.Fprintln(g.app.Stdout, v.shownAs(palette{})) // a mutating verb's confirmation stays plain
 	return nil
-}
-
-// writeKeyAlias sets alias in the config.toml at path, keeping the rest of it.
-func writeKeyAlias(path, alias string) error {
-	w, err := config.ReadWorkspace(path)
-	if err != nil {
-		return err
-	}
-	w.Alias = alias
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return config.WriteWorkspace(path, w)
 }
 
 // keyAliases is what the targeted Group's Conversation config.toml files say
