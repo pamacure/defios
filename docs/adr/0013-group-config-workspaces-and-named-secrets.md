@@ -68,6 +68,10 @@ to a deployed Node, so nothing is migrated.
   Conversation that sets `[agent] model` keeps the Group's `token_window`, and
   one that sets `[networks.eth]` keeps the Group's `[networks.btc]`. A Sign
   Request is Key-scoped, so its broadcast uses its Key's merged config.
+  *Amended by [ADR 0033](0033-a-key-alias-starts-on-the-log-and-then-is-the-nodes.md):
+  a Conversation's `config.toml` may also hold a top-level `alias`, which a
+  Group's refuses and no merge inherits; and `key inspect` no longer takes a
+  public-key prefix.*
 - **A credential goes only where this Node said.** The endpoint a Model is
   called at is the local `[providers.<p>] base_url` if set, else the Model's
   `base_url` from the COSL, else the provider's default. The provider's
