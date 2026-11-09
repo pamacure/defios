@@ -85,7 +85,7 @@ func load(g *globals, keyQuery string) (config.Effective, error) {
 			return config.Effective{}, err
 		}
 		defer store.Close()
-		if conv, err = conversationID(store, keyQuery); err != nil {
+		if conv, err = conversationID(g, store, keyQuery); err != nil {
 			return config.Effective{}, err
 		}
 		if keys, err = key.Read(store); err != nil {
@@ -112,7 +112,7 @@ func conversationConfigFile(g *globals, keyQuery string) (string, error) {
 		return "", err
 	}
 	defer store.Close()
-	conv, err := conversationID(store, keyQuery)
+	conv, err := conversationID(g, store, keyQuery)
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +126,7 @@ func conversationConfigFile(g *globals, keyQuery string) (string, error) {
 }
 
 // keyQueryHelp is the ways a --key flag can name a Key.
-const keyQueryHelp = "curve:hex or the Conversation ID"
+const keyQueryHelp = "curve:hex, the Conversation ID or the Key alias"
 
 // keyFlagHelp is --key on a read verb of a Workspace section.
 const keyFlagHelp = "read with this Key's Conversation config.toml merged over the Group's: " + keyQueryHelp

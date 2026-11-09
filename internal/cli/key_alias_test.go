@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"defios.com/internal/group"
+	"defios.com/internal/key"
 	"defios.com/internal/nodedir"
 )
 
@@ -215,5 +216,111 @@ func TestABrokenConfigFailsOnlyAnAliasLookup(t *testing.T) {
 	r = run(t, nil, "", "--dir", dir, "key", "inspect", strings.Repeat("🦄", 64))
 	if r.code != 2 || !strings.Contains(r.stderr, "no such key") || strings.Contains(r.stderr, broken) {
 		t.Fatalf("long query: exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+func TestConversationLogFindsAKeyByAlias(t *testing.T) {
+	dir := t.TempDir()
+	groupWithKeys(t, dir)
+	mustKey(t, dir, "alias", ecdsaKeyRef, "Treasury")
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--key", "tREASURY")
+	if r.code != 0 || !strings.Contains(r.stdout, "ecdsa talk") || strings.Contains(r.stdout, "eddsa talk") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+}
+
+// everyKeyFlag is each verb whose --key the CLI resolves, naming query, so
+// none needs a serve to refuse it. sign propose and sign fill resolve inside
+// serve and are tested there.
+func everyKeyFlag(query string) [][]string {
+	return [][]string{
+		{"conversation", "log", "--key", query},
+		{"conversation", "send", "--key", query, "hi"},
+		{"conversation", "follow", "--key", query},
+		{"conversation", "cancel", "--key", query},
+		{"conversation", "transcript", "abab", "--key", query},
+		{"conversation", "recap", "--key", query, "--base-seq", "12", "--text", "x"},
+		{"conversation", "prune", "--key", query, "--before", "1"},
+		{"network", "list", "--key", query},
+		{"network", "show", "eth", "--key", query},
+		{"provider", "list", "--key", query},
+		{"provider", "show", "claude", "--key", query},
+		{"agent", "list", "--key", query},
+		{"agent", "include", "auditor", "--key", query},
+		{"agent", "exclude", "auditor", "--key", query},
+	}
+}
+
+func TestReadVerbsAndAgentIncludeFindAKeyByAlias(t *testing.T) {
+	p := agentsWithKeys(t)
+	dir := p.Config
+	mustKey(t, dir, "alias", ecdsaKeyRef, "Treasury")
+	for _, args := range [][]string{
+		{"conversation", "log", "--key"},
+		{"network", "list", "--key"},
+		{"provider", "list", "--key"},
+		{"agent", "list", "--key"},
+	} {
+		want := run(t, nil, "", append(append([]string{"--dir", dir}, args...), ecdsaKeyRef)...)
+		got := run(t, nil, "", append(append([]string{"--dir", dir}, args...), "tREASURY")...)
+		if want.code != 0 || got.code != 0 || got.stdout != want.stdout {
+			t.Errorf("%v: by alias exit %d %q, stderr %q; by curve:hex exit %d %q", args, got.code, got.stdout, got.stderr, want.code, want.stdout)
+		}
+	}
+	r := run(t, nil, "", "--dir", dir, "agent", "include", "auditor", "--key", "Treasury")
+	if r.code != 0 || !strings.Contains(readFile(t, keyConfigFile(dir, group.ImplicitAlias, ecdsaKeyRef)), "auditor") {
+		t.Fatalf("agent include: exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+func TestConversationSendPostsTheConversationOfAnAlias(t *testing.T) {
+	dir := t.TempDir()
+	ecdsaPK, _ := groupWithKeys(t, dir)
+	mustKey(t, dir, "alias", ecdsaKeyRef, "Treasury")
+	body := fakeConversationSend(t, dir)
+	if r := run(t, nil, "", "--dir", dir, "conversation", "send", "--key", "Treasury", "hello"); r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	id := key.ConversationID("ecdsa", ecdsaPK)
+	if posted := body.Load().(string); !strings.Contains(posted, hex.EncodeToString(id[:])) {
+		t.Fatalf("posted %s", posted)
+	}
+}
+
+func TestEveryKeyFlagRefusesAnAliasOnTwoKeys(t *testing.T) {
+	dir := agentsWithKeys(t).Config
+	ecdsaFile := keyConfigFile(dir, group.ImplicitAlias, ecdsaKeyRef)
+	handEdit(t, ecdsaFile, "alias = \"twin\"\n"+readFile(t, ecdsaFile)) // keeps its [agent] list
+	handEdit(t, keyConfigFile(dir, group.ImplicitAlias, eddsaKeyRef), "alias = \"twin\"\n")
+	for _, args := range everyKeyFlag("TWIN") {
+		r := run(t, nil, "", append([]string{"--dir", dir}, args...)...)
+		if r.code != 1 || !strings.Contains(r.stderr, "ambiguous") || !strings.Contains(r.stderr, ecdsaKeyRef) || !strings.Contains(r.stderr, eddsaKeyRef) {
+			t.Errorf("%v: exit %d, stderr %q", args, r.code, r.stderr)
+		}
+	}
+}
+
+func TestEveryKeyFlagFailsOnAnUnknownAliasAsOnAnUnknownKey(t *testing.T) {
+	dir := agentsWithKeys(t).Config
+	for _, args := range everyKeyFlag("nobody") {
+		r := run(t, nil, "", append([]string{"--dir", dir}, args...)...)
+		if r.code != 1 || !strings.Contains(r.stderr, "no such key") {
+			t.Errorf("%v: exit %d, stderr %q", args, r.code, r.stderr)
+		}
+	}
+}
+
+func TestABrokenConfigFailsOnlyAKeyFlagThatNamesAnAlias(t *testing.T) {
+	dir := t.TempDir()
+	groupWithKeys(t, dir)
+	mustKey(t, dir, "alias", eddsaKeyRef, "savings")
+	broken := keyConfigFile(dir, group.ImplicitAlias, ecdsaKeyRef)
+	handEdit(t, broken, "alias = \n")
+	r := run(t, nil, "", "--dir", dir, "conversation", "log", "--key", "savings")
+	if r.code != 2 || !strings.Contains(r.stderr, broken) {
+		t.Fatalf("by alias: exit %d, stderr %q", r.code, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", dir, "conversation", "log", "--key", eddsaKeyRef); r.code != 0 {
+		t.Fatalf("by curve:hex: exit %d, stderr %q", r.code, r.stderr)
 	}
 }

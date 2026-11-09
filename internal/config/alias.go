@@ -57,6 +57,16 @@ func AliasHolders(keys []key.Key, aliases map[string]KeyAlias, alias string) ([]
 	return out, nil
 }
 
+// FindKey is ResolveKey for a caller that holds no aliases: the Conversation
+// config.toml files of Group groupAlias are read only if query names no Key
+// without them (ADR 0033), and at each call, so an edit needs no restart.
+func FindKey(p nodedir.Paths, groupAlias string, keys []key.Key, query string) (key.Key, error) {
+	if k, err := key.Resolve(keys, query); !errors.Is(err, key.ErrUnknown) {
+		return k, err
+	}
+	return ResolveKey(keys, ReadKeyAliases(p, groupAlias, keys), query)
+}
+
 // ResolveKey finds the Key query names: a whole curve:hex or Conversation ID,
 // which need no Workspace, or else a Key alias. Anything that could not be an
 // alias, a query over key.MaxAliasLen among them, is never looked up as one.

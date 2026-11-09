@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
@@ -85,7 +86,7 @@ func (s *server) keyNetworks(store *cosl.Store, query string) (key.Key, [32]byte
 	if err != nil {
 		return key.Key{}, [32]byte{}, nil, err
 	}
-	k, err := key.Resolve(keys, query)
+	k, err := config.FindKey(s.opts.Paths, s.opts.Alias, keys, query)
 	if err != nil {
 		return key.Key{}, [32]byte{}, nil, err
 	}

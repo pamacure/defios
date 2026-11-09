@@ -122,6 +122,8 @@ func TestConfigRefusesMalformedJobsAndHooks(t *testing.T) {
 		"bad from":                     "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nfrom = \"me\"\njobs = [\"j\"]",
 		"bad handle":                   "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nhandles = [\"Auditor\"]\njobs = [\"j\"]",
 		"bad conversation":             "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nconversation = \"../x\"\njobs = [\"j\"]",
+		"hook naming a key alias":      "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nconversation = \"Treasury\"\njobs = [\"j\"]",
+		"job targeting a key alias":    "[agent]\nprofiles = [\"auditor\"]\n[jobs.j]\nagent = \"auditor\"\ntarget = \"Treasury\"",
 		"bad text":                     "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\ntext = \"(\"\njobs = [\"j\"]",
 		"from not a string":            "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nfrom = 1\njobs = [\"j\"]",
 		"unknown hook key":             "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\njobs = [\"j\"]\nwhen = \"x\"",

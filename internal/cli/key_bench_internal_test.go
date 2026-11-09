@@ -2,10 +2,13 @@ package cli
 
 import (
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/cosl/coslbench"
+	"defios.com/internal/group"
 	"defios.com/internal/key"
 )
 
@@ -22,15 +25,19 @@ func BenchmarkKeyListing(b *testing.B) {
 				b.Fatal(err)
 			}
 			b.Cleanup(func() { store.Close() })
+			g := &globals{dir: b.TempDir()}
+			if err := os.MkdirAll(filepath.Join(g.paths().GroupsDir(), group.ImplicitAlias), 0o700); err != nil {
+				b.Fatal(err)
+			}
 			ref := "ecdsa:" + hex.EncodeToString(r.SignKey)
 			want := key.ConversationID("ecdsa", r.SignKey)
-			got, err := conversationID(store, ref)
+			got, err := conversationID(g, store, ref)
 			if err != nil || string(got) != string(want[:]) {
 				b.Fatalf("conversationID(%s) = %x, %v; want %x", ref, got, err, want)
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := conversationID(store, ref); err != nil {
+				if _, err := conversationID(g, store, ref); err != nil {
 					b.Fatal(err)
 				}
 			}

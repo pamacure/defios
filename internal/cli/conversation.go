@@ -500,7 +500,7 @@ func runConversationRecap(g *globals, keyQuery string, baseSeq uint64, text stri
 		return err
 	}
 	defer store.Close()
-	conv, err := optionalConversation(store, keyQuery)
+	conv, err := optionalConversation(g, store, keyQuery)
 	if err != nil {
 		return err
 	}
@@ -527,11 +527,11 @@ func runConversationRecap(g *globals, keyQuery string, baseSeq uint64, text stri
 
 // optionalConversation is the Conversation keyQuery names, or nil for
 // Group-level talk when it is empty.
-func optionalConversation(store *cosl.Store, keyQuery string) ([]byte, error) {
+func optionalConversation(g *globals, store *cosl.Store, keyQuery string) ([]byte, error) {
 	if keyQuery == "" {
 		return nil, nil
 	}
-	return conversationID(store, keyQuery)
+	return conversationID(g, store, keyQuery)
 }
 
 // recapPath is this Node's RECAP.md for conv, nil for Group-level talk, in
@@ -595,7 +595,7 @@ func runConversationPrune(g *globals, keyQuery string, cut pruneCut) error {
 	if err != nil {
 		return err
 	}
-	conv, err := optionalConversation(store, keyQuery)
+	conv, err := optionalConversation(g, store, keyQuery)
 	if err != nil {
 		return err
 	}
@@ -750,7 +750,7 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 		return err
 	}
 	defer store.Close()
-	conv, err := optionalConversation(store, keyQuery)
+	conv, err := optionalConversation(g, store, keyQuery)
 	if err != nil {
 		return err
 	}
@@ -939,17 +939,27 @@ func resolveConversation(g *globals, query string) ([]byte, error) {
 		return nil, err
 	}
 	defer store.Close()
-	return conversationID(store, query)
+	return conversationID(g, store, query)
 }
 
-func conversationID(store *cosl.Store, query string) ([]byte, error) {
+// conversationID is the Conversation of the Key query names in the targeted
+// Group. A query naming no Key or two is a usage error; a config.toml that
+// could not be read for the alias is not.
+func conversationID(g *globals, store *cosl.Store, query string) ([]byte, error) {
 	keys, err := key.Read(store)
 	if err != nil {
 		return nil, exitOperational(err)
 	}
-	k, err := key.Resolve(keys, query)
+	groupAlias, err := g.resolveAlias()
 	if err != nil {
+		return nil, err
+	}
+	k, err := config.FindKey(g.paths(), groupAlias, keys, query)
+	if errors.Is(err, key.ErrUnknown) || errors.Is(err, key.ErrAmbiguous) {
 		return nil, exitUsagef("%w", err)
+	}
+	if err != nil {
+		return nil, exitOperational(err)
 	}
 	id := key.ConversationID(k.Curve, k.PublicKey)
 	return append([]byte(nil), id[:]...), nil
