@@ -21,6 +21,7 @@ import (
 
 	"defios.com/internal/agent"
 	"defios.com/internal/group"
+	"defios.com/internal/key"
 	"defios.com/internal/mention"
 	"defios.com/internal/network"
 	"defios.com/internal/plugin"
@@ -122,6 +123,10 @@ func ValidateTool(name string) error {
 
 // Workspace is the part of a config.toml a Conversation's may override.
 type Workspace struct {
+	// Alias is this Key's Key alias, in a Conversation's config.toml only:
+	// a Group's refuses it and Merge drops it, for it names one Key
+	// (ADR 0033).
+	Alias string `toml:"alias,omitempty"`
 	// Networks are this Node's Networks, by alias: the chains it signs for
 	// and the endpoints it reaches them by (ADR 0023). ReadFile fills no
 	// Alias; network.List does.
@@ -370,7 +375,7 @@ func parseWorkspace(path string, data []byte) (Workspace, error) {
 func decode(path string, data []byte, into any) (toml.MetaData, error) {
 	md, err := toml.Decode(string(data), into)
 	if err != nil {
-		return md, fmt.Errorf("config: %w", err)
+		return md, fmt.Errorf("config: %s: %w", path, err)
 	}
 	_, isProfile := into.(*Profile)
 	var keys []string
@@ -394,6 +399,14 @@ func decode(path string, data []byte, into any) (toml.MetaData, error) {
 // api_path. A Conversation's need not be, for its tables override the
 // Group's key by key. A Network table is always whole.
 func (w Workspace) validate(md toml.MetaData, complete bool) error {
+	if md.IsDefined("alias") {
+		if complete {
+			return errors.New("alias names one Key, so it belongs in that Key's Conversation config.toml, not the Group's")
+		}
+		if _, err := key.NormalizeAlias(w.Alias); err != nil {
+			return err
+		}
+	}
 	if _, err := network.List(w.Networks); err != nil {
 		return fmt.Errorf("[networks]: %w", err)
 	}
@@ -454,8 +467,8 @@ func ValidateHandle(h string) error {
 	return nil
 }
 
-// Merge is w with over laid on it table by table: a whole Network table, a
-// Provider's base_url, api_path or api_key, an [agent] profiles list (even
+// Merge is w with over laid on it table by table, an alias being no part of
+// it: a whole Network table, a Provider's base_url, api_path or api_key, an [agent] profiles list (even
 // an empty one), or a max_depth that over sets wins, and everything over
 // leaves unset comes from w. A Provider's body in over merges over w's as a
 // profile's body does. Neither input is changed. Merged Networks that name

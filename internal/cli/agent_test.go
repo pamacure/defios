@@ -451,7 +451,7 @@ func TestAgentIncludeExcludeEditTheGroupsList(t *testing.T) {
 func TestAgentIncludeExcludeEditAConversationsList(t *testing.T) {
 	p := agentsWithKeys(t)
 	path := p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111")
-	writeFile(t, path, "[providers.claude]\nbase_url = \"https://gateway.example\"\n\n[agent]\nprofiles = [\"scribe\"]\nmax_depth = 2\n")
+	writeFile(t, path, "alias = \"treasury\"\n\n[providers.claude]\nbase_url = \"https://gateway.example\"\n\n[agent]\nprofiles = [\"scribe\"]\nmax_depth = 2\n")
 	groupBefore := readFile(t, p.GroupConfigFile(group.ImplicitAlias))
 
 	for _, c := range []struct {
@@ -471,6 +471,7 @@ func TestAgentIncludeExcludeEditAConversationsList(t *testing.T) {
 	}
 	w, err := config.ReadWorkspace(path)
 	want := config.Workspace{
+		Alias:     "treasury",
 		Providers: map[string]config.Provider{"claude": {BaseURL: "https://gateway.example"}},
 		Agent:     config.Agent{Profiles: []string{}, MaxDepth: 2},
 	}
