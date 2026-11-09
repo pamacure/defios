@@ -143,6 +143,7 @@ func (s *server) startSessions(store *cosl.Store, ob *outbox.Outbox, roster grou
 		Shares:        s.opts.Vault,
 		AcceptPath:    filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "local-accept.json"),
 		PendingPath:   filepath.Join(s.opts.Paths.GroupDir(s.opts.Alias), "pending-shares.json"),
+		Aborted:       s.holds.release,
 		Append: func(ctx context.Context, signed cosl.Signed) error {
 			res, err := ob.Write(ctx, signed)
 			if err == nil && res.Queued {

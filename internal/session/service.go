@@ -131,6 +131,9 @@ type Config struct {
 	// but not yet a minted Key, so a restart can delete it on abort.
 	Shares      ShareStore
 	PendingPath string
+	// Aborted is told of every aborted Session on each wake that looks at
+	// them, so it may hear of one more than once. Nil means no one is told.
+	Aborted func(ID)
 }
 
 // Clock is the Session layer's time: the accept wait, an engine's stall
@@ -456,7 +459,13 @@ func (s *Service) Start(ctx context.Context, curve string, t int, alias string) 
 
 // Accept is this Node's local engine gate for a Session it did not start.
 // Nothing is written to the COSL.
-func (s *Service) Accept(_ context.Context, id ID) error {
+func (s *Service) Accept(_ context.Context, id ID) error { return s.accept(id, false) }
+
+// AcceptKeygen is Accept of a Session that must mint a Key, for a caller
+// naming that Key; any other is ErrNotKeygen.
+func (s *Service) AcceptKeygen(_ context.Context, id ID) error { return s.accept(id, true) }
+
+func (s *Service) accept(id ID, keygenOnly bool) error {
 	recs, err := s.records()
 	if err != nil {
 		return err
@@ -464,6 +473,9 @@ func (s *Service) Accept(_ context.Context, id ID) error {
 	r := find(recs, id)
 	if r == nil {
 		return ErrUnknownSession
+	}
+	if keygenOnly && r.isSign {
+		return ErrNotKeygen
 	}
 	if r.status != Open {
 		return ErrClosedSession
@@ -532,6 +544,9 @@ func (s *Service) catchUp(ctx context.Context, rescan bool) {
 			s.forget(r.gate())
 			delete(s.aborting, r.id)
 			if r.status == Aborted {
+				if s.cfg.Aborted != nil {
+					s.cfg.Aborted(r.id)
+				}
 				if err := s.dropShare(r.id); err != nil {
 					s.failWake(err)
 				}

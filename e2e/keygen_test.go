@@ -85,6 +85,21 @@ func TestKeygenProposedAliasNamesTheKeyOnBothNodes(t *testing.T) {
 	}
 }
 
+// TestKeygenOverrideNamesTheKeyOnOneNode: alice proposes an alias and bob
+// accepts with its own, so one Key goes by a different name on each (ADR 0033).
+func TestKeygenOverrideNamesTheKeyOnOneNode(t *testing.T) {
+	hs := startHeadscale(t)
+	alice, bob := initKeygenNodes(t, hs)
+	startKeygenGroup(t, alice, bob)
+	sessionID, pub := mintCurveAccepting(t, alice, bob, "eddsa", []string{"--alias", "Cold"}, []string{"--alias", "Vault"})
+	for n, alias := range map[*node]string{alice: "Cold", bob: "Vault"} {
+		v := waitKeyByAlias(t, n, alias)
+		if v.Key != "eddsa:"+pub || v.Alias != alias || v.SessionID != sessionID {
+			t.Fatalf("%s inspect = %+v", n.name, v)
+		}
+	}
+}
+
 // waitKeyByAlias waits for n to know a Key by alias: its Workspace is made
 // shortly after the Key mints.
 func waitKeyByAlias(t *testing.T, n *node, alias string) keyView {
@@ -143,10 +158,16 @@ func startKeygenGroup(t *testing.T, alice, bob *node) {
 // Session ID and the canonical public-key hex.
 func mintCurve(t *testing.T, alice, bob *node, curve string, startFlags ...string) (sessionID, pub string) {
 	t.Helper()
+	return mintCurveAccepting(t, alice, bob, curve, startFlags, nil)
+}
+
+// mintCurveAccepting is mintCurve with flags for bob's session accept too.
+func mintCurveAccepting(t *testing.T, alice, bob *node, curve string, startFlags, acceptFlags []string) (sessionID, pub string) {
+	t.Helper()
 	var started sessionView
 	alice.mustJSONVerb(t, &started, append([]string{"session", "start", "--curve", curve, "--t", "2"}, startFlags...)...)
 	bob.coslLog(t, func(rows []coslLine) bool { return hasStart(rows, started.SessionID) })
-	bob.mustJSONVerb(t, &sessionView{}, "session", "accept", started.SessionID)
+	bob.mustJSONVerb(t, &sessionView{}, append([]string{"session", "accept", started.SessionID}, acceptFlags...)...)
 
 	rows := waitCompletes(t, alice, started.SessionID, 2)
 	bobRows := waitCompletes(t, bob, started.SessionID, 2)

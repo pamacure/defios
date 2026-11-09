@@ -169,6 +169,8 @@ type server struct {
 	ctx       context.Context   // Run's, set before any handler runs; bounds the join
 	started   time.Time         // when Run began, for `node usage` uptime
 
+	holds aliasHolds // Key aliases waiting on a mint, from session accept --alias
+
 	replicaMu sync.Mutex
 	replica   *raftx.Replica // nil until the Group is valid
 	store     *cosl.Store    // the replica's COSL

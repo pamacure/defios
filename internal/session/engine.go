@@ -14,6 +14,8 @@ var (
 	ErrUnknownSession = errors.New("session: no such session")
 	ErrNotParticipant = errors.New("session: this Node is not a participant")
 	ErrClosedSession  = errors.New("session: session is not open")
+	// ErrNotKeygen is a Key alias chosen for a Session that mints no Key.
+	ErrNotKeygen = errors.New("session: only a keygen Session takes a Key alias")
 	// ErrSignerSetFull is a sign accept that came after t Nodes had already
 	// accepted: the Node is not a signer for this request, and nothing was appended.
 	ErrSignerSetFull = errors.New("session: t other Nodes accepted first")

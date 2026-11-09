@@ -88,7 +88,7 @@ func (w *workspaceWatcher) catchUp(wk cosl.Wake) error {
 	}
 	names := key.WorkspaceNames(keys)
 	var errs []error
-	var aliases map[string]config.KeyAlias // read only if a proposal needs them
+	var aliases map[string]config.KeyAlias // read only if an alias is to be written
 	for _, k := range keys {               // in mint order, so a repeated error reads alike
 		id := key.ConversationID(k.Curve, k.PublicKey)
 		name := names[id]
@@ -101,15 +101,16 @@ func (w *workspaceWatcher) catchUp(wk cosl.Wake) error {
 			continue
 		}
 		w.made[id] = true
-		if !created || (k.ProposedAlias == "" && !k.ProposalInvalid) {
-			continue
+		chosen := w.s.holds.of(k.SessionID)
+		if created && (chosen != "" || k.ProposedAlias != "" || k.ProposalInvalid) {
+			if aliases == nil {
+				aliases = config.ReadKeyAliases(w.s.opts.Paths, w.s.opts.Alias, keys)
+			}
+			if err := applyAlias(k, chosen, keys, aliases); err != nil {
+				w.s.opts.Logf("serve: warning: Key %s keeps no alias on this Node: %v", k.Ref(), err)
+			}
 		}
-		if aliases == nil {
-			aliases = config.ReadKeyAliases(w.s.opts.Paths, w.s.opts.Alias, keys)
-		}
-		if err := applyProposal(k, keys, aliases); err != nil {
-			w.s.opts.Logf("serve: warning: Key %s keeps no alias on this Node: %v", k.Ref(), err)
-		}
+		w.s.holds.release(k.SessionID) // only now, for its config.toml now says it is taken
 	}
 	return errors.Join(errs...)
 }
@@ -127,26 +128,31 @@ func createDir(dir string) (bool, error) {
 	return err == nil, err
 }
 
-// applyProposal writes k's proposed alias into its new Workspace's config.toml
-// and records it in aliases, for the next Key this wake. An error says why the
-// proposal does not apply here, which never stops the Key: a proposal comes
-// from another Node and cannot block a keygen (ADR 0033).
-func applyProposal(k key.Key, keys []key.Key, aliases map[string]config.KeyAlias) error {
-	if k.ProposalInvalid {
-		return errors.New("the alias proposed at keygen is invalid") // and not repeated here
+// applyAlias writes k's alias into its new Workspace's config.toml and records
+// it in aliases, for the next Key this wake: chosen, this Node's own from
+// session accept, or else the one proposed at keygen. An error says why it does
+// not apply here, which never stops the Key: the mint has already happened, and
+// a proposal comes from another Node and cannot block a keygen (ADR 0033).
+func applyAlias(k key.Key, chosen string, keys []key.Key, aliases map[string]config.KeyAlias) error {
+	alias, origin := chosen, "chosen at session accept"
+	if chosen == "" {
+		if k.ProposalInvalid {
+			return errors.New("the alias proposed at keygen is invalid") // and not repeated here
+		}
+		alias, origin = k.ProposedAlias, "proposed at keygen"
 	}
-	holders, err := config.AliasHolders(keys, aliases, k.ProposedAlias)
+	holders, err := config.AliasHolders(keys, aliases, alias)
 	if err != nil {
 		return err
 	}
 	if len(holders) > 0 {
-		return fmt.Errorf("the alias %q proposed at keygen is already on %s", k.ProposedAlias, holders[0].Ref())
+		return fmt.Errorf("the alias %q %s is already on %s", alias, origin, holders[0].Ref())
 	}
 	own := aliases[k.Ref()]
-	if err := config.WriteKeyAlias(own.File, k.ProposedAlias); err != nil {
+	if err := config.WriteKeyAlias(own.File, alias); err != nil {
 		return err
 	}
-	own.Alias = k.ProposedAlias
+	own.Alias = alias
 	aliases[k.Ref()] = own
 	return nil
 }

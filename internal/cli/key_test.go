@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/vault"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -205,4 +208,53 @@ func fillKey(prefix, fill byte) []byte {
 		b[i] = fill
 	}
 	return b
+}
+
+// serveWaiting answers on dir's socket as a serve would for its waiting Key
+// aliases, in Group groupAlias.
+func serveWaiting(t *testing.T, dir, groupAlias string, aliases ...string) {
+	t.Helper()
+	l, err := net.Listen("unix", filepath.Join(dir, "serve.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/key/aliases/waiting", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(serve.WaitingKeyAliases{Group: groupAlias, Aliases: aliases})
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { _ = srv.Close() })
+}
+
+// key alias refuses an alias a running serve holds for a mint, as it does one
+// on another Key, whatever the case.
+func TestKeyAliasRefusesAnAliasWaitingOnAMint(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	pk, _ := seedMinted(t, dir)
+	serveWaiting(t, dir, group.ImplicitAlias, "Vault")
+	ref := "ecdsa:" + hex.EncodeToString(pk)
+
+	r := run(t, nil, "", "--dir", dir, "key", "alias", ref, "vAULT")
+	if r.code != 1 || !strings.Contains(r.stderr, "waiting") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "key", "alias", ref, "Free")
+	if r.code != 0 {
+		t.Fatalf("free alias: exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+// What serve holds is for its own Group: another Group's aliases are apart.
+func TestKeyAliasIgnoresAliasesWaitingInAnotherGroup(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	pk, _ := seedMinted(t, dir)
+	serveWaiting(t, dir, "elsewhere", "Vault")
+
+	r := run(t, nil, "", "--dir", dir, "key", "alias", "ecdsa:"+hex.EncodeToString(pk), "Vault")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
 }

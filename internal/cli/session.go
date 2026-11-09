@@ -41,14 +41,17 @@ func sessionCommand(g *globals) *cobra.Command {
 	start.Flags().StringVar(&alias, "alias", "", "Key alias to propose to every Node party to the Key")
 	root.AddCommand(start)
 
-	root.AddCommand(&cobra.Command{
+	var ownAlias string
+	accept := &cobra.Command{
 		Use:   "accept <session-id>",
 		Short: "Accept a Session locally so this Node's engine may start (requires serve)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSessionAccept(cmd, g, args[0])
+			return runSessionAccept(cmd, g, args[0], ownAlias)
 		},
-	})
+	}
+	accept.Flags().StringVar(&ownAlias, "alias", "", "this Node's own Key alias for the Key, instead of the one proposed")
+	root.AddCommand(accept)
 
 	var reason string
 	abort := &cobra.Command{
@@ -88,11 +91,9 @@ func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int, alias 
 	if t < 1 {
 		return exitUsagef("--t must be >= 1")
 	}
-	if cmd.Flags().Changed("alias") { // so that --alias "" is refused, not ignored
-		var err error
-		if alias, err = keyalias.Normalize(alias); err != nil {
-			return exitUsagef("%w", err)
-		}
+	alias, err := aliasFlag(cmd, alias)
+	if err != nil {
+		return err
 	}
 	client := serve.Client{Socket: g.paths().Socket}
 	sum, err := client.SessionStart(cmd.Context(), curve, t, alias)
@@ -106,13 +107,16 @@ func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int, alias 
 	return nil
 }
 
-func runSessionAccept(cmd *cobra.Command, g *globals, hexID string) error {
+func runSessionAccept(cmd *cobra.Command, g *globals, hexID, alias string) error {
 	id, err := parseSessionID(hexID)
 	if err != nil {
 		return err
 	}
+	if alias, err = aliasFlag(cmd, alias); err != nil {
+		return err
+	}
 	client := serve.Client{Socket: g.paths().Socket}
-	if err := client.SessionAccept(cmd.Context(), id); err != nil {
+	if err := client.SessionAccept(cmd.Context(), id, alias); err != nil {
 		return sessionCallError(err)
 	}
 	if g.json {
@@ -214,6 +218,19 @@ func runSessionInspect(g *globals, hexID string) error {
 	return nil
 }
 
+// aliasFlag is --alias in stored form, or a usage error. Set but empty is
+// refused, not taken for no flag at all.
+func aliasFlag(cmd *cobra.Command, alias string) (string, error) {
+	if !cmd.Flags().Changed("alias") {
+		return "", nil
+	}
+	stored, err := keyalias.Normalize(alias)
+	if err != nil {
+		return "", exitUsagef("%w", err)
+	}
+	return stored, nil
+}
+
 // proposedSuffix ends a one-line Session with the Key alias it proposes.
 func proposedSuffix(p palette, s session.Summary) string {
 	if s.ProposedAlias == "" {
@@ -233,7 +250,7 @@ func parseSessionID(s string) (session.ID, error) {
 // sessionCallError maps a serve failure onto an exit code.
 func sessionCallError(err error) error {
 	switch {
-	case errors.Is(err, session.ErrBadCurve), errors.Is(err, serve.ErrBadAlias):
+	case errors.Is(err, session.ErrBadCurve), errors.Is(err, serve.ErrBadAlias), errors.Is(err, session.ErrNotKeygen):
 		return exitUsagef("%w", err)
 	case errors.Is(err, raftx.ErrNotInserted):
 		return &ExitError{Code: ExitProtocol, Err: err}

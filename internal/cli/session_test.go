@@ -256,3 +256,20 @@ func TestSessionStartRefusesAnInvalidAliasAsUsage(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
 	}
 }
+
+// session accept refuses what session start does, before serve is asked.
+func TestSessionAcceptRefusesAnInvalidAliasAsUsage(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	id := session.ID{1}.String()
+	for _, bad := range []string{"", " spaced", strings.Repeat("x", 64)} {
+		r := run(t, nil, "", "--dir", dir, "session", "accept", id, "--alias", bad)
+		if r.code != 1 || !strings.Contains(r.stderr, "key alias") {
+			t.Errorf("%q: exit %d, stderr %q", bad, r.code, r.stderr)
+		}
+	}
+	r := run(t, nil, "", "--dir", dir, "session", "accept", id, "--alias", "vault")
+	if r.code != 2 || !strings.Contains(r.stderr, "serve") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+}

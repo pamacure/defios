@@ -41,18 +41,18 @@ func keyCommand(g *globals) *cobra.Command {
 	alias := &cobra.Command{
 		Use:   "alias <key> <alias>",
 		Short: "Set or rename a Key's alias, or remove it with --clear",
-		Long:  `A Key alias is this Node's own label for a Key, kept as alias in the Key's Conversation config.toml: 1 to 63 characters, compared case-insensitively, unique in the Group on this Node. <key> is curve:hex, the Conversation ID or the alias. This needs no serve.`,
+		Long:  `A Key alias is this Node's own label for a Key, kept as alias in the Key's Conversation config.toml: 1 to 63 characters, compared case-insensitively, unique in the Group on this Node. <key> is curve:hex, the Conversation ID or the alias. This needs no serve, but a running serve is asked whether the alias is waiting on a mint.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if clearAlias {
 				return cobra.ExactArgs(1)(cmd, args)
 			}
 			return cobra.ExactArgs(2)(cmd, args)
 		},
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if clearAlias {
-				return runKeyAlias(g, args[0], "", true)
+				return runKeyAlias(cmd.Context(), g, args[0], "", true)
 			}
-			return runKeyAlias(g, args[0], args[1], false)
+			return runKeyAlias(cmd.Context(), g, args[0], args[1], false)
 		},
 	}
 	alias.Flags().BoolVar(&clearAlias, "clear", false, "remove the Key's alias")
@@ -130,11 +130,16 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 
 // runKeyAlias sets, renames or clears the alias of the Key query names. It
 // needs no serve: the alias is this Node's alone (ADR 0033).
-func runKeyAlias(g *globals, query, alias string, remove bool) error {
+func runKeyAlias(ctx context.Context, g *globals, query, alias string, remove bool) error {
 	if !remove {
 		var err error
 		if alias, err = keyalias.Normalize(alias); err != nil {
 			return exitUsagef("%w", err)
+		}
+		// Before the Keys are read: a mint lets go of its hold only once its
+		// config.toml names the alias, so it is seen in one or the other.
+		if err := refuseWaitingAlias(ctx, g, alias); err != nil {
+			return err
 		}
 	}
 	store, err := openReplica(g)
@@ -182,6 +187,31 @@ func runKeyAlias(g *globals, query, alias string, remove bool) error {
 		}{v.Key, v.Alias})
 	}
 	fmt.Fprintln(g.app.Stdout, v.shownAs(palette{})) // a mutating verb's confirmation stays plain
+	return nil
+}
+
+// refuseWaitingAlias fails if a running serve holds alias for a mint in the
+// targeted Group. With no serve running, nothing is held.
+func refuseWaitingAlias(ctx context.Context, g *globals, alias string) error {
+	waiting, err := serve.Client{Socket: g.paths().Socket}.WaitingKeyAliases(ctx)
+	if errors.Is(err, serve.ErrNotRunning) {
+		return nil
+	}
+	if err != nil {
+		return exitOperational(err)
+	}
+	groupAlias, err := g.resolveAlias()
+	if err != nil {
+		return err
+	}
+	if waiting.Group != groupAlias {
+		return nil
+	}
+	for _, held := range waiting.Aliases {
+		if keyalias.Same(held, alias) {
+			return exitUsagef("key alias %q is waiting on a mint in this Group", alias)
+		}
+	}
 	return nil
 }
 

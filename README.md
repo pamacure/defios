@@ -66,7 +66,7 @@ On B, accept it:
 defios session accept <session-id>
 ```
 
-`defios key list` shows the Key on both machines. Add `--alias cold` to `session start` to name it on both; after that each machine's alias is its own, changed with `defios key alias`.
+`defios key list` shows the Key on both machines. Add `--alias cold` to `session start` to name it on both, or `--alias vault` to `session accept` to name it differently on that machine alone; after that each machine's alias is its own, changed with `defios key alias`.
 
 **4. Back up** each machine now, and again after every new Key:
 
