@@ -39,7 +39,7 @@ func TestKeyScopedConversation(t *testing.T) {
 	}
 
 	bob.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "--key", ecdsaKey.ConversationID, "ecdsa from bob")
-	alice.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "--key", eddsaPub[:8], "eddsa from alice")
+	alice.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "--key", eddsaKey.ConversationID, "eddsa from alice")
 	bob.mustJSONVerb(t, new(serve.SendView), "conversation", "send", "--key", "eddsa:"+eddsaPub, "eddsa from bob")
 
 	var group serve.SendView

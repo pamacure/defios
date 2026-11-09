@@ -54,28 +54,37 @@ func TestListAndResolveMintedKeys(t *testing.T) {
 	if err != nil || byConv.SessionID != keys[0].SessionID {
 		t.Fatalf("conversation: %v", err)
 	}
-	byPrefix, err := key.Resolve(keys, encode(pk[:4]))
-	if err != nil || byPrefix.Ref() != keys[0].Ref() {
-		t.Fatalf("prefix: %v", err)
-	}
 	if _, err := key.Resolve(keys, "ff"); !errors.Is(err, key.ErrUnknown) {
 		t.Fatalf("missing: %v", err)
 	}
 }
 
-func TestAmbiguousPrefixErrors(t *testing.T) {
-	a := bytesKey(0x02, 0xaa)
-	b := bytesKey(0x02, 0xab)
-	keys := []key.Key{
-		{Curve: "ecdsa", PublicKey: a, T: 2, N: 2},
-		{Curve: "ecdsa", PublicKey: b, T: 2, N: 2},
+// A Key is named by curve:hex or its Conversation ID, and nothing shorter or
+// looser: a prefix or a bare public key is unknown, not a guess (ADR 0033).
+func TestResolveRefusesAnythingButARefOrConversationID(t *testing.T) {
+	ecdsa := key.Key{Curve: "ecdsa", PublicKey: bytesKey(0x02, 0xaa), T: 2, N: 2}
+	eddsa := key.Key{Curve: "eddsa", PublicKey: bytes.Repeat([]byte{0x66}, 32), T: 2, N: 2}
+	keys := []key.Key{ecdsa, eddsa}
+	for _, query := range []string{
+		"",
+		"02",                               // once ambiguous
+		"02aa",                             // a public-key prefix
+		encode(ecdsa.PublicKey),            // a bare public key
+		encode(eddsa.PublicKey),            // bare, and as long as a Conversation ID
+		ecdsa.Ref()[:12],                   // a truncated curve:hex
+		"eddsa:" + encode(ecdsa.PublicKey), // the wrong curve
+		ecdsa.Conversation()[:12],          // a truncated Conversation ID
+	} {
+		if got, err := key.Resolve(keys, query); !errors.Is(err, key.ErrUnknown) {
+			t.Errorf("Resolve(%q) = %s, %v; want ErrUnknown", query, got.Ref(), err)
+		}
 	}
-	if _, err := key.Resolve(keys, "02"); !errors.Is(err, key.ErrAmbiguous) {
-		t.Fatalf("prefix: %v", err)
-	}
-	got, err := key.Resolve(keys, "02aa")
-	if err != nil || encode(got.PublicKey) != encode(a) {
-		t.Fatalf("longer prefix: %v %x", err, got.PublicKey)
+	for _, k := range keys {
+		for _, query := range []string{k.Ref(), k.Conversation(), strings.ToUpper(k.Ref()), " " + k.Conversation() + "\n"} {
+			if got, err := key.Resolve(keys, query); err != nil || got.Ref() != k.Ref() {
+				t.Errorf("Resolve(%q) = %s, %v; want %s", query, got.Ref(), err, k.Ref())
+			}
+		}
 	}
 }
 
@@ -202,10 +211,10 @@ func encode(b []byte) string {
 	return string(out)
 }
 
-// A Key's Workspace is named <curve>-<first 12 hex of its public key>, a
-// prefix key inspect accepts. A Key whose short name an earlier-minted Key
-// already holds takes its full public key instead, so no two Keys share a
-// Workspace and a name, once given, never changes.
+// A Key's Workspace is named <curve>-<first 12 hex of its public key>. A Key
+// whose short name an earlier-minted Key already holds takes its full public
+// key instead, so no two Keys share a Workspace and a name, once given, never
+// changes.
 func TestWorkspaceNamesAreShortUnlessTaken(t *testing.T) {
 	first := key.Key{Curve: "ecdsa", PublicKey: bytesKey(0x02, 0xaa)}
 	clash := key.Key{Curve: "ecdsa", PublicKey: append(bytesKey(0x02, 0xaa)[:32:32], 0xbb)}

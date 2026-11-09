@@ -16,7 +16,7 @@ import (
 var (
 	// ErrUnknown is an inspect query that matches nothing.
 	ErrUnknown = errors.New("key: no such key")
-	// ErrAmbiguous is a hex prefix that matches more than one Key.
+	// ErrAmbiguous is a query that could mean more than one Key.
 	ErrAmbiguous = errors.New("key: ambiguous key")
 )
 
@@ -86,45 +86,21 @@ func List(rows []cosl.Row) ([]Key, error) {
 	return out, nil
 }
 
-// Resolve matches query as curve:hex, a unique public-key hex prefix, or a
-// Conversation ID hex.
+// Resolve matches query as a whole curve:hex or Conversation ID hex. Anything
+// else, a public-key prefix or a bare public key included, is ErrUnknown
+// (ADR 0033).
 func Resolve(keys []Key, query string) (Key, error) {
 	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
-		return Key{}, ErrUnknown
-	}
-	if curve, pk, ok := strings.Cut(query, ":"); ok {
-		raw, err := hex.DecodeString(pk)
-		if err != nil || curve == "" {
-			return Key{}, ErrUnknown
-		}
-		for _, k := range keys {
-			if k.Curve == curve && string(k.PublicKey) == string(raw) {
-				return k, nil
-			}
-		}
-		return Key{}, ErrUnknown
-	}
-	var match []Key
 	for _, k := range keys {
-		pub := hex.EncodeToString(k.PublicKey)
-		if strings.HasPrefix(pub, query) || k.Conversation() == query {
-			match = append(match, k)
+		if k.Ref() == query || k.Conversation() == query {
+			return k, nil
 		}
 	}
-	switch len(match) {
-	case 0:
-		return Key{}, ErrUnknown
-	case 1:
-		return match[0], nil
-	default:
-		return Key{}, ErrAmbiguous
-	}
+	return Key{}, ErrUnknown
 }
 
 // workspacePrefix is how many hex characters of a public key name its
-// Conversation's Workspace: short enough to type, and a prefix key inspect
-// accepts.
+// Conversation's Workspace.
 const workspacePrefix = 12
 
 // WorkspaceNames names each Key's Conversation Workspace, by Conversation ID:

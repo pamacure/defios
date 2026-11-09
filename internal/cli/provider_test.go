@@ -218,7 +218,7 @@ api_path = "/v1/chat/completions"
 		t.Fatalf("list: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
 	}
 
-	r = run(t, nil, "", "--dir", dir, "provider", "show", "claude", "--key", "ab11", "--json")
+	r = run(t, nil, "", "--dir", dir, "provider", "show", "claude", "--key", ecdsaKeyRef, "--json")
 	var got map[string]any
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
 		t.Fatalf("show --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)

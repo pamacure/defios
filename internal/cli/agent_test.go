@@ -241,7 +241,7 @@ func TestAgentListMarksTheIncluded(t *testing.T) {
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("list: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
 	}
-	r = run(t, nil, "", "--dir", p.Config, "agent", "list", "--key", "ab11")
+	r = run(t, nil, "", "--dir", p.Config, "agent", "list", "--key", ecdsaKeyRef)
 	want = "auditor  claude  claude-opus-5-5\nscribe  claude  -  [included]\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("list --key: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
@@ -464,7 +464,7 @@ func TestAgentIncludeExcludeEditAConversationsList(t *testing.T) {
 		{[]string{"exclude", "scribe"}, "auditor\n"},
 		{[]string{"exclude", "auditor"}, ""},
 	} {
-		r := run(t, nil, "", append([]string{"--dir", p.Config, "agent"}, append(c.args, "--key", "ab11")...)...)
+		r := run(t, nil, "", append([]string{"--dir", p.Config, "agent"}, append(c.args, "--key", ecdsaKeyRef)...)...)
 		if r.code != 0 || r.stdout != c.want || r.stderr != "" {
 			t.Fatalf("%v --key: exit %d, stdout %q, stderr %q; want %q", c.args, r.code, r.stdout, r.stderr, c.want)
 		}
@@ -490,15 +490,15 @@ func TestAgentIncludeExcludeOnAConversationFollowingTheGroup(t *testing.T) {
 	path := p.ConversationConfigFile(group.ImplicitAlias, "eddsa-ab2222222222")
 	writeFile(t, path, "[agent]\nmax_depth = 3\n")
 
-	r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "auditor", "--key", "ab22")
-	if r.code != 1 || !strings.Contains(r.stderr, "ab22 follows the Group's list; exclude it there, or give ab22 its own list with include --key") {
+	r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "auditor", "--key", eddsaKeyRef)
+	if r.code != 1 || !strings.Contains(r.stderr, eddsaKeyRef+" follows the Group's list; exclude it there, or give "+eddsaKeyRef+" its own list with include --key") {
 		t.Fatalf("exclude --key on a list-less Conversation: exit %d, stderr %q", r.code, r.stderr)
 	}
 	if got := readFile(t, path); got != "[agent]\nmax_depth = 3\n" {
 		t.Fatalf("a refused exclude wrote %q", got)
 	}
 
-	r = run(t, nil, "", "--dir", p.Config, "agent", "include", "scribe", "--key", "ab22")
+	r = run(t, nil, "", "--dir", p.Config, "agent", "include", "scribe", "--key", eddsaKeyRef)
 	if r.code != 0 || r.stdout != "scribe\n" || !strings.Contains(r.stderr, "no longer follows the Group's") {
 		t.Fatalf("include --key on a list-less Conversation: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
@@ -511,13 +511,13 @@ func TestAgentIncludeExcludeOnAConversationFollowingTheGroup(t *testing.T) {
 	if err := os.Remove(fresh); err != nil {
 		t.Fatal(err)
 	}
-	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "auditor", "--key", "ab11"); r.code != 0 || r.stdout != "auditor\n" {
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "auditor", "--key", ecdsaKeyRef); r.code != 0 || r.stdout != "auditor\n" {
 		t.Fatalf("include --key with no config.toml: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
 	if w, err := config.ReadWorkspace(fresh); err != nil || !reflect.DeepEqual(w.Agent.Profiles, []string{"auditor"}) {
 		t.Fatalf("new Conversation config: %#v, %v", w, err)
 	}
-	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "ghost", "--key", "ab11"); r.code != 1 || !strings.Contains(r.stderr, "ghost") {
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "ghost", "--key", ecdsaKeyRef); r.code != 1 || !strings.Contains(r.stderr, "ghost") {
 		t.Fatalf("include ghost --key: exit %d, stderr %q", r.code, r.stderr)
 	}
 }
@@ -532,10 +532,10 @@ func TestAgentIncludeExcludeKeyDoNotMergeTheConfig(t *testing.T) {
 	path := p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111")
 	writeFile(t, path, "[networks.mainnet]\ntype = \"ethereum\"\nchain_id = 1\n\n[agent]\nprofiles = [\"scribe\"]\n")
 
-	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "auditor", "--key", "ab11"); r.code != 0 || r.stdout != "scribe\nauditor\n" {
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "include", "auditor", "--key", ecdsaKeyRef); r.code != 0 || r.stdout != "scribe\nauditor\n" {
 		t.Fatalf("include --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
-	if r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "scribe", "--key", "ab11"); r.code != 0 || r.stdout != "auditor\n" {
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "scribe", "--key", ecdsaKeyRef); r.code != 0 || r.stdout != "auditor\n" {
 		t.Fatalf("exclude --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
 }

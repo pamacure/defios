@@ -196,9 +196,14 @@ func TestConversationSendThroughServe(t *testing.T) {
 	}
 }
 
+// ecdsaKeyRef and eddsaKeyRef name the Keys groupWithKeys mints.
+var (
+	ecdsaKeyRef = "ecdsa:ab" + strings.Repeat("11", 32)
+	eddsaKeyRef = "eddsa:ab" + strings.Repeat("22", 31)
+)
+
 // groupWithKeys is groupWithTalk plus two minted Keys and one message in
-// each Conversation. Both public keys start with 0xab, so the prefix "ab"
-// is ambiguous and "ab11" is the ECDSA Key.
+// each Conversation.
 func groupWithKeys(t *testing.T, dir string) (ecdsaPK, eddsaPK []byte) {
 	t.Helper()
 	alice, bob := groupWithTalk(t, dir)
@@ -323,7 +328,7 @@ func TestConversationRecapWritesRECAPmd(t *testing.T) {
 	}
 
 	id := key.ConversationID("ecdsa", ecdsaPK)
-	if r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--key", "ab11", "--base-seq", "12", "--text", "ecdsa talk"); r.code != 0 {
+	if r := run(t, nil, "", "--dir", dir, "conversation", "recap", "--key", ecdsaKeyRef, "--base-seq", "12", "--text", "ecdsa talk"); r.code != 0 {
 		t.Fatalf("--key: exit %d: %s", r.code, r.stderr)
 	}
 	if got := readFile(t, recapFile(dir, hex.EncodeToString(id[:]))); got != "---\nbase_seq: 12\n---\necdsa talk\n" {
@@ -556,7 +561,7 @@ func TestConversationLogKeyShowsOnlyThatConversation(t *testing.T) {
 		t.Fatalf("group log = %q", groupLog.stdout)
 	}
 
-	for _, query := range []string{ecdsaRef, hex.EncodeToString(ecdsaPK[:4]), hex.EncodeToString(ecdsaID[:])} {
+	for _, query := range []string{ecdsaRef, hex.EncodeToString(ecdsaID[:])} {
 		r := run(t, nil, "", "--dir", dir, "conversation", "log", "--key", query)
 		if r.code != 0 {
 			t.Fatalf("--key %s: exit %d: %s", query, r.code, r.stderr)
@@ -571,7 +576,7 @@ func TestConversationLogKeyShowsOnlyThatConversation(t *testing.T) {
 	}
 }
 
-func TestConversationKeyUnknownAndAmbiguousExitUsage(t *testing.T) {
+func TestConversationKeyUnknownExitsUsage(t *testing.T) {
 	dir := t.TempDir()
 	groupWithKeys(t, dir)
 	cases := []struct {
@@ -579,9 +584,11 @@ func TestConversationKeyUnknownAndAmbiguousExitUsage(t *testing.T) {
 		want string
 	}{
 		{[]string{"conversation", "log", "--key", "ff"}, "no such key"},
-		{[]string{"conversation", "log", "--key", "ab"}, "ambiguous"},
+		{[]string{"conversation", "log", "--key", "ab"}, "no such key"},
+		{[]string{"conversation", "log", "--key", strings.TrimPrefix(ecdsaKeyRef, "ecdsa:")}, "no such key"},
 		{[]string{"conversation", "send", "--key", "ff", "nope"}, "no such key"},
-		{[]string{"conversation", "send", "--key", "ab", "nope"}, "ambiguous"},
+		{[]string{"conversation", "send", "--key", "ab11", "nope"}, "no such key"},
+		{[]string{"conversation", "send", "--key", strings.TrimPrefix(eddsaKeyRef, "eddsa:"), "nope"}, "no such key"},
 	}
 	for _, c := range cases {
 		r := run(t, nil, "", append([]string{"--dir", dir}, c.args...)...)

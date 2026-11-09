@@ -10,8 +10,8 @@ import (
 )
 
 // One listing of a Group's Keys, as `--key` resolution and `key inspect` do
-// it: list every minted Key off the replica and resolve a public-key prefix
-// among them. Since ADR 0014 a listing reads Session start, complete and
+// it: list every minted Key off the replica and resolve one curve:hex among
+// them. Since ADR 0014 a listing reads Session start, complete and
 // abort rows only, so talk and round traffic cost it nothing.
 func BenchmarkKeyListing(b *testing.B) {
 	for _, shape := range coslbench.Shapes {
@@ -22,15 +22,15 @@ func BenchmarkKeyListing(b *testing.B) {
 				b.Fatal(err)
 			}
 			b.Cleanup(func() { store.Close() })
-			prefix := hex.EncodeToString(r.SignKey)[:12]
+			ref := "ecdsa:" + hex.EncodeToString(r.SignKey)
 			want := key.ConversationID("ecdsa", r.SignKey)
-			got, err := conversationID(store, prefix)
+			got, err := conversationID(store, ref)
 			if err != nil || string(got) != string(want[:]) {
-				b.Fatalf("conversationID(%s) = %x, %v; want %x", prefix, got, err, want)
+				b.Fatalf("conversationID(%s) = %x, %v; want %x", ref, got, err, want)
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := conversationID(store, prefix); err != nil {
+				if _, err := conversationID(store, ref); err != nil {
 					b.Fatal(err)
 				}
 			}

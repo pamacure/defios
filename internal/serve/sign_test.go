@@ -72,6 +72,17 @@ func TestSignProposeListInspect(t *testing.T) {
 	if _, err := a.client().SignPropose(ctx, keyQuery, spec); !errors.Is(err, network.ErrUnknown) {
 		t.Fatalf("an alias the proposer has no Network for: %v", err)
 	}
+	if _, err := b.client().SignPropose(ctx, hexOf(conv[:]), wrong); !errors.Is(err, signreq.ErrCurveMismatch) {
+		t.Fatalf("by Conversation ID: %v", err)
+	}
+	for _, query := range []string{hexOf(pk), hexOf(pk)[:8]} {
+		if _, err := b.client().SignPropose(ctx, query, spec); !errors.Is(err, key.ErrUnknown) {
+			t.Errorf("propose --key %s: %v, want an unknown Key", query, err)
+		}
+		if _, err := b.client().SignFill(ctx, query, spec.Transactions); !errors.Is(err, key.ErrUnknown) {
+			t.Errorf("fill --key %s: %v, want an unknown Key", query, err)
+		}
+	}
 	noReason := spec
 	noReason.Reason = ""
 	if _, err := b.client().SignPropose(ctx, keyQuery, noReason); !errors.Is(err, signreq.ErrInvalid) {

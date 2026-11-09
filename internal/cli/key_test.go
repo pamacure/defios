@@ -44,7 +44,7 @@ func TestKeyListAndInspectWithoutServe(t *testing.T) {
 		t.Fatalf("locked list exit %d:\n%s", r.code, r.stdout)
 	}
 
-	r = run(t, nil, "", "--dir", dir, "key", "inspect", hex.EncodeToString(pk)[:8], "--json")
+	r = run(t, nil, "", "--dir", dir, "key", "inspect", ref, "--json")
 	if r.code != 0 {
 		t.Fatalf("inspect exit %d: %s", r.code, r.stderr)
 	}
@@ -64,13 +64,11 @@ func TestKeyListAndInspectWithoutServe(t *testing.T) {
 		t.Fatalf("conversation inspect exit %d:\n%s\n%s", r.code, r.stdout, r.stderr)
 	}
 
-	r = run(t, nil, "", "--dir", dir, "key", "inspect", "02")
-	if r.code != 1 {
-		t.Fatalf("ambiguous: exit %d, stderr %q", r.code, r.stderr)
-	}
-	r = run(t, nil, "", "--dir", dir, "key", "inspect", "ff")
-	if r.code != 2 {
-		t.Fatalf("unknown: exit %d, stderr %q", r.code, r.stderr)
+	for _, query := range []string{"ff", "02", hex.EncodeToString(pk)[:8], hex.EncodeToString(pk)} {
+		r = run(t, nil, "", "--dir", dir, "key", "inspect", query)
+		if r.code != 2 || !strings.Contains(r.stderr, "no such key") {
+			t.Fatalf("inspect %s: exit %d, stderr %q", query, r.code, r.stderr)
+		}
 	}
 	r = run(t, map[string]string{"DEFIOS_PASSPHRASE": "wrong"}, "", "--dir", dir, "key", "list")
 	if r.code != 4 {

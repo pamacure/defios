@@ -185,10 +185,10 @@ network = "testnet"
 		t.Fatalf("list: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
 	want := "btc  bitcoin  bitcoin testnet\neth  ethereum  ethereum chain 1\n"
-	if r := run(t, nil, "", "--dir", dir, "network", "list", "--key", "ab11"); r.code != 0 || r.stdout != want {
+	if r := run(t, nil, "", "--dir", dir, "network", "list", "--key", ecdsaKeyRef); r.code != 0 || r.stdout != want {
 		t.Fatalf("list --key: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
 	}
-	r := run(t, nil, "", "--dir", dir, "network", "show", "eth", "--key", "ab11")
+	r := run(t, nil, "", "--dir", dir, "network", "show", "eth", "--key", ecdsaKeyRef)
 	if r.code != 0 || !strings.Contains(r.stdout, "rpc_url $RPC\n") || strings.Contains(r.stdout, "a.example") {
 		t.Fatalf("show --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}

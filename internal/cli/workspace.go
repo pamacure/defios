@@ -126,7 +126,7 @@ func conversationConfigFile(g *globals, keyQuery string) (string, error) {
 }
 
 // keyFlagHelp is --key on a read verb of a Workspace section.
-const keyFlagHelp = "read with this Key's Conversation config.toml merged over the Group's: curve:hex, a unique public-key prefix, or the Conversation ID"
+const keyFlagHelp = "read with this Key's Conversation config.toml merged over the Group's: curve:hex or the Conversation ID"
 
 // keyEditFlagHelp is --key on a writing verb of a Workspace section.
-const keyEditFlagHelp = "edit this Key's Conversation config.toml instead of the Group's: curve:hex, a unique public-key prefix, or the Conversation ID"
+const keyEditFlagHelp = "edit this Key's Conversation config.toml instead of the Group's: curve:hex or the Conversation ID"
