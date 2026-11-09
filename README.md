@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/3_2/DeFiOS_text_nobg-977x651.png" height="256"/>
+  <img src="assets/BrandTheme/no_bg_text.png" height="256"/>
 </div>
 
 A self-hosted multi-party wallet. Each machine runs one Node. Nodes form a Group on a headscale tailnet, mint threshold Keys together, and talk to each other and to agents over the COSL, a replicated log.
