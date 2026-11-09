@@ -59,9 +59,9 @@ func TestListAndResolveMintedKeys(t *testing.T) {
 	}
 }
 
-// A Key is named by curve:hex or its Conversation ID, and nothing shorter or
-// looser: a prefix or a bare public key is unknown, not a guess (ADR 0033).
-func TestResolveRefusesAnythingButARefOrConversationID(t *testing.T) {
+// A prefix or a bare public key never names a Key: it is unknown, not a guess
+// (ADR 0033).
+func TestResolveRefusesPrefixesAndBarePublicKeys(t *testing.T) {
 	ecdsa := key.Key{Curve: "ecdsa", PublicKey: bytesKey(0x02, 0xaa), T: 2, N: 2}
 	eddsa := key.Key{Curve: "eddsa", PublicKey: bytes.Repeat([]byte{0x66}, 32), T: 2, N: 2}
 	keys := []key.Key{ecdsa, eddsa}

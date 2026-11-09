@@ -86,9 +86,8 @@ func List(rows []cosl.Row) ([]Key, error) {
 	return out, nil
 }
 
-// Resolve matches query as a whole curve:hex or Conversation ID hex. Anything
-// else, a public-key prefix or a bare public key included, is ErrUnknown
-// (ADR 0033).
+// Resolve matches query as a whole curve:hex or Conversation ID hex. A
+// public-key prefix or a bare public key is ErrUnknown (ADR 0033).
 func Resolve(keys []Key, query string) (Key, error) {
 	query = strings.ToLower(strings.TrimSpace(query))
 	for _, k := range keys {

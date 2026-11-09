@@ -76,7 +76,7 @@ Every chain must be of the Key's curve.`,
 			return nil
 		},
 	}
-	propose.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	propose.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	propose.Flags().StringVar(&reason, "reason", "", "why the Group should sign (required)")
 	propose.Flags().StringVar(&txFile, "transactions", "", "JSON file of transactions, or - for stdin")
 	propose.Flags().Uint64Var(&deadline, "deadline", signreq.DefaultDeadlineSeconds, "seconds the request stays open")
@@ -347,7 +347,7 @@ stdout, ready for sign propose --transactions -; what was filled, and from where
 			return nil
 		},
 	}
-	fill.Flags().StringVar(&fillKey, "key", "", "curve:hex or the Conversation ID")
+	fill.Flags().StringVar(&fillKey, "key", "", keyQueryHelp)
 	fill.Flags().StringVar(&fillFile, "transactions", "", "JSON file of transactions, or - for stdin")
 
 	root.AddCommand(propose, fill, list, inspect, accept, refuse, decline, broadcast)

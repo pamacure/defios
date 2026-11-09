@@ -125,8 +125,11 @@ func conversationConfigFile(g *globals, keyQuery string) (string, error) {
 	return g.paths().ConversationConfigFile(alias, key.WorkspaceNames(keys)[id]), nil
 }
 
+// keyQueryHelp is the ways a --key flag can name a Key.
+const keyQueryHelp = "curve:hex or the Conversation ID"
+
 // keyFlagHelp is --key on a read verb of a Workspace section.
-const keyFlagHelp = "read with this Key's Conversation config.toml merged over the Group's: curve:hex or the Conversation ID"
+const keyFlagHelp = "read with this Key's Conversation config.toml merged over the Group's: " + keyQueryHelp
 
 // keyEditFlagHelp is --key on a writing verb of a Workspace section.
-const keyEditFlagHelp = "edit this Key's Conversation config.toml instead of the Group's: curve:hex or the Conversation ID"
+const keyEditFlagHelp = "edit this Key's Conversation config.toml instead of the Group's: " + keyQueryHelp

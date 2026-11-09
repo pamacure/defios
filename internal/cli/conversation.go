@@ -40,7 +40,7 @@ func conversationCommand(g *globals) *cobra.Command {
 			return runConversationSend(cmd, g, keyQuery, as, args[0])
 		},
 	}
-	send.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	send.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	send.Flags().StringVar(&as.handle, "handle", "", "@handle: post as that agent, for an external runner; it must be included here")
 	send.Flags().Uint32Var(&as.depth, "depth", 1, "with --handle, the reply's depth in its chain: 1 to max_depth; unset, DEFIOS_DEPTH if set")
 	send.Flags().BoolVar(&as.detach, "detach", false, "return once the message commits, without streaming the agents it mentions")
@@ -51,7 +51,7 @@ func conversationCommand(g *globals) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runConversationFollow(cmd, g, keyQuery) },
 	}
-	follow.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	follow.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	root.AddCommand(follow)
 	cancel := &cobra.Command{
 		Use:   "cancel [msg-id]",
@@ -65,7 +65,7 @@ func conversationCommand(g *globals) *cobra.Command {
 			return runConversationCancel(cmd, g, keyQuery, chain)
 		},
 	}
-	cancel.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	cancel.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	root.AddCommand(cancel)
 	transcriptCmd := &cobra.Command{
 		Use:   "transcript <msg-id>",
@@ -73,7 +73,7 @@ func conversationCommand(g *globals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(_ *cobra.Command, args []string) error { return runConversationTranscript(g, keyQuery, args[0]) },
 	}
-	transcriptCmd.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	transcriptCmd.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	bindGroupFlag(g, transcriptCmd)
 	root.AddCommand(transcriptCmd)
 	var opts logOptions
@@ -83,7 +83,7 @@ func conversationCommand(g *globals) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runConversationLog(g, keyQuery, opts) },
 	}
-	log.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	log.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	log.Flags().IntVar(&opts.limit, "limit", 0, "only the latest N messages (with --lean, after this Node's Recap)")
 	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
 	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it, as its agents read them")
@@ -101,7 +101,7 @@ func conversationCommand(g *globals) *cobra.Command {
 			return runConversationRecap(g, keyQuery, baseSeq, text)
 		},
 	}
-	recapCmd.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	recapCmd.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	recapCmd.Flags().Uint64Var(&baseSeq, "base-seq", 0, "the highest seq the Recap accounts for: a message of this Conversation")
 	recapCmd.Flags().StringVar(&text, "text", "", "the account of the talk it covers")
 	recapCmd.MarkFlagRequired("base-seq")
@@ -115,7 +115,7 @@ func conversationCommand(g *globals) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return runConversationPrune(g, keyQuery, cut) },
 	}
-	prune.Flags().StringVar(&keyQuery, "key", "", "curve:hex or the Conversation ID")
+	prune.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	prune.Flags().Uint64Var(&cut.before, "before", 0, "prune the talk at or below this seq")
 	prune.Flags().StringVar(&cut.olderThan, "older-than", "", "prune the talk its sender wrote longer ago than this: whole days like 30d, or a Go duration like 36h")
 	prune.MarkFlagsOneRequired("before", "older-than")

@@ -7,8 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// A Key is named by curve:hex or its Conversation ID, so no --key flag may
-// offer a public-key prefix (ADR 0033).
+// Public-key prefix lookup is gone, so no --key flag may offer one (ADR 0033).
 func TestNoKeyFlagOffersAPrefix(t *testing.T) {
 	g := &globals{}
 	seen := 0
