@@ -95,6 +95,36 @@ type Options struct {
 // tailnet and serves formation HTTP. Returns when ctx is done or a
 // listener fails.
 func Run(ctx context.Context, o Options) error {
+	r, err := Start(ctx, o)
+	if err != nil {
+		return err
+	}
+	return r.Wait()
+}
+
+// Running is a serve Start began: it serves until its ctx is done or a
+// listener fails.
+type Running struct {
+	s    *server
+	done chan struct{}
+	err  error // set before done closes
+}
+
+// Done is closed once the serve has stopped and cleaned up.
+func (r *Running) Done() <-chan struct{} { return r.done }
+
+// Wait blocks until the serve stops and returns why: nil when its ctx
+// ended it.
+func (r *Running) Wait() error {
+	<-r.done
+	return r.err
+}
+
+// Start binds the socket and answers the local API before it returns, so a
+// socket another serve holds is reported as ErrAlreadyRunning to the
+// caller. Joining the tailnet and everything after it runs in the
+// background until ctx is done; Wait reports how it ended.
+func Start(ctx context.Context, o Options) (*Running, error) {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
 	}
@@ -106,16 +136,16 @@ func Run(ctx context.Context, o Options) error {
 	}
 	self, err := group.SignIdentity(o.Node, o.Config.DisplayName, o.Config.Hostname)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	socket, err := bindSocket(o.Paths.Socket)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer socket.Close()
 	slot, err := group.OpenSlot(o.Paths.GroupsDir(), o.Alias, o.Node)
 	if err != nil {
-		return fmt.Errorf("serve: %w", err)
+		socket.Close()
+		return nil, fmt.Errorf("serve: %w", err)
 	}
 
 	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), chainCalls: make(chan chainCall),
@@ -126,6 +156,20 @@ func Run(ctx context.Context, o Options) error {
 	o.Logf("serve: node %s listening on %s; joining tailnet as %s", o.Node.NodeID, o.Paths.Socket, o.Config.Hostname)
 	s.logStatus("resumed")
 
+	r := &Running{s: s, done: make(chan struct{})}
+	go func() {
+		defer close(r.done)
+		defer socket.Close()
+		r.err = s.serve(ctx, localSrv, errc)
+	}()
+	return r, nil
+}
+
+// serve joins the tailnet and serves formation HTTP beside the local API
+// until ctx is done or a listener fails, then shuts everything down.
+func (s *server) serve(ctx context.Context, localSrv *http.Server, errc chan error) error {
+	o := s.opts
+	var err error
 	if err := o.Tailnet.Up(ctx); err != nil {
 		localSrv.Close()
 		return fmt.Errorf("serve: tailnet: %w", err)

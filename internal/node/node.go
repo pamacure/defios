@@ -1,0 +1,519 @@
+// Package node is the application layer front ends host a Node through
+// (ADR 0034): a typed API over a Node directory, and one subscription to
+// what happens on it. This slice holds hosting: Unlock serves a Group
+// in-process, as `defios serve` does, and Lock stops it.
+package node
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+
+	"defios.com/internal/config"
+	"defios.com/internal/engine/tssl"
+	"defios.com/internal/identity"
+	"defios.com/internal/nodedir"
+	"defios.com/internal/secret"
+	"defios.com/internal/serve"
+	"defios.com/internal/session"
+	"defios.com/internal/vault"
+)
+
+// Node is a Node as a front end drives it. Nothing in it assumes a unix
+// socket, a terminal or a desktop OS, so a later client of a Node hosted
+// elsewhere can implement it over a connection. Host is the in-process
+// implementation.
+type Node interface {
+	// Check reports what would stop Unlock(_, group) that needs no
+	// passphrase to find, so a front end can refuse before asking for one.
+	Check(group string) error
+	// Unlock opens the Vault with passphrase and serves group. The Node
+	// keeps the passphrase while it serves, to read Secrets on each use
+	// and to Switch.
+	Unlock(passphrase, group string) error
+	// Lock stops serving and forgets the passphrase. It returns why
+	// serving failed, if it did while stopping; locking a locked Node is
+	// a no-op.
+	Lock() error
+	// Switch serves group in place of the Group served now, with the
+	// passphrase Unlock was given. A Switch that fails leaves the Node
+	// locked.
+	Switch(group string) error
+	// Status is the Node's status now.
+	Status() Status
+	// Subscribe delivers events, in order, starting with the status now,
+	// until ctx is done, when the channel closes.
+	Subscribe(ctx context.Context) <-chan Event
+}
+
+// Errors a front end tells apart. Vault failures come through as the
+// vault package's own: vault.ErrBadPassphrase, vault.ErrBusy (a passphrase
+// change is under way) and *vault.LeftoverError.
+var (
+	// ErrNoNode: the directory holds no Node.
+	ErrNoNode = errors.New("node: no Node in this directory")
+	// ErrUnknownGroup: the Node has no Group by that alias.
+	ErrUnknownGroup = errors.New("node: no such Group on this Node")
+	// ErrServedElsewhere: another process is serving this Node, so this
+	// one does not serve it too.
+	ErrServedElsewhere = errors.New("node: another process is serving this Node")
+	// ErrUnlocked: this host already serves a Group; Lock or Switch.
+	ErrUnlocked = errors.New("node: already unlocked")
+	// ErrLocked: the operation needs the Node unlocked.
+	ErrLocked = errors.New("node: locked")
+)
+
+// NoHeadscaleURLError: the Group's config names no control server, so the
+// Node cannot join its tailnet.
+type NoHeadscaleURLError struct{ ConfigFile string }
+
+func (e *NoHeadscaleURLError) Error() string {
+	return fmt.Sprintf("headscale_url is not set in %s", e.ConfigFile)
+}
+
+// IdentityError: the Vault opened but its keys do not match this Node's
+// identity file.
+type IdentityError struct{ Err error }
+
+func (e *IdentityError) Error() string { return e.Err.Error() }
+func (e *IdentityError) Unwrap() error { return e.Err }
+
+// Status is the Node status a front end shows.
+type Status struct {
+	Group     string // the Group served; "" when locked
+	Serving   bool
+	TailnetUp bool
+	Leader    string // Node ID of the Raft leader; "" when none is known
+	// Roster is the served Group's Roster with each Node's reachability
+	// from here; empty before the Group has one.
+	Roster []RosterNode
+	// MajorityReachable: more than half the Roster is reachable, so
+	// writes can commit.
+	MajorityReachable bool
+	// Err is why serving stopped on its own; nil after Lock.
+	Err error
+}
+
+// RosterNode is one Roster Node as Status reports it.
+type RosterNode struct {
+	NodeID      string
+	DisplayName string
+	Reachable   bool
+}
+
+// Event is one thing that happened on the Node. Exactly one field is set.
+type Event struct {
+	Status *Status // the Node's status changed to this
+}
+
+// Options are what a host chooses. The zero value is production.
+type Options struct {
+	// Getenv resolves config "$NAME" references; nil is os.Getenv.
+	Getenv func(string) string
+	// Logf receives the serving Node's log lines; nil discards them.
+	Logf func(format string, args ...any)
+	// NewTailnet joins the tailnet; nil is serve.NewTsnet.
+	NewTailnet func(serve.TsnetOptions) serve.Tailnet
+	// Sessions sets how this Node runs Sessions, once the Vault is open;
+	// nil is tss-lib's engines and the default wait.
+	Sessions func(self identity.ID) (Sessions, error)
+	// StatusInterval is how often a serving Node's status is refreshed;
+	// zero is 5 seconds.
+	StatusInterval time.Duration
+}
+
+// Sessions is how a Node runs Sessions.
+type Sessions struct {
+	Keygen func() session.Engine // nil: the Node runs no Sessions
+	Sign   func() session.Engine // nil: the Node does not sign
+	// WaitingFor overrides a Session's wait when non-zero.
+	WaitingFor time.Duration
+}
+
+// Host hosts a Node in this process. Its methods are safe to call from
+// any goroutine.
+type Host struct {
+	p   nodedir.Paths
+	o   Options
+	pub identity.Public
+
+	// op serializes Unlock, Lock and Switch, so one never sees another
+	// half done; mu guards the fields below and is never held while the
+	// Vault opens.
+	op         sync.Mutex
+	mu         sync.Mutex
+	cur        *serving // nil when locked
+	passphrase string   // held while cur is set
+	status     Status
+	subs       map[*subscriber]struct{}
+}
+
+var _ Node = (*Host)(nil)
+
+// serving is one Unlock's serve and what it holds.
+type serving struct {
+	group  string
+	run    *serve.Running
+	cancel context.CancelFunc
+	done   chan struct{} // closed once the serve stopped and released all
+}
+
+// Open reads the Node in p. It serves nothing until Unlock.
+func Open(p nodedir.Paths, o Options) (*Host, error) {
+	pub, err := identity.ReadFile(p.IdentityFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNoNode
+	} else if err != nil {
+		return nil, err
+	}
+	if o.Getenv == nil {
+		o.Getenv = os.Getenv
+	}
+	if o.Logf == nil {
+		o.Logf = func(string, ...any) {}
+	}
+	if o.NewTailnet == nil {
+		o.NewTailnet = serve.NewTsnet
+	}
+	if o.Sessions == nil {
+		o.Sessions = tssSessions
+	}
+	if o.StatusInterval <= 0 {
+		o.StatusInterval = 5 * time.Second
+	}
+	return &Host{p: p, o: o, pub: pub, subs: map[*subscriber]struct{}{}}, nil
+}
+
+func tssSessions(self identity.ID) (Sessions, error) {
+	return Sessions{
+		Keygen: func() session.Engine { return tssl.New([32]byte(self)) },
+		Sign:   func() session.Engine { return tssl.NewSigner([32]byte(self)) },
+	}, nil
+}
+
+// Check implements Node.
+func (h *Host) Check(group string) error {
+	_, err := h.check(group)
+	return err
+}
+
+// check loads group's config and refuses what Unlock would, short of
+// opening the Vault.
+func (h *Host) check(group string) (config.Config, error) {
+	cfg, err := h.checkConfig(group)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if serve.IsUp(h.p.Socket) {
+		return config.Config{}, ErrServedElsewhere
+	}
+	unlockVault, err := useVault(h.p)
+	if err != nil {
+		return config.Config{}, err
+	}
+	unlockVault()
+	return cfg, nil
+}
+
+// checkConfig loads group's config and refuses a Group that config alone
+// shows cannot be served.
+func (h *Host) checkConfig(group string) (config.Config, error) {
+	if group == "" {
+		return config.Config{}, ErrUnknownGroup
+	}
+	if _, err := os.Stat(h.p.GroupConfigFile(group)); errors.Is(err, os.ErrNotExist) {
+		return config.Config{}, fmt.Errorf("%w: %q", ErrUnknownGroup, group)
+	} else if err != nil {
+		return config.Config{}, err
+	}
+	e, err := config.Load(h.p, group, nil, nil)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if e.Group.HeadscaleURL == "" {
+		return config.Config{}, &NoHeadscaleURLError{ConfigFile: h.p.GroupConfigFile(group)}
+	}
+	return e.Group, nil
+}
+
+// useVault takes the Vault's lock shared, so no passphrase change runs
+// while it is held, and refuses a Vault an interrupted change left.
+func useVault(p nodedir.Paths) (unlock func(), err error) {
+	unlock, err = vault.Lock(p.VaultDir(), false)
+	if err != nil {
+		return nil, err
+	}
+	if err := vault.CheckLeftover(p.VaultDir()); err != nil {
+		unlock()
+		return nil, err
+	}
+	return unlock, nil
+}
+
+// Unlock implements Node.
+func (h *Host) Unlock(passphrase, group string) error {
+	h.op.Lock()
+	defer h.op.Unlock()
+	return h.unlock(passphrase, group)
+}
+
+// unlock is Unlock with h.op held.
+func (h *Host) unlock(passphrase, group string) error {
+	h.mu.Lock()
+	unlocked := h.cur != nil
+	h.mu.Unlock()
+	if unlocked {
+		return ErrUnlocked
+	}
+	sv, err := h.start(passphrase, group)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cur, h.passphrase = sv, passphrase
+	h.setStatus(Status{Group: group, Serving: true})
+	return nil
+}
+
+// start opens the Vault and serves group, as `defios serve` always has.
+func (h *Host) start(passphrase, group string) (*serving, error) {
+	cfg, err := h.check(group)
+	if err != nil {
+		return nil, err
+	}
+	// Held for as long as the Node serves: it reseals a Group's shares on
+	// keygen, so no passphrase change may run under it.
+	unlockVault, err := useVault(h.p)
+	if err != nil {
+		return nil, err
+	}
+	release := unlockVault
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	// Unlock the Node's shared secrets plus only this Group's shares;
+	// another Group's shares file is never opened (ADR 0007).
+	shared, err := vault.Open(h.p.VaultSharedFile(), passphrase)
+	if err != nil {
+		return nil, err
+	}
+	shares, err := vault.OpenShares(h.p.VaultSharesFile(group), passphrase)
+	if errors.Is(err, os.ErrNotExist) {
+		shares = nil // no Key minted for this Group yet
+	} else if err != nil {
+		return nil, err
+	}
+	self, err := identity.Unlock(h.pub, shared.AuthSeed, shared.EncryptionPrivateKey)
+	if err != nil {
+		return nil, &IdentityError{Err: err}
+	}
+	sessions, err := h.o.Sessions(self.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	logf := h.o.Logf
+	// The Group's Secrets are read at each use, so a `secret set` while
+	// the Node serves takes effect without a restart.
+	secrets := func() (map[string]string, error) {
+		s, err := vault.OpenSecrets(h.p.VaultSecretsFile(group), passphrase)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // no Secret set for this Group yet
+		}
+		return s, err
+	}
+	// The Vault is open before the tailnet join, so a Vault-held preauth
+	// key works on first boot. A Node already joined needs none, so a
+	// reference that resolves nowhere is reported and the join goes ahead
+	// on the saved tailnet state.
+	var authKey string
+	if cfg.TailnetAuthKey != "" {
+		r := &secret.Resolver{Group: group, Getenv: h.o.Getenv, Vault: secrets}
+		authKey, err = r.Resolve(cfg.TailnetAuthKey)
+		if errors.Is(err, secret.ErrUnresolved) {
+			logf("serve: tailnet_auth_key: %v; joining on this Node's saved tailnet state", err)
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	tailnet := h.o.NewTailnet(serve.TsnetOptions{
+		Dir:        h.p.TsnetDir(group),
+		Hostname:   cfg.Hostname,
+		ControlURL: cfg.HeadscaleURL,
+		AuthKey:    authKey,
+		Logf:       logf,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	run, err := serve.Start(ctx, serve.Options{
+		Paths:             h.p,
+		Alias:             group,
+		Node:              self,
+		Config:            cfg,
+		Tailnet:           tailnet,
+		Logf:              logf,
+		Preparams:         shared.EcdsaPreparams,
+		Vault:             vault.NewStore(h.p.VaultSharesFile(group), passphrase, shares),
+		SessionWaitingFor: sessions.WaitingFor,
+		NewEngine:         sessions.Keygen,
+		NewSigner:         sessions.Sign,
+		Getenv:            h.o.Getenv,
+		Secrets:           secrets,
+	})
+	if errors.Is(err, serve.ErrAlreadyRunning) {
+		cancel()
+		return nil, ErrServedElsewhere
+	} else if err != nil {
+		cancel()
+		return nil, err
+	}
+	sv := &serving{group: group, run: run, cancel: cancel, done: make(chan struct{})}
+	release = nil // the serving goroutine releases the Vault now
+	go h.watch(sv, ctx, unlockVault)
+	return sv, nil
+}
+
+// watch refreshes sv's status until its serve stops, then releases the
+// Vault and, when the serve stopped on its own, locks the Node.
+func (h *Host) watch(sv *serving, ctx context.Context, unlockVault func()) {
+	defer close(sv.done)
+	tick := time.NewTicker(h.o.StatusInterval)
+	defer tick.Stop()
+	for stopped := false; !stopped; {
+		select {
+		case <-sv.run.Done():
+			stopped = true
+			continue
+		default:
+		}
+		h.refresh(sv, ctx)
+		select {
+		case <-tick.C:
+		case <-sv.run.Done():
+			stopped = true
+		}
+	}
+	sv.cancel()
+	unlockVault()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cur == sv { // not Lock's doing
+		h.cur, h.passphrase = nil, ""
+		h.setStatus(Status{Err: sv.run.Wait()})
+	}
+}
+
+// refresh publishes sv's status, if sv is still what this host serves.
+func (h *Host) refresh(sv *serving, ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, h.o.StatusInterval+10*time.Second)
+	defer cancel()
+	ns := sv.run.NodeStatus(ctx)
+	st := Status{Group: sv.group, Serving: true, TailnetUp: ns.TailnetUp}
+	if ns.HasLeader {
+		st.Leader = ns.Leader.String()
+	}
+	reachable := 0
+	for _, r := range ns.Roster {
+		st.Roster = append(st.Roster, RosterNode{NodeID: r.NodeID.String(), DisplayName: r.DisplayName, Reachable: r.Reachable})
+		if r.Reachable {
+			reachable++
+		}
+	}
+	st.MajorityReachable = len(ns.Roster) > 0 && reachable > len(ns.Roster)/2
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cur == sv {
+		h.setStatus(st)
+	}
+}
+
+// Lock implements Node.
+func (h *Host) Lock() error {
+	h.op.Lock()
+	defer h.op.Unlock()
+	return h.lock()
+}
+
+// lock is Lock with h.op held.
+func (h *Host) lock() error {
+	h.mu.Lock()
+	sv := h.cur
+	h.cur, h.passphrase = nil, ""
+	h.mu.Unlock()
+	if sv == nil {
+		return nil
+	}
+	sv.cancel()
+	<-sv.done
+	h.mu.Lock()
+	if h.cur == nil {
+		h.setStatus(Status{})
+	}
+	h.mu.Unlock()
+	return sv.run.Wait()
+}
+
+// Switch implements Node. A group that cannot be served, by its config
+// alone, is refused before the Group served now stops.
+func (h *Host) Switch(group string) error {
+	h.op.Lock()
+	defer h.op.Unlock()
+	h.mu.Lock()
+	if h.cur == nil {
+		h.mu.Unlock()
+		return ErrLocked
+	}
+	passphrase, from := h.passphrase, h.cur.group
+	h.mu.Unlock()
+	if _, err := h.checkConfig(group); err != nil {
+		return err
+	}
+	if err := h.lock(); err != nil {
+		h.o.Logf("node: stopping Group %s: %v", from, err)
+	}
+	return h.unlock(passphrase, group)
+}
+
+// Status implements Node.
+func (h *Host) Status() Status {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.status.clone()
+}
+
+// setStatus records st and tells subscribers when it changed. h.mu is held.
+func (h *Host) setStatus(st Status) {
+	if st.equal(h.status) {
+		return
+	}
+	h.status = st
+	for s := range h.subs {
+		c := st.clone()
+		s.push(Event{Status: &c})
+	}
+}
+
+func (s Status) clone() Status {
+	s.Roster = append([]RosterNode(nil), s.Roster...)
+	return s
+}
+
+func (s Status) equal(o Status) bool {
+	if s.Group != o.Group || s.Serving != o.Serving || s.TailnetUp != o.TailnetUp || s.Leader != o.Leader ||
+		s.MajorityReachable != o.MajorityReachable || len(s.Roster) != len(o.Roster) || (s.Err == nil) != (o.Err == nil) {
+		return false
+	}
+	if s.Err != nil && s.Err.Error() != o.Err.Error() {
+		return false
+	}
+	for i := range s.Roster {
+		if s.Roster[i] != o.Roster[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -141,18 +141,17 @@ func useVault(p nodedir.Paths) (unlock func(), err error) {
 		// No data tree, so no Vault to guard: the command reports the
 		// missing Node itself.
 		return func() {}, nil
-	case errors.Is(err, vault.ErrBusy):
-		return nil, exitOperationalf("a passphrase change is under way; wait for it to finish")
 	case err != nil:
+		if inUse := vaultInUse(err); inUse != nil {
+			return nil, inUse
+		}
 		return nil, exitOperational(err)
 	}
-	var left *vault.LeftoverError
-	switch err := vault.CheckLeftover(p.VaultDir()); {
-	case errors.As(err, &left):
+	if err := vault.CheckLeftover(p.VaultDir()); err != nil {
 		unlock()
-		return nil, exitOperationalf("%s is left over from an interrupted passphrase change; run `defios passphrase change` to finish it", left.Dir)
-	case err != nil:
-		unlock()
+		if inUse := vaultInUse(err); inUse != nil {
+			return nil, inUse
+		}
 		return nil, exitOperational(err)
 	}
 	return unlock, nil

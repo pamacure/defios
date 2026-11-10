@@ -37,6 +37,12 @@ type discovered struct {
 // whose Node ID is not derived from its auth public key is rejected and not
 // listed (§11.3).
 func (s *server) discover(ctx context.Context) ([]discovered, error) {
+	return s.discoverPeers(ctx, s.opts.Logf, false)
+}
+
+// discoverPeers is discover reporting each peer that fails to logf, and
+// with onlineOnly skipping the peers the control plane reports offline.
+func (s *server) discoverPeers(ctx context.Context, logf func(string, ...any), onlineOnly bool) ([]discovered, error) {
 	peers, err := s.opts.Tailnet.Peers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("serve: listing peers: %w", err)
@@ -47,12 +53,15 @@ func (s *server) discover(ctx context.Context) ([]discovered, error) {
 	var found []discovered
 	var wg sync.WaitGroup
 	for _, p := range peers {
+		if onlineOnly && !p.Online {
+			continue
+		}
 		wg.Add(1)
 		go func(p Peer) {
 			defer wg.Done()
 			d, err := fetchIdentity(ctx, client, p)
 			if err != nil {
-				s.opts.Logf("serve: peer %s (%s): %v", p.Hostname, p.IP, err)
+				logf("serve: peer %s (%s): %v", p.Hostname, p.IP, err)
 				return
 			}
 			mu.Lock()

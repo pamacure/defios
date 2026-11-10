@@ -3,13 +3,12 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
-	"defios.com/internal/config"
 	"defios.com/internal/identity"
-	"defios.com/internal/secret"
+	"defios.com/internal/node"
+	"defios.com/internal/nodedir"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
 )
@@ -28,118 +27,95 @@ func serveCommand(g *globals) *cobra.Command {
 	return cmd
 }
 
+// runServe hosts the Node for the terminal (ADR 0034): it serves the
+// Current Group until interrupted, or until serving fails.
 func runServe(cmd *cobra.Command, g *globals, pass passphraseSource) error {
 	p := g.paths()
-	pub, err := identity.ReadFile(p.IdentityFile())
-	if errors.Is(err, os.ErrNotExist) {
-		return errNoNode(p)
-	} else if err != nil {
-		return exitOperational(err)
+	h, err := node.Open(p, node.Options{
+		Getenv: g.app.Getenv,
+		Logf:   func(format string, args ...any) { fmt.Fprintf(g.app.Stderr, format+"\n", args...) },
+		Sessions: func(self identity.ID) (node.Sessions, error) {
+			wait, err := sessionTimeout(g.app.Getenv)
+			if err != nil {
+				return node.Sessions{}, err
+			}
+			keygen, err := sessionEngine(g.app.Getenv, self)
+			if err != nil {
+				return node.Sessions{}, err
+			}
+			return node.Sessions{Keygen: keygen, Sign: signEngine(g.app.Getenv, self), WaitingFor: wait}, nil
+		},
+	})
+	if err != nil {
+		return nodeError(p, err)
 	}
 	alias, err := currentAlias(p)
 	if err != nil {
 		return err
 	}
-	e, err := config.Load(p, alias, nil, nil)
-	if err != nil {
-		return exitOperational(err)
+	// Refuse what needs no passphrase to find before asking for one.
+	if err := h.Check(alias); err != nil {
+		return nodeError(p, err)
 	}
-	cfg := e.Group
-	if cfg.HeadscaleURL == "" {
-		return exitOperationalf("headscale_url is not set in %s", p.GroupConfigFile(alias))
-	}
-	if serve.IsUp(p.Socket) {
-		return exitOperational(serve.ErrAlreadyRunning)
-	}
-	// Held for as long as serve runs: it reseals a Group's shares on keygen,
-	// so no passphrase change may run under it.
-	unlock, err := useVault(p)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
 	passphrase, err := pass.read(g, false)
 	if err != nil {
 		return err
 	}
-	// Unlock the Node's shared secrets plus only this Group's shares; another
-	// Group's shares file is never opened (ADR 0007).
-	shared, err := vault.Open(p.VaultSharedFile(), passphrase)
-	if errors.Is(err, vault.ErrBadPassphrase) {
-		return exitVerify(err)
-	} else if err != nil {
-		return exitOperational(err)
+	if err := h.Unlock(passphrase, alias); err != nil {
+		return nodeError(p, err)
 	}
-	shares, err := vault.OpenShares(p.VaultSharesFile(alias), passphrase)
-	if errors.Is(err, os.ErrNotExist) {
-		shares = nil // no Key minted for this Group yet
-	} else if errors.Is(err, vault.ErrBadPassphrase) {
-		return exitVerify(err)
-	} else if err != nil {
-		return exitOperational(err)
+	ctx := cmd.Context()
+	events := h.Subscribe(ctx)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				events = nil // ctx is done; the other case stops serving
+				continue
+			}
+			if ev.Status != nil && !ev.Status.Serving {
+				if ev.Status.Err != nil {
+					return exitOperational(ev.Status.Err)
+				}
+				return nil
+			}
+		case <-ctx.Done():
+			if err := h.Lock(); err != nil {
+				return exitOperational(err)
+			}
+			return nil
+		}
 	}
-	node, err := identity.Unlock(pub, shared.AuthSeed, shared.EncryptionPrivateKey)
-	if err != nil {
-		return exitVerify(err)
-	}
+}
 
-	logf := func(format string, args ...any) { fmt.Fprintf(g.app.Stderr, format+"\n", args...) }
-	wait, err := sessionTimeout(g.app.Getenv)
-	if err != nil {
-		return exitOperational(err)
+// nodeError maps an internal/node error onto the exit code and message
+// the CLI has always given for it.
+func nodeError(p nodedir.Paths, err error) error {
+	var ident *node.IdentityError
+	switch {
+	case errors.Is(err, node.ErrNoNode):
+		return errNoNode(p)
+	case errors.Is(err, node.ErrServedElsewhere):
+		return exitOperational(serve.ErrAlreadyRunning)
+	case errors.Is(err, vault.ErrBadPassphrase), errors.As(err, &ident):
+		return exitVerify(err)
 	}
-	engine, err := sessionEngine(g.app.Getenv, node.NodeID)
-	if err != nil {
-		return exitOperational(err)
+	if err := vaultInUse(err); err != nil {
+		return err
 	}
-	// The Group's Secrets are read at each use, so a `secret set` while this
-	// serve runs takes effect without a restart.
-	secrets := func() (map[string]string, error) {
-		s, err := vault.OpenSecrets(p.VaultSecretsFile(alias), passphrase)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil // no Secret set for this Group yet
-		}
-		return s, err
-	}
-	// The Vault is open before the tailnet join, so a Vault-held preauth key
-	// works on first boot. A Node already joined needs none, so a reference
-	// that resolves nowhere is reported and the join goes ahead on the saved
-	// tailnet state.
-	var authKey string
-	if cfg.TailnetAuthKey != "" {
-		r := &secret.Resolver{Group: alias, Getenv: g.app.Getenv, Vault: secrets}
-		authKey, err = r.Resolve(cfg.TailnetAuthKey)
-		if errors.Is(err, secret.ErrUnresolved) {
-			logf("serve: tailnet_auth_key: %v; joining on this Node's saved tailnet state", err)
-		} else if err != nil {
-			return exitOperational(err)
-		}
-	}
-	tailnet := serve.NewTsnet(serve.TsnetOptions{
-		Dir:        p.TsnetDir(alias),
-		Hostname:   cfg.Hostname,
-		ControlURL: cfg.HeadscaleURL,
-		AuthKey:    authKey,
-		Logf:       logf,
-	})
-	err = serve.Run(cmd.Context(), serve.Options{
-		Paths:             p,
-		Alias:             alias,
-		Node:              node,
-		Config:            cfg,
-		Tailnet:           tailnet,
-		Logf:              logf,
-		Preparams:         shared.EcdsaPreparams,
-		Vault:             vault.NewStore(p.VaultSharesFile(alias), passphrase, shares),
-		SessionWaitingFor: wait,
-		NewEngine:         engine,
-		NewSigner:         signEngine(g.app.Getenv, node.NodeID),
-		Getenv:            g.app.Getenv,
-		Secrets:           secrets,
-	})
-	if err != nil {
-		return exitOperational(err)
+	return exitOperational(err)
+}
+
+// vaultInUse is the CLI's error for a Vault it may not use now: a
+// passphrase change under way, or one an interruption left. nil for any
+// other error.
+func vaultInUse(err error) error {
+	var left *vault.LeftoverError
+	switch {
+	case errors.Is(err, vault.ErrBusy):
+		return exitOperationalf("a passphrase change is under way; wait for it to finish")
+	case errors.As(err, &left):
+		return exitOperationalf("%s is left over from an interrupted passphrase change; run `defios passphrase change` to finish it", left.Dir)
 	}
 	return nil
 }
