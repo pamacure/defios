@@ -1,7 +1,8 @@
 // Package node is the application layer front ends host a Node through
 // (ADR 0034): a typed API over a Node directory, and one subscription to
-// what happens on it. This slice holds hosting: Unlock serves a Group
-// in-process, as `defios serve` does, and Lock stops it.
+// what happens on it. It holds hosting (Unlock serves a Group in-process,
+// as `defios serve` does, and Lock stops it) and onboarding: Create or
+// Restore a Node, scaffold Groups, and form them with other Nodes.
 package node
 
 import (
@@ -14,6 +15,7 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/engine/tssl"
+	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/secret"
@@ -27,6 +29,8 @@ import (
 // elsewhere can implement it over a connection. Host is the in-process
 // implementation.
 type Node interface {
+	// NodeID is this Node's ID, hex.
+	NodeID() string
 	// Check reports what would stop Unlock(_, group) that needs no
 	// passphrase to find, so a front end can refuse before asking for one.
 	Check(group string) error
@@ -47,6 +51,19 @@ type Node interface {
 	// Subscribe delivers events, in order, starting with the status now,
 	// until ctx is done, when the channel closes.
 	Subscribe(ctx context.Context) <-chan Event
+
+	// Groups, each named by the alias it has on this Node.
+	NewGroup(spec GroupSpec) (GroupConfig, error)
+	SetSecret(group, name, value, passphrase string) error
+	Groups(ctx context.Context) ([]GroupSummary, error)
+	GroupByID(groupID string) (string, error)
+	InspectGroup(ctx context.Context, group string) (GroupDetail, error)
+
+	// Forming a Group, from a served Group that has none yet.
+	Discover(ctx context.Context, group string) ([]DiscoveredNode, error)
+	Propose(ctx context.Context, group string, nodeIDs []string) (Formation, error)
+	Accept(ctx context.Context, group, groupID string) (Formation, error)
+	Decline(ctx context.Context, group, groupID, reason string) (Formation, error)
 }
 
 // Errors a front end tells apart. Vault failures come through as the
@@ -106,7 +123,33 @@ type RosterNode struct {
 
 // Event is one thing that happened on the Node. Exactly one field is set.
 type Event struct {
-	Status *Status // the Node's status changed to this
+	Status   *Status   // the Node's status changed to this
+	Proposal *Proposal // another Node proposed a Group; Accept or Decline it
+	Accepted *Accepted // a Node accepted the served Group's proposal
+}
+
+// Proposal is a Group proposal this Node holds pending.
+type Proposal struct {
+	Group     string // the alias of the served Group that holds it
+	GroupID   string
+	Initiator string // Node ID of the proposing Node
+	Roster    []ProposedNode
+}
+
+// ProposedNode is one Node a proposal's Roster names.
+type ProposedNode struct {
+	NodeID      string
+	DisplayName string
+	Hostname    string
+}
+
+// Accepted is one Node's acceptance, this Node's own included, as this
+// Node holds it.
+type Accepted struct {
+	Group   string // the alias of the served Group
+	GroupID string
+	NodeID  string // who accepted
+	Status  string // the Group's status after it: pending | valid
 }
 
 // Options are what a host chooses. The zero value is production.
@@ -194,6 +237,9 @@ func tssSessions(self identity.ID) (Sessions, error) {
 	}, nil
 }
 
+// NodeID implements Node.
+func (h *Host) NodeID() string { return h.pub.NodeID.String() }
+
 // Check implements Node.
 func (h *Host) Check(group string) error {
 	_, err := h.check(group)
@@ -280,8 +326,8 @@ func (h *Host) unlock(passphrase, group string) error {
 }
 
 // start opens the Vault and serves group, as `defios serve` always has.
-func (h *Host) start(passphrase, group string) (*serving, error) {
-	cfg, err := h.check(group)
+func (h *Host) start(passphrase, alias string) (*serving, error) {
+	cfg, err := h.check(alias)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +349,7 @@ func (h *Host) start(passphrase, group string) (*serving, error) {
 	if err != nil {
 		return nil, err
 	}
-	shares, err := vault.OpenShares(h.p.VaultSharesFile(group), passphrase)
+	shares, err := vault.OpenShares(h.p.VaultSharesFile(alias), passphrase)
 	if errors.Is(err, os.ErrNotExist) {
 		shares = nil // no Key minted for this Group yet
 	} else if err != nil {
@@ -321,7 +367,7 @@ func (h *Host) start(passphrase, group string) (*serving, error) {
 	// The Group's Secrets are read at each use, so a `secret set` while
 	// the Node serves takes effect without a restart.
 	secrets := func() (map[string]string, error) {
-		s, err := vault.OpenSecrets(h.p.VaultSecretsFile(group), passphrase)
+		s, err := vault.OpenSecrets(h.p.VaultSecretsFile(alias), passphrase)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil // no Secret set for this Group yet
 		}
@@ -333,7 +379,7 @@ func (h *Host) start(passphrase, group string) (*serving, error) {
 	// on the saved tailnet state.
 	var authKey string
 	if cfg.TailnetAuthKey != "" {
-		r := &secret.Resolver{Group: group, Getenv: h.o.Getenv, Vault: secrets}
+		r := &secret.Resolver{Group: alias, Getenv: h.o.Getenv, Vault: secrets}
 		authKey, err = r.Resolve(cfg.TailnetAuthKey)
 		if errors.Is(err, secret.ErrUnresolved) {
 			logf("serve: tailnet_auth_key: %v; joining on this Node's saved tailnet state", err)
@@ -342,7 +388,7 @@ func (h *Host) start(passphrase, group string) (*serving, error) {
 		}
 	}
 	tailnet := h.o.NewTailnet(serve.TsnetOptions{
-		Dir:        h.p.TsnetDir(group),
+		Dir:        h.p.TsnetDir(alias),
 		Hostname:   cfg.Hostname,
 		ControlURL: cfg.HeadscaleURL,
 		AuthKey:    authKey,
@@ -351,18 +397,28 @@ func (h *Host) start(passphrase, group string) (*serving, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	run, err := serve.Start(ctx, serve.Options{
 		Paths:             h.p,
-		Alias:             group,
+		Alias:             alias,
 		Node:              self,
 		Config:            cfg,
 		Tailnet:           tailnet,
 		Logf:              logf,
 		Preparams:         shared.EcdsaPreparams,
-		Vault:             vault.NewStore(h.p.VaultSharesFile(group), passphrase, shares),
+		Vault:             vault.NewStore(h.p.VaultSharesFile(alias), passphrase, shares),
 		SessionWaitingFor: sessions.WaitingFor,
 		NewEngine:         sessions.Keygen,
 		NewSigner:         sessions.Sign,
 		Getenv:            h.o.Getenv,
 		Secrets:           secrets,
+		OnProposal: func(p group.Proposal) {
+			ev := &Proposal{Group: alias, GroupID: p.GroupID.String(), Initiator: p.Initiator.String()}
+			for _, n := range p.Roster.Nodes() {
+				ev.Roster = append(ev.Roster, ProposedNode{NodeID: n.NodeID.String(), DisplayName: n.DisplayName, Hostname: n.TsnetHostname})
+			}
+			h.publish(Event{Proposal: ev})
+		},
+		OnAccept: func(gid group.ID, who identity.ID, st group.Status) {
+			h.publish(Event{Accepted: &Accepted{Group: alias, GroupID: gid.String(), NodeID: who.String(), Status: st.String()}})
+		},
 	})
 	if errors.Is(err, serve.ErrAlreadyRunning) {
 		cancel()
@@ -371,7 +427,7 @@ func (h *Host) start(passphrase, group string) (*serving, error) {
 		cancel()
 		return nil, err
 	}
-	sv := &serving{group: group, run: run, cancel: cancel, done: make(chan struct{})}
+	sv := &serving{group: alias, run: run, cancel: cancel, done: make(chan struct{})}
 	release = nil // the serving goroutine releases the Vault now
 	go h.watch(sv, ctx, unlockVault)
 	return sv, nil
@@ -483,6 +539,15 @@ func (h *Host) Status() Status {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.status.clone()
+}
+
+// publish tells every subscriber ev.
+func (h *Host) publish(ev Event) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for s := range h.subs {
+		s.push(ev)
+	}
 }
 
 // setStatus records st and tells subscribers when it changed. h.mu is held.

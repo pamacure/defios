@@ -3,7 +3,6 @@ package serve
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +28,7 @@ import (
 
 // Status is what the local API reports about this serve.
 type Status struct {
+	Alias     string `json:"alias"` // the Group this serve serves
 	NodeID    string `json:"node_id"`
 	Hostname  string `json:"hostname"`
 	TailnetUp bool   `json:"tailnet_up"`
@@ -92,6 +92,7 @@ func (s *server) localHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
 		st := Status{
+			Alias:     s.opts.Alias,
 			NodeID:    s.opts.Node.NodeID.String(),
 			Hostname:  s.opts.Config.Hostname,
 			TailnetUp: s.tailnetUp.Load(),
@@ -109,22 +110,10 @@ func (s *server) localHandler() http.Handler {
 			writeError(w, ErrTailnetNotUp)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		nodes, err := s.discover(ctx)
+		out, err := s.nodes(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
-		}
-		out := make([]NodeSummary, 0, len(nodes))
-		for _, n := range nodes {
-			out = append(out, NodeSummary{
-				NodeID:              n.NodeID.String(),
-				DisplayName:         n.DisplayName,
-				Hostname:            n.TsnetHostname,
-				AuthPublicKey:       hex.EncodeToString(n.AuthPublicKey),
-				EncryptionPublicKey: hex.EncodeToString(n.EncryptionPublicKey),
-			})
 		}
 		writeJSON(w, out)
 	})
@@ -206,6 +195,9 @@ func (s *server) readLocal(w http.ResponseWriter, r *http.Request, v any) bool {
 // can hand the CLI the same sentinel the server saw.
 const errorKindHeader = "X-DeFiOS-Error"
 
+// nodeHeader names the Node an "unreachable" error is about.
+const nodeHeader = "X-DeFiOS-Node"
+
 // errorKinds pairs each sentinel either HTTP face can report with its wire
 // kind and status. The formation face (:4634) uses the status alone; the
 // local face also sends the kind. First match wins.
@@ -223,6 +215,7 @@ var errorKinds = []struct {
 	{group.ErrBadAccept, "bad-accept", http.StatusBadRequest},
 	{group.ErrBadDecline, "bad-decline", http.StatusBadRequest},
 	{ErrTailnetNotUp, "tailnet-down", http.StatusServiceUnavailable},
+	{ErrUnreachable, "unreachable", http.StatusBadGateway},
 	{ErrNoReplica, "no-replica", http.StatusConflict},
 	{ErrNoJob, "no-job", http.StatusNotFound},
 	{ErrNoConversation, "no-conversation", http.StatusUnprocessableEntity},
@@ -274,12 +267,13 @@ func errorKind(err error) string {
 func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	var req *requestError
-	var unreachable *unreachableError
+	var unreachable *UnreachableError
 	switch {
 	case errors.As(err, &req):
 		status = http.StatusBadRequest
 	case errors.As(err, &unreachable):
 		status = http.StatusBadGateway
+		w.Header().Set(nodeHeader, unreachable.Node.String())
 	}
 	for _, e := range errorKinds {
 		if errors.Is(err, e.err) {
@@ -306,6 +300,9 @@ func localError(path string, resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	msg := strings.TrimSpace(string(body))
 	kind := resp.Header.Get(errorKindHeader)
+	if node, err := identity.ParseID(resp.Header.Get(nodeHeader)); err == nil && kind == "unreachable" {
+		return &UnreachableError{Node: node, msg: fmt.Sprintf("serve: %s: %s", path, msg)}
+	}
 	for _, e := range errorKinds {
 		if e.kind == kind {
 			return &kindError{sentinel: e.err, msg: msg}

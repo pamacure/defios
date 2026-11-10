@@ -86,6 +86,12 @@ type Options struct {
 	// AgentBackoff is the wait before an agent's first retry, doubling
 	// after each; zero is a second (ADR 0015).
 	AgentBackoff time.Duration
+	// OnProposal hears each Group proposal another Node delivered and
+	// this Node now holds pending; OnAccept each acceptance this Node
+	// holds, its own included, with the Group's status after it. Either
+	// may be nil. They are called on the request's goroutine.
+	OnProposal func(group.Proposal)
+	OnAccept   func(gid group.ID, node identity.ID, status group.Status)
 	// MCPCallTimeout bounds an MCP Server's start and each call of its
 	// tools; zero is DefaultMCPCallTimeout (ADR 0030).
 	MCPCallTimeout time.Duration

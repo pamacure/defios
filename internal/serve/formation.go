@@ -56,6 +56,9 @@ func (s *server) formationRoutes(mux *http.ServeMux) {
 		}
 		s.opts.Logf("serve: holding proposal for Group %s from %s (pending)", prop.GroupID, prop.Initiator.String()[:8])
 		w.WriteHeader(http.StatusOK)
+		if s.opts.OnProposal != nil {
+			s.opts.OnProposal(prop)
+		}
 	})
 	mux.HandleFunc("POST /v1/group/accept", func(w http.ResponseWriter, r *http.Request) {
 		var a groupv1.CreateAccept
@@ -70,6 +73,7 @@ func (s *server) formationRoutes(mux *http.ServeMux) {
 		}
 		s.logStatus("accept from " + who.String()[:8])
 		w.WriteHeader(http.StatusOK)
+		s.accepted(who)
 		s.startReplica()
 	})
 	mux.HandleFunc("POST /v1/group/decline", func(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +90,16 @@ func (s *server) formationRoutes(mux *http.ServeMux) {
 		s.opts.Logf("serve: Group declined by %s (%q); slot is free", who.String()[:8], d.Reason)
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+// accepted tells OnAccept that who's acceptance is held.
+func (s *server) accepted(who identity.ID) {
+	if s.opts.OnAccept == nil {
+		return
+	}
+	if rec, ok := s.slot.Current(); ok {
+		s.opts.OnAccept(rec.GroupID(), who, rec.Status())
+	}
 }
 
 // logStatus reports the Slot after an event.
@@ -124,7 +138,7 @@ func (s *server) post(ctx context.Context, to discovered, path string, msg proto
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	resp, err := s.opts.Tailnet.HTTPClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("node %s unreachable: %w", to.NodeID.String()[:8], err)
+		return &UnreachableError{Node: to.NodeID, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
@@ -167,7 +181,7 @@ func (s *server) groupCreate(ctx context.Context, nodeIDs []identity.ID) (GroupV
 	for _, id := range others {
 		d, ok := located[id]
 		if !ok {
-			return GroupView{}, &unreachableError{id}
+			return GroupView{}, &UnreachableError{Node: id}
 		}
 		roster = append(roster, d.identity)
 		targets = append(targets, d)
@@ -205,6 +219,7 @@ func (s *server) groupAccept(ctx context.Context, gid group.ID) (GroupView, erro
 		if _, err := s.slot.ReceiveAccept(a); err != nil {
 			return GroupView{}, err
 		}
+		s.accepted(s.opts.Node.NodeID)
 	}
 	s.logStatus("accepted")
 	s.startReplica()
@@ -267,10 +282,26 @@ type requestError struct{ msg string }
 
 func (e *requestError) Error() string { return e.msg }
 
-// unreachableError names a Roster Node no tailnet machine advertised an
-// Identity for (502).
-type unreachableError struct{ node identity.ID }
+// ErrUnreachable: a formation message did not reach a Node, so it can be
+// sent again once the Node is reachable.
+var ErrUnreachable = errors.New("serve: node is not reachable on the tailnet")
 
-func (e *unreachableError) Error() string {
-	return fmt.Sprintf("serve: node %s is not reachable on the tailnet", e.node)
+// UnreachableError names the Node a formation message did not reach: no
+// tailnet machine advertised its Identity, or posting to it failed (502).
+type UnreachableError struct {
+	Node identity.ID
+	Err  error  // why posting failed; nil when the Node was not found
+	msg  string // the message, as a Client reconstitutes it
 }
+
+func (e *UnreachableError) Error() string {
+	switch {
+	case e.msg != "":
+		return e.msg
+	case e.Err != nil:
+		return fmt.Sprintf("node %s unreachable: %v", e.Node.String()[:8], e.Err)
+	}
+	return fmt.Sprintf("serve: node %s is not reachable on the tailnet", e.Node)
+}
+func (e *UnreachableError) Is(target error) bool { return target == ErrUnreachable }
+func (e *UnreachableError) Unwrap() error        { return e.Err }

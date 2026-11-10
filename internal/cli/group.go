@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -9,10 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"defios.com/internal/config"
-	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/node"
 	"defios.com/internal/serve"
 )
 
@@ -63,7 +61,7 @@ func groupCommand(g *globals) *cobra.Command {
 		Use:   "list",
 		Short: "List this Node's Groups: alias, status, Group ID, and which is current",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runGroupList(g) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runGroupList(cmd, g) },
 	})
 	inspect := &cobra.Command{
 		Use:   "inspect [group-id]",
@@ -80,9 +78,8 @@ type groupNewOptions struct {
 	headscaleURL, hostname, name string
 }
 
-// runGroupNew scaffolds a Group under a local alias: its config and data
-// subtrees and a per-Group config.toml, before any network, then focuses it
-// as the Current Group (ADR 0007). It needs the device (identity) but no
+// runGroupNew scaffolds a Group under a local alias on internal/node, then
+// focuses it as the Current Group (ADR 0007). It needs the device but no
 // serve. A Node may hold any number of Groups at once (#27); only the alias
 // must be unique.
 func runGroupNew(g *globals, alias string, o groupNewOptions) error {
@@ -92,59 +89,44 @@ func runGroupNew(g *globals, alias string, o groupNewOptions) error {
 	if o.headscaleURL == "" {
 		return exitUsagef("--headscale is required")
 	}
-	p := g.paths()
-	pub, err := identity.ReadFile(p.IdentityFile())
-	if errors.Is(err, os.ErrNotExist) {
-		return errNoNode(p)
-	} else if err != nil {
-		return exitOperational(err)
-	}
-	existing, err := configGroupAliases(p)
-	if err != nil {
-		return exitOperational(err)
-	}
-	if contains(existing, alias) {
-		return exitOperationalf("Group alias %q already exists on this Node", alias)
-	}
-
-	name := o.name
-	if name == "" {
-		if name, err = deviceDisplayName(p); err != nil {
-			return exitOperational(err)
-		}
-	}
-	name, err = validateDisplayName(name)
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	hostname := o.hostname
-	if hostname == "" {
-		hostname = "defios-" + pub.NodeID.String()[:8] + "-" + alias
-	}
-
-	for _, dir := range []string{p.GroupConfigDir(alias), p.GroupDir(alias)} {
-		if err := mkdirPrivate(dir); err != nil {
-			return exitOperational(err)
-		}
-	}
-	cfg := config.Config{HeadscaleURL: o.headscaleURL, DisplayName: name, Hostname: hostname, TailnetAuthKey: "$TS_AUTHKEY", Jobs: config.DefaultJobs()}
-	if err := config.WriteFile(p.GroupConfigFile(alias), cfg); err != nil {
+	c, err := h.NewGroup(node.GroupSpec{Alias: alias, HeadscaleURL: o.headscaleURL, Hostname: o.hostname, DisplayName: o.name})
+	var invalid *node.InvalidError
+	switch {
+	case errors.Is(err, node.ErrGroupExists):
+		return exitOperationalf("Group alias %q already exists on this Node", alias)
+	case errors.As(err, &invalid):
+		return exitUsagef("%v", err)
+	case err != nil:
 		return exitOperational(err)
 	}
-	if err := writeCurrentGroup(p, alias); err != nil {
+	if err := writeCurrentGroup(g.paths(), alias); err != nil {
 		return exitOperational(err)
 	}
 	if g.json {
 		return g.emitJSON(map[string]any{
 			"alias":         alias,
-			"display_name":  name,
-			"hostname":      hostname,
-			"headscale_url": o.headscaleURL,
+			"display_name":  c.DisplayName,
+			"hostname":      c.Hostname,
+			"headscale_url": c.HeadscaleURL,
 			"current":       true,
 		})
 	}
-	fmt.Fprintf(g.app.Stdout, "Group %q scaffolded and now current\n  display name: %s\n  hostname:     %s\n", alias, name, hostname)
+	fmt.Fprintf(g.app.Stdout, "Group %q scaffolded and now current\n  display name: %s\n  hostname:     %s\n", alias, c.DisplayName, c.Hostname)
 	return nil
+}
+
+// openNode opens this Node for a verb that drives it through internal/node
+// without hosting it.
+func openNode(g *globals) (*node.Host, error) {
+	h, err := node.Open(g.paths(), node.Options{Getenv: g.app.Getenv})
+	if err != nil {
+		return nil, nodeError(g.paths(), err)
+	}
+	return h, nil
 }
 
 // runGroupUse sets the Current Group pointer to an already-scaffolded Group.
@@ -202,33 +184,6 @@ func loadAliasRecord(g *globals, alias string) (*group.Record, error) {
 	return nil, exitOperational(err)
 }
 
-// findGroupByID resolves the alias and Record of the Group with this ID,
-// across every Group on this Node, so `group inspect <group-id>` reaches a
-// Group that is not the current one (#27). Unformed Groups are skipped; a
-// Record that fails to verify is a verify failure (4).
-func findGroupByID(g *globals, gid group.ID) (string, *group.Record, error) {
-	p := g.paths()
-	aliases, err := groupAliases(p)
-	if err != nil {
-		return "", nil, exitOperational(err)
-	}
-	for _, alias := range aliases {
-		rec, err := group.LoadAlias(p.GroupsDir(), alias)
-		switch {
-		case errors.Is(err, group.ErrNoGroup):
-			continue
-		case errors.Is(err, group.ErrBadProposal), errors.Is(err, group.ErrBadAccept):
-			return "", nil, exitVerify(err)
-		case err != nil:
-			return "", nil, exitOperational(err)
-		}
-		if rec.GroupID() == gid {
-			return alias, rec, nil
-		}
-	}
-	return "", nil, exitOperationalf("%w: %s", group.ErrUnknownGroup, gid)
-}
-
 func parseGroupID(s string) (group.ID, error) {
 	gid, err := group.ParseID(strings.ToLower(s))
 	if err != nil {
@@ -237,8 +192,8 @@ func parseGroupID(s string) (group.ID, error) {
 	return gid, nil
 }
 
-// groupError maps a formation failure from serve to an exit code: another
-// Node's refusal is a protocol reject (3); everything else is operational.
+// groupError maps a formation failure to an exit code: another Node's
+// refusal is a protocol reject (3); everything else is operational.
 func groupError(err error) error {
 	if errors.Is(err, serve.ErrRejected) {
 		return &ExitError{Code: ExitProtocol, Err: err}
@@ -249,29 +204,27 @@ func groupError(err error) error {
 // printView reports a formation verb's outcome. Nodes a message did not
 // reach make the verb fail (2) even though the local state changed, so the
 // operator knows to re-run it.
-func printView(g *globals, v serve.GroupView) error {
+func printView(g *globals, f node.Formation) error {
 	if g.json {
-		if err := g.emitJSON(v); err != nil {
+		if err := g.emitJSON(serve.GroupView{GroupID: f.GroupID, Status: f.Status, Undelivered: f.Undelivered}); err != nil {
 			return err
 		}
 	} else {
-		fmt.Fprintf(g.app.Stdout, "Group %s is %s\n", v.GroupID, v.Status)
+		fmt.Fprintf(g.app.Stdout, "Group %s is %s\n", f.GroupID, f.Status)
 	}
-	if len(v.Undelivered) > 0 {
-		return exitOperationalf("not delivered to %s; re-run once they are reachable", strings.Join(v.Undelivered, ", "))
+	if len(f.Undelivered) > 0 {
+		return exitOperationalf("not delivered to %s; re-run once they are reachable", strings.Join(f.Undelivered, ", "))
 	}
 	return nil
 }
 
+// The formation verbs act on the Group serve serves.
+
 func runGroupCreate(cmd *cobra.Command, g *globals, args []string) error {
-	p := g.paths()
-	self, err := identity.ReadFile(p.IdentityFile())
-	if errors.Is(err, os.ErrNotExist) {
-		return errNoNode(p)
-	} else if err != nil {
-		return exitOperational(err)
+	h, err := openNode(g)
+	if err != nil {
+		return err
 	}
-	ids := make([]identity.ID, 0, len(args))
 	others := 0
 	seenSelf := false
 	for _, a := range args {
@@ -279,24 +232,23 @@ func runGroupCreate(cmd *cobra.Command, g *globals, args []string) error {
 		if err != nil {
 			return exitUsagef("%v", err)
 		}
-		if id == self.NodeID {
+		if id.String() == h.NodeID() {
 			seenSelf = true
 		} else {
 			others++
 		}
-		ids = append(ids, id)
 	}
 	if !seenSelf {
-		return exitUsagef("this Node (%s) must be on the roster", self.NodeID)
+		return exitUsagef("this Node (%s) must be on the roster", h.NodeID())
 	}
 	if others != 1 {
 		return exitUsagef("MVP forms Groups of exactly one other Node; got %d", others)
 	}
-	v, err := serve.Client{Socket: p.Socket}.GroupCreate(cmd.Context(), ids)
+	f, err := h.Propose(cmd.Context(), node.ServedGroup, args)
 	if err != nil {
 		return groupError(err)
 	}
-	return printView(g, v)
+	return printView(g, f)
 }
 
 func runGroupAccept(cmd *cobra.Command, g *globals, arg string) error {
@@ -304,11 +256,15 @@ func runGroupAccept(cmd *cobra.Command, g *globals, arg string) error {
 	if err != nil {
 		return err
 	}
-	v, err := serve.Client{Socket: g.paths().Socket}.GroupAccept(cmd.Context(), gid)
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	f, err := h.Accept(cmd.Context(), node.ServedGroup, gid.String())
 	if err != nil {
 		return groupError(err)
 	}
-	return printView(g, v)
+	return printView(g, f)
 }
 
 func runGroupDecline(cmd *cobra.Command, g *globals, arg, reason string) error {
@@ -316,21 +272,16 @@ func runGroupDecline(cmd *cobra.Command, g *globals, arg, reason string) error {
 	if err != nil {
 		return err
 	}
-	v, err := serve.Client{Socket: g.paths().Socket}.GroupDecline(cmd.Context(), gid, reason)
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	f, err := h.Decline(cmd.Context(), node.ServedGroup, gid.String(), reason)
 	if err != nil {
 		return groupError(err)
 	}
-	return printView(g, v)
+	return printView(g, f)
 }
-
-// group list status values (#27): pending/valid come from group.Status;
-// unformed is a scaffolded Group with no Record yet; error is a Record that
-// no longer verifies, surfaced per row so one bad Group does not hide the
-// rest.
-const (
-	statusUnformed = "unformed"
-	statusError    = "error"
-)
 
 // groupLine is one `group list` row: one of this Node's Groups by its local
 // alias, its status, its Group ID once formed, and whether it is current.
@@ -344,27 +295,26 @@ type groupLine struct {
 // runGroupList prints one row per Group scaffolded on this Node (#27). An
 // unformed Group (scaffolded, no Record yet) shows "unformed" and no Group
 // ID. Works without serve: the status comes from disk.
-func runGroupList(g *globals) error {
+func runGroupList(cmd *cobra.Command, g *globals) error {
 	p := g.paths()
-	aliases, err := groupAliases(p)
-	if err != nil {
-		return exitOperational(err)
+	var groups []node.GroupSummary
+	h, err := node.Open(p, node.Options{Getenv: g.app.Getenv})
+	switch {
+	case errors.Is(err, node.ErrNoNode): // no Node, so no Group
+	case err != nil:
+		return nodeError(p, err)
+	default:
+		if groups, err = h.Groups(cmd.Context()); err != nil {
+			return exitOperational(err)
+		}
 	}
 	current, err := readCurrentGroup(p)
 	if err != nil {
 		return exitOperational(err)
 	}
 	lines := []groupLine{}
-	for _, alias := range aliases {
-		l := groupLine{Alias: alias, Status: statusUnformed, Current: alias == current}
-		switch rec, err := group.LoadAlias(p.GroupsDir(), alias); {
-		case err == nil:
-			l.Status, l.GroupID = rec.Status().String(), rec.GroupID().String()
-		case errors.Is(err, group.ErrNoGroup):
-		default:
-			l.Status = statusError // a corrupt Group must not hide the others
-		}
-		lines = append(lines, l)
+	for _, gr := range groups {
+		lines = append(lines, groupLine{Alias: gr.Alias, Status: gr.Status, GroupID: gr.GroupID, Current: gr.Alias == current})
 	}
 	if g.json {
 		return g.emitJSON(lines)
@@ -406,62 +356,38 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 	// with a Group ID inspect whichever of this Node's Groups has it,
 	// current or not (#27). The Group ID arg and --group alias are two ways
 	// to name a non-current Group, so refuse both at once.
-	var alias string
-	var rec *group.Record
-	var err error
 	if len(args) == 1 && g.group != "" {
 		return exitUsagef("give a Group ID or --group <alias>, not both")
 	}
+	var alias, gid string
 	if len(args) == 1 {
-		gid, perr := parseGroupID(args[0])
-		if perr != nil {
-			return perr
+		id, err := parseGroupID(args[0])
+		if err != nil {
+			return err
 		}
-		alias, rec, err = findGroupByID(g, gid)
+		gid = id.String()
 	} else {
-		alias, rec, err = loadGroup(g)
+		var err error
+		if alias, err = g.resolveAlias(); err != nil {
+			return err
+		}
 	}
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	p := g.paths()
-
-	// Reachability and refreshed names come from live Identities when
-	// serve is up; the pinned keys never do (§6.2).
-	live := map[identity.ID]serve.NodeSummary{}
-	serveUp := serve.IsUp(p.Socket)
-	if serveUp {
-		if nodes, err := (serve.Client{Socket: p.Socket}).Nodes(cmd.Context()); err == nil {
-			for _, n := range nodes {
-				if id, err := identity.ParseID(n.NodeID); err == nil {
-					live[id] = n
-				}
-			}
+	if gid != "" {
+		if alias, err = h.GroupByID(gid); err != nil {
+			return recordError(err)
 		}
 	}
-	self, _ := identity.ReadFile(p.IdentityFile())
-	joined, err := joinedNodes(p.CoslFile(alias))
+	d, err := h.InspectGroup(cmd.Context(), alias)
 	if err != nil {
-		return exitOperational(err)
+		return recordError(err)
 	}
-
-	v := groupView{GroupID: rec.GroupID().String(), Status: rec.Status()}
-	for _, n := range rec.Roster().Nodes() {
-		row := rosterRow{
-			NodeID:              n.NodeID.String(),
-			DisplayName:         n.DisplayName,
-			Hostname:            n.TsnetHostname,
-			Joined:              joined[n.NodeID],
-			AuthPublicKey:       hex.EncodeToString(n.AuthPublicKey),
-			EncryptionPublicKey: hex.EncodeToString(n.EncryptionPublicKey),
-		}
-		if n.NodeID == self.NodeID {
-			row.Reachable = serveUp
-		} else if l, ok := live[n.NodeID]; ok && l.AuthPublicKey == row.AuthPublicKey && l.EncryptionPublicKey == row.EncryptionPublicKey {
-			row.Reachable = true
-			row.DisplayName, row.Hostname = l.DisplayName, l.Hostname
-		}
-		v.Roster = append(v.Roster, row)
+	v := groupView{GroupID: d.GroupID, Status: d.Status}
+	for _, n := range d.Roster {
+		v.Roster = append(v.Roster, rosterRow(n))
 	}
 	if g.json {
 		return g.emitJSON(v)
@@ -478,33 +404,18 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 	return nil
 }
 
+// recordError maps a Group Record failure: one whose signatures no longer
+// check is a verify failure (4); anything else is operational.
+func recordError(err error) error {
+	if errors.Is(err, group.ErrBadProposal) || errors.Is(err, group.ErrBadAccept) {
+		return exitVerify(err)
+	}
+	return exitOperational(err)
+}
+
 func yesNo(b bool) string {
 	if b {
 		return "yes"
 	}
 	return "no"
-}
-
-// joinedNodes reads which Nodes have a membership.join on the COSL. No
-// replica yet means nobody has.
-func joinedNodes(coslPath string) (map[identity.ID]bool, error) {
-	joined := map[identity.ID]bool{}
-	if _, err := os.Stat(coslPath); errors.Is(err, os.ErrNotExist) {
-		return joined, nil
-	} else if err != nil {
-		return nil, err
-	}
-	store, err := cosl.Open(coslPath)
-	if err != nil {
-		return nil, err
-	}
-	defer store.Close()
-	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeMembershipJoin}})
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range rows {
-		joined[r.Sender] = true
-	}
-	return joined, nil
 }
