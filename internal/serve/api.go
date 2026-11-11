@@ -164,6 +164,7 @@ func (s *server) localHandler() http.Handler {
 	s.chainRoutes(mux)
 	s.jobRoutes(mux)
 	s.signRoutes(mux)
+	s.hookRunRoutes(mux)
 	s.broadcastRoutes(mux)
 	s.fillRoutes(mux)
 	s.sessionRoutes(mux)

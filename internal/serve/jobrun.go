@@ -68,7 +68,7 @@ func (s *server) jobRun(ctx context.Context, req jobRunRequest) (JobView, error)
 	if ev.From == "" {
 		ev.From = s.opts.Node.NodeID.String()
 	}
-	r := s.jobRunner(store, "serve: job run "+req.Job+": ")
+	r := s.jobRunner(store, "serve: job run "+req.Job+": ", nil)
 	return runJob(ctx, &s.chains, r, req.Job, j, ev), nil
 }
 

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"strings"
 
+	"defios.com/internal/chainfill"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 )
 
 // Formation failures a front end tells apart, besides ErrNotServed and
@@ -81,6 +83,16 @@ type servedAPI interface {
 	SessionAbort(ctx context.Context, id session.ID, reason string) error
 	KeyShares(ctx context.Context) ([]serve.KeyShare, error)
 	WaitingKeyAliases(ctx context.Context) (serve.WaitingKeyAliases, error)
+
+	SignList(ctx context.Context) ([]signreq.Summary, error)
+	SignInspect(ctx context.Context, msgID string) (signreq.Detail, error)
+	SignFill(ctx context.Context, keyQuery string, txs []signreq.TxSpec) (chainfill.Result, error)
+	SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec) (serve.SendView, error)
+	SignAccept(ctx context.Context, msgID string) (serve.AcceptView, error)
+	SignRefuse(ctx context.Context, msgID, reason string) (serve.AcceptView, error)
+	SignDecline(ctx context.Context, msgID string) (serve.DeclineView, error)
+	SignBroadcast(ctx context.Context, msgID string) (serve.BroadcastView, error)
+	HookRuns(ctx context.Context) ([]serve.HookRun, error)
 }
 
 var (

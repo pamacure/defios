@@ -15,6 +15,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
+	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -58,10 +59,15 @@ Every chain must be of the Key's curve.`,
 				return err
 			}
 			spec := signreq.Spec{Reason: reason, DeadlineSeconds: deadline, Transactions: txs, Depth: depth}
-			v, err := serve.Client{Socket: g.paths().Socket}.SignPropose(cmd.Context(), keyQuery, spec)
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			sent, err := h.ProposeSignRequest(cmd.Context(), node.ServedGroup, keyQuery, spec)
 			if err != nil {
 				return signError(err)
 			}
+			v := serve.SendView(sent)
 			if g.json {
 				if err := g.emitJSON(v); err != nil {
 					return err
@@ -86,16 +92,24 @@ Every chain must be of the Key's curve.`,
 		Short: "List Sign Requests, open and past (requires serve)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			rows, err := serve.Client{Socket: g.paths().Socket}.SignList(cmd.Context())
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			rows, err := h.SignRequests(cmd.Context(), node.ServedGroup)
 			if err != nil {
 				return signError(err)
 			}
 			if g.json {
-				return g.emitJSON(rows)
+				sums := make([]signreq.Summary, len(rows))
+				for i, r := range rows {
+					sums[i] = r.Summary
+				}
+				return g.emitJSON(sums)
 			}
 			p := g.out()
 			for _, s := range rows {
-				fmt.Fprintf(g.app.Stdout, "%s  %s  %s  you %s  txs=%d  broadcasts=%d%s  %s\n", p.primary(s.MsgID[:8]), p.status(s.Status), stancesOf(s), p.status(s.Stance), s.Transactions, s.Broadcasts, p.dim(fully(s.FullyBroadcast)), s.Reason)
+				fmt.Fprintf(g.app.Stdout, "%s  %s  %s  you %s  txs=%d  broadcasts=%d%s  %s\n", p.primary(s.MsgID[:8]), p.status(s.Status), stancesOf(s.Summary), p.status(s.Stance), s.Transactions, s.Broadcasts, p.dim(fully(s.FullyBroadcast)), s.Reason)
 			}
 			return nil
 		},
@@ -106,12 +120,16 @@ Every chain must be of the Key's curve.`,
 		Short: "Decode one Sign Request (requires serve)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d, err := serve.Client{Socket: g.paths().Socket}.SignInspect(cmd.Context(), args[0])
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			d, err := h.InspectSignRequest(cmd.Context(), node.ServedGroup, args[0])
 			if err != nil {
 				return signError(err)
 			}
 			if g.json {
-				return g.emitJSON(d)
+				return g.emitJSON(d.Detail)
 			}
 			out, p := g.app.Stdout, g.out()
 			fmt.Fprintf(out, "sign_request %s\nstatus %s\nstance %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
@@ -156,12 +174,16 @@ signature verifies against the Key. A Node that accepts after that is not a sign
 a request for chains it has a Network for (see network); the refusal names the chain.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := serve.Client{Socket: g.paths().Socket}.SignAccept(cmd.Context(), args[0])
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			v, err := h.AcceptSignRequest(cmd.Context(), node.ServedGroup, args[0])
 			if err != nil {
 				return signError(err)
 			}
 			if g.json {
-				if err := g.emitJSON(v); err != nil {
+				if err := g.emitJSON(serve.AcceptView(v)); err != nil {
 					return err
 				}
 				return queuedExit(v.Queued)
@@ -192,12 +214,16 @@ stop, and before one starts it does nothing.`,
 			if refuseReason == "" {
 				return exitUsagef("--reason is required")
 			}
-			v, err := serve.Client{Socket: g.paths().Socket}.SignRefuse(cmd.Context(), args[0], refuseReason)
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			v, err := h.RefuseSignRequest(cmd.Context(), node.ServedGroup, args[0], refuseReason)
 			if err != nil {
 				return signError(err)
 			}
 			if g.json {
-				if err := g.emitJSON(v); err != nil {
+				if err := g.emitJSON(serve.AcceptView(v)); err != nil {
 					return err
 				}
 				return queuedExit(v.Queued)
@@ -220,15 +246,19 @@ to abort and nothing is written: an accept you already made stays on the log (th
 turn a request down before its Session, with a reason every Node sees, use sign refuse.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := serve.Client{Socket: g.paths().Socket}.SignDecline(cmd.Context(), args[0])
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			result, err := h.DeclineSignRequest(cmd.Context(), node.ServedGroup, args[0])
 			if err != nil {
 				return signError(err)
 			}
 			if g.json {
-				return g.emitJSON(v)
+				return g.emitJSON(serve.DeclineView{Result: result})
 			}
 			out := g.app.Stdout
-			switch v.Result {
+			switch result {
 			case session.DeclineAborted:
 				fmt.Fprintf(out, "declined %s: its signing Session was aborted\n", args[0])
 			case session.DeclineAcceptStands:
@@ -254,7 +284,11 @@ Any Node may broadcast; the proposer goes first by convention. Broadcasting agai
 already has a transaction is not an error, the repeat shows as one more receipt, and a failed chain is retried.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := serve.Client{Socket: g.paths().Socket}.SignBroadcast(cmd.Context(), args[0])
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			v, err := h.BroadcastSignRequest(cmd.Context(), node.ServedGroup, args[0])
 			if err != nil {
 				return signError(err)
 			}
@@ -318,7 +352,11 @@ stdout, ready for sign propose --transactions -; what was filled, and from where
 			if err != nil {
 				return err
 			}
-			v, err := serve.Client{Socket: g.paths().Socket}.SignFill(cmd.Context(), fillKey, txs)
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			v, err := h.FillTransactions(cmd.Context(), node.ServedGroup, fillKey, txs)
 			if err != nil {
 				return signError(err)
 			}
@@ -395,6 +433,9 @@ func readTransactions(g *globals, path string) ([]signreq.TxSpec, error) {
 // signError maps a rejected proposal to usage (1), a transport failure to
 // operational, as the other write verbs do.
 func signError(err error) error {
+	if invalid := (*node.InvalidError)(nil); errors.As(err, &invalid) {
+		return exitUsagef("%v", err)
+	}
 	for _, target := range []error{
 		signreq.ErrInvalid, signreq.ErrCurveMismatch, chainfill.ErrBitcoin, session.ErrUnknownSession, session.ErrSignerSetFull, session.ErrAlreadyRefused, session.ErrAlreadyAccepted, session.ErrUnsupported, signreq.ErrUnknown, signreq.ErrAmbiguous, signreq.ErrNotSigned,
 		key.ErrUnknown, key.ErrAmbiguous, network.ErrUnknown, network.ErrInvalid, network.ErrNoChain,

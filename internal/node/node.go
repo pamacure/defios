@@ -4,7 +4,8 @@
 // as `defios serve` does, and Lock stops it); onboarding: Create or
 // Restore a Node, scaffold Groups, and form them with other Nodes; and
 // talk and Keys: Conversations and their messages, chains of agents,
-// the Outbox, keygen Sessions and minted Keys.
+// the Outbox, keygen Sessions and minted Keys; and Sign Requests, with
+// the Hooks of this Node's that fired on them.
 package node
 
 import (
@@ -26,6 +27,7 @@ import (
 	"defios.com/internal/secret"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 	"defios.com/internal/talk"
 	"defios.com/internal/vault"
 )
@@ -96,6 +98,17 @@ type Node interface {
 	AbortSession(ctx context.Context, group, id, reason string) error
 	Sessions(ctx context.Context, group string) ([]Session, error)
 	InspectSession(ctx context.Context, group, id string) (SessionDetail, error)
+
+	// Sign Requests, named by a msg_id or a unique hex prefix of one. All
+	// need the Group served.
+	SignRequests(ctx context.Context, group string) ([]SignRequest, error)
+	InspectSignRequest(ctx context.Context, group, msgID string) (SignRequestDetail, error)
+	FillTransactions(ctx context.Context, group, keyQuery string, txs []TxSpec) (Filled, error)
+	ProposeSignRequest(ctx context.Context, group, keyQuery string, spec SignSpec) (Sent, error)
+	AcceptSignRequest(ctx context.Context, group, msgID string) (Answered, error)
+	RefuseSignRequest(ctx context.Context, group, msgID, reason string) (Answered, error)
+	DeclineSignRequest(ctx context.Context, group, msgID string) (DeclineResult, error)
+	BroadcastSignRequest(ctx context.Context, group, msgID string) (Broadcast, error)
 }
 
 // Errors a front end tells apart. Vault failures come through as the
@@ -184,6 +197,13 @@ type Event struct {
 	// Session is a Session whose status moved: started, completed or
 	// aborted.
 	Session *SessionEvent
+	// SignRequest is a Sign Request whose status, stances, Session or
+	// Broadcast Receipts moved, one proposed included, or whose deadline
+	// passed: expired, which no message marks.
+	SignRequest *SignRequestEvent
+	// HookRun is a Hook of this Node's firing on a Sign Request, and each
+	// of its Jobs starting and ending.
+	HookRun *HookRunEvent
 }
 
 // MessageEvent is a committed message and where.
@@ -511,6 +531,12 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 		},
 		OnSession: func(sum session.Summary) {
 			h.publish(Event{Session: &SessionEvent{Group: alias, Session: sum}})
+		},
+		OnSignRequest: func(sum signreq.Summary) {
+			h.publish(Event{SignRequest: &SignRequestEvent{Group: alias, Request: sum}})
+		},
+		OnHookRun: func(run serve.HookRun) {
+			h.publish(Event{HookRun: &HookRunEvent{Group: alias, Run: run}})
 		},
 		OnOutbox: func(queued []cosl.Signed) {
 			q, err := queuedOf(queued)

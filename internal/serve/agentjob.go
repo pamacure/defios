@@ -25,8 +25,9 @@ import (
 // it returns at once and the chain runs on without it. The chain is named
 // by a random id, not its event's msg_id: a person's message may start a
 // chain of its own, two Jobs may answer one event, and a status change
-// has no message.
-func (s *server) runAgentJob(ctx context.Context, store *cosl.Store, name string, j config.Job, ev trigger.Event) error {
+// has no message. started, if set, hears the chain's Conversation and id
+// once it is queued.
+func (s *server) runAgentJob(ctx context.Context, store *cosl.Store, name string, j config.Job, ev trigger.Event, started func(conv []byte, chain string)) error {
 	conv, where, err := jobTarget(store, j, ev)
 	if err != nil {
 		return err
@@ -61,6 +62,9 @@ func (s *server) runAgentJob(ctx context.Context, store *cosl.Store, name string
 		return errors.New("the chain did not start: the replica stopped")
 	}
 	s.opts.Logf("serve: job %s: @%s answers in chain %s", name, j.Agent, id)
+	if started != nil {
+		started(conv, id)
+	}
 	select {
 	case <-c.done:
 		return c.err

@@ -5,16 +5,18 @@ import (
 	"time"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/outbox"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 	"defios.com/internal/talk"
 )
 
 // tellCommits tells Options.OnTalk each app.freeform the replica applies
-// after it starts, and Options.OnSession each Session whose status that
-// moves, until ctx ends. A restore, which rewrites the replica, tells none
-// of the talk it brings, only the Sessions it moves.
-func (s *server) tellCommits(ctx context.Context, store *cosl.Store) {
+// after it starts, Options.OnSession each Session whose status that moves,
+// and Options.OnSignRequest each Sign Request it moves, or whose deadline
+// passes, until ctx ends. A restore, which rewrites the replica, tells none
+// of the talk it brings, only the Sessions and Sign Requests it moves.
+func (s *server) tellCommits(ctx context.Context, store *cosl.Store, ob *outbox.Outbox) {
 	m, err := store.Mark()
 	if err != nil {
 		s.opts.Logf("serve: events: %v", err)
@@ -26,12 +28,39 @@ func (s *server) tellCommits(ctx context.Context, store *cosl.Store) {
 		s.opts.Logf("serve: events: %v", err)
 	}
 	statuses := byID(list)
+	signs, deadline, err := s.signStates(store, ob)
+	if err != nil {
+		s.opts.Logf("serve: events: %v", err)
+	}
+	watched := s.opts.OnSession != nil || s.opts.OnSignRequest != nil
 	f := store.Follow(cosl.FallbackTick)
 	tick := time.NewTicker(cosl.FallbackTick)
 	defer tick.Stop()
+	expiry := time.NewTimer(time.Hour)
+	defer expiry.Stop()
+	// tellSigns tells OnSignRequest each Sign Request moved since it last
+	// looked.
+	tellSigns := func() error {
+		if s.opts.OnSignRequest == nil {
+			return nil
+		}
+		now, next, err := s.signStates(store, ob)
+		if err != nil {
+			return err
+		}
+		for id, st := range now {
+			if was, ok := signs[id]; !ok || !was.same(st) {
+				s.opts.OnSignRequest(st.Summary)
+			}
+		}
+		signs, deadline = now, next
+		return nil
+	}
+	nudged := false
 	for {
+		toldSigns := false
 		err := f.Act(func(wk cosl.Wake) error {
-			// reread: the Sessions may have moved.
+			// reread: the Sessions and Sign Requests may have moved.
 			reread := wk.Mark.Restores != restores
 			restores = wk.Mark.Restores
 			if reread {
@@ -41,8 +70,8 @@ func (s *server) tellCommits(ctx context.Context, store *cosl.Store) {
 				if err != nil {
 					return err
 				}
-				if s.opts.OnSession != nil {
-					rows, err := store.Log(cosl.Query{MsgTypes: signreq.LookupMsgTypes, AfterSeq: last, Limit: 1})
+				if watched {
+					rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes, AfterSeq: last, Limit: 1})
 					if err != nil {
 						return err
 					}
@@ -50,31 +79,82 @@ func (s *server) tellCommits(ctx context.Context, store *cosl.Store) {
 				}
 				last = max(last, told, wk.Mark.LastAppliedSeq)
 			}
-			if !reread || s.opts.OnSession == nil {
+			if !reread || !watched {
 				return nil
 			}
-			now, err := sessionStatuses(store)
-			if err != nil {
-				return err
-			}
-			for _, sum := range now {
-				if was, ok := statuses[sum.SessionID]; !ok || was != sum.Status {
-					s.opts.OnSession(sum)
+			if s.opts.OnSession != nil {
+				now, err := sessionStatuses(store)
+				if err != nil {
+					return err
 				}
+				for _, sum := range now {
+					if was, ok := statuses[sum.SessionID]; !ok || was != sum.Status {
+						s.opts.OnSession(sum)
+					}
+				}
+				statuses = byID(now)
 			}
-			statuses = byID(now)
-			return nil
+			toldSigns = true
+			return tellSigns()
 		})
+		// A deadline passing, or this Node's stance queued in its Outbox,
+		// moves a request with nothing on the log.
+		if err == nil && !toldSigns && (nudged || !deadline.IsZero() && !time.Now().Before(deadline)) {
+			if err = tellSigns(); err != nil && !deadline.IsZero() {
+				deadline = time.Now().Add(time.Second) // retry, not spin
+			}
+		}
+		nudged = false
 		if err != nil {
 			s.opts.Logf("serve: events: %v", err)
+		}
+		expiry.Stop() // since Go 1.23, a stopped timer delivers nothing stale
+		if !deadline.IsZero() {
+			// A moment past it, so the status has turned when it is read.
+			expiry.Reset(max(time.Until(deadline), 0) + 10*time.Millisecond)
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-f.Changes():
 		case <-tick.C:
+		case <-expiry.C:
+		case <-s.signNudge:
+			nudged = true
 		}
 	}
+}
+
+// signState is a Sign Request as OnSignRequest last told it.
+type signState struct{ signreq.Summary }
+
+// same reports whether nothing OnSignRequest tells of moved from s to o.
+func (s signState) same(o signState) bool {
+	return s.Status == o.Status && s.Stance == o.Stance && s.Session == o.Session && s.Broadcasts == o.Broadcasts &&
+		s.FullyBroadcast == o.FullyBroadcast && len(s.Accepts) == len(o.Accepts) && len(s.Refusals) == len(o.Refusals)
+}
+
+// signStates is every Sign Request the replica holds, by msg id, as `sign
+// list` shows it with ob, and the next deadline of one open or waiting;
+// zero for none. It reads what it is given, not the server's current
+// replica: stopReplica holds the server lock waiting for it.
+func (s *server) signStates(store *cosl.Store, ob *outbox.Outbox) (map[string]signState, time.Time, error) {
+	if s.opts.OnSignRequest == nil {
+		return nil, time.Time{}, nil
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	list, err := s.signSummaries(rows, ob)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	out := make(map[string]signState, len(list))
+	for _, sum := range list {
+		out[sum.MsgID] = signState{sum}
+	}
+	return out, nextDeadline(rows, list), nil
 }
 
 // tellTalk tells OnTalk the app.freeform rows after seq last, and returns

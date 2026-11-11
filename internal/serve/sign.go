@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"defios.com/internal/chainfill"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/key"
@@ -230,27 +231,6 @@ func (s *server) stance(ob *outbox.Outbox, sum signreq.Summary) string {
 	return signreq.StanceUnaddressed
 }
 
-// signAnswer is this Node's accept, refusal or decline of a Sign Request.
-// reply, if set, builds the response body after answer ran.
-func (s *server) signAnswer(w http.ResponseWriter, r *http.Request, answer func(*session.Service, context.Context, [32]byte) error, reply func() any) {
-	var req signInspectRequest
-	if !s.readLocal(w, r, &req) {
-		return
-	}
-	err := s.resolveSign(req.MsgID, nil, func(svc *session.Service, id [32]byte) error {
-		return answer(svc, r.Context(), id)
-	})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if reply != nil {
-		writeJSON(w, reply())
-		return
-	}
-	writeJSON(w, struct{}{})
-}
-
 // resolveSign runs answer on the Sign Request whose msg id starts with
 // msgID. With conv set, only the requests in that Key's Conversation are
 // matched.
@@ -288,42 +268,62 @@ type DeclineView struct {
 	Result session.DeclineResult `json:"result"`
 }
 
+// signAccept is `sign accept` of the request whose msg id starts with msgID.
+func (s *server) signAccept(ctx context.Context, msgID string) (AcceptView, error) {
+	return answered(s.resolveSign(msgID, nil, func(svc *session.Service, id [32]byte) error {
+		return s.acceptSign(svc, ctx, id, "")
+	}))
+}
+
+// signRefuse is `sign refuse` of the request whose msg id starts with msgID.
+func (s *server) signRefuse(ctx context.Context, msgID, reason string) (AcceptView, error) {
+	return answered(s.resolveSign(msgID, nil, func(svc *session.Service, id [32]byte) error {
+		return s.refuseSign(svc, ctx, id, reason, "")
+	}))
+}
+
+// answered is an accept's or refusal's view: session.ErrQueued is Queued.
+func answered(err error) (AcceptView, error) {
+	if errors.Is(err, session.ErrQueued) {
+		return AcceptView{Queued: true}, nil
+	}
+	return AcceptView{}, err
+}
+
+// signDecline is `sign decline` of the request whose msg id starts with msgID.
+func (s *server) signDecline(ctx context.Context, msgID string) (DeclineView, error) {
+	var v DeclineView
+	err := s.resolveSign(msgID, nil, func(svc *session.Service, id [32]byte) (err error) {
+		v.Result, err = svc.DeclineSign(ctx, id)
+		return err
+	})
+	return v, err
+}
+
 func (s *server) signRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sign/accept", func(w http.ResponseWriter, r *http.Request) {
-		var v AcceptView
-		s.signAnswer(w, r, func(svc *session.Service, ctx context.Context, id [32]byte) error {
-			err := s.acceptSign(svc, ctx, id, "")
-			if errors.Is(err, session.ErrQueued) {
-				v.Queued, err = true, nil
-			}
-			return err
-		}, func() any { return v })
+		var req signInspectRequest
+		if !s.readLocal(w, r, &req) {
+			return
+		}
+		v, err := s.signAccept(r.Context(), req.MsgID)
+		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sign/refuse", func(w http.ResponseWriter, r *http.Request) {
 		var req signRefuseRequest
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		var v AcceptView
-		err := s.resolveSign(req.MsgID, nil, func(svc *session.Service, id [32]byte) error {
-			err := s.refuseSign(svc, r.Context(), id, req.Reason, "")
-			if errors.Is(err, session.ErrQueued) {
-				v.Queued, err = true, nil
-			}
-			return err
-		})
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, v)
+		v, err := s.signRefuse(r.Context(), req.MsgID, req.Reason)
+		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sign/decline", func(w http.ResponseWriter, r *http.Request) {
-		var result session.DeclineResult
-		s.signAnswer(w, r, func(svc *session.Service, ctx context.Context, id [32]byte) (err error) {
-			result, err = svc.DeclineSign(ctx, id)
-			return err
-		}, func() any { return DeclineView{Result: result} })
+		var req signInspectRequest
+		if !s.readLocal(w, r, &req) {
+			return
+		}
+		v, err := s.signDecline(r.Context(), req.MsgID)
+		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sign/propose", func(w http.ResponseWriter, r *http.Request) {
 		var req signProposeRequest
@@ -331,36 +331,33 @@ func (s *server) signRoutes(mux *http.ServeMux) {
 			return
 		}
 		v, err := s.signPropose(r.Context(), req, "")
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, v)
+		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sign/list", func(w http.ResponseWriter, r *http.Request) {
 		var req struct{}
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		list, err := s.signList()
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, list)
+		v, err := s.signList()
+		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sign/inspect", func(w http.ResponseWriter, r *http.Request) {
 		var req signInspectRequest
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		d, err := s.signInspect(req.MsgID, nil)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, d)
+		v, err := s.signInspect(req.MsgID, nil)
+		respond(w, v, err)
 	})
+}
+
+// respond writes a handler's result: v, or err as the API reports errors.
+func respond(w http.ResponseWriter, v any, err error) {
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, v)
 }
 
 // signList is every Sign Request, open and past, with its Session and this
@@ -374,6 +371,13 @@ func (s *server) signList() ([]signreq.Summary, error) {
 	if err != nil {
 		return nil, err
 	}
+	ob, _, _ := s.writer()
+	return s.signSummaries(rows, ob)
+}
+
+// signSummaries is every Sign Request on rows, which hold signreq.MsgTypes,
+// with its Session and this Node's stance, which ob may hold queued.
+func (s *server) signSummaries(rows []cosl.Row, ob *outbox.Outbox) ([]signreq.Summary, error) {
 	list, err := signreq.List(rows, time.Now())
 	if err != nil {
 		return nil, err
@@ -382,7 +386,6 @@ func (s *server) signList() ([]signreq.Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	ob, _, _ := s.writer()
 	for i := range list {
 		list[i].Session = sessions[list[i].MsgID]
 		list[i].Stance = s.stance(ob, list[i])
@@ -477,4 +480,71 @@ func (c Client) SignInspect(ctx context.Context, msgID string) (signreq.Detail, 
 	var v signreq.Detail
 	err := c.do(ctx, "/v1/sign/inspect", signInspectRequest{MsgID: msgID}, &v)
 	return v, err
+}
+
+// The sign verbs in this process, as Client has them over the socket. Each
+// needs the tailnet up, as the socket's do.
+
+// SignPropose is Client.SignPropose in this process.
+func (r *Running) SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec) (SendView, error) {
+	if err := r.tailnet(); err != nil {
+		return SendView{}, err
+	}
+	return r.s.signPropose(ctx, signProposeRequest{Key: keyQuery, Spec: spec}, "")
+}
+
+// SignAccept is Client.SignAccept in this process.
+func (r *Running) SignAccept(ctx context.Context, msgID string) (AcceptView, error) {
+	if err := r.tailnet(); err != nil {
+		return AcceptView{}, err
+	}
+	return r.s.signAccept(ctx, msgID)
+}
+
+// SignRefuse is Client.SignRefuse in this process.
+func (r *Running) SignRefuse(ctx context.Context, msgID, reason string) (AcceptView, error) {
+	if err := r.tailnet(); err != nil {
+		return AcceptView{}, err
+	}
+	return r.s.signRefuse(ctx, msgID, reason)
+}
+
+// SignDecline is Client.SignDecline in this process.
+func (r *Running) SignDecline(ctx context.Context, msgID string) (DeclineView, error) {
+	if err := r.tailnet(); err != nil {
+		return DeclineView{}, err
+	}
+	return r.s.signDecline(ctx, msgID)
+}
+
+// SignList is Client.SignList in this process.
+func (r *Running) SignList(context.Context) ([]signreq.Summary, error) {
+	if err := r.tailnet(); err != nil {
+		return nil, err
+	}
+	return r.s.signList()
+}
+
+// SignInspect is Client.SignInspect in this process.
+func (r *Running) SignInspect(_ context.Context, msgID string) (signreq.Detail, error) {
+	if err := r.tailnet(); err != nil {
+		return signreq.Detail{}, err
+	}
+	return r.s.signInspect(msgID, nil)
+}
+
+// SignBroadcast is Client.SignBroadcast in this process.
+func (r *Running) SignBroadcast(ctx context.Context, msgID string) (BroadcastView, error) {
+	if err := r.tailnet(); err != nil {
+		return BroadcastView{}, err
+	}
+	return r.s.signBroadcast(ctx, signInspectRequest{MsgID: msgID})
+}
+
+// SignFill is Client.SignFill in this process.
+func (r *Running) SignFill(ctx context.Context, keyQuery string, txs []signreq.TxSpec) (chainfill.Result, error) {
+	if err := r.tailnet(); err != nil {
+		return chainfill.Result{}, err
+	}
+	return r.s.signFill(ctx, keyQuery, txs)
 }

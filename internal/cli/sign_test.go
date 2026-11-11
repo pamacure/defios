@@ -40,6 +40,7 @@ type signServe struct {
 
 func newSignServe(t *testing.T, dir string, ss *signServe) *signServe {
 	t.Helper()
+	ensureNode(t, dir)
 	l, err := net.Listen("unix", filepath.Join(dir, "serve.sock"))
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +48,7 @@ func newSignServe(t *testing.T, dir string, ss *signServe) *signServe {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/sign/list", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(signList)) })
 	mux.HandleFunc("POST /v1/sign/inspect", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(signDetail)) })
+	mux.HandleFunc("GET /v1/hooks/runs", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`[]`)) })
 	mux.HandleFunc("POST /v1/sign/fill", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		ss.mu.Lock()

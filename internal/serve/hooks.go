@@ -131,8 +131,9 @@ func (s *server) newTriggers(ctx context.Context, store *cosl.Store, kind string
 }
 
 // jobRunner runs this Group's Jobs, agent Jobs in store's Conversations,
-// logging their output to the serve log behind prefix.
-func (s *server) jobRunner(store *cosl.Store, prefix string) trigger.Runner {
+// logging their output to the serve log behind prefix. started, if set,
+// hears where each agent Job's chain runs once it is queued.
+func (s *server) jobRunner(store *cosl.Store, prefix string, started func(conv []byte, chain string)) trigger.Runner {
 	o := s.opts
 	return trigger.Runner{
 		Group: o.Alias,
@@ -148,7 +149,7 @@ func (s *server) jobRunner(store *cosl.Store, prefix string) trigger.Runner {
 		Getenv: o.Getenv,
 		Logf:   func(format string, args ...any) { o.Logf(prefix+format, args...) },
 		Agent: func(ctx context.Context, name string, j config.Job, ev trigger.Event) error {
-			return s.runAgentJob(ctx, store, name, j, ev)
+			return s.runAgentJob(ctx, store, name, j, ev, started)
 		},
 	}
 }
@@ -191,12 +192,24 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 	prefix := "serve: " + t.kind + " " + name + ": "
 	logf("%sfired %s", prefix, cause)
 	t.s.chains.publish(eventConversation(ev), ChainEvent{Type: EventTriggerFire, Trigger: name, Event: &ev})
-	r := t.s.jobRunner(t.store, prefix)
-	for _, job := range jobs {
+	// A Hook's firing on a Sign Request is remembered, so a front end can
+	// show who is on it.
+	var rec *hookRun
+	if t.kind == "hook" && ev.SignRequestID != "" {
+		rec = t.s.hookRuns.start(name, jobs, defs, ev)
+	}
+	current := 0
+	r := t.s.jobRunner(t.store, prefix, func(conv []byte, chain string) { rec.chain(current, conv, chain) })
+	for i, job := range jobs {
 		if t.ctx.Err() != nil {
+			rec.stopped(i)
 			return
 		}
-		if v := runJob(t.ctx, &t.s.chains, r, job, defs[job], ev); !v.OK {
+		current = i
+		rec.running(i)
+		v := runJob(t.ctx, &t.s.chains, r, job, defs[job], ev)
+		rec.ended(i, v)
+		if !v.OK {
 			logf("%sjob %s failed: %s", prefix, job, v.Error)
 			return
 		}

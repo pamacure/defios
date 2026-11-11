@@ -78,8 +78,16 @@ func (s *server) startReplica() {
 			}
 			return m.LastAppliedSeq
 		},
-		Logf:    s.opts.Logf,
-		Changed: s.opts.OnOutbox,
+		Logf: s.opts.Logf,
+		Changed: func(queued []cosl.Signed) {
+			if s.opts.OnOutbox != nil {
+				s.opts.OnOutbox(queued)
+			}
+			select { // a queued accept or refusal is this Node's stance
+			case s.signNudge <- struct{}{}:
+			default:
+			}
+		},
 	})
 	if err != nil {
 		unlock()
@@ -92,7 +100,7 @@ func (s *server) startReplica() {
 	s.opts.Logf("serve: Raft up for Group %s; COSL at %s", gid, s.opts.Paths.CoslFile(s.opts.Alias))
 	s.startOutbox(replica, ob)
 	s.startSessions(store, ob, rec.Roster())
-	s.startWatchers(replica, store)
+	s.startWatchers(replica, store, ob)
 	go s.join(s.ctx, replica, store, gid)
 }
 
@@ -100,7 +108,7 @@ func (s *server) startReplica() {
 // Conversation Workspaces, the prune policy, which follows config.toml
 // and does nothing while there is none, the chains of agents this Node's
 // mentions summon, and this Node's Hooks and Schedules.
-func (s *server) startWatchers(replica *raftx.Replica, store *cosl.Store) {
+func (s *server) startWatchers(replica *raftx.Replica, store *cosl.Store, ob *outbox.Outbox) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() { s.watchWorkspaces(ctx, store) })
@@ -108,8 +116,8 @@ func (s *server) startWatchers(replica *raftx.Replica, store *cosl.Store) {
 	wg.Go(func() { s.runChains(ctx) })
 	wg.Go(func() { s.keepHooks(ctx, replica, store) })
 	wg.Go(func() { s.keepSchedules(ctx, store) })
-	if s.opts.OnTalk != nil || s.opts.OnSession != nil {
-		wg.Go(func() { s.tellCommits(ctx, store) })
+	if s.opts.OnTalk != nil || s.opts.OnSession != nil || s.opts.OnSignRequest != nil {
+		wg.Go(func() { s.tellCommits(ctx, store, ob) })
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()

@@ -23,6 +23,7 @@ import (
 	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 	"defios.com/internal/talk"
 	"defios.com/internal/vault"
 	groupv1 "defios.com/proto/group/v1"
@@ -106,6 +107,15 @@ type Options struct {
 	OnTalk    func(conv []byte, m talk.Message)
 	OnSession func(session.Summary)
 	OnOutbox  func(queued []cosl.Signed)
+	// OnSignRequest hears each Sign Request the replica holds whose status,
+	// stances, Session or Broadcast Receipts moved after it starts, one
+	// proposed included, and one whose deadline passed (expired, which no
+	// message marks). Stance is this Node's. A restore tells what it moved.
+	OnSignRequest func(signreq.Summary)
+	// OnHookRun hears a firing of this Node's Hooks on a Sign Request each
+	// time it changes: fired, then as each Job starts and ends. It is
+	// called under the runs' lock, so it must not block or call the serve.
+	OnHookRun func(HookRun)
 	// MCPCallTimeout bounds an MCP Server's start and each call of its
 	// tools; zero is DefaultMCPCallTimeout (ADR 0030).
 	MCPCallTimeout time.Duration
@@ -168,9 +178,10 @@ func Start(ctx context.Context, o Options) (*Running, error) {
 		return nil, fmt.Errorf("serve: %w", err)
 	}
 
-	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), chainCalls: make(chan chainCall),
+	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), chainCalls: make(chan chainCall), signNudge: make(chan struct{}, 1),
 		mcp: newMCPServers(o.Logf)}
 	s.chains.onEvent = o.OnChain
+	s.hookRuns.onChange = o.OnHookRun
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()
@@ -253,6 +264,8 @@ type server struct {
 	watchDone   chan struct{}
 
 	chains     chainHub       // this Node's chains of agents, and their watchers
+	hookRuns   hookRuns       // this Node's Hooks' firings on Sign Requests
+	signNudge  chan struct{}  // the Outbox changed, so this Node's stance may have moved
 	chainCalls chan chainCall // to the replica's chain runner
 
 	mcp *mcpServers // the MCP Server processes agents' runs use (ADR 0030)
