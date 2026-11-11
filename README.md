@@ -27,6 +27,8 @@ CGO_ENABLED=0 go build -o ~/.local/bin/defios ./cmd/defios
 
 Build the binary on each machine, or build once and copy it over. Make sure `~/.local/bin` is on `PATH`.
 
+The desktop app, which hosts the Node in place of `defios serve`, is in [`desktop/`](desktop/README.md).
+
 ## Quick start
 
 These steps set up two machines, A and B, as a 2-of-2 wallet. On each one, run `defios serve` in one terminal and every other command in a second terminal.

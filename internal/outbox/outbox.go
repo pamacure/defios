@@ -16,10 +16,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"defios.com/internal/cosl"
+	"defios.com/internal/flock"
 	"defios.com/internal/raftx"
 	"defios.com/internal/signreq"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -127,13 +127,9 @@ func Lock(path string, wait bool) (unlock func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("outbox: %w", err)
 	}
-	how := syscall.LOCK_EX
-	if !wait {
-		how |= syscall.LOCK_NB
-	}
-	if err := syscall.Flock(int(f.Fd()), how); err != nil {
+	if err := flock.Lock(f, true, wait); err != nil {
 		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, flock.ErrWouldBlock) {
 			return nil, ErrBusy
 		}
 		return nil, fmt.Errorf("outbox: locking %s: %w", path, err)

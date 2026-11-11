@@ -33,3 +33,43 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -tags e2e ./e2e -timeout 20m -v
+
+  # The desktop app (ADR 0034) on each OS it targets. The jobs above run
+  # with CGO_ENABLED=0 and so skip desktop/, whose Wails backend needs cgo
+  # on Linux and macOS.
+  desktop-linux:
+    name: desktop (Linux, GTK 4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+      - run: go vet -tags desktop ./desktop/...
+      - run: go build -tags desktop -o defios-desktop ./desktop
+      - run: go test ./desktop/...
+
+  desktop-macos:
+    name: desktop (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./desktop/...
+      - run: go build -o defios-desktop ./desktop
+      - run: go test ./desktop/... ./internal/flock
+
+  desktop-windows:
+    name: desktop (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./desktop/...
+      - run: go build -o defios-desktop.exe ./desktop
+      - run: go test ./desktop/internal/prefs ./internal/flock

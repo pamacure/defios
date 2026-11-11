@@ -92,11 +92,10 @@ func (h *Host) NewGroup(spec GroupSpec) (GroupConfig, error) {
 	}
 	name := spec.DisplayName
 	if name == "" {
-		raw, err := os.ReadFile(h.p.DisplayNameFile())
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		var err error
+		if name, err = h.DisplayName(); err != nil {
 			return GroupConfig{}, err
 		}
-		name = strings.TrimSpace(string(raw))
 	}
 	if err := ValidateDisplayName(name); err != nil {
 		return GroupConfig{}, err

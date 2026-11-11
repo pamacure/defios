@@ -269,3 +269,11 @@ func TestSubscriptionCarriesNodeStatus(t *testing.T) {
 	for range events { // closes once ctx is done
 	}
 }
+
+func TestDisplayNameIsReadWhileLocked(t *testing.T) {
+	h := open(t, nodeDir(t))
+	name, err := h.DisplayName()
+	if err != nil || name != "laptop" {
+		t.Fatalf("DisplayName = %q, %v; want laptop", name, err)
+	}
+}

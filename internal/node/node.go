@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,9 @@ import (
 type Node interface {
 	// NodeID is this Node's ID, hex.
 	NodeID() string
+	// DisplayName is the Node's default display name, the one `init
+	// --name` set; "" when it has none. It needs no Unlock.
+	DisplayName() (string, error)
 	// Check reports what would stop Unlock(_, group) that needs no
 	// passphrase to find, so a front end can refuse before asking for one.
 	Check(group string) error
@@ -438,6 +442,15 @@ func tssSessions(self identity.ID) (Sessions, error) {
 
 // NodeID implements Node.
 func (h *Host) NodeID() string { return h.pub.NodeID.String() }
+
+// DisplayName implements Node.
+func (h *Host) DisplayName() (string, error) {
+	raw, err := os.ReadFile(h.p.DisplayNameFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	return strings.TrimSpace(string(raw)), err
+}
 
 // Check implements Node.
 func (h *Host) Check(group string) error {

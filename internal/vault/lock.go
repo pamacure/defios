@@ -4,7 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"syscall"
+
+	"defios.com/internal/flock"
 )
 
 // ErrBusy means another process holds the Vault's lock the other way: a
@@ -24,13 +25,9 @@ func Lock(dir string, exclusive bool) (unlock func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("vault: %w", err)
 	}
-	how := syscall.LOCK_SH | syscall.LOCK_NB
-	if exclusive {
-		how = syscall.LOCK_EX | syscall.LOCK_NB
-	}
-	if err := syscall.Flock(int(f.Fd()), how); err != nil {
+	if err := flock.Lock(f, exclusive, false); err != nil {
 		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, flock.ErrWouldBlock) {
 			return nil, ErrBusy
 		}
 		return nil, fmt.Errorf("vault: locking %s: %w", dir, err)
