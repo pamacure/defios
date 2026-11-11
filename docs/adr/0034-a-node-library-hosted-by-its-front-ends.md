@@ -64,11 +64,13 @@ hosts the Node, so the CLI keeps working against a Node the app is hosting.
   in the same change that adds what the app needs from it. A verb's output and
   exit codes do not change when it moves. Trigger config gains write
   operations (Jobs, Hooks, Schedules) that the CLI does not have yet.
-- **The desktop app** is a Wails project at `desktop/`, in this module, with a
-  web frontend. Closing its window hides it to the system tray and the Node
-  keeps serving; Lock or Quit stops the Node. Its own preferences (start at
-  login, notifications, the keychain option) belong to the machine, not the
-  Node: they are kept outside the Node directory and never go into a Backup.
+- **The desktop app** is a Wails v3 project at `desktop/`, in this module,
+  with a web frontend, for Linux, macOS and Windows. Wails v3 has the system
+  tray built in, which v2 lacks. Closing its window hides it to the system
+  tray and the Node keeps serving; Lock or Quit stops the Node. Its own
+  preferences (start at login, notifications, the keychain option) belong to
+  the machine, not the Node: they are kept outside the Node directory and
+  never go into a Backup.
 - **The keychain option** stores the Vault passphrase in the OS keychain so the
   app can unlock at login. It is off by default, because it moves the Node's
   protection from a passphrase someone must type to the OS account: a stolen
