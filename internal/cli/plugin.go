@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/config"
 	"defios.com/internal/plugin"
 )
 
@@ -321,4 +324,29 @@ func reinstalledJSON(plugins []plugin.Reinstalled) []map[string]any {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// pluginGrants is every grant on this Node of a Skill or MCP Server of
+// Plugin name, sorted by Handle, as "<handle> (<plugin>/<name>, ...)".
+func pluginGrants(g *globals, name string) ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(g.paths().AgentProfilesDir(), "*", "config.toml"))
+	if err != nil {
+		return nil, exitOperational(err)
+	}
+	sort.Strings(matches)
+	var out []string
+	for _, m := range matches {
+		h := filepath.Base(filepath.Dir(m))
+		if config.ValidateHandle(h) != nil {
+			continue
+		}
+		p, err := config.ReadProfile(m)
+		if err != nil {
+			return nil, exitOperational(err)
+		}
+		if refs := p.PluginGrants(name); len(refs) > 0 {
+			out = append(out, fmt.Sprintf("%s (%s)", h, strings.Join(refs, ", ")))
+		}
+	}
+	return out, nil
 }

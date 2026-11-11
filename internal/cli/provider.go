@@ -1,16 +1,16 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
+	"defios.com/internal/node"
 	"defios.com/internal/provider"
 	"defios.com/internal/secret"
 )
@@ -30,37 +30,78 @@ func (f *providerFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.body, "body", "", "the base request body for every agent on it, a JSON object: inline, @path to read a file, or - for stdin")
 }
 
-// apply sets on p each field whose flag cmd was given: --body replaces the
-// body whole, and --api-key must be a Secret reference.
-func (f *providerFlags) apply(g *globals, cmd *cobra.Command, p *config.Provider) error {
+// edit is the node.ProviderEdit of each field whose flag cmd was given:
+// --body replaces the body whole, and --api-key must be a Secret
+// reference.
+func (f *providerFlags) edit(g *globals, cmd *cobra.Command) (node.ProviderEdit, error) {
+	var e node.ProviderEdit
 	fl := cmd.Flags()
 	if fl.Changed("base-url") {
-		p.BaseURL = f.baseURL
+		e.BaseURL = &f.baseURL
 	}
 	if fl.Changed("api-path") {
-		p.APIPath = f.apiPath
+		e.APIPath = &f.apiPath
 	}
 	if fl.Changed("api-key") {
 		if f.apiKey != "" {
 			if _, err := secret.ParseRef(f.apiKey); err != nil {
-				return fmt.Errorf("--api-key: %w", err)
+				return e, exitUsagef("--api-key: %w", err)
 			}
 		}
-		p.APIKey = f.apiKey
+		e.APIKey = &f.apiKey
 	}
 	if fl.Changed("body") {
 		body, err := readBody(g, f.body)
 		if err != nil {
-			return err
+			return e, exitUsagef("%w", err)
 		}
-		// An empty body is no body, as the file reads back, so clearing
-		// one already clear is unchanged.
-		if len(body) == 0 {
-			body = nil
-		}
-		p.Body = body
+		e.Body = body
 	}
-	return nil
+	return e, nil
+}
+
+// providerError maps a failure of the library's Provider operations: what
+// is refused is a usage error, the rest as talk's.
+func providerError(err error) error {
+	var invalid *node.InvalidError
+	switch {
+	case errors.Is(err, provider.ErrExists), errors.Is(err, provider.ErrUnknown), errors.Is(err, provider.ErrUnchanged),
+		errors.Is(err, provider.ErrInvalid), errors.As(err, &invalid), errors.Is(err, config.ErrNotWritten):
+		return exitUsagef("%w", err)
+	}
+	return talkError(err)
+}
+
+// providerReadError maps a failure of the library's Provider reads: an
+// alias in force nowhere is a usage error, as is a Key query naming none;
+// a config that does not read or validate is operational.
+func providerReadError(err error) error {
+	var invalid *node.InvalidError
+	switch {
+	case errors.Is(err, provider.ErrUnknown), errors.As(err, &invalid):
+		return exitUsagef("%w", err)
+	case errors.Is(err, provider.ErrInvalid):
+		return exitOperational(err)
+	}
+	return talkError(err)
+}
+
+// providerTarget is the Node, Group alias and Conversation a provider verb
+// acts on.
+func providerTarget(g *globals, keyQuery string) (*node.Host, string, string, error) {
+	h, err := openNode(g)
+	if err != nil {
+		return nil, "", "", err
+	}
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return nil, "", "", err
+	}
+	conv, err := queriedConversation(g, h, keyQuery)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return h, alias, conv, nil
 }
 
 func providerCommand(g *globals) *cobra.Command {
@@ -84,31 +125,18 @@ option are set there or per agent, in the [body] of its agents/<handle>/config.t
 --api-path override its fields. Without a preset both are required. Presets: ` + strings.Join(provider.PresetNames(), ", ") + ".",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			alias := args[0]
-			var p config.Provider
-			name := preset
-			if !cmd.Flags().Changed("preset") {
-				name = alias
-			}
-			if pre, ok := provider.Preset(name); ok {
-				p.BaseURL, p.APIPath = pre.BaseURL, pre.APIPath
-			} else if cmd.Flags().Changed("preset") {
-				return exitUsagef("no preset %q; the presets are %s", preset, strings.Join(provider.PresetNames(), ", "))
-			}
-			if err := add.apply(g, cmd, &p); err != nil {
-				return exitUsagef("%w", err)
-			}
-			path, err := writeProviders(g, func(ps map[string]config.Provider) error {
-				if _, ok := ps[alias]; ok {
-					return fmt.Errorf("%w: %q", provider.ErrExists, alias)
-				}
-				ps[alias] = p
-				return nil
-			})
+			e, err := add.edit(g, cmd)
 			if err != nil {
 				return err
 			}
-			return providerWritten(g, providerViewOf(alias, p), "added "+alias+" to "+path)
+			e.Preset = preset
+			if cmd.Flags().Changed("preset") && preset == "" {
+				return exitUsagef("no preset %q; the presets are %s", preset, strings.Join(node.PresetNames(), ", "))
+			}
+			return writeProvider(g, "added", "to", args[0], func(h *node.Host, group string) (any, error) {
+				p, err := h.AddProvider(cmd.Context(), group, node.GroupTalk, args[0], e)
+				return providerViewOf(p), err
+			})
 		},
 	}
 	add.bind(addCmd)
@@ -123,27 +151,14 @@ option are set there or per agent, in the [body] of its agents/<handle>/config.t
 its key reference.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			alias := args[0]
-			var p config.Provider
-			path, err := writeProviders(g, func(ps map[string]config.Provider) error {
-				cur, ok := ps[alias]
-				if !ok {
-					return fmt.Errorf("%w: %q", provider.ErrUnknown, alias)
-				}
-				p = cur
-				if err := edit.apply(g, cmd, &p); err != nil {
-					return err
-				}
-				if reflect.DeepEqual(p, cur) {
-					return fmt.Errorf("%w: %q", provider.ErrUnchanged, alias)
-				}
-				ps[alias] = p
-				return nil
-			})
+			e, err := edit.edit(g, cmd)
 			if err != nil {
 				return err
 			}
-			return providerWritten(g, providerViewOf(alias, p), "edited "+alias+" in "+path)
+			return writeProvider(g, "edited", "in", args[0], func(h *node.Host, group string) (any, error) {
+				p, err := h.EditProvider(cmd.Context(), group, node.GroupTalk, args[0], e)
+				return providerViewOf(p), err
+			})
 		},
 	}
 	edit.bind(editCmd)
@@ -153,19 +168,10 @@ its key reference.`,
 		Use:   "remove <alias>",
 		Short: "Remove a Provider's table, its key reference and body with it",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			alias := args[0]
-			path, err := writeProviders(g, func(ps map[string]config.Provider) error {
-				if _, ok := ps[alias]; !ok {
-					return fmt.Errorf("%w: %q", provider.ErrUnknown, alias)
-				}
-				delete(ps, alias)
-				return nil
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return writeProvider(g, "removed", "from", args[0], func(h *node.Host, group string) (any, error) {
+				return map[string]string{"alias": args[0]}, h.RemoveProvider(cmd.Context(), group, node.GroupTalk, args[0])
 			})
-			if err != nil {
-				return err
-			}
-			return providerWritten(g, map[string]string{"alias": alias}, "removed "+alias+" from "+path)
 		},
 	}
 	bindWriteGroupFlag(g, removeCmd)
@@ -175,7 +181,7 @@ its key reference.`,
 		Use:   "list",
 		Short: "List the Providers: alias, URL, shape",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runProviderList(g, keyQuery) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runProviderList(cmd.Context(), g, keyQuery) },
 	}
 	bindGroupFlag(g, listCmd)
 	listCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
@@ -183,7 +189,9 @@ its key reference.`,
 		Use:   "show <alias>",
 		Short: "Show one Provider",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, args []string) error { return runProviderShow(g, keyQuery, args[0]) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProviderShow(cmd.Context(), g, keyQuery, args[0])
+		},
 	}
 	bindGroupFlag(g, showCmd)
 	showCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
@@ -192,28 +200,21 @@ its key reference.`,
 	return root
 }
 
-// writeProviders applies change to the Providers of the targeted Group's
-// config.toml and writes it back if every Provider is then valid; it
-// returns the file's path.
-func writeProviders(g *globals, change func(map[string]config.Provider) error) (string, error) {
-	return writeGroupConfig(g, func(ws *config.Workspace) error {
-		if err := change(ws.Providers); err != nil {
-			return err
-		}
-		for a, p := range ws.Providers {
-			if err := provider.Validate(p.Endpoint(a)); err != nil {
-				return fmt.Errorf("[providers.%s]: %w", a, err)
-			}
-		}
-		return nil
-	})
-}
-
-func providerWritten(g *globals, v any, what string) error {
+// writeProvider runs write on the targeted Group's Providers and prints
+// what it returns as JSON, or "<done> <alias> <prep> <config.toml>".
+func writeProvider(g *globals, done, prep, alias string, write func(*node.Host, string) (any, error)) error {
+	h, group, _, err := providerTarget(g, "")
+	if err != nil {
+		return err
+	}
+	v, err := write(h, group)
+	if err != nil {
+		return providerError(err)
+	}
 	if g.json {
 		return g.emitJSON(v)
 	}
-	fmt.Fprintln(g.app.Stdout, what)
+	fmt.Fprintf(g.app.Stdout, "%s %s %s %s\n", done, alias, prep, g.paths().GroupConfigFile(group))
 	return nil
 }
 
@@ -229,30 +230,23 @@ type providerView struct {
 	url     string
 }
 
-func providerViewOf(alias string, p config.Provider) providerView {
-	at := p.Endpoint(alias)
-	return providerView{Alias: alias, BaseURL: p.BaseURL, APIPath: p.APIPath, Shape: at.Shape().Name,
-		APIKey: p.APIKey, Body: p.Body, url: at.URL()}
+func providerViewOf(p node.Provider) providerView {
+	return providerView{Alias: p.Alias, BaseURL: p.BaseURL, APIPath: p.APIPath, Shape: p.Shape,
+		APIKey: p.APIKey, Body: p.Body, url: p.URL}
 }
 
-func runProviderList(g *globals, keyQuery string) error {
-	e, err := load(g, keyQuery)
+func runProviderList(ctx context.Context, g *globals, keyQuery string) error {
+	h, group, conv, err := providerTarget(g, keyQuery)
 	if err != nil {
 		return err
 	}
-	ws := e.Workspace
-	aliases := make([]string, 0, len(ws.Providers))
-	for a := range ws.Providers {
-		aliases = append(aliases, a)
+	ps, err := h.Providers(ctx, group, conv)
+	if err != nil {
+		return providerReadError(err)
 	}
-	sort.Strings(aliases)
-	views := make([]providerView, len(aliases))
-	for i, a := range aliases {
-		p, err := ws.Provider(a)
-		if err != nil {
-			return exitOperational(err)
-		}
-		views[i] = providerViewOf(a, p)
+	views := make([]providerView, len(ps))
+	for i, p := range ps {
+		views[i] = providerViewOf(p)
 	}
 	if g.json {
 		return g.emitJSON(views)
@@ -264,18 +258,16 @@ func runProviderList(g *globals, keyQuery string) error {
 	return nil
 }
 
-func runProviderShow(g *globals, keyQuery, alias string) error {
-	e, err := load(g, keyQuery)
+func runProviderShow(ctx context.Context, g *globals, keyQuery, alias string) error {
+	h, group, conv, err := providerTarget(g, keyQuery)
 	if err != nil {
 		return err
 	}
-	p, err := e.Workspace.Provider(alias)
-	if errors.Is(err, provider.ErrUnknown) {
-		return exitUsagef("%w", err)
-	} else if err != nil {
-		return exitOperational(err)
+	p, err := h.Provider(ctx, group, conv, alias)
+	if err != nil {
+		return providerReadError(err)
 	}
-	v := providerViewOf(alias, p)
+	v := providerViewOf(p)
 	if g.json {
 		return g.emitJSON(v)
 	}

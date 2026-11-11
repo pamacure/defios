@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,14 +10,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
+	"defios.com/internal/key"
+	"defios.com/internal/node"
 )
 
 // agentFlags are the fields add and edit take.
@@ -34,36 +35,68 @@ func (f *agentFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&f.maxTurns, "max-turns", 0, "model calls a summon may make (default 8)")
 }
 
-// apply sets on p each field whose flag cmd was given: --body replaces the
-// body whole, and --model sets body.model over it.
-func (f *agentFlags) apply(g *globals, cmd *cobra.Command, p *config.Profile) error {
+// edit is the node.ProfileEdit of each field whose flag cmd was given.
+func (f *agentFlags) edit(g *globals, cmd *cobra.Command) (node.ProfileEdit, error) {
+	var e node.ProfileEdit
 	fl := cmd.Flags()
 	if fl.Changed("provider") {
-		p.Provider = f.provider
+		e.Provider = &f.provider
 	}
 	if fl.Changed("max-turns") {
 		if f.maxTurns < 1 {
-			return fmt.Errorf("--max-turns %d must be a positive integer", f.maxTurns)
+			return e, exitUsagef("--max-turns %d must be a positive integer", f.maxTurns)
 		}
-		p.MaxTurns = f.maxTurns
+		e.MaxTurns = &f.maxTurns
 	}
 	if fl.Changed("body") {
 		body, err := readBody(g, f.body)
 		if err != nil {
-			return err
+			return e, exitUsagef("%w", err)
 		}
-		p.Body = body
+		e.Body = body
 	}
 	if fl.Changed("model") {
-		body := map[string]any{"model": f.model}
-		for k, v := range p.Body {
-			if k != "model" {
-				body[k] = v
-			}
-		}
-		p.Body = body
+		e.Model = &f.model
 	}
-	return nil
+	return e, nil
+}
+
+// agentError maps a failure of the library's Agent Profile operations on
+// handle: what is refused is a usage error with the CLI's own hint, the
+// rest operational.
+func agentError(handle string, err error) error {
+	var exit *ExitError
+	var invalid *node.InvalidError
+	var included *node.ProfileIncludedError
+	switch {
+	case errors.As(err, &exit):
+		return err
+	case errors.Is(err, node.ErrUnknownProfile):
+		return exitUsagef("no Agent Profile %q on this Node; add it with `defios agent add`", handle)
+	case errors.Is(err, node.ErrProfileExists):
+		return exitUsagef("Agent Profile %q already exists; change it with `defios agent edit`", handle)
+	case errors.Is(err, node.ErrProfileUnchanged):
+		return exitUsagef("Agent Profile %q is unchanged: nothing to change", handle)
+	case errors.As(err, &included):
+		return exitUsagef("Agent Profile %q is included in %s; exclude it there first", handle, strings.Join(placeNames(included.In), ", "))
+	case errors.As(err, &invalid), errors.Is(err, config.ErrNotWritten), errors.Is(err, config.ErrGrantRefused),
+		errors.Is(err, key.ErrUnknown), errors.Is(err, key.ErrAmbiguous):
+		return exitUsagef("%w", err)
+	}
+	return talkError(err)
+}
+
+// placeNames names each place as the CLI prints it: a Group by its alias,
+// a Conversation as <alias>/<workspace>.
+func placeNames(in []node.Place) []string {
+	out := make([]string, len(in))
+	for i, pl := range in {
+		out[i] = pl.Group
+		if pl.Workspace != "" {
+			out[i] += "/" + pl.Workspace
+		}
+	}
+	return out
 }
 
 func agentCommand(g *globals) *cobra.Command {
@@ -93,27 +126,23 @@ includes it must define its Provider.`,
 			if !cmd.Flags().Changed("provider") {
 				return exitUsagef("--provider is required: the alias of the Provider it runs on")
 			}
-			var p config.Profile
-			if err := add.apply(g, cmd, &p); err != nil {
-				return exitUsagef("%w", err)
-			}
-			path := g.paths().AgentProfileFile(handle)
-			if _, err := os.Stat(path); err == nil {
-				return exitUsagef("Agent Profile %q already exists; change it with `defios agent edit`", handle)
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return exitOperational(err)
-			}
-			if err := writeProfile(path, p); err != nil {
-				return err
-			}
-			system, err := scaffoldSystem(g, handle)
+			e, err := add.edit(g, cmd)
 			if err != nil {
 				return err
 			}
-			if g.json {
-				return g.emitJSON(agentViewOf(g, handle, p))
+			h, err := openNode(g)
+			if err != nil {
+				return err
 			}
-			fmt.Fprintf(g.app.Stdout, "added %s\n%s\ninclude it with: defios agent include %s\n", path, system, handle)
+			a, err := h.AddAgentProfile(cmd.Context(), handle, e)
+			if err != nil {
+				return agentError(handle, err)
+			}
+			if g.json {
+				return g.emitJSON(agentViewOf(a))
+			}
+			fmt.Fprintf(g.app.Stdout, "added %s\n%s\ninclude it with: defios agent include %s\n",
+				filepath.Join(a.Dir, "config.toml"), filepath.Join(a.Dir, "SYSTEM.md"), handle)
 			return nil
 		},
 	}
@@ -131,25 +160,22 @@ the new body when both are given. A Handle cannot be renamed: add another and de
 			if err != nil {
 				return err
 			}
-			cur, err := readProfile(g, handle)
+			e, err := edit.edit(g, cmd)
 			if err != nil {
 				return err
 			}
-			p := cur
-			if err := edit.apply(g, cmd, &p); err != nil {
-				return exitUsagef("%w", err)
-			}
-			if reflect.DeepEqual(p, cur) {
-				return exitUsagef("Agent Profile %q is unchanged: nothing to change", handle)
-			}
-			path := g.paths().AgentProfileFile(handle)
-			if err := writeProfile(path, p); err != nil {
+			h, err := openNode(g)
+			if err != nil {
 				return err
 			}
-			if g.json {
-				return g.emitJSON(agentViewOf(g, handle, p))
+			a, err := h.EditAgentProfile(cmd.Context(), handle, e)
+			if err != nil {
+				return agentError(handle, err)
 			}
-			fmt.Fprintf(g.app.Stdout, "edited %s\n", path)
+			if g.json {
+				return g.emitJSON(agentViewOf(a))
+			}
+			fmt.Fprintf(g.app.Stdout, "edited %s\n", filepath.Join(a.Dir, "config.toml"))
 			return nil
 		},
 	}
@@ -160,7 +186,7 @@ the new body when both are given. A Handle cannot be renamed: add another and de
 		Use:   "list",
 		Short: "List the Agent Profiles on this Node: Handle, Provider, model, and whether the Group includes it",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runAgentList(g, keyQuery) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runAgentList(cmd.Context(), g, keyQuery) },
 	}
 	bindGroupFlag(g, listCmd)
 	listCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
@@ -168,12 +194,12 @@ the new body when both are given. A Handle cannot be renamed: add another and de
 		Use:   "show <handle>",
 		Short: "Show one Agent Profile and the Groups and Conversations on this Node that include it",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
 			if err != nil {
 				return err
 			}
-			return runAgentShow(g, handle)
+			return runAgentShow(cmd.Context(), g, handle)
 		},
 	}
 
@@ -183,27 +209,19 @@ the new body when both are given. A Handle cannot be renamed: add another and de
 		Long: `Delete agents/<handle>/ under the config root. The profile is the whole Node's, so delete refuses, changing
 nothing, while any Group or Conversation on this Node includes its Handle: exclude it there first.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
 			if err != nil {
 				return err
 			}
-			dir := g.paths().AgentProfileDir(handle)
-			if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-				return exitUsagef("%w", noProfile(handle))
-			} else if err != nil {
-				return exitOperational(err)
-			}
-			in, err := includers(g, handle)
+			h, err := openNode(g)
 			if err != nil {
 				return err
 			}
-			if len(in) > 0 {
-				return exitUsagef("Agent Profile %q is included in %s; exclude it there first", handle, strings.Join(in, ", "))
+			if err := h.DeleteAgentProfile(cmd.Context(), handle); err != nil {
+				return agentError(handle, err)
 			}
-			if err := os.RemoveAll(dir); err != nil {
-				return exitOperational(err)
-			}
+			dir := g.paths().AgentProfileDir(handle)
 			if g.json {
 				return g.emitJSON(struct {
 					Handle  string `json:"handle"`
@@ -222,12 +240,12 @@ nothing, while any Group or Conversation on this Node includes its Handle: exclu
 A Conversation with no list of its own follows the Group's; including one there gives it a list of
 that Handle alone, and it no longer follows the Group's until its profiles line is deleted by hand.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
 			if err != nil {
 				return err
 			}
-			return runAgentInclusion(g, keyQuery, handle, true)
+			return runAgentInclusion(cmd.Context(), g, keyQuery, handle, true)
 		},
 	}
 	excludeCmd := &cobra.Command{
@@ -237,12 +255,12 @@ that Handle alone, and it no longer follows the Group's until its profiles line 
 leaves an empty list, so no agent answers there. A Conversation with no list of its own follows the
 Group's, and exclude --key refuses it.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
 			if err != nil {
 				return err
 			}
-			return runAgentInclusion(g, keyQuery, handle, false)
+			return runAgentInclusion(cmd.Context(), g, keyQuery, handle, false)
 		},
 	}
 	for _, cmd := range []*cobra.Command{includeCmd, excludeCmd} {
@@ -264,7 +282,9 @@ or built in, and a name that is both is refused as ambiguous.
 An MCP Server runs with PATH, HOME and nothing else of the serve's environment but each --secret, a Secret
 its server asks for, set under its own name. Granting a server again sets its Secrets to those given.`,
 		Args: cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, true, secrets) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentGrant(cmd.Context(), g, args, true, secrets)
+		},
 	}
 	grantCmd.Flags().StringArrayVar(&secrets, "secret", nil, "a Secret the MCP Server's process gets, by NAME; repeatable")
 	revokeCmd := &cobra.Command{
@@ -275,7 +295,9 @@ out of its mcp. Revoking say leaves an agent that cannot post to the talk; revok
 empty list, an agent that can only end its turn. A Skill or MCP Server it grants can be revoked though its
 Plugin is no longer installed.`,
 		Args: cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error { return runAgentGrant(g, args, false, nil) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentGrant(cmd.Context(), g, args, false, nil)
+		},
 	}
 
 	root.AddCommand(addCmd, listCmd, showCmd, editCmd, deleteCmd, includeCmd, excludeCmd, grantCmd, revokeCmd)
@@ -284,46 +306,39 @@ Plugin is no longer installed.`,
 
 // runAgentGrant grants the item args[1] to the Agent Profile args[0], or
 // revokes it, with secrets for an MCP Server, and prints what it is granted
-// of that kind (config.Profile.Grant and Revoke).
-func runAgentGrant(g *globals, args []string, grant bool, secrets []string) error {
+// of that kind.
+func runAgentGrant(ctx context.Context, g *globals, args []string, grant bool, secrets []string) error {
 	handle, err := handleArg(args)
 	if err != nil {
 		return err
 	}
-	p, err := readProfile(g, handle)
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	var kind config.GrantKind
-	var changed bool
+	var kind node.GrantKind
+	var a node.AgentProfile
 	if grant {
-		p, kind, changed, err = p.Grant(g.paths().PluginsDir(), args[1], secrets)
+		kind, a, err = h.Grant(ctx, handle, args[1], secrets)
 	} else {
-		p, kind, changed, err = p.Revoke(g.paths().PluginsDir(), args[1])
+		kind, a, err = h.Revoke(ctx, handle, args[1])
 	}
-	if errors.Is(err, config.ErrGrantRefused) {
-		return exitUsagef("%w", err)
-	} else if err != nil {
-		return exitOperational(err)
-	}
-	if changed {
-		if err := writeProfile(g.paths().AgentProfileFile(handle), p); err != nil {
-			return err
-		}
+	if err != nil {
+		return agentError(handle, err)
 	}
 	switch kind {
-	case config.GrantSkill:
-		return printList(g, p.Skills)
-	case config.GrantMCP:
-		return printMCP(g, p.MCP)
+	case node.GrantSkill:
+		return printList(g, a.Skills)
+	case node.GrantMCP:
+		return printMCP(g, a.MCP)
 	}
-	return printList(g, p.Granted())
+	return printList(g, a.Tools)
 }
 
 // printMCP prints the MCP Server grants mcp, one a line as
 // "<plugin>/<server>" with its Secrets in parentheses, or as a JSON object
 // as the profile holds them.
-func printMCP(g *globals, mcp map[string]config.MCPGrant) error {
+func printMCP(g *globals, mcp map[string]node.MCPGrant) error {
 	if g.json {
 		return g.emitJSON(mcpView(mcp))
 	}
@@ -335,7 +350,7 @@ func printMCP(g *globals, mcp map[string]config.MCPGrant) error {
 
 // mcpLines are the MCP Server grants mcp, sorted, each "<plugin>/<server>"
 // with its Secrets in parentheses, styled by paren.
-func mcpLines(mcp map[string]config.MCPGrant, paren func(string) string) []string {
+func mcpLines(mcp map[string]node.MCPGrant, paren func(string) string) []string {
 	var out []string
 	for _, ref := range slices.Sorted(maps.Keys(mcp)) {
 		if s := mcp[ref].Secrets; len(s) > 0 {
@@ -352,7 +367,7 @@ type mcpGrantView struct {
 }
 
 // mcpView is the MCP Server grants mcp as JSON, never null.
-func mcpView(mcp map[string]config.MCPGrant) map[string]mcpGrantView {
+func mcpView(mcp map[string]node.MCPGrant) map[string]mcpGrantView {
 	out := map[string]mcpGrantView{}
 	for ref, gr := range mcp {
 		s := gr.Secrets
@@ -378,189 +393,80 @@ func printList(g *globals, list []string) error {
 	return nil
 }
 
-// pluginGrants is every grant on this Node of a Skill or MCP Server of
-// Plugin name, sorted by Handle, as "<handle> (<plugin>/<name>, ...)".
-func pluginGrants(g *globals, name string) ([]string, error) {
-	handles, err := profileHandles(g)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, h := range handles {
-		p, err := readProfile(g, h)
-		if err != nil {
-			return nil, err
-		}
-		if refs := p.PluginGrants(name); len(refs) > 0 {
-			out = append(out, fmt.Sprintf("%s (%s)", h, strings.Join(refs, ", ")))
-		}
-	}
-	return out, nil
-}
-
 // runAgentInclusion includes handle in, or excludes it from, the Group's
 // [agent] profiles, or with keyQuery the Conversation's, and prints the
 // list that results.
-func runAgentInclusion(g *globals, keyQuery, handle string, include bool) error {
-	edit := func(list []string) []string {
-		if !include {
-			return without(list, handle)
-		}
-		if contains(list, handle) {
-			return list
-		}
-		return append(list, handle)
-	}
-	var list []string
-	var err error
-	if include {
-		if _, err := readProfile(g, handle); err != nil {
-			return err
-		}
-	}
-	if keyQuery == "" {
-		_, err = writeGroup(g, func(c *config.Config) error {
-			c.Agent.Profiles = edit(c.Agent.Profiles)
-			list = c.Agent.Profiles
-			return nil
-		})
-	} else {
-		list, err = editConversationList(g, keyQuery, handle, include, edit)
-	}
+func runAgentInclusion(ctx context.Context, g *globals, keyQuery, handle string, include bool) error {
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	if list == nil {
-		list = []string{}
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return err
+	}
+	if include {
+		// An unknown Handle is refused before the Key query is.
+		if _, err := h.AgentProfile(ctx, handle); err != nil {
+			return agentError(handle, err)
+		}
+	}
+	conv, err := queriedConversation(g, h, keyQuery)
+	if err != nil {
+		return err
+	}
+	var in node.Inclusion
+	if include {
+		in, err = h.IncludeAgent(ctx, alias, conv, handle)
+	} else {
+		in, err = h.ExcludeAgent(ctx, alias, conv, handle)
+	}
+	if errors.Is(err, node.ErrFollowsGroup) {
+		return exitUsagef("%s follows the Group's list; exclude it there, or give %s its own list with include --key", keyQuery, keyQuery)
+	} else if err != nil {
+		return agentError(handle, err)
+	}
+	if in.OwnList {
+		fmt.Fprintf(g.app.Stderr, "%s %s now has its own list of agents and no longer follows the Group's\n",
+			paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:"), keyQuery)
 	}
 	if g.json {
-		return g.emitJSON(list)
+		return g.emitJSON(in.Handles)
 	}
-	for _, h := range list {
-		fmt.Fprintln(g.app.Stdout, h)
+	for _, x := range in.Handles {
+		fmt.Fprintln(g.app.Stdout, x)
 	}
 	return nil
 }
 
-// editConversationList applies edit to the [agent] profiles of the
-// Conversation keyQuery names, keeping the file's other sections, and
-// returns the list. A Conversation with no list follows the Group's: an
-// include gives it its own, and warns so; an exclude is refused.
-func editConversationList(g *globals, keyQuery, handle string, include bool, edit func([]string) []string) ([]string, error) {
-	path, err := conversationConfigFile(g, keyQuery)
-	if err != nil {
-		return nil, err
-	}
-	w, err := config.ReadWorkspace(path)
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	following := w.Agent.Profiles == nil
-	if following && !include {
-		return nil, exitUsagef("%s follows the Group's list; exclude it there, or give %s its own list with include --key", keyQuery, keyQuery)
-	}
-	w.Agent.Profiles = edit(w.Agent.Profiles)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, exitOperational(err)
-	}
-	if err := config.WriteWorkspace(path, w); err != nil {
-		return nil, exitOperational(err)
-	}
-	if following {
-		fmt.Fprintf(g.app.Stderr, "%s %s now has its own list of agents and no longer follows the Group's\n",
-			paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:"), keyQuery)
-	}
-	return w.Agent.Profiles, nil
-}
-
-// includers is every place on this Node that includes handle, sorted: each
-// Group whose [agent] profiles lists it, by alias, and each Conversation
-// whose own list does, as <alias>/<workspace>.
-func includers(g *globals, handle string) ([]string, error) {
-	p := g.paths()
-	aliases, err := groupAliases(p)
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	var out []string
-	for _, a := range aliases {
-		c, err := config.ReadFile(p.GroupConfigFile(a))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, exitOperational(err)
-		}
-		if contains(c.Agent.Profiles, handle) {
-			out = append(out, a)
-		}
-		convs, err := config.ConversationFiles(p, a)
-		if err != nil {
-			return nil, exitOperational(err)
-		}
-		for _, path := range convs {
-			w, err := config.ReadWorkspace(path)
-			if err != nil {
-				return nil, exitOperational(err)
-			}
-			if contains(w.Agent.Profiles, handle) {
-				out = append(out, a+"/"+filepath.Base(filepath.Dir(path)))
-			}
-		}
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// without is list less every h, never nil when list is not.
-func without(list []string, h string) []string {
-	if list == nil {
-		return nil
-	}
-	out := []string{}
-	for _, x := range list {
-		if x != h {
-			out = append(out, x)
-		}
-	}
-	return out
-}
-
-// profileHandles is the Handle of every Agent Profile on this Node, sorted:
-// each directory under agents/ named by a valid Handle and holding a
-// config.toml.
-func profileHandles(g *globals) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(g.paths().AgentProfilesDir(), "*", "config.toml"))
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	out := make([]string, 0, len(matches))
-	for _, m := range matches {
-		if h := filepath.Base(filepath.Dir(m)); config.ValidateHandle(h) == nil {
-			out = append(out, h)
-		}
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-func runAgentList(g *globals, keyQuery string) error {
-	e, err := load(g, keyQuery)
+func runAgentList(ctx context.Context, g *globals, keyQuery string) error {
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	handles, err := profileHandles(g)
+	alias, err := g.resolveAlias()
 	if err != nil {
 		return err
+	}
+	conv, err := queriedConversation(g, h, keyQuery)
+	if err != nil {
+		return err
+	}
+	included, err := h.IncludedAgents(ctx, alias, conv)
+	if err != nil {
+		return agentError("", err)
+	}
+	profiles, err := h.AgentProfiles(ctx)
+	if err != nil {
+		return agentError("", err)
 	}
 	type listed struct {
 		agentView
 		Included bool `json:"included"`
 	}
-	views := make([]listed, len(handles))
-	for i, h := range handles {
-		p, err := readProfile(g, h)
-		if err != nil {
-			return err
-		}
-		views[i] = listed{agentViewOf(g, h, p), contains(e.Workspace.Agent.Profiles, h)}
+	views := make([]listed, len(profiles))
+	for i, a := range profiles {
+		views[i] = listed{agentViewOf(a), slices.Contains(included, a.Handle)}
 	}
 	if g.json {
 		return g.emitJSON(views)
@@ -580,22 +486,20 @@ func runAgentList(g *globals, keyQuery string) error {
 	return nil
 }
 
-func runAgentShow(g *globals, handle string) error {
-	p, err := readProfile(g, handle)
+func runAgentShow(ctx context.Context, g *globals, handle string) error {
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	in, err := includers(g, handle)
+	a, err := h.AgentProfile(ctx, handle)
 	if err != nil {
-		return err
+		return agentError(handle, err)
 	}
-	if in == nil {
-		in = []string{}
-	}
+	in := placeNames(a.IncludedIn)
 	v := struct {
 		agentView
 		IncludedIn []string `json:"included_in"`
-	}{agentViewOf(g, handle, p), in}
+	}{agentViewOf(a), in}
 	if g.json {
 		return g.emitJSON(v)
 	}
@@ -612,7 +516,7 @@ func runAgentShow(g *globals, handle string) error {
 		skills = strings.Join(v.Skills, ", ")
 	}
 	mcp := g.out().caution("none")
-	if lines := mcpLines(p.MCP, g.out().dim); len(lines) > 0 {
+	if lines := mcpLines(a.MCP, g.out().dim); len(lines) > 0 {
 		mcp = strings.Join(lines, ", ")
 	}
 	fmt.Fprintf(g.app.Stdout, "tools %s\nskills %s\nmcp %s\nprofile_dir %s\n", tools, skills, mcp, v.Dir)
@@ -642,65 +546,6 @@ func handleArg(args []string) (string, error) {
 		return "", exitUsagef("%w", err)
 	}
 	return args[0], nil
-}
-
-// noProfile is the refusal of a Handle with no Agent Profile on this Node.
-func noProfile(handle string) error {
-	return fmt.Errorf("no Agent Profile %q on this Node; add it with `defios agent add`", handle)
-}
-
-// readProfile is handle's Agent Profile config.toml, a usage error when it
-// has none.
-func readProfile(g *globals, handle string) (config.Profile, error) {
-	p, err := config.ReadProfile(g.paths().AgentProfileFile(handle))
-	if errors.Is(err, os.ErrNotExist) {
-		return config.Profile{}, exitUsagef("%w", noProfile(handle))
-	} else if err != nil {
-		return config.Profile{}, exitOperational(err)
-	}
-	return p, nil
-}
-
-// writeProfile writes p as the Agent Profile config.toml at path, making
-// its directory and removing it again, if it made it, when the write is
-// refused; a profile that would not read back is a usage error.
-func writeProfile(path string, p config.Profile) error {
-	dir := filepath.Dir(path)
-	_, statErr := os.Stat(dir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return exitOperational(err)
-	}
-	err := config.WriteProfile(path, p)
-	if err != nil && errors.Is(statErr, os.ErrNotExist) {
-		os.Remove(dir)
-	}
-	if errors.Is(err, config.ErrNotWritten) {
-		return exitUsagef("%w", err)
-	} else if err != nil {
-		return exitOperational(err)
-	}
-	return nil
-}
-
-// scaffoldSystem writes handle's SYSTEM.md with a placeholder prompt unless
-// one is there, and returns its path.
-func scaffoldSystem(g *globals, handle string) (string, error) {
-	dir := g.paths().AgentProfileDir(handle)
-	path := filepath.Join(dir, "SYSTEM.md")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", exitOperational(err)
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return path, nil
-	} else if err != nil {
-		return "", exitOperational(err)
-	}
-	defer f.Close()
-	if _, err := fmt.Fprintf(f, "# @%s\n\nYou are @%s, an agent in a DeFiOS Group's talk.\nDescribe your purpose here.\n", handle, handle); err != nil {
-		return "", exitOperational(err)
-	}
-	return path, f.Close()
 }
 
 // readBody is the JSON object arg holds inline, in the file @path names, or
@@ -765,12 +610,7 @@ type agentView struct {
 	Body     map[string]any          `json:"body,omitempty"`
 }
 
-func agentViewOf(g *globals, handle string, p config.Profile) agentView {
-	model, _ := p.Body["model"].(string)
-	skills := p.Skills
-	if skills == nil {
-		skills = []string{}
-	}
-	return agentView{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: p.Granted(), Skills: skills,
-		MCP: mcpView(p.MCP), Dir: g.paths().AgentProfileDir(handle), Body: p.Body}
+func agentViewOf(a node.AgentProfile) agentView {
+	return agentView{Handle: a.Handle, Provider: a.Provider, Model: a.Model, MaxTurns: a.MaxTurns, Tools: a.Tools, Skills: a.Skills,
+		MCP: mcpView(a.MCP), Dir: a.Dir, Body: a.Body}
 }

@@ -99,32 +99,6 @@ func load(g *globals, keyQuery string) (config.Effective, error) {
 	return e, nil
 }
 
-// conversationConfigFile is the path of the config.toml of the
-// Conversation of the Key keyQuery names, in the targeted Group, read or
-// not; it reads no config.
-func conversationConfigFile(g *globals, keyQuery string) (string, error) {
-	alias, err := g.resolveAlias()
-	if err != nil {
-		return "", err
-	}
-	store, err := openReplica(g)
-	if err != nil {
-		return "", err
-	}
-	defer store.Close()
-	conv, err := conversationID(g, store, keyQuery)
-	if err != nil {
-		return "", err
-	}
-	keys, err := key.Read(store)
-	if err != nil {
-		return "", exitOperational(err)
-	}
-	var id [32]byte
-	copy(id[:], conv)
-	return g.paths().ConversationConfigFile(alias, key.WorkspaceNames(keys)[id]), nil
-}
-
 // keyQueryHelp is the ways a --key flag can name a Key.
 const keyQueryHelp = "curve:hex, the Conversation ID or the Key alias"
 

@@ -4,8 +4,9 @@
 // as `defios serve` does, and Lock stops it); onboarding: Create or
 // Restore a Node, scaffold Groups, and form them with other Nodes; and
 // talk and Keys: Conversations and their messages, chains of agents,
-// the Outbox, keygen Sessions and minted Keys; and Sign Requests, with
-// the Hooks of this Node's that fired on them.
+// the Outbox, keygen Sessions and minted Keys; Sign Requests, with the
+// Hooks of this Node's that fired on them; and agents: the Node's Agent
+// Profiles, where each is included, and each Group's Providers.
 package node
 
 import (
@@ -109,6 +110,31 @@ type Node interface {
 	RefuseSignRequest(ctx context.Context, group, msgID, reason string) (Answered, error)
 	DeclineSignRequest(ctx context.Context, group, msgID string) (DeclineResult, error)
 	BroadcastSignRequest(ctx context.Context, group, msgID string) (Broadcast, error)
+
+	// Agent Profiles, the whole Node's, named by Handle. None needs serve.
+	AgentProfiles(ctx context.Context) ([]AgentProfile, error)
+	AgentProfile(ctx context.Context, handle string) (AgentProfile, error)
+	AddAgentProfile(ctx context.Context, handle string, e ProfileEdit) (AgentProfile, error)
+	EditAgentProfile(ctx context.Context, handle string, e ProfileEdit) (AgentProfile, error)
+	DeleteAgentProfile(ctx context.Context, handle string) error
+	AgentSystem(ctx context.Context, handle string) (string, error)
+	SetAgentSystem(ctx context.Context, handle, prompt string) error
+	Grant(ctx context.Context, handle, item string, secrets []string) (GrantKind, AgentProfile, error)
+	Revoke(ctx context.Context, handle, item string) (GrantKind, AgentProfile, error)
+
+	// Which agents answer where: a Group's Group-level talk (GroupTalk) or
+	// one of its Conversations. The Group need not be served.
+	IncludedAgents(ctx context.Context, group, conv string) ([]string, error)
+	IncludeAgent(ctx context.Context, group, conv, handle string) (Inclusion, error)
+	ExcludeAgent(ctx context.Context, group, conv, handle string) (Inclusion, error)
+
+	// Providers, a Group's, which a Conversation overrides key by key. The
+	// Group need not be served.
+	Providers(ctx context.Context, group, conv string) ([]Provider, error)
+	Provider(ctx context.Context, group, conv, alias string) (Provider, error)
+	AddProvider(ctx context.Context, group, conv, alias string, e ProviderEdit) (Provider, error)
+	EditProvider(ctx context.Context, group, conv, alias string, e ProviderEdit) (Provider, error)
+	RemoveProvider(ctx context.Context, group, conv, alias string) error
 }
 
 // Errors a front end tells apart. Vault failures come through as the
