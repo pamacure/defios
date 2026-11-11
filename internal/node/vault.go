@@ -28,7 +28,8 @@ var (
 )
 
 // Secret is one of a Group's Secrets (ADR 0013): a name the Group's Vault
-// holds, or one a config field references. Its value is never given.
+// holds, or one a config field references. Its value is not in it;
+// RevealSecret reads it.
 type Secret struct {
 	Name string
 	// Source is where a reference to it resolves: secret.SourceEnv (the
@@ -69,7 +70,7 @@ func (h *Host) Secrets(ctx context.Context, group string, passphrase Passphrase)
 		return nil, err
 	}
 	var held map[string]string
-	err = h.withSecrets(group, passphrase, func(s map[string]string, _ string) error {
+	err = h.withSecrets(group, passphrase, true, func(s map[string]string, _ string) error {
 		held = s
 		return nil
 	})
@@ -99,7 +100,7 @@ func (h *Host) Secrets(ctx context.Context, group string, passphrase Passphrase)
 // only when the environment lacks name, and passphrase asked for only
 // then.
 func (h *Host) Secret(ctx context.Context, group, name string, passphrase Passphrase) (Secret, error) {
-	_, source, err := h.lookupSecret(group, name, passphrase)
+	_, source, err := h.lookupSecret(group, name, passphrase, true)
 	if err != nil {
 		return Secret{}, err
 	}
@@ -111,15 +112,17 @@ func (h *Host) Secret(ctx context.Context, group, name string, passphrase Passph
 }
 
 // RevealSecret is the value group's Secret name resolves to, "" for none,
-// and where it comes from: secret.SourceEnv, SourceVault or SourceNone. It
-// is for a terminal front end's explicit reveal, so it is not on the Node
-// interface, which never reads a value back.
+// and where it comes from: secret.SourceEnv, SourceVault or SourceNone.
+// The Vault opens only with the passphrase entered, never the one a hosted
+// Node holds, so a value is read back only for someone who knows it; one
+// from the environment needs none.
 func (h *Host) RevealSecret(ctx context.Context, group, name string, passphrase Passphrase) (value, source string, err error) {
-	return h.lookupSecret(group, name, passphrase)
+	return h.lookupSecret(group, name, passphrase, false)
 }
 
-// lookupSecret resolves name as a config reference in group would.
-func (h *Host) lookupSecret(group, name string, passphrase Passphrase) (value, source string, err error) {
+// lookupSecret resolves name as a config reference in group would. held
+// says whether the Vault may open with this host's passphrase.
+func (h *Host) lookupSecret(group, name string, passphrase Passphrase, held bool) (value, source string, err error) {
 	if err := secret.ValidateName(name); err != nil {
 		return "", "", &InvalidError{Err: err}
 	}
@@ -127,12 +130,12 @@ func (h *Host) lookupSecret(group, name string, passphrase Passphrase) (value, s
 		return "", "", err
 	}
 	r := h.resolver(group, func() (map[string]string, error) {
-		var held map[string]string
-		err := h.withSecrets(group, passphrase, func(s map[string]string, _ string) error {
-			held = s
+		var stored map[string]string
+		err := h.withSecrets(group, passphrase, held, func(s map[string]string, _ string) error {
+			stored = s
 			return nil
 		})
-		return held, err
+		return stored, err
 	})
 	return r.Lookup(name)
 }
@@ -178,7 +181,7 @@ func (h *Host) changeSecrets(group string, passphrase Passphrase, change func(ma
 	if err := h.knownGroup(group); err != nil {
 		return err
 	}
-	return h.withSecrets(group, passphrase, func(s map[string]string, phrase string) error {
+	return h.withSecrets(group, passphrase, true, func(s map[string]string, phrase string) error {
 		if !change(s) {
 			return nil
 		}
@@ -187,15 +190,14 @@ func (h *Host) changeSecrets(group string, passphrase Passphrase, change func(ma
 }
 
 // withSecrets calls fn with group's Secrets and the passphrase that opened
-// them, holding the Vault's lock throughout: this host's passphrase while
-// it is unlocked, else the one passphrase gives.
-func (h *Host) withSecrets(group string, passphrase Passphrase, fn func(secrets map[string]string, phrase string) error) error {
+// them, holding the Vault's lock throughout: as vaultPassphrase gives it.
+func (h *Host) withSecrets(group string, passphrase Passphrase, held bool, fn func(secrets map[string]string, phrase string) error) error {
 	unlock, err := useVault(h.p)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	phrase, err := h.vaultPassphrase(passphrase)
+	phrase, err := h.vaultPassphrase(passphrase, held)
 	if err != nil {
 		return err
 	}
@@ -223,14 +225,16 @@ func (h *Host) openSecrets(group, phrase string) (map[string]string, error) {
 	return secrets, err
 }
 
-// vaultPassphrase is the Vault passphrase: this host's while it is
-// unlocked, else the one passphrase gives.
-func (h *Host) vaultPassphrase(passphrase Passphrase) (string, error) {
-	h.mu.Lock()
-	phrase := h.passphrase
-	h.mu.Unlock()
-	if phrase != "" {
-		return phrase, nil
+// vaultPassphrase is the Vault passphrase: with held, this host's while it
+// is unlocked; else the one passphrase gives.
+func (h *Host) vaultPassphrase(passphrase Passphrase, held bool) (string, error) {
+	if held {
+		h.mu.Lock()
+		phrase := h.passphrase
+		h.mu.Unlock()
+		if phrase != "" {
+			return phrase, nil
+		}
 	}
 	if passphrase != nil {
 		p, ok, err := passphrase()
@@ -339,7 +343,7 @@ func (h *Host) Backup(ctx context.Context, dst string, passphrase Passphrase) (b
 		return backup.Manifest{}, err
 	}
 	defer unlock()
-	phrase, err := h.vaultPassphrase(passphrase)
+	phrase, err := h.vaultPassphrase(passphrase, true)
 	if err != nil {
 		return backup.Manifest{}, err
 	}

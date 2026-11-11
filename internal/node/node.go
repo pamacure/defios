@@ -137,11 +137,13 @@ type Node interface {
 	EditProvider(ctx context.Context, group, conv, alias string, e ProviderEdit) (Provider, error)
 	RemoveProvider(ctx context.Context, group, conv, alias string) error
 
-	// A Group's Secrets, by name; their values are set, never read back.
-	// The Vault opens with the passphrase this host holds while it is
-	// unlocked, else with the one passphrase gives. None needs serve.
+	// A Group's Secrets, by name. The Vault opens with the passphrase this
+	// host holds while it is unlocked, else with the one passphrase gives;
+	// RevealSecret alone reads a value back, and only with the passphrase
+	// entered. None needs serve.
 	Secrets(ctx context.Context, group string, passphrase Passphrase) ([]Secret, error)
 	Secret(ctx context.Context, group, name string, passphrase Passphrase) (Secret, error)
+	RevealSecret(ctx context.Context, group, name string, passphrase Passphrase) (value, source string, err error)
 	SetSecret(ctx context.Context, group, name, value string, passphrase Passphrase) error
 	RemoveSecret(ctx context.Context, group, name string, passphrase Passphrase) error
 

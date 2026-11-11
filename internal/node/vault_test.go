@@ -191,3 +191,47 @@ func TestChangePassphraseIsRefusedWhileHosted(t *testing.T) {
 		t.Fatalf("Unlock with the new passphrase: %v", err)
 	}
 }
+
+// Revealing a Vault-held value takes the passphrase entered, never the one
+// a hosted Node holds. One from the environment needs none.
+func TestRevealSecretNeedsThePassphraseEnteredEvenWhenHosted(t *testing.T) {
+	ctx := context.Background()
+	p := nodeDir(t)
+	h, err := node.Open(p, node.Options{
+		Getenv: func(k string) string {
+			if k == "FROM_ENV" {
+				return "env-value"
+			}
+			return ""
+		},
+		NewTailnet: func(serve.TsnetOptions) serve.Tailnet { return loopTailnet{} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Lock() })
+	if err := h.Unlock(passphrase, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.SetSecret(ctx, "beta", "ETH_RPC", "https://rpc.example/key", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := h.RevealSecret(ctx, "beta", "ETH_RPC", nil); !errors.Is(err, node.ErrNoPassphrase) {
+		t.Fatalf("reveal while hosted with none entered: %v; want ErrNoPassphrase", err)
+	}
+	if _, _, err := h.RevealSecret(ctx, "beta", "ETH_RPC", given("wrong")); !errors.Is(err, vault.ErrBadPassphrase) {
+		t.Fatalf("reveal with the wrong passphrase: %v", err)
+	}
+	value, source, err := h.RevealSecret(ctx, "beta", "ETH_RPC", given(passphrase))
+	if err != nil || value != "https://rpc.example/key" || source != "vault" {
+		t.Fatalf("reveal = %q, %q, %v", value, source, err)
+	}
+	value, source, err = h.RevealSecret(ctx, "beta", "FROM_ENV", nil)
+	if err != nil || value != "env-value" || source != "env" {
+		t.Fatalf("reveal from the environment = %q, %q, %v", value, source, err)
+	}
+	if value, source, err := h.RevealSecret(ctx, "beta", "NEVER_SET", given(passphrase)); err != nil || value != "" || source != "none" {
+		t.Fatalf("reveal of one never set = %q, %q, %v", value, source, err)
+	}
+}
