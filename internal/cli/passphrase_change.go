@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"defios.com/internal/node"
 	"defios.com/internal/nodedir"
-	"defios.com/internal/serve"
 	"defios.com/internal/vault"
 )
 
@@ -33,7 +34,9 @@ The old passphrase comes from --passphrase-file, DEFIOS_PASSPHRASE or a prompt; 
 one from --new-passphrase-file or a prompt asked twice, never from the environment.
 Stop serve first: it holds the old passphrase. Existing Backups are not re-sealed.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error { return runPassphraseChange(g, pass, newFile) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runPassphraseChange(cmd.Context(), g, pass, newFile)
+		},
 	}
 	pass.bind(changeCmd)
 	changeCmd.Flags().StringVar(&newFile, "new-passphrase-file", "", "read the new Vault passphrase from this file")
@@ -41,15 +44,14 @@ Stop serve first: it holds the old passphrase. Existing Backups are not re-seale
 	return root
 }
 
-func runPassphraseChange(g *globals, pass passphraseSource, newFile string) error {
+func runPassphraseChange(ctx context.Context, g *globals, pass passphraseSource, newFile string) error {
 	p := g.paths()
-	if exists, err := nodeExists(p); err != nil {
-		return exitOperational(err)
-	} else if !exists {
-		return errNoNode(p)
+	h, err := openNode(g)
+	if err != nil {
+		return err
 	}
-	if serve.IsUp(p.Socket) {
-		return exitOperationalf("serve is running and holds the old passphrase; stop it, then change the passphrase")
+	if err := h.CheckPassphraseChange(); err != nil {
+		return passphraseChangeError(g, err)
 	}
 	old, err := pass.read(g, false)
 	if err != nil {
@@ -59,22 +61,9 @@ func runPassphraseChange(g *globals, pass passphraseSource, newFile string) erro
 	if err != nil {
 		return err
 	}
-	if next == old {
-		return exitUsagef("the new passphrase is the old one")
-	}
-
-	change, err := vault.ChangePassphrase(p.VaultDir(), old, next)
-	switch {
-	case errors.Is(err, vault.ErrBadPassphrase):
-		return exitVerify(err)
-	case errors.Is(err, vault.ErrBusy):
-		// serve started, or another verb took the Vault, after the check
-		// above: the lock is what keeps either from running mid-change.
-		return exitOperationalf("serve or another command is using the Vault; stop it, then change the passphrase")
-	case errors.Is(err, os.ErrNotExist):
-		return errNoNode(p)
-	case err != nil:
-		return exitOperational(err)
+	change, err := h.ChangePassphrase(ctx, old, next)
+	if err != nil {
+		return passphraseChangeError(g, err)
 	}
 
 	// The note on Backups goes to stderr under --json, so it is never lost
@@ -101,6 +90,21 @@ func runPassphraseChange(g *globals, pass passphraseSource, newFile string) erro
 	}
 	fmt.Fprintln(w, "Existing Backups are not re-sealed: they still open with the old passphrase. Take a new one (`defios backup <path>`).")
 	return nil
+}
+
+// passphraseChangeError maps a refused passphrase change onto an exit code.
+func passphraseChangeError(g *globals, err error) error {
+	switch {
+	case errors.Is(err, node.ErrHosted), errors.Is(err, node.ErrServedElsewhere):
+		return exitOperationalf("serve is running and holds the old passphrase; stop it, then change the passphrase")
+	case errors.Is(err, vault.ErrBusy):
+		// serve started, or another verb took the Vault, after the check:
+		// the lock is what keeps either from running mid-change.
+		return exitOperationalf("serve or another command is using the Vault; stop it, then change the passphrase")
+	case errors.Is(err, vault.ErrEmptyPassphrase):
+		return exitUsagef("%v", err)
+	}
+	return vaultError(g, err)
 }
 
 // readNewPassphrase is the new Vault passphrase: --new-passphrase-file or a

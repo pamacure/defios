@@ -13,9 +13,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
-	"defios.com/internal/secret"
 	"defios.com/internal/serve"
-	"defios.com/internal/vault"
 )
 
 // ErrGroupExists: the Node already has a Group by that alias.
@@ -123,37 +121,6 @@ func (h *Host) NewGroup(spec GroupSpec) (GroupConfig, error) {
 		return GroupConfig{}, err
 	}
 	return GroupConfig{Alias: spec.Alias, DisplayName: name, Hostname: hostname, HeadscaleURL: spec.HeadscaleURL}, nil
-}
-
-// SetSecret seals value into group's Secrets under name, replacing any
-// value it had. A served Group reads it at its next use.
-func (h *Host) SetSecret(groupAlias, name, value, passphrase string) error {
-	if err := secret.ValidateName(name); err != nil {
-		return &InvalidError{Err: err}
-	}
-	if value == "" {
-		return invalidf("a Secret must not be empty")
-	}
-	if err := h.knownGroup(groupAlias); err != nil {
-		return err
-	}
-	unlock, err := useVault(h.p)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	if _, err := vault.Open(h.p.VaultSharedFile(), passphrase); err != nil {
-		return err
-	}
-	path := h.p.VaultSecretsFile(groupAlias)
-	secrets, err := vault.OpenSecrets(path, passphrase)
-	if errors.Is(err, os.ErrNotExist) {
-		secrets = map[string]string{}
-	} else if err != nil {
-		return err
-	}
-	secrets[name] = value
-	return vault.SealSecrets(path, secrets, passphrase)
 }
 
 // knownGroup refuses an alias the Node has no Group by.

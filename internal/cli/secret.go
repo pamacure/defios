@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"defios.com/internal/node"
 	"defios.com/internal/secret"
-	"defios.com/internal/vault"
 )
 
 // secretCommand is `secret`: a Group's Secrets, held in this Node's Vault by
@@ -32,7 +33,7 @@ An environment variable of the same name, when set, takes precedence.`,
 		Use:   "set <NAME>",
 		Short: "Store a Secret, read from stdin (or a prompt on a terminal)",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, args []string) error { return runSecretSet(g, setPass, args[0]) },
+		RunE:  func(cmd *cobra.Command, args []string) error { return runSecretSet(cmd.Context(), g, setPass, args[0]) },
 	}
 	setPass.bind(setCmd)
 	bindGroupFlag(g, setCmd)
@@ -43,7 +44,9 @@ An environment variable of the same name, when set, takes precedence.`,
 		Use:   "show <NAME>",
 		Short: "Say where a Secret comes from: env, vault or none",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, args []string) error { return runSecretShow(g, showPass, args[0], reveal) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSecretShow(cmd.Context(), g, showPass, args[0], reveal)
+		},
 	}
 	showPass.bind(showCmd)
 	showCmd.Flags().BoolVar(&reveal, "reveal", false, "also print the value itself")
@@ -54,7 +57,9 @@ An environment variable of the same name, when set, takes precedence.`,
 		Use:   "remove <NAME>",
 		Short: "Delete a Secret from the Vault",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, args []string) error { return runSecretRemove(g, removePass, args[0]) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSecretRemove(cmd.Context(), g, removePass, args[0])
+		},
 	}
 	removePass.bind(removeCmd)
 	bindGroupFlag(g, removeCmd)
@@ -63,51 +68,15 @@ An environment variable of the same name, when set, takes precedence.`,
 	return root
 }
 
-// openSecrets unlocks the targeted Group's Secrets file. The passphrase is
-// first checked against the Node's shared secrets, so a typo cannot seal a
-// Secrets file the Node's own passphrase will not open. The caller holds
-// useVault's lock across this and any reseal.
-func openSecrets(g *globals, pass passphraseSource) (path, phrase string, secrets map[string]string, err error) {
-	p := g.paths()
-	alias, err := g.resolveAlias()
-	if err != nil {
-		return "", "", nil, err
-	}
-	if phrase, err = pass.read(g, false); err != nil {
-		return "", "", nil, err
-	}
-	if _, err := vault.Open(p.VaultSharedFile(), phrase); errors.Is(err, os.ErrNotExist) {
-		return "", "", nil, errNoNode(p)
-	} else if errors.Is(err, vault.ErrBadPassphrase) {
-		return "", "", nil, exitVerify(err)
-	} else if err != nil {
-		return "", "", nil, exitOperational(err)
-	}
-	path = p.VaultSecretsFile(alias)
-	secrets, err = vault.OpenSecrets(path, phrase)
-	switch {
-	case errors.Is(err, os.ErrNotExist): // no Secret set for this Group yet
-	case errors.Is(err, vault.ErrBadPassphrase):
-		return "", "", nil, exitVerify(err)
-	case err != nil:
-		return "", "", nil, exitOperational(err)
-	}
-	if secrets == nil {
-		secrets = map[string]string{}
-	}
-	return path, phrase, secrets, nil
-}
-
-func runSecretSet(g *globals, pass passphraseSource, name string) error {
+func runSecretSet(ctx context.Context, g *globals, pass passphraseSource, name string) error {
 	if err := secret.ValidateName(name); err != nil {
 		return exitUsagef("%v", err)
 	}
-	unlock, err := useVault(g.paths())
+	h, alias, err := openGroup(g)
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	path, phrase, secrets, err := openSecrets(g, pass)
+	phrase, err := pass.read(g, false)
 	if err != nil {
 		return err
 	}
@@ -115,15 +84,28 @@ func runSecretSet(g *globals, pass passphraseSource, name string) error {
 	if err != nil {
 		return err
 	}
-	secrets[name] = value
-	if err := vault.SealSecrets(path, secrets, phrase); err != nil {
-		return exitOperational(err)
+	if err := h.SetSecret(ctx, alias, name, value, given(phrase)); err != nil {
+		return vaultError(g, err)
 	}
 	if g.json {
 		return g.emitJSON(map[string]string{"name": name, "source": secret.SourceVault})
 	}
 	fmt.Fprintf(g.app.Stdout, "%s sealed into the Vault\n", name)
 	return nil
+}
+
+// vaultError maps a failure of the library's Vault operations onto an
+// exit code.
+func vaultError(g *globals, err error) error {
+	var exit *ExitError
+	var invalid *node.InvalidError
+	switch {
+	case errors.As(err, &exit):
+		return err
+	case errors.As(err, &invalid):
+		return exitUsagef("%v", err)
+	}
+	return nodeError(g.paths(), err)
 }
 
 // readSecret reads the value from stdin: a no-echo prompt on a terminal,
@@ -162,26 +144,17 @@ type secretView struct {
 
 // runSecretShow resolves name as a config reference would. The Vault is
 // opened only when the environment lacks it.
-func runSecretShow(g *globals, pass passphraseSource, name string, reveal bool) error {
+func runSecretShow(ctx context.Context, g *globals, pass passphraseSource, name string, reveal bool) error {
 	if err := secret.ValidateName(name); err != nil {
 		return exitUsagef("%v", err)
 	}
-	alias, err := g.resolveAlias()
+	h, alias, err := openGroup(g)
 	if err != nil {
 		return err
 	}
-	r := secret.Resolver{Group: alias, Getenv: g.app.Getenv, Vault: func() (map[string]string, error) {
-		unlock, err := useVault(g.paths())
-		if err != nil {
-			return nil, err
-		}
-		defer unlock()
-		_, _, secrets, err := openSecrets(g, pass)
-		return secrets, err
-	}}
-	value, source, err := r.Lookup(name)
+	value, source, err := h.RevealSecret(ctx, alias, name, pass.asked(g))
 	if err != nil {
-		return err
+		return vaultError(g, err)
 	}
 	v := secretView{Name: name, Source: source}
 	if reveal {
@@ -200,24 +173,20 @@ func runSecretShow(g *globals, pass passphraseSource, name string, reveal bool) 
 
 // runSecretRemove deletes name from the Vault. One that is not there is
 // success, as a share's Delete is.
-func runSecretRemove(g *globals, pass passphraseSource, name string) error {
+func runSecretRemove(ctx context.Context, g *globals, pass passphraseSource, name string) error {
 	if err := secret.ValidateName(name); err != nil {
 		return exitUsagef("%v", err)
 	}
-	unlock, err := useVault(g.paths())
+	h, alias, err := openGroup(g)
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	path, phrase, secrets, err := openSecrets(g, pass)
+	phrase, err := pass.read(g, false)
 	if err != nil {
 		return err
 	}
-	if _, ok := secrets[name]; ok {
-		delete(secrets, name)
-		if err := vault.SealSecrets(path, secrets, phrase); err != nil {
-			return exitOperational(err)
-		}
+	if err := h.RemoveSecret(ctx, alias, name, given(phrase)); err != nil {
+		return vaultError(g, err)
 	}
 	if g.json {
 		return g.emitJSON(map[string]string{"name": name, "source": secret.SourceNone})

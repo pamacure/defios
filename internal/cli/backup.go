@@ -1,14 +1,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
-
-	"defios.com/internal/backup"
-	"defios.com/internal/vault"
 )
 
 // backupCommand is `backup <path>`: this Node sealed into one file under its
@@ -26,38 +24,27 @@ alone (tailnet state, the Outbox, Recaps, Transcripts). It works while serve run
 A Backup holds the shares of the Keys that exist when it is taken: take a fresh one
 after every new Key.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return runBackup(g, pass, args[0]) },
+		RunE: func(cmd *cobra.Command, args []string) error { return runBackup(cmd.Context(), g, pass, args[0]) },
 	}
 	pass.bind(cmd)
 	return cmd
 }
 
-func runBackup(g *globals, pass passphraseSource, dst string) error {
-	p := g.paths()
-	if exists, err := nodeExists(p); err != nil {
-		return exitOperational(err)
-	} else if !exists {
-		return errNoNode(p)
-	}
-	unlock, err := useVault(p)
+func runBackup(ctx context.Context, g *globals, pass passphraseSource, dst string) error {
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	defer unlock()
 	phrase, err := pass.read(g, false)
 	if err != nil {
 		return err
 	}
-	m, err := backup.Write(p, phrase, dst)
+	m, err := h.Backup(ctx, dst, given(phrase))
 	switch {
-	case errors.Is(err, vault.ErrBadPassphrase):
-		return exitVerify(err)
-	case errors.Is(err, backup.ErrNoNode):
-		return errNoNode(p)
 	case errors.Is(err, os.ErrExist):
 		return exitOperationalf("%s already exists; a Backup never overwrites a file", dst)
 	case err != nil:
-		return exitOperational(err)
+		return vaultError(g, err)
 	}
 	if g.json {
 		return g.emitJSON(m)

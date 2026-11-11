@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"defios.com/internal/node"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -106,4 +107,19 @@ func askPassphrase(g *globals, tty *os.File, label string) (string, error) {
 		return "", exitOperationalf("reading passphrase: %w", err)
 	}
 	return strings.TrimRight(string(raw), "\r\n"), nil
+}
+
+// given is a node.Passphrase that gives phrase.
+func given(phrase string) node.Passphrase {
+	return func() (string, bool, error) { return phrase, true, nil }
+}
+
+// asked is a node.Passphrase read from --passphrase-file,
+// DEFIOS_PASSPHRASE or a prompt, only if the library needs it. Unlike
+// from, it prompts.
+func (s passphraseSource) asked(g *globals) node.Passphrase {
+	return func() (string, bool, error) {
+		phrase, err := s.read(g, false)
+		return phrase, err == nil, err
+	}
 }

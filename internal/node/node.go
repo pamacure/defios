@@ -6,7 +6,8 @@
 // talk and Keys: Conversations and their messages, chains of agents,
 // the Outbox, keygen Sessions and minted Keys; Sign Requests, with the
 // Hooks of this Node's that fired on them; and agents: the Node's Agent
-// Profiles, where each is included, and each Group's Providers.
+// Profiles, where each is included, and each Group's Providers; and the
+// Vault: each Group's Secrets, Backups and the passphrase change.
 package node
 
 import (
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"defios.com/internal/backup"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/engine/tssl"
@@ -63,7 +65,6 @@ type Node interface {
 
 	// Groups, each named by the alias it has on this Node.
 	NewGroup(spec GroupSpec) (GroupConfig, error)
-	SetSecret(group, name, value, passphrase string) error
 	Groups(ctx context.Context) ([]GroupSummary, error)
 	GroupByID(groupID string) (string, error)
 	InspectGroup(ctx context.Context, group string) (GroupDetail, error)
@@ -135,6 +136,20 @@ type Node interface {
 	AddProvider(ctx context.Context, group, conv, alias string, e ProviderEdit) (Provider, error)
 	EditProvider(ctx context.Context, group, conv, alias string, e ProviderEdit) (Provider, error)
 	RemoveProvider(ctx context.Context, group, conv, alias string) error
+
+	// A Group's Secrets, by name; their values are set, never read back.
+	// The Vault opens with the passphrase this host holds while it is
+	// unlocked, else with the one passphrase gives. None needs serve.
+	Secrets(ctx context.Context, group string, passphrase Passphrase) ([]Secret, error)
+	Secret(ctx context.Context, group, name string, passphrase Passphrase) (Secret, error)
+	SetSecret(ctx context.Context, group, name, value string, passphrase Passphrase) error
+	RemoveSecret(ctx context.Context, group, name string, passphrase Passphrase) error
+
+	// The whole Node's Vault: a Backup, and a passphrase change, which is
+	// refused while the Node is hosted.
+	Backup(ctx context.Context, dst string, passphrase Passphrase) (backup.Manifest, error)
+	CheckPassphraseChange() error
+	ChangePassphrase(ctx context.Context, old, next string) (vault.Change, error)
 }
 
 // Errors a front end tells apart. Vault failures come through as the

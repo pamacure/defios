@@ -70,13 +70,13 @@ func TestTheTailnetAuthKeySecretReachesTheTailnet(t *testing.T) {
 	if _, err := h.NewGroup(node.GroupSpec{Alias: "alpha", HeadscaleURL: "https://hs.example"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.SetSecret("alpha", node.TailnetAuthKeySecret, "tskey-auth-1", "wrong passphrase"); !errors.Is(err, vault.ErrBadPassphrase) {
+	if err := h.SetSecret(context.Background(), "alpha", node.TailnetAuthKeySecret, "tskey-auth-1", given("wrong passphrase")); !errors.Is(err, vault.ErrBadPassphrase) {
 		t.Fatalf("SetSecret with the wrong passphrase: %v", err)
 	}
-	if err := h.SetSecret("gamma", node.TailnetAuthKeySecret, "tskey-auth-1", passphrase); !errors.Is(err, node.ErrUnknownGroup) {
+	if err := h.SetSecret(context.Background(), "gamma", node.TailnetAuthKeySecret, "tskey-auth-1", given(passphrase)); !errors.Is(err, node.ErrUnknownGroup) {
 		t.Fatalf("SetSecret on an unknown Group: %v", err)
 	}
-	if err := h.SetSecret("alpha", node.TailnetAuthKeySecret, "tskey-auth-1", passphrase); err != nil {
+	if err := h.SetSecret(context.Background(), "alpha", node.TailnetAuthKeySecret, "tskey-auth-1", given(passphrase)); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Unlock(passphrase, "alpha"); err != nil {
