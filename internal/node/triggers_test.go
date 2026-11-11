@@ -143,8 +143,8 @@ func TestTriggerWritesKeepTheRestOfConfigTOML(t *testing.T) {
 }
 
 // A write the config loader would refuse writes nothing: a Trigger naming
-// no Job, a Job a Trigger still names, an agent Job naming no Agent
-// Profile, a name already defined or not defined.
+// no Job, a Job a Trigger still names, an agent Job in Group-level talk by
+// an agent not included there, a name already defined or not defined.
 func TestTriggerWritesAreValidated(t *testing.T) {
 	p, h := triggerNode(t)
 	ctx := context.Background()
@@ -162,7 +162,8 @@ func TestTriggerWritesAreValidated(t *testing.T) {
 	invalid("deleting a Job a Hook names", h.DeleteJob(ctx, "alpha", "ping"))
 	invalid("a Job of two kinds", h.AddJob(ctx, "alpha", "x", config.Job{Exec: []string{"true"}, Webhook: "https://x.example"}))
 	invalid("a bad name", h.AddJob(ctx, "alpha", "Bad Name", config.Job{Exec: []string{"true"}}))
-	invalid("an agent Job naming no Agent Profile", h.AddJob(ctx, "alpha", "x", config.Job{Agent: "ghost", Target: "group"}))
+	invalid("an agent Job with a malformed Handle", h.AddJob(ctx, "alpha", "x", config.Job{Agent: "Not A Handle"}))
+	invalid("an agent Job in Group-level talk not in [agent] profiles", h.AddJob(ctx, "alpha", "x", config.Job{Agent: "auditor", Target: "group"}))
 
 	if err := h.AddJob(ctx, "alpha", "ping", config.Job{Exec: []string{"true"}}); !errors.Is(err, node.ErrAlreadyDefined) {
 		t.Errorf("adding ping again: %v; want ErrAlreadyDefined", err)
@@ -177,10 +178,8 @@ func TestTriggerWritesAreValidated(t *testing.T) {
 		t.Fatalf("a refused write changed config.toml:\n%s", got)
 	}
 
-	// An agent Job naming an Agent Profile of this Node's is written.
-	if _, err := h.AddAgentProfile(ctx, "auditor", node.ProfileEdit{Provider: ptr("claude")}); err != nil {
-		t.Fatal(err)
-	}
+	// An agent Job answering in the event's Conversation is written: its
+	// Handle is checked where it runs, as the loader does.
 	if err := h.AddJob(ctx, "alpha", "audit", config.Job{Agent: "auditor", Prompt: "audit it"}); err != nil {
 		t.Fatalf("an agent Job: %v", err)
 	}

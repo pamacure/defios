@@ -107,20 +107,17 @@ func (h *Host) groupConfig(group string) (config.Config, error) {
 	return c, err
 }
 
-// AddJob defines Job name in group's config.toml. An agent Job must name
-// an Agent Profile of this Node's.
+// AddJob defines Job name in group's config.toml. An agent Job's Handle
+// is checked as the config loader checks it: one answering in Group-level
+// talk must be in the Group's [agent] profiles. That it names an Agent
+// Profile of this Node's is a front end's to offer, as the loader checks
+// it only where the Job runs.
 func (h *Host) AddJob(ctx context.Context, group, name string, j config.Job) error {
-	if err := h.knownHandle(j); err != nil {
-		return err
-	}
 	return h.setEntry(group, config.TableJobs, name, j, false)
 }
 
 // EditJob replaces Job name's definition with j.
 func (h *Host) EditJob(ctx context.Context, group, name string, j config.Job) error {
-	if err := h.knownHandle(j); err != nil {
-		return err
-	}
 	return h.setEntry(group, config.TableJobs, name, j, true)
 }
 
@@ -157,23 +154,6 @@ func (h *Host) EditSchedule(ctx context.Context, group, name string, s config.Sc
 // DeleteSchedule removes Schedule name.
 func (h *Host) DeleteSchedule(ctx context.Context, group, name string) error {
 	return h.setEntry(group, config.TableSchedules, name, nil, true)
-}
-
-// knownHandle refuses an agent Job whose Handle names no Agent Profile
-// of this Node's.
-func (h *Host) knownHandle(j config.Job) error {
-	if j.Kind() != config.JobAgent {
-		return nil
-	}
-	if err := config.ValidateHandle(j.Agent); err != nil {
-		return &InvalidError{Err: fmt.Errorf("agent: %w", err)}
-	}
-	if _, err := os.Stat(h.p.AgentProfileFile(j.Agent)); errors.Is(err, os.ErrNotExist) {
-		return invalidf("agent: no Agent Profile @%s on this Node", j.Agent)
-	} else if err != nil {
-		return err
-	}
-	return nil
 }
 
 // setEntry sets [<table>.<name>] of group's config.toml to v, nil to
