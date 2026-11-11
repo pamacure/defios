@@ -2,23 +2,39 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
-	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"defios.com/internal/config"
+	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/trigger"
 )
 
 // Triggers and Jobs are defined in the Group's config.toml only (ADR
-// 0032), so these verbs list and run them, and add or remove none.
+// 0032). These verbs list and run them; the library writes them, but no
+// verb here does yet.
+
+// triggerTarget is the Node and Group alias a trigger verb acts on.
+func triggerTarget(g *globals) (*node.Host, string, error) {
+	h, err := openNode(g)
+	if err != nil {
+		return nil, "", err
+	}
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return nil, "", err
+	}
+	return h, alias, nil
+}
 
 func hookCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
@@ -29,7 +45,7 @@ func hookCommand(g *globals) *cobra.Command {
 		Use:   "list",
 		Short: "List this Node's Hooks: what each fires on and the Jobs it runs",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runHookList(g) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runHookList(cmd.Context(), g) },
 	}
 	bindGroupFlag(g, list)
 	root.AddCommand(list)
@@ -45,7 +61,7 @@ func scheduleCommand(g *globals) *cobra.Command {
 		Use:   "list",
 		Short: "List this Node's Schedules: when each fires, its next firing, and the Jobs it runs",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runScheduleList(g) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runScheduleList(cmd.Context(), g) },
 	}
 	bindGroupFlag(g, list)
 	root.AddCommand(list)
@@ -65,8 +81,86 @@ func jobCommand(g *globals) *cobra.Command {
 		RunE:  func(cmd *cobra.Command, args []string) error { return runJobRun(cmd, g, args[0], eventFile) },
 	}
 	run.Flags().StringVar(&eventFile, "event", "", "a JSON file holding the event, as a Job is given it on stdin")
-	root.AddCommand(run)
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List this Node's Jobs: each one's kind and what it runs",
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runJobList(cmd.Context(), g) },
+	}
+	bindGroupFlag(g, list)
+	root.AddCommand(list, run)
 	return root
+}
+
+// jobView is one Job, as config.toml defines it. A webhook's URL is shown
+// only when it is a Secret reference: a literal one may carry a token.
+type jobView struct {
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Agent   string   `json:"agent,omitempty"`
+	Prompt  string   `json:"prompt,omitempty"`
+	Target  string   `json:"target,omitempty"`
+	Exec    []string `json:"exec,omitempty"`
+	Secrets []string `json:"secrets,omitempty"`
+	Webhook string   `json:"webhook,omitempty"`
+	Timeout string   `json:"timeout,omitempty"`
+}
+
+func runJobList(ctx context.Context, g *globals) error {
+	h, alias, err := triggerTarget(g)
+	if err != nil {
+		return err
+	}
+	jobs, err := h.Jobs(ctx, alias)
+	if err != nil {
+		return exitOperational(err)
+	}
+	views := make([]jobView, 0, len(jobs))
+	for _, j := range jobs {
+		v := jobView{Name: j.Name, Kind: j.Kind(), Agent: j.Agent, Prompt: j.Prompt, Target: j.Target, Exec: j.Exec, Secrets: j.Secrets}
+		if strings.HasPrefix(j.Webhook, "$") {
+			v.Webhook = j.Webhook
+		}
+		if j.Timeout != 0 {
+			v.Timeout = j.Timeout.String()
+		}
+		views = append(views, v)
+	}
+	if g.json {
+		return g.emitJSON(views)
+	}
+	p := g.out()
+	for _, v := range views {
+		parts := []string{p.primary(v.Name), v.Kind}
+		switch v.Kind {
+		case config.JobAgent:
+			parts[1] += " @" + v.Agent
+			if v.Target != "" {
+				parts = append(parts, "in "+v.Target)
+			}
+		case config.JobExec:
+			args := make([]string, len(v.Exec))
+			for i, a := range v.Exec {
+				args[i] = a
+				if a == "" || strings.ContainsAny(a, " \t\n\"'") {
+					args[i] = strconv.Quote(a)
+				}
+			}
+			parts[1] += " " + strings.Join(args, " ")
+			if len(v.Secrets) > 0 {
+				parts = append(parts, "secrets "+strings.Join(v.Secrets, ", "))
+			}
+		case config.JobWebhook:
+			if v.Webhook != "" {
+				parts[1] += " " + v.Webhook
+			}
+		}
+		if v.Timeout != "" {
+			parts = append(parts, "timeout "+v.Timeout)
+		}
+		fmt.Fprintln(g.app.Stdout, strings.Join(parts, "  "))
+	}
+	return nil
 }
 
 // hookView is one Hook, as config.toml defines it.
@@ -80,17 +174,19 @@ type hookView struct {
 	Jobs         []string `json:"jobs"`
 }
 
-func runHookList(g *globals) error {
-	e, err := load(g, "")
+func runHookList(ctx context.Context, g *globals) error {
+	h, alias, err := triggerTarget(g)
 	if err != nil {
 		return err
 	}
-	hooks := e.Group.Hooks
+	hooks, err := h.Hooks(ctx, alias)
+	if err != nil {
+		return exitOperational(err)
+	}
 	views := make([]hookView, 0, len(hooks))
-	for _, name := range slices.Sorted(maps.Keys(hooks)) {
-		h := hooks[name]
+	for _, h := range hooks {
 		views = append(views, hookView{
-			Name: name, Events: h.Events, From: h.From, Handles: h.Handles,
+			Name: h.Name, Events: h.Events, From: h.From, Handles: h.Handles,
 			Conversation: h.Conversation, Text: h.Text, Jobs: h.Jobs,
 		})
 	}
@@ -131,19 +227,20 @@ type scheduleView struct {
 	Jobs []string `json:"jobs"`
 }
 
-func runScheduleList(g *globals) error {
-	e, err := load(g, "")
+func runScheduleList(ctx context.Context, g *globals) error {
+	h, alias, err := triggerTarget(g)
 	if err != nil {
 		return err
 	}
-	schedules := e.Group.Schedules
-	now := time.Now()
+	schedules, err := h.Schedules(ctx, alias)
+	if err != nil {
+		return exitOperational(err)
+	}
 	views := make([]scheduleView, 0, len(schedules))
-	for _, name := range slices.Sorted(maps.Keys(schedules)) {
-		s := schedules[name]
-		v := scheduleView{Name: name, Cron: s.Cron, TZ: s.TZ, At: s.At, Jobs: s.Jobs}
-		if next := s.Next(now); !next.IsZero() {
-			v.Next = next.Format(time.RFC3339)
+	for _, s := range schedules {
+		v := scheduleView{Name: s.Name, Cron: s.Cron, TZ: s.TZ, At: s.At, Jobs: s.Jobs}
+		if !s.Next.IsZero() {
+			v.Next = s.Next.Format(time.RFC3339)
 		}
 		views = append(views, v)
 	}
@@ -184,8 +281,12 @@ func runJobRun(cmd *cobra.Command, g *globals, name, eventFile string) error {
 			return exitUsagef("--event %s: not an event: %w", eventFile, err)
 		}
 	}
-	v, err := serve.Client{Socket: g.paths().Socket}.JobRun(cmd.Context(), name, ev)
-	if errors.Is(err, serve.ErrNoJob) {
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	v, err := h.RunJob(cmd.Context(), node.ServedGroup, name, ev)
+	if errors.Is(err, node.ErrNoJob) {
 		return exitUsagef("%w", err)
 	}
 	if err != nil {

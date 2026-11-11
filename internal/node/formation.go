@@ -12,6 +12,7 @@ import (
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
+	"defios.com/internal/trigger"
 )
 
 // Formation failures a front end tells apart, besides ErrNotServed and
@@ -93,6 +94,8 @@ type servedAPI interface {
 	SignDecline(ctx context.Context, msgID string) (serve.DeclineView, error)
 	SignBroadcast(ctx context.Context, msgID string) (serve.BroadcastView, error)
 	HookRuns(ctx context.Context) ([]serve.HookRun, error)
+
+	JobRun(ctx context.Context, name string, ev *trigger.Event) (serve.JobView, error)
 }
 
 var (

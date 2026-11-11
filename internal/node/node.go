@@ -7,7 +7,8 @@
 // the Outbox, keygen Sessions and minted Keys; Sign Requests, with the
 // Hooks of this Node's that fired on them; and agents: the Node's Agent
 // Profiles, where each is included, and each Group's Providers; and the
-// Vault: each Group's Secrets, Backups and the passphrase change.
+// Vault: each Group's Secrets, Backups and the passphrase change; and
+// Trigger config: each Group's Jobs, Hooks and Schedules.
 package node
 
 import (
@@ -32,6 +33,7 @@ import (
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 	"defios.com/internal/talk"
+	"defios.com/internal/trigger"
 	"defios.com/internal/vault"
 )
 
@@ -152,6 +154,27 @@ type Node interface {
 	Backup(ctx context.Context, dst string, passphrase Passphrase) (backup.Manifest, error)
 	CheckPassphraseChange() error
 	ChangePassphrase(ctx context.Context, old, next string) (vault.Change, error)
+
+	// Trigger config: a Group's Jobs, Hooks and Schedules (ADR 0032), by
+	// name, in any Group, served or not. Writes are validated as the config
+	// loader does and change only that table of config.toml, comments
+	// elsewhere included; config.toml is also read and written whole as
+	// text. RunJob runs a Job of the served Group now.
+	Jobs(ctx context.Context, group string) ([]Job, error)
+	AddJob(ctx context.Context, group, name string, j config.Job) error
+	EditJob(ctx context.Context, group, name string, j config.Job) error
+	DeleteJob(ctx context.Context, group, name string) error
+	Hooks(ctx context.Context, group string) ([]Hook, error)
+	AddHook(ctx context.Context, group, name string, hk config.Hook) error
+	EditHook(ctx context.Context, group, name string, hk config.Hook) error
+	DeleteHook(ctx context.Context, group, name string) error
+	Schedules(ctx context.Context, group string) ([]Schedule, error)
+	AddSchedule(ctx context.Context, group, name string, s config.Schedule) error
+	EditSchedule(ctx context.Context, group, name string, s config.Schedule) error
+	DeleteSchedule(ctx context.Context, group, name string) error
+	GroupConfigTOML(ctx context.Context, group string) (string, error)
+	SetGroupConfigTOML(ctx context.Context, group, text string) error
+	RunJob(ctx context.Context, group, name string, ev *trigger.Event) (JobResult, error)
 }
 
 // Errors a front end tells apart. Vault failures come through as the

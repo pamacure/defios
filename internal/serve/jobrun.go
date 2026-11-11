@@ -79,3 +79,8 @@ func (c Client) JobRun(ctx context.Context, name string, ev *trigger.Event) (Job
 	err := c.doUntimed(ctx, "/v1/job/run", jobRunRequest{Job: name, Event: ev}, &v)
 	return v, err
 }
+
+// JobRun is Client.JobRun in this process.
+func (r *Running) JobRun(ctx context.Context, name string, ev *trigger.Event) (JobView, error) {
+	return r.s.jobRun(ctx, jobRunRequest{Job: name, Event: ev})
+}

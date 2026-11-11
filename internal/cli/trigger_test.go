@@ -117,6 +117,38 @@ func TestHookAndScheduleListReadConfig(t *testing.T) {
 	}
 }
 
+// job list reads the Group's config.toml, with no serve running: each Job
+// by name with its kind and what it runs, a webhook's URL never shown, for
+// it may carry a token.
+func TestJobListReadsConfig(t *testing.T) {
+	dir := triggerNode(t, triggersBody+`
+[jobs.slow]
+exec = ["sleep", "10"]
+timeout = "30s"
+`)
+	r := run(t, nil, "", "--dir", dir, "job", "list")
+	want := "notify  webhook\n" +
+		"ping  exec true\n" +
+		"sign_accept  exec defios sign accept $DEFIOS_SIGN_REQUEST_ID\n" +
+		"sign_refuse  exec defios sign refuse $DEFIOS_SIGN_REQUEST_ID --reason \"refused by this Node's sign_refuse Job\"\n" +
+		"slow  exec sleep 10  timeout 30s\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("job list exit %d:\n%s%s\nwant:\n%s", r.code, r.stdout, r.stderr, want)
+	}
+	r = run(t, nil, "", "--dir", dir, "--json", "job", "list")
+	var jv []struct {
+		Name    string   `json:"name"`
+		Kind    string   `json:"kind"`
+		Exec    []string `json:"exec"`
+		Webhook string   `json:"webhook"`
+		Timeout string   `json:"timeout"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &jv); err != nil || len(jv) != 5 || jv[0].Kind != "webhook" || jv[0].Webhook != "" ||
+		jv[4].Exec[1] != "10" || jv[4].Timeout != "30s" || strings.Contains(r.stdout, "ntfy.example") {
+		t.Fatalf("job list --json = %s (%v)", r.stdout, err)
+	}
+}
+
 // fakeJobRun answers POST /v1/job/run with view, keeping the body.
 func fakeJobRun(t *testing.T, dir string, view serve.JobView) *atomic.Value {
 	t.Helper()
@@ -184,7 +216,9 @@ func TestJobRunThroughServe(t *testing.T) {
 	if r := run(t, nil, "", "--dir", unknown, "job", "run", "pong"); r.code != 1 || !strings.Contains(r.stderr, "no [jobs.pong]") {
 		t.Errorf("unknown Job: exit %d stderr %q", r.code, r.stderr)
 	}
-	if r := run(t, nil, "", "--dir", t.TempDir(), "job", "run", "ping"); r.code != 2 || !strings.Contains(r.stderr, "defios serve") {
+	idle := t.TempDir()
+	mustInit(t, idle)
+	if r := run(t, nil, "", "--dir", idle, "job", "run", "ping"); r.code != 2 || !strings.Contains(r.stderr, "defios serve") {
 		t.Errorf("no serve: exit %d stderr %q", r.code, r.stderr)
 	}
 }
