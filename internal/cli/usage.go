@@ -1,11 +1,7 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,8 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/cosl"
-	"defios.com/internal/identity"
-	"defios.com/internal/nodedir"
+	"defios.com/internal/node"
 	"defios.com/internal/serve"
 )
 
@@ -70,71 +65,26 @@ type coslUsage struct {
 	cosl.Counts
 }
 
-// dataSide is what of a Group lives in the data tree.
-func (u groupUsage) dataSide() int64 { return u.COSL.Bytes + u.Raft + u.Tsnet + u.Vault + u.Other }
-
 func runNodeUsage(cmd *cobra.Command, g *globals) error {
-	p := g.paths()
-	if _, err := identity.ReadFile(p.IdentityFile()); errors.Is(err, os.ErrNotExist) {
-		return errNoNode(p)
-	} else if err != nil {
-		return exitOperational(err)
-	}
-	// The Vault's sizes are read below; mid-change or after an interrupted
-	// one they are not the Vault's.
-	unlock, err := useVault(p)
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	aliases, err := groupAliases(p)
-	if err != nil {
-		return exitOperational(err)
-	}
+	alias := ""
 	if g.group != "" {
-		alias, err := g.resolveAlias()
-		if err != nil {
+		if alias, err = g.resolveAlias(); err != nil {
 			return err
 		}
-		aliases = []string{alias}
 	}
-	current, err := readCurrentGroup(p)
+	u, err := h.Usage(cmd.Context(), alias)
+	if err != nil {
+		return nodeError(g.paths(), err)
+	}
+	current, err := readCurrentGroup(g.paths())
 	if err != nil {
 		return exitOperational(err)
 	}
-
-	v := usageView{
-		Data:   dataUsage{Path: p.Data, Identity: sizeOf(p.IdentityFile()), VaultShared: sizeOf(p.VaultSharedFile())},
-		Config: configUsage{Path: p.Config, Root: sizeOf(p.CurrentGroupFile()) + sizeOf(p.DisplayNameFile())},
-	}
-	if exe, err := os.Executable(); err == nil {
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolved
-		}
-		v.Binary = usagePath{Path: exe, Bytes: sizeOf(exe)}
-	}
-	v.Data.Bytes = v.Data.Identity + v.Data.VaultShared
-	v.Config.Bytes = v.Config.Root
-	for _, alias := range aliases {
-		u, err := groupDisk(p, alias)
-		if err != nil {
-			return exitOperational(err)
-		}
-		u.Current = alias == current
-		v.Groups = append(v.Groups, u)
-		v.Data.Bytes += u.dataSide()
-		v.Config.Bytes += u.Workspace
-	}
-	v.Total = v.Binary.Bytes + v.Data.Bytes + v.Config.Bytes
-
-	switch u, err := (serve.Client{Socket: p.Socket}).Usage(cmd.Context()); {
-	case err == nil:
-		v.Serve = &u
-	case errors.Is(err, serve.ErrNotRunning):
-	default:
-		return serveError(err)
-	}
-
+	v := usageViewOf(u, current)
 	if g.json {
 		return g.emitJSON(v)
 	}
@@ -142,66 +92,24 @@ func runNodeUsage(cmd *cobra.Command, g *globals) error {
 	return nil
 }
 
-// groupDisk measures one Group across both trees. When config and data are
-// one tree (--dir), group/<alias>/ holds the Workspace too: config.toml,
-// agent markdown and one directory per Conversation Workspace sit beside
-// the data, and are counted as Workspace, never as other.
-func groupDisk(p nodedir.Paths, alias string) (groupUsage, error) {
-	u := groupUsage{
-		Alias: alias,
-		Vault: sizeOf(p.VaultSharesFile(alias)) + sizeOf(p.VaultSecretsFile(alias)),
+// usageViewOf is u as node usage shows it, current marking the Current
+// Group.
+func usageViewOf(u node.Usage, current string) usageView {
+	v := usageView{
+		Binary: usagePath{Path: u.Binary.Path, Bytes: u.Binary.Bytes},
+		Data:   dataUsage{Path: u.Data.Path, Identity: u.Data.Identity, VaultShared: u.Data.VaultShared, Bytes: u.Data.Bytes},
+		Config: configUsage{Path: u.Config.Path, Root: u.Config.Root, Bytes: u.Config.Bytes},
+		Total:  u.Total,
+		Serve:  u.Serve,
 	}
-	shared := filepath.Clean(p.Config) == filepath.Clean(p.Data)
-	if !shared {
-		u.Workspace = sizeOf(p.GroupConfigDir(alias))
+	for _, gu := range u.Groups {
+		v.Groups = append(v.Groups, groupUsage{
+			Alias: gu.Alias, Current: gu.Alias == current,
+			COSL: coslUsage{Bytes: gu.COSL.Bytes, Counts: gu.COSL.Counts},
+			Raft: gu.Raft, Tsnet: gu.Tsnet, Vault: gu.Vault, Workspace: gu.Workspace, Other: gu.Other, Bytes: gu.Bytes,
+		})
 	}
-	entries, err := os.ReadDir(p.GroupDir(alias))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return groupUsage{}, err
-	}
-	for _, e := range entries {
-		name, n := e.Name(), sizeOf(filepath.Join(p.GroupDir(alias), e.Name()))
-		switch {
-		case strings.HasPrefix(name, "cosl.sqlite"):
-			u.COSL.Bytes += n
-		case name == "raft.db" || name == "raft-snap":
-			u.Raft += n
-		case name == "tsnet":
-			u.Tsnet += n
-		case shared && (name == "config.toml" || strings.HasSuffix(name, ".md") || e.IsDir()):
-			u.Workspace += n
-		default:
-			u.Other += n
-		}
-	}
-	if path := p.CoslFile(alias); sizeOf(path) > 0 {
-		store, err := cosl.Open(path)
-		if err != nil {
-			return groupUsage{}, err
-		}
-		defer store.Close()
-		if u.COSL.Counts, err = store.Counts(); err != nil {
-			return groupUsage{}, err
-		}
-	}
-	u.Bytes = u.dataSide() + u.Workspace
-	return u, nil
-}
-
-// sizeOf is the apparent size of a file, or of every regular file under a
-// directory; 0 when path does not exist.
-func sizeOf(path string) int64 {
-	var n int64
-	filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() {
-			return nil
-		}
-		if info, err := d.Info(); err == nil {
-			n += info.Size()
-		}
-		return nil
-	})
-	return n
+	return v
 }
 
 func printUsage(g *globals, v usageView) {

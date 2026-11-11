@@ -10,7 +10,6 @@ import (
 	"golang.org/x/term"
 
 	"defios.com/internal/node"
-	"defios.com/internal/nodedir"
 	"defios.com/internal/vault"
 )
 
@@ -132,31 +131,4 @@ func readNewPassphrase(g *globals, file string) (string, error) {
 		return "", exitUsagef("new passphrase must not be empty")
 	}
 	return next, nil
-}
-
-// useVault is how every command that touches the Vault starts: it takes the
-// Vault's Lock shared, so no passphrase change runs while the command does,
-// and refuses a vault.new/ or vault.old/ an interrupted change left. The
-// command holds the lock until it calls unlock.
-func useVault(p nodedir.Paths) (unlock func(), err error) {
-	unlock, err = vault.Lock(p.VaultDir(), false)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		// No data tree, so no Vault to guard: the command reports the
-		// missing Node itself.
-		return func() {}, nil
-	case err != nil:
-		if inUse := vaultInUse(err); inUse != nil {
-			return nil, inUse
-		}
-		return nil, exitOperational(err)
-	}
-	if err := vault.CheckLeftover(p.VaultDir()); err != nil {
-		unlock()
-		if inUse := vaultInUse(err); inUse != nil {
-			return nil, inUse
-		}
-		return nil, exitOperational(err)
-	}
-	return unlock, nil
 }

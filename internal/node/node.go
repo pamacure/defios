@@ -9,7 +9,8 @@
 // Profiles, where each is included, and each Group's Providers; and the
 // Vault: each Group's Secrets, Backups and the passphrase change; and
 // Trigger config: each Group's Jobs, Hooks and Schedules; and the Node's
-// Plugins and each Group's Networks.
+// Plugins and each Group's Networks; and each Group's settings, and the
+// Node's disk and process usage.
 package node
 
 import (
@@ -193,6 +194,16 @@ type Node interface {
 	AddNetwork(ctx context.Context, group, conv, alias string, e NetworkEdit) (Network, error)
 	EditNetwork(ctx context.Context, group, conv, alias string, e NetworkEdit) (Network, error)
 	RemoveNetwork(ctx context.Context, group, conv, alias string) error
+
+	// A Group's settings: this Node's presence in it and its prune
+	// policy. The Group need not be served; a served one takes a change
+	// the next time it is served.
+	GroupSettings(ctx context.Context, group string) (GroupSettings, error)
+	EditGroupSettings(ctx context.Context, group string, e SettingsEdit) (GroupSettings, error)
+
+	// Usage is the Node's disk, every Group's or one's, and the serving
+	// process's own use. It needs no Group served.
+	Usage(ctx context.Context, group string) (Usage, error)
 }
 
 // Errors a front end tells apart. Vault failures come through as the
