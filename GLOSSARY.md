@@ -25,12 +25,16 @@ The one of a Node's Groups currently in focus: the Group a running serve serves,
 _Avoid_: active group, default group, selected group
 
 **Node**:
-One device running one DeFiOS CLI instance, holding one auth keypair. It may belong to one or more Groups, presenting that same identity in each; it exists before it does.
+One device running one DeFiOS CLI instance, holding one auth keypair. It may belong to one or more Groups, presenting that same identity in each; it exists before it does. The desktop app calls it a **device** in everything it shows a person; everywhere else it is a Node. A restored Node is the same Node on another device, so what must never run again is the old copy, not the old machine.
 _Avoid_: peer, member, client
 
 **Node ID**:
 A Node's 32-byte public-facing identity, distinct from its auth public key. Determined once at init from that auth public key, then stored; it does not change if the auth keypair later does.
 _Avoid_: peer id, member id, node key, auth public key
+
+**Node Usage**:
+What a Node takes up on its machine: disk for its binary, data, config and each Group, and the memory and CPU of the process serving it, as `node usage` reports. Unrelated to Token Usage; it says nothing about agents or Providers.
+_Avoid_: usage (alone), resource usage, footprint, stats
 
 **Identity**:
 A Node's signed advertisement of Node ID, auth public key, encryption public key, display name, and tsnet hostname, published on the tailnet for discovery and Group formation.
@@ -179,6 +183,10 @@ _Avoid_: provider type, format, flavour, protocol
 **Model ID**:
 The provider's own name for one of the models a Provider serves (e.g. `claude-opus-5-5`), which an Agent Profile writes into the request it sends its Provider. Not a config, not on the COSL, and not checked against anything until the call.
 _Avoid_: Model, model alias
+
+**Token Usage**:
+The input and output tokens a Node's agents consumed calling their Providers, counted per Handle within a Group from the Transcripts of the Chains that Node ran. Unrelated to Node Usage: it measures what Providers bill for, not what the machine holds.
+_Avoid_: usage (alone), agent usage, cost, quota
 
 **Sign Request**:
 One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several chains of the Key's curve, each naming its chain's identity, but each signed transaction is broadcastable on exactly one chain. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `refused` (too many Sign Refusals for t accepts ever to exist), `aborted` or `expired`.
