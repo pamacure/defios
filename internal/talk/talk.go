@@ -192,10 +192,14 @@ func (r Reader) Read(conv []byte) (View, error) {
 }
 
 // message is row decoded, once.
-func (r Reader) message(row cosl.Row) (Message, error) {
+func (r Reader) message(row cosl.Row) (Message, error) { return Decode(row, r.Roster) }
+
+// Decode is one app.freeform row as a Message, its sender named from
+// roster, which may be nil.
+func Decode(row cosl.Row, roster *group.Roster) (Message, error) {
 	m := Message{Row: row, Pruned: row.Pruned()}
-	if r.Roster != nil {
-		if n, ok := r.Roster.Lookup(row.Sender); ok {
+	if roster != nil {
+		if n, ok := roster.Lookup(row.Sender); ok {
 			m.Sender = n.DisplayName
 		}
 	}

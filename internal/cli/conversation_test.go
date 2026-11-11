@@ -39,6 +39,7 @@ import (
 // come from the Roster. Returns the Nodes in that order.
 func groupWithTalk(t *testing.T, dir string) (alice, bob *identity.Node) {
 	t.Helper()
+	ensureNode(t, dir)
 	alice, _ = identity.Generate()
 	bob, _ = identity.Generate()
 	ia, _ := group.SignIdentity(alice, "alice", "defios-alice")

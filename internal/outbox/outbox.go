@@ -41,6 +41,10 @@ type Config struct {
 	// Now is the clock a Sign Request's deadline is read against; nil is
 	// time.Now.
 	Now func() time.Time
+	// Changed, if set, hears what is queued, oldest first, each time that
+	// changes. It is called under the Outbox's lock, so it must not call
+	// the Outbox.
+	Changed func(queued []cosl.Signed)
 }
 
 // Result is what a Write did: committed at Position, or Queued.
@@ -440,6 +444,7 @@ func (o *Outbox) push(s cosl.Signed) error {
 		return err
 	}
 	o.entries = next
+	o.changed()
 	select {
 	case o.queued <- struct{}{}:
 	default:
@@ -462,11 +467,19 @@ func (o *Outbox) remove(s cosl.Signed, seq uint64) error {
 		return err
 	}
 	o.entries = next
+	o.changed()
 	delete(o.inFlight, s.MsgID)
 	if seq != 0 {
 		o.remember(s, seq)
 	}
 	return nil
+}
+
+// changed tells Config.Changed what is queued now. o.mu is held.
+func (o *Outbox) changed() {
+	if o.cfg.Changed != nil {
+		o.cfg.Changed(slices.Clone(o.entries))
+	}
 }
 
 // Entry is one of this Node's messages its replica may not hold yet:

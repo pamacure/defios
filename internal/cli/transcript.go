@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,34 +23,29 @@ func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 	if p == "" {
 		return exitUsagef("name the chain: its msg id, or a unique prefix of it")
 	}
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
 	alias, err := g.resolveAlias()
 	if err != nil {
 		return err
 	}
-	conv, err := queriedConversation(g, keyQuery)
+	conv, err := queriedConversation(g, h, keyQuery)
 	if err != nil {
 		return err
 	}
-	paths := g.paths()
-	chains, err := transcript.List(paths, alias, conv)
-	if err != nil {
-		return exitOperational(err)
-	}
-	chain, err := serve.MatchChain(p, chains)
+	t, err := h.Transcript(context.Background(), alias, conv, p)
 	if errors.Is(err, serve.ErrNotAChain) || errors.Is(err, serve.ErrAmbiguousChain) {
 		return exitUsagef("%w", err)
 	}
 	if err != nil {
-		return err
-	}
-	t, err := transcript.Read(paths, alias, conv, chain)
-	if err != nil {
-		return exitOperational(err)
+		return talkError(err)
 	}
 	if g.json {
 		return emitJSONL(g, t.Lines)
 	}
-	printRuns(g, t.Runs())
+	printRuns(g, t.Runs)
 	return nil
 }
 

@@ -45,43 +45,26 @@ type WaitingKeyAliases struct {
 	Aliases []string `json:"aliases"`
 }
 
-type keyShareRef struct {
+// KeyShare names a Key this Node holds a share of; the share stays in the
+// Vault.
+type KeyShare struct {
 	Curve     string `json:"curve"`
-	PublicKey string `json:"public_key"`
+	PublicKey string `json:"public_key"` // hex
 }
 
 func (s *server) sessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/key/shares", func(w http.ResponseWriter, _ *http.Request) {
-		if s.opts.Vault == nil {
-			writeJSON(w, []keyShareRef{})
-			return
-		}
-		shares := s.opts.Vault.Shares()
-		out := make([]keyShareRef, len(shares))
-		for i, sh := range shares {
-			out[i] = keyShareRef{Curve: sh.Curve, PublicKey: hex.EncodeToString(sh.PublicKey)}
-		}
-		writeJSON(w, out)
+		writeJSON(w, s.keyShares())
 	})
 	mux.HandleFunc("GET /v1/key/aliases/waiting", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, WaitingKeyAliases{Group: s.opts.Alias, Aliases: s.holds.all()})
+		writeJSON(w, s.waitingKeyAliases())
 	})
 	mux.HandleFunc("POST /v1/session/start", func(w http.ResponseWriter, r *http.Request) {
 		var req sessionStartRequest
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		svc := s.sessionLayer()
-		if svc == nil {
-			writeError(w, ErrNoReplica)
-			return
-		}
-		alias, err := s.storedProposal(req.Alias)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		sum, err := svc.Start(r.Context(), req.Curve, req.T, alias)
+		sum, err := s.sessionStart(r.Context(), req.Curve, req.T, req.Alias)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -98,12 +81,7 @@ func (s *server) sessionRoutes(mux *http.ServeMux) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		svc := s.sessionLayer()
-		if svc == nil {
-			writeError(w, ErrNoReplica)
-			return
-		}
-		if err := s.accept(r.Context(), svc, id, req.Alias); err != nil {
+		if err := s.sessionAccept(r.Context(), id, req.Alias); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -119,17 +97,61 @@ func (s *server) sessionRoutes(mux *http.ServeMux) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		svc := s.sessionLayer()
-		if svc == nil {
-			writeError(w, ErrNoReplica)
-			return
-		}
-		if err := svc.Abort(r.Context(), id, req.Reason); err != nil {
+		if err := s.sessionAbort(r.Context(), id, req.Reason); err != nil {
 			writeError(w, err)
 			return
 		}
 		writeJSON(w, sessionAck{SessionID: id.String()})
 	})
+}
+
+// keyShares is the Keys this Node holds a share of, from the unlocked Vault.
+func (s *server) keyShares() []KeyShare {
+	if s.opts.Vault == nil {
+		return []KeyShare{}
+	}
+	shares := s.opts.Vault.Shares()
+	out := make([]KeyShare, len(shares))
+	for i, sh := range shares {
+		out[i] = KeyShare{Curve: sh.Curve, PublicKey: hex.EncodeToString(sh.PublicKey)}
+	}
+	return out
+}
+
+func (s *server) waitingKeyAliases() WaitingKeyAliases {
+	return WaitingKeyAliases{Group: s.opts.Alias, Aliases: s.holds.all()}
+}
+
+// sessionStart starts a keygen Session proposing alias, "" for none.
+func (s *server) sessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error) {
+	svc := s.sessionLayer()
+	if svc == nil {
+		return session.Summary{}, ErrNoReplica
+	}
+	stored, err := s.storedProposal(alias)
+	if err != nil {
+		return session.Summary{}, err
+	}
+	return svc.Start(ctx, curve, t, stored)
+}
+
+// sessionAccept is this Node's local accept of id, with its own Key alias
+// unless alias is "".
+func (s *server) sessionAccept(ctx context.Context, id session.ID, alias string) error {
+	svc := s.sessionLayer()
+	if svc == nil {
+		return ErrNoReplica
+	}
+	return s.accept(ctx, svc, id, alias)
+}
+
+// sessionAbort appends session.abort for id.
+func (s *server) sessionAbort(ctx context.Context, id session.ID, reason string) error {
+	svc := s.sessionLayer()
+	if svc == nil {
+		return ErrNoReplica
+	}
+	return svc.Abort(ctx, id, reason)
 }
 
 // accept is this Node's local accept of id, with its own Key alias for the Key
@@ -240,8 +262,43 @@ func (c Client) SessionAbort(ctx context.Context, id session.ID, reason string) 
 
 // KeyShares is the public keys this Node holds a share of. Save data stays
 // in the Vault.
-func (c Client) KeyShares(ctx context.Context) ([]keyShareRef, error) {
-	var refs []keyShareRef
+func (c Client) KeyShares(ctx context.Context) ([]KeyShare, error) {
+	var refs []KeyShare
 	err := c.do(ctx, "/v1/key/shares", nil, &refs)
 	return refs, err
+}
+
+// The Session and Key verbs in this process, as Client has them over the
+// socket. The writing ones need the tailnet up, as the socket's do.
+
+// WaitingKeyAliases is Client.WaitingKeyAliases in this process.
+func (r *Running) WaitingKeyAliases(context.Context) (WaitingKeyAliases, error) {
+	return r.s.waitingKeyAliases(), nil
+}
+
+// KeyShares is Client.KeyShares in this process.
+func (r *Running) KeyShares(context.Context) ([]KeyShare, error) { return r.s.keyShares(), nil }
+
+// SessionStart is Client.SessionStart in this process.
+func (r *Running) SessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error) {
+	if err := r.tailnet(); err != nil {
+		return session.Summary{}, err
+	}
+	return r.s.sessionStart(ctx, curve, t, alias)
+}
+
+// SessionAccept is Client.SessionAccept in this process.
+func (r *Running) SessionAccept(ctx context.Context, id session.ID, alias string) error {
+	if err := r.tailnet(); err != nil {
+		return err
+	}
+	return r.s.sessionAccept(ctx, id, alias)
+}
+
+// SessionAbort is Client.SessionAbort in this process.
+func (r *Running) SessionAbort(ctx context.Context, id session.ID, reason string) error {
+	if err := r.tailnet(); err != nil {
+		return err
+	}
+	return r.s.sessionAbort(ctx, id, reason)
 }

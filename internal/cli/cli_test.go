@@ -11,6 +11,7 @@ import (
 
 	"defios.com/internal/cli"
 	"defios.com/internal/group"
+	"defios.com/internal/nodedir"
 )
 
 type result struct {
@@ -72,6 +73,17 @@ func mustInit(t *testing.T, dir string, extra ...string) result {
 		t.Fatalf("init exit %d\nstdout: %s\nstderr: %s", r.code, r.stdout, r.stderr)
 	}
 	return r
+}
+
+// ensureNode inits a Node in dir unless it holds one: the fixtures that
+// write a Group's Record and replica directly need the Node they belong to,
+// as every real one has.
+func ensureNode(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Stat(nodedir.Resolve(nodedir.Lookup{Dir: dir}).IdentityFile()); err == nil {
+		return
+	}
+	mustInit(t, dir)
 }
 
 // mustGroupNew scaffolds a Group under the implicit alias and focuses it, as

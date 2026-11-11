@@ -93,6 +93,9 @@ const watcherBuffer = 4096
 type chainHub struct {
 	mu    sync.Mutex
 	convs map[string]*conversationChains // by hex Conversation ID, "" for Group-level; only while in use
+	// onEvent, if set, hears every event of every Conversation, watched or
+	// not, under mu: it must not block or call back into the hub.
+	onEvent func(conv []byte, ev ChainEvent)
 }
 
 // conversationChains is one Conversation's queue and watchers.
@@ -378,6 +381,9 @@ func (h *chainHub) end(c *chain) {
 }
 
 func (h *chainHub) publishLocked(conv []byte, ev ChainEvent) {
+	if h.onEvent != nil {
+		h.onEvent(conv, ev)
+	}
 	cc := h.conversation(conversationKey(conv), false)
 	if cc == nil {
 		return
@@ -921,21 +927,71 @@ func (s *server) chainRoutes(mux *http.ServeMux) {
 	})
 }
 
-// ChainStream reads chain events from the serve until closed.
+// ChainStream reads chain events until closed: from a serve over its
+// socket (Client) or in this process (Running).
 type ChainStream struct {
-	resp *http.Response
-	dec  *json.Decoder
+	next  func() (ChainEvent, error)
+	close func() error
 }
 
 // Next is the next event; it blocks until one arrives or the stream ends.
-func (s *ChainStream) Next() (ChainEvent, error) {
-	var ev ChainEvent
-	err := s.dec.Decode(&ev)
-	return ev, err
-}
+func (s *ChainStream) Next() (ChainEvent, error) { return s.next() }
 
 // Close ends the stream.
-func (s *ChainStream) Close() error { return s.resp.Body.Close() }
+func (s *ChainStream) Close() error { return s.close() }
+
+// NewChainStream is a ChainStream read by next and ended by close, for a
+// front end's own source of chain events, such as a Node hosted elsewhere.
+func NewChainStream(next func() (ChainEvent, error), close func() error) *ChainStream {
+	return &ChainStream{next: next, close: close}
+}
+
+// ErrStreamEnded is a stream the serve ended: it stopped, or the watcher
+// fell too far behind.
+var ErrStreamEnded = errors.New("serve: the chain stream ended")
+
+// ConversationStream is Client.ConversationStream in this process.
+func (r *Running) ConversationStream(ctx context.Context, conversationID []byte) (*ChainStream, error) {
+	events, stop := r.s.chains.subscribe(conversationID)
+	var once sync.Once
+	closed := make(chan struct{})
+	end := func() error {
+		once.Do(func() { stop(); close(closed) })
+		return nil
+	}
+	next := func() (ChainEvent, error) {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return ChainEvent{}, ErrStreamEnded
+			}
+			return ev, nil
+		case <-closed:
+			return ChainEvent{}, ErrStreamEnded
+		case <-ctx.Done():
+			return ChainEvent{}, ctx.Err()
+		case <-r.s.ctx.Done():
+			return ChainEvent{}, ErrStreamEnded
+		}
+	}
+	return &ChainStream{next: next, close: end}, nil
+}
+
+// ConversationCancel is Client.ConversationCancel in this process.
+func (r *Running) ConversationCancel(_ context.Context, conversationID []byte, chain string) (CancelView, error) {
+	if err := r.tailnet(); err != nil {
+		return CancelView{}, err
+	}
+	prefix, err := ChainPrefix(chain)
+	if err != nil {
+		return CancelView{}, err
+	}
+	id, err := r.s.chains.cancel(conversationID, prefix)
+	if err != nil {
+		return CancelView{}, err
+	}
+	return CancelView{Cancelled: id != "", Chain: id}, nil
+}
 
 // ConversationStream watches the chains of agents in a Conversation (nil
 // for Group-level talk) on this Node. Every chain that starts after it
@@ -959,7 +1015,13 @@ func (c Client) ConversationStream(ctx context.Context, conversationID []byte) (
 		defer resp.Body.Close()
 		return nil, localError(path, resp)
 	}
-	return &ChainStream{resp: resp, dec: json.NewDecoder(bufio.NewReader(resp.Body))}, nil
+	dec := json.NewDecoder(bufio.NewReader(resp.Body))
+	next := func() (ChainEvent, error) {
+		var ev ChainEvent
+		err := dec.Decode(&ev)
+		return ev, err
+	}
+	return &ChainStream{next: next, close: resp.Body.Close}, nil
 }
 
 // ConversationCancel cancels the chain in a Conversation, running or queued,

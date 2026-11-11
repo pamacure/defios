@@ -15,13 +15,16 @@ import (
 	"defios.com/internal/agent"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
+	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/mention"
+	"defios.com/internal/node"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
 	"defios.com/internal/serve"
 	"defios.com/internal/talk"
+	"defios.com/internal/vault"
 )
 
 func conversationCommand(g *globals) *cobra.Command {
@@ -187,26 +190,30 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 	if err != nil {
 		return err
 	}
-	conv, err := queriedConversation(g, keyQuery)
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	client := serve.Client{Socket: g.paths().Socket}
+	conv, err := queriedConversation(g, h, keyQuery)
+	if err != nil {
+		return err
+	}
 	ctx := cmd.Context()
 	// A person's mention runs a chain of agents. Watch before sending, so
 	// the chain cannot start unseen (ADR 0015).
-	var stream *serve.ChainStream
+	var stream *node.ChainStream
 	if handle == "" && !as.detach && len(mention.Handles(text)) > 0 {
-		if stream, err = client.ConversationStream(ctx, conv); err != nil {
+		if stream, err = h.Follow(ctx, node.ServedGroup, conv); err != nil {
 			return sendError(err)
 		}
 		defer stream.Close()
 	}
-	v, err := client.ConversationSendAs(ctx, text, handle, depth, conv)
+	sent, err := h.Send(ctx, node.ServedGroup, conv, node.Outgoing{Text: text, Handle: handle, Depth: depth})
 	if err != nil {
 		return sendError(err)
 	}
-	att := attached{client: client, conv: conv, stream: stream, chain: v.MsgID, cancelled: "; your message stays"}
+	v := serve.SendView(sent)
+	att := attached{h: h, conv: conv, stream: stream, chain: v.MsgID, cancelled: "; your message stays"}
 	if !v.Queued {
 		return att.run(ctx, g, v, fmt.Sprintf("sent as seq %d (msg_id %s)", v.Seq, v.MsgID))
 	}
@@ -221,10 +228,10 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 // attached is a command that started or queued a chain and, with a stream
 // opened before it did, prints it until it ends.
 type attached struct {
-	client serve.Client
-	conv   []byte
-	stream *serve.ChainStream // nil when detached
-	chain  string             // the hex msg_id that started it
+	h      *node.Host
+	conv   string            // hex Conversation ID, node.GroupTalk for Group-level
+	stream *node.ChainStream // nil when detached
+	chain  string            // the hex msg_id that started it
 	// cancelled ends what Ctrl-C reports once the chain is cancelled.
 	cancelled string
 }
@@ -250,7 +257,7 @@ func (a attached) run(ctx context.Context, g *globals, view any, line string) er
 	if ctx.Err() != nil {
 		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, cerr := a.client.ConversationCancel(cctx, a.conv, a.chain); cerr != nil {
+		if _, cerr := a.h.Cancel(cctx, node.ServedGroup, a.conv, a.chain); cerr != nil {
 			return exitOperationalf("interrupted, but cancelling the agents failed: %w", cerr)
 		}
 		return exitOperationalf("cancelled: nothing is committed for the agent that was answering, and the rest of the chain is dropped%s", a.cancelled)
@@ -262,7 +269,7 @@ func (a attached) run(ctx context.Context, g *globals, view any, line string) er
 // it ends: each agent's message as it commits, labelled @handle:, with skips
 // and silences, but not its output; or under --json those events as lines.
 // Other chains in the Conversation are not this send's.
-func followChain(g *globals, stream *serve.ChainStream, chain string) error {
+func followChain(g *globals, stream *node.ChainStream, chain string) error {
 	cp := newChainPrinter(g, false)
 	var failed error
 	for {
@@ -296,12 +303,16 @@ func followChain(g *globals, stream *serve.ChainStream, chain string) error {
 // Ctrl-C, which only detaches: the chain runs on and its
 // replies still commit (ADR 0015).
 func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) error {
-	conv, err := queriedConversation(g, keyQuery)
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	conv, err := queriedConversation(g, h, keyQuery)
 	if err != nil {
 		return err
 	}
 	ctx := cmd.Context()
-	stream, err := serve.Client{Socket: g.paths().Socket}.ConversationStream(ctx, conv)
+	stream, err := h.Follow(ctx, node.ServedGroup, conv)
 	if err != nil {
 		return serveError(err)
 	}
@@ -347,17 +358,22 @@ func runConversationCancel(cmd *cobra.Command, g *globals, keyQuery, chain strin
 	if err != nil {
 		return err
 	}
-	conv, err := queriedConversation(g, keyQuery)
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	v, err := serve.Client{Socket: g.paths().Socket}.ConversationCancel(cmd.Context(), conv, chain)
+	conv, err := queriedConversation(g, h, keyQuery)
+	if err != nil {
+		return err
+	}
+	c, err := h.Cancel(cmd.Context(), node.ServedGroup, conv, chain)
 	if errors.Is(err, serve.ErrAmbiguousChain) {
 		return exitUsagef("%w", err)
 	}
 	if err != nil {
 		return serveError(err)
 	}
+	v := serve.CancelView(c)
 	if g.json {
 		return g.emitJSON(v)
 	}
@@ -397,13 +413,48 @@ func isOutput(ev serve.ChainEvent) bool {
 	return false
 }
 
-// queriedConversation is the Conversation --key names, or nil for
-// Group-level talk.
-func queriedConversation(g *globals, keyQuery string) ([]byte, error) {
+// queriedConversation is the hex ID of the Conversation --key names in the
+// targeted Group, or node.GroupTalk with none. A query naming no Key or two
+// is a usage error: a Conversation exists iff the Key does.
+func queriedConversation(g *globals, h *node.Host, keyQuery string) (string, error) {
 	if keyQuery == "" {
-		return nil, nil
+		return node.GroupTalk, nil
 	}
-	return resolveConversation(g, keyQuery)
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return "", err
+	}
+	conv, err := h.ResolveConversation(context.Background(), alias, keyQuery)
+	switch {
+	case errors.Is(err, key.ErrUnknown), errors.Is(err, key.ErrAmbiguous):
+		return "", exitUsagef("%w", err)
+	case err != nil:
+		return "", talkError(err)
+	}
+	return conv, nil
+}
+
+// talkError maps a failure of the library's talk, Key or Session reads:
+// a Group Record that no longer verifies is a verify failure (4), a Vault
+// in use or a wrong passphrase as the Vault verbs report them, a serve not
+// running as every "requires serve" verb does; the rest is operational.
+func talkError(err error) error {
+	var exit *ExitError
+	var invalid *node.InvalidError
+	switch {
+	case errors.As(err, &exit):
+		return err
+	case errors.As(err, &invalid):
+		return exitUsagef("%v", err)
+	case errors.Is(err, group.ErrBadProposal), errors.Is(err, group.ErrBadAccept):
+		return exitVerify(err)
+	case errors.Is(err, vault.ErrBadPassphrase):
+		return exitVerify(err)
+	}
+	if v := vaultInUse(err); v != nil {
+		return v
+	}
+	return serveError(err)
 }
 
 // chainPrinter prints chain events as they stream: with output set, each
@@ -741,50 +792,41 @@ func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if opts.transcripts && !opts.chat {
 		return exitUsagef("--transcripts expands --chat; pass both")
 	}
-	alias, rec, err := loadGroup(g)
+	h, err := openNode(g)
 	if err != nil {
 		return err
 	}
-	store, err := openReplica(g)
+	alias, err := g.resolveAlias()
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	conv, err := optionalConversation(g, store, keyQuery)
+	conv, err := queriedConversation(g, h, keyQuery)
 	if err != nil {
 		return err
 	}
-	roster := rec.Roster()
-	reader := talk.Reader{Paths: g.paths(), Alias: alias, Store: store, Mine: talk.File(g.paths().OutboxFile(alias)), Roster: &roster}
-	v, err := reader.Read(conv)
-	if err != nil {
-		return exitOperational(err)
-	}
+	ctx := context.Background()
 	switch {
 	case opts.lean:
-		l, err := v.Lean()
+		l, err := h.Lean(ctx, alias, conv)
 		if err != nil {
-			return exitOperational(err)
+			return talkError(err)
 		}
 		return emitLean(g, l, opts.limit)
 	case opts.chat:
-		msgs := v.Chat().Last(opts.limit)
-		chat := make([]talk.Expanded, len(msgs))
-		for i, m := range msgs {
-			chat[i].Message = m
-		}
-		if opts.transcripts {
-			if chat, err = reader.Expand(conv, msgs); err != nil {
-				return exitOperational(err)
-			}
+		chat, err := h.Chat(ctx, alias, conv, opts.limit, opts.transcripts)
+		if err != nil {
+			return talkError(err)
 		}
 		return emitChat(g, chat, opts.transcripts)
 	}
-	msgs := v.Messages
-	if !opts.full {
-		msgs = slices.DeleteFunc(slices.Clone(msgs), func(m talk.Message) bool { return m.Pruned })
+	msgs, err := h.Messages(ctx, alias, conv)
+	if err != nil {
+		return talkError(err)
 	}
-	msgs = msgs.Last(opts.limit)
+	if !opts.full {
+		msgs = slices.DeleteFunc(msgs, func(m node.Message) bool { return m.Pruned })
+	}
+	msgs = latest(msgs, opts.limit)
 	lines := make([]messageLine, len(msgs))
 	for i, m := range msgs {
 		lines[i] = newTalkLine(m)
@@ -844,19 +886,18 @@ func latest[T any](xs []T, n int) []T {
 
 // newTalkLine is a message as a log row: a pruned or unreadable one's
 // metadata only.
-func newTalkLine(m talk.Message) messageLine {
-	r := m.Row
+func newTalkLine(m node.Message) messageLine {
 	l := messageLine{
-		Seq:               r.Seq,
-		Term:              r.Term,
-		CreatedAt:         rfc3339(r.CreatedAt),
-		Sender:            r.Sender.String(),
+		Seq:               m.Seq,
+		Term:              m.Term,
+		CreatedAt:         rfc3339(m.CreatedAt.UnixNano()),
+		Sender:            m.NodeID,
 		SenderDisplayName: messageSender(m),
-		MsgID:             m.MsgID(),
-		MsgType:           cosl.TypeName(r.MsgType),
+		MsgID:             m.MsgID,
+		MsgType:           cosl.TypeName(cosl.TypeAppFreeform),
 		Pruned:            m.Pruned,
 		Unreadable:        m.Unreadable,
-		Queued:            r.Queued(),
+		Queued:            m.Queued,
 	}
 	if m.Readable() {
 		l.Text, l.ContentType = m.Text, m.ContentType
@@ -871,8 +912,8 @@ func newTalkLine(m talk.Message) messageLine {
 // or `<display name>/@handle: <text>` for an agent's, one entry per line
 // and nothing else: timestamps are advisory and never ordering, while who
 // said what is load-bearing in a multi-party Conversation.
-func emitLean(g *globals, v talk.Lean, limit int) error {
-	msgs := v.Messages.Last(limit)
+func emitLean(g *globals, v node.Lean, limit int) error {
+	msgs := latest(v.Messages, limit)
 	lean := make([]leanLine, 0, len(msgs)+1)
 	if v.Recap != nil {
 		lean = append(lean, leanLine{BaseSeq: v.Recap.BaseSeq, Text: v.Recap.Text})
@@ -906,7 +947,7 @@ type chatLine struct {
 // per message. With transcripts, each agent message this Node's chain said
 // is preceded by its run's blocks as conversation transcript shows them,
 // indented apart from what was said, and each --json line has its blocks.
-func emitChat(g *globals, msgs []talk.Expanded, transcripts bool) error {
+func emitChat(g *globals, msgs []node.ChatMessage, transcripts bool) error {
 	chat := make([]chatLine, len(msgs))
 	for i, m := range msgs {
 		chat[i].leanLine = leanLine{SenderDisplayName: messageSender(m.Message), Handle: m.Handle, Text: m.Text}
@@ -929,17 +970,6 @@ func emitChat(g *globals, msgs []talk.Expanded, transcripts bool) error {
 		fmt.Fprintf(g.app.Stdout, "%s %s\n", p.primary(talk.Speaker(l.SenderDisplayName, l.Handle)+":"), l.Text)
 	}
 	return nil
-}
-
-// resolveConversation is the Conversation of a minted Key. Unknown and
-// ambiguous queries are usage errors: a Conversation exists iff the Key does.
-func resolveConversation(g *globals, query string) ([]byte, error) {
-	store, err := openReplica(g)
-	if err != nil {
-		return nil, err
-	}
-	defer store.Close()
-	return conversationID(g, store, query)
 }
 
 // conversationID is the Conversation of the Key query names in the targeted
@@ -968,9 +998,9 @@ func conversationID(g *globals, store *cosl.Store, query string) ([]byte, error)
 // messageSender is the display name the Roster pins for m's sender; the FSM
 // only admits Roster Nodes, so the fallback is for a replica older than
 // its Roster.
-func messageSender(m talk.Message) string {
-	if m.Sender != "" {
-		return m.Sender
+func messageSender(m node.Message) string {
+	if m.DisplayName != "" {
+		return m.DisplayName
 	}
-	return m.Row.Sender.String()[:8]
+	return m.NodeID[:8]
 }

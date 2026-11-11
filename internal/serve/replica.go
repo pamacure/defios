@@ -78,7 +78,8 @@ func (s *server) startReplica() {
 			}
 			return m.LastAppliedSeq
 		},
-		Logf: s.opts.Logf,
+		Logf:    s.opts.Logf,
+		Changed: s.opts.OnOutbox,
 	})
 	if err != nil {
 		unlock()
@@ -107,6 +108,9 @@ func (s *server) startWatchers(replica *raftx.Replica, store *cosl.Store) {
 	wg.Go(func() { s.runChains(ctx) })
 	wg.Go(func() { s.keepHooks(ctx, replica, store) })
 	wg.Go(func() { s.keepSchedules(ctx, store) })
+	if s.opts.OnTalk != nil || s.opts.OnSession != nil {
+		wg.Go(func() { s.tellCommits(ctx, store) })
+	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	s.watchCancel, s.watchDone = cancel, done

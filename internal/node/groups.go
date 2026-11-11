@@ -258,7 +258,7 @@ func (h *Host) InspectGroup(ctx context.Context, groupAlias string) (GroupDetail
 	}
 	live := map[string]DiscoveredNode{}
 	served := false
-	if api, err := h.formation(ctx, groupAlias); err == nil {
+	if api, err := h.reach(ctx, groupAlias); err == nil {
 		served = true
 		if nodes, err := discover(ctx, api); err == nil {
 			for _, n := range nodes {

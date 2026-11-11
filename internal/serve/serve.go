@@ -23,6 +23,7 @@ import (
 	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/session"
+	"defios.com/internal/talk"
 	"defios.com/internal/vault"
 	groupv1 "defios.com/proto/group/v1"
 )
@@ -92,6 +93,19 @@ type Options struct {
 	// may be nil. They are called on the request's goroutine.
 	OnProposal func(group.Proposal)
 	OnAccept   func(gid group.ID, node identity.ID, status group.Status)
+	// OnChain hears every chain event of every Conversation (nil conv for
+	// Group-level talk), Trigger firings and Jobs' ends among them, whether
+	// or not anyone watches it there. It is called under the chains' lock,
+	// so it must not block or call the serve.
+	OnChain func(conv []byte, ev ChainEvent)
+	// OnTalk hears each app.freeform the replica applies after it starts,
+	// any Node's, in seq order; OnSession each Session whose status moved
+	// with it, one that starts included. OnOutbox hears this Node's Outbox
+	// each time what it holds queued changes, oldest first, under the
+	// Outbox's lock: it must not call the Outbox. Any may be nil.
+	OnTalk    func(conv []byte, m talk.Message)
+	OnSession func(session.Summary)
+	OnOutbox  func(queued []cosl.Signed)
 	// MCPCallTimeout bounds an MCP Server's start and each call of its
 	// tools; zero is DefaultMCPCallTimeout (ADR 0030).
 	MCPCallTimeout time.Duration
@@ -156,6 +170,7 @@ func Start(ctx context.Context, o Options) (*Running, error) {
 
 	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), chainCalls: make(chan chainCall),
 		mcp: newMCPServers(o.Logf)}
+	s.chains.onEvent = o.OnChain
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()

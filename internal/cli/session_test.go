@@ -104,6 +104,7 @@ func TestSessionListWithoutReplicaIsOperational(t *testing.T) {
 // open with a single complete. Returns the Nodes and the Session IDs.
 func seedSessions(t *testing.T, dir string) (alice, bob *identity.Node, aborted, open string) {
 	t.Helper()
+	ensureNode(t, dir)
 	var err error
 	alice, err = identity.Generate()
 	if err != nil {
@@ -160,6 +161,7 @@ func seedSessions(t *testing.T, dir string) (alice, bob *identity.Node, aborted,
 // order, and returns their IDs.
 func seedProposals(t *testing.T, dir string, aliases ...string) []string {
 	t.Helper()
+	ensureNode(t, dir)
 	alice, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)

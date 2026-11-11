@@ -147,6 +147,7 @@ func seedMinted(t *testing.T, dir string) (pk, other []byte) {
 // several Groups can be read per-Group with --group (#28).
 func seedMintedAlias(t *testing.T, dir, alias string) (pk, other []byte) {
 	t.Helper()
+	ensureNode(t, dir)
 	alice, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)

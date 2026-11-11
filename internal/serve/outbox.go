@@ -28,18 +28,31 @@ func (s *server) outboxRoutes(mux *http.ServeMux) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		ob, store, ok := s.writer()
-		if !ok {
-			writeError(w, ErrNoReplica)
-			return
-		}
-		dropped, err := outbox.Withdraw(ob, store, req.MsgID)
+		v, err := s.outboxDrop(req.MsgID)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, DropView{MsgID: hex.EncodeToString(dropped.MsgID[:])})
+		writeJSON(w, v)
 	})
+}
+
+// outboxDrop withdraws the queued message whose msg_id starts with prefix.
+func (s *server) outboxDrop(prefix string) (DropView, error) {
+	ob, store, ok := s.writer()
+	if !ok {
+		return DropView{}, ErrNoReplica
+	}
+	dropped, err := outbox.Withdraw(ob, store, prefix)
+	if err != nil {
+		return DropView{}, err
+	}
+	return DropView{MsgID: hex.EncodeToString(dropped.MsgID[:])}, nil
+}
+
+// OutboxDrop is Client.OutboxDrop in this process. It needs no tailnet.
+func (r *Running) OutboxDrop(_ context.Context, msgID string) (DropView, error) {
+	return r.s.outboxDrop(msgID)
 }
 
 // OutboxDrop is `outbox drop`: erase the queued message whose msg_id starts

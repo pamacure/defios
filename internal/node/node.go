@@ -1,19 +1,24 @@
 // Package node is the application layer front ends host a Node through
 // (ADR 0034): a typed API over a Node directory, and one subscription to
 // what happens on it. It holds hosting (Unlock serves a Group in-process,
-// as `defios serve` does, and Lock stops it) and onboarding: Create or
-// Restore a Node, scaffold Groups, and form them with other Nodes.
+// as `defios serve` does, and Lock stops it); onboarding: Create or
+// Restore a Node, scaffold Groups, and form them with other Nodes; and
+// talk and Keys: Conversations and their messages, chains of agents,
+// the Outbox, keygen Sessions and minted Keys.
 package node
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
 	"defios.com/internal/config"
+	"defios.com/internal/cosl"
 	"defios.com/internal/engine/tssl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
@@ -21,6 +26,7 @@ import (
 	"defios.com/internal/secret"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
+	"defios.com/internal/talk"
 	"defios.com/internal/vault"
 )
 
@@ -64,6 +70,32 @@ type Node interface {
 	Propose(ctx context.Context, group string, nodeIDs []string) (Formation, error)
 	Accept(ctx context.Context, group, groupID string) (Formation, error)
 	Decline(ctx context.Context, group, groupID, reason string) (Formation, error)
+
+	// Talk. A Conversation is named by its hex ID, GroupTalk for the
+	// Group-level talk; ResolveConversation finds a Key's from a query.
+	// Reads need no serve; writes and Follow need the Group served.
+	Conversations(ctx context.Context, group string) (Conversations, error)
+	ResolveConversation(ctx context.Context, group, keyQuery string) (string, error)
+	Messages(ctx context.Context, group, conv string) ([]Message, error)
+	Lean(ctx context.Context, group, conv string) (Lean, error)
+	Chat(ctx context.Context, group, conv string, limit int, transcripts bool) ([]ChatMessage, error)
+	Handles(ctx context.Context, group, conv string) ([]string, error)
+	Send(ctx context.Context, group, conv string, m Outgoing) (Sent, error)
+	Cancel(ctx context.Context, group, conv, chain string) (Cancelled, error)
+	Follow(ctx context.Context, group, conv string) (*ChainStream, error)
+	Transcript(ctx context.Context, group, conv, chain string) (Transcript, error)
+	Outbox(ctx context.Context, group string) ([]Queued, error)
+	DropQueued(ctx context.Context, group, msgID string) (string, error)
+
+	// Keys and the keygen Sessions that mint them.
+	Keys(ctx context.Context, group string, passphrase Passphrase) ([]Key, error)
+	InspectKey(ctx context.Context, group, query string, passphrase Passphrase) (Key, error)
+	SetKeyAlias(ctx context.Context, group, query, alias string) (Key, error)
+	StartKeygen(ctx context.Context, group string, k Keygen) (Session, error)
+	AcceptSession(ctx context.Context, group, id, alias string) error
+	AbortSession(ctx context.Context, group, id, reason string) error
+	Sessions(ctx context.Context, group string) ([]Session, error)
+	InspectSession(ctx context.Context, group, id string) (SessionDetail, error)
 }
 
 // Errors a front end tells apart. Vault failures come through as the
@@ -110,6 +142,9 @@ type Status struct {
 	// MajorityReachable: more than half the Roster is reachable, so
 	// writes can commit.
 	MajorityReachable bool
+	// Keys are the served Group's minted Keys, each with whether t of its
+	// Nodes are reachable, so it can sign.
+	Keys []KeyReach
 	// Err is why serving stopped on its own; nil after Lock.
 	Err error
 }
@@ -121,11 +156,60 @@ type RosterNode struct {
 	Reachable   bool
 }
 
+// KeyReach is one Key as Status reports it.
+type KeyReach struct {
+	Key       string // curve:hex
+	T         int
+	Reachable int  // how many of its Nodes are reachable
+	CanSign   bool // at least T of them are
+}
+
 // Event is one thing that happened on the Node. Exactly one field is set.
 type Event struct {
 	Status   *Status   // the Node's status changed to this
 	Proposal *Proposal // another Node proposed a Group; Accept or Decline it
 	Accepted *Accepted // a Node accepted the served Group's proposal
+	// Message is a message the served Group's replica committed, any
+	// Node's, this one's queued ones once they commit included.
+	Message *MessageEvent
+	// Outbox is this Node's Outbox after what it holds queued changed: a
+	// message was queued, committed or dropped.
+	Outbox *OutboxEvent
+	// Chain is an event of agents answering in a Conversation on this
+	// Node: a chain's start and end, each agent's output as it generates
+	// it (thinking, text, tool calls), and what it said. A Trigger of this
+	// Node's firing (trigger.fire) and how each of its Jobs ended
+	// (job.end) come this way too, in the Conversation of what it fired on.
+	Chain *ChainEventIn
+	// Session is a Session whose status moved: started, completed or
+	// aborted.
+	Session *SessionEvent
+}
+
+// MessageEvent is a committed message and where.
+type MessageEvent struct {
+	Group        string
+	Conversation string // hex Conversation ID; GroupTalk for Group-level
+	Message      Message
+}
+
+// OutboxEvent is what a Group's Outbox holds queued now, oldest first.
+type OutboxEvent struct {
+	Group  string
+	Queued []Queued
+}
+
+// ChainEventIn is a chain event and where.
+type ChainEventIn struct {
+	Group        string
+	Conversation string // hex Conversation ID; GroupTalk for Group-level
+	Event        ChainEvent
+}
+
+// SessionEvent is a Session's new status, in Session.Status.
+type SessionEvent struct {
+	Group   string
+	Session Session
 }
 
 // Proposal is a Group proposal this Node holds pending.
@@ -419,6 +503,23 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 		OnAccept: func(gid group.ID, who identity.ID, st group.Status) {
 			h.publish(Event{Accepted: &Accepted{Group: alias, GroupID: gid.String(), NodeID: who.String(), Status: st.String()}})
 		},
+		OnChain: func(conv []byte, ev serve.ChainEvent) {
+			h.publish(Event{Chain: &ChainEventIn{Group: alias, Conversation: hex.EncodeToString(conv), Event: ev}})
+		},
+		OnTalk: func(conv []byte, m talk.Message) {
+			h.publish(Event{Message: &MessageEvent{Group: alias, Conversation: hex.EncodeToString(conv), Message: h.message(m)}})
+		},
+		OnSession: func(sum session.Summary) {
+			h.publish(Event{Session: &SessionEvent{Group: alias, Session: sum}})
+		},
+		OnOutbox: func(queued []cosl.Signed) {
+			q, err := queuedOf(queued)
+			if err != nil {
+				logf("node: Outbox: %v", err)
+				return
+			}
+			h.publish(Event{Outbox: &OutboxEvent{Group: alias, Queued: q}})
+		},
 	})
 	if errors.Is(err, serve.ErrAlreadyRunning) {
 		cancel()
@@ -472,14 +573,25 @@ func (h *Host) refresh(sv *serving, ctx context.Context) {
 	if ns.HasLeader {
 		st.Leader = ns.Leader.String()
 	}
-	reachable := 0
+	reachable, reach := 0, map[identity.ID]bool{}
 	for _, r := range ns.Roster {
 		st.Roster = append(st.Roster, RosterNode{NodeID: r.NodeID.String(), DisplayName: r.DisplayName, Reachable: r.Reachable})
 		if r.Reachable {
 			reachable++
+			reach[r.NodeID] = true
 		}
 	}
 	st.MajorityReachable = len(ns.Roster) > 0 && reachable > len(ns.Roster)/2
+	for _, k := range ns.Keys {
+		kr := KeyReach{Key: k.Key, T: k.T}
+		for _, n := range k.Nodes {
+			if reach[n] {
+				kr.Reachable++
+			}
+		}
+		kr.CanSign = kr.Reachable >= k.T
+		st.Keys = append(st.Keys, kr)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.cur == sv {
@@ -564,12 +676,14 @@ func (h *Host) setStatus(st Status) {
 
 func (s Status) clone() Status {
 	s.Roster = append([]RosterNode(nil), s.Roster...)
+	s.Keys = append([]KeyReach(nil), s.Keys...)
 	return s
 }
 
 func (s Status) equal(o Status) bool {
 	if s.Group != o.Group || s.Serving != o.Serving || s.TailnetUp != o.TailnetUp || s.Leader != o.Leader ||
-		s.MajorityReachable != o.MajorityReachable || len(s.Roster) != len(o.Roster) || (s.Err == nil) != (o.Err == nil) {
+		s.MajorityReachable != o.MajorityReachable || len(s.Roster) != len(o.Roster) || (s.Err == nil) != (o.Err == nil) ||
+		!slices.Equal(s.Keys, o.Keys) {
 		return false
 	}
 	if s.Err != nil && s.Err.Error() != o.Err.Error() {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -8,14 +9,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"defios.com/internal/cosl"
 	"defios.com/internal/engine/tssl"
 	"defios.com/internal/identity"
 	"defios.com/internal/keyalias"
+	"defios.com/internal/node"
 	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
-	"defios.com/internal/signreq"
 )
 
 func sessionCommand(g *globals) *cobra.Command {
@@ -95,8 +95,11 @@ func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int, alias 
 	if err != nil {
 		return err
 	}
-	client := serve.Client{Socket: g.paths().Socket}
-	sum, err := client.SessionStart(cmd.Context(), curve, t, alias)
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	sum, err := h.StartKeygen(cmd.Context(), node.ServedGroup, node.Keygen{Curve: curve, T: t, Alias: alias})
 	if err != nil {
 		return sessionCallError(err)
 	}
@@ -115,8 +118,11 @@ func runSessionAccept(cmd *cobra.Command, g *globals, hexID, alias string) error
 	if alias, err = aliasFlag(cmd, alias); err != nil {
 		return err
 	}
-	client := serve.Client{Socket: g.paths().Socket}
-	if err := client.SessionAccept(cmd.Context(), id, alias); err != nil {
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	if err := h.AcceptSession(cmd.Context(), node.ServedGroup, id.String(), alias); err != nil {
 		return sessionCallError(err)
 	}
 	if g.json {
@@ -133,8 +139,11 @@ func runSessionAbort(cmd *cobra.Command, g *globals, hexID, reason string) error
 	if err != nil {
 		return err
 	}
-	client := serve.Client{Socket: g.paths().Socket}
-	if err := client.SessionAbort(cmd.Context(), id, reason); err != nil {
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	if err := h.AbortSession(cmd.Context(), node.ServedGroup, id.String(), reason); err != nil {
 		return sessionCallError(err)
 	}
 	if g.json {
@@ -148,18 +157,13 @@ func runSessionAbort(cmd *cobra.Command, g *globals, hexID, reason string) error
 }
 
 func runSessionList(g *globals) error {
-	store, err := openReplica(g)
+	h, alias, err := openGroup(g)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	rows, err := store.Log(cosl.Query{MsgTypes: signreq.LookupMsgTypes})
+	list, err := h.Sessions(context.Background(), alias)
 	if err != nil {
-		return exitOperational(err)
-	}
-	list, err := session.List(rows, signInfoOf(rows))
-	if err != nil {
-		return exitOperational(err)
+		return talkError(err)
 	}
 	if g.json {
 		return g.emitJSON(list)
@@ -176,21 +180,13 @@ func runSessionInspect(g *globals, hexID string) error {
 	if err != nil {
 		return err
 	}
-	store, err := openReplica(g)
+	h, alias, err := openGroup(g)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	rows, err := store.Log(cosl.Query{MsgTypes: signreq.LookupMsgTypes})
+	detail, err := h.InspectSession(context.Background(), alias, id.String())
 	if err != nil {
-		return exitOperational(err)
-	}
-	detail, err := session.Inspect(rows, id, signInfoOf(rows))
-	if errors.Is(err, session.ErrUnknownSession) {
-		return exitOperational(err)
-	}
-	if err != nil {
-		return exitOperational(err)
+		return talkError(err)
 	}
 	if g.json {
 		return g.emitJSON(detail)
@@ -247,9 +243,25 @@ func parseSessionID(s string) (session.ID, error) {
 	return id, nil
 }
 
+// openGroup opens this Node and resolves the Group a read verb targets.
+func openGroup(g *globals) (*node.Host, string, error) {
+	h, err := openNode(g)
+	if err != nil {
+		return nil, "", err
+	}
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return nil, "", err
+	}
+	return h, alias, nil
+}
+
 // sessionCallError maps a serve failure onto an exit code.
 func sessionCallError(err error) error {
+	var invalid *node.InvalidError
 	switch {
+	case errors.As(err, &invalid):
+		return exitUsagef("%v", err)
 	case errors.Is(err, session.ErrBadCurve), errors.Is(err, serve.ErrBadAlias), errors.Is(err, session.ErrNotKeygen):
 		return exitUsagef("%w", err)
 	case errors.Is(err, raftx.ErrNotInserted):
@@ -296,17 +308,4 @@ func signEngine(getenv func(string) string, self identity.ID) func() session.Eng
 		return func() session.Engine { return tssl.NewSigner([32]byte(self)) }
 	}
 	return nil
-}
-
-// signInfoOf lets the listings verify a signing Session's completes against
-// the Key and Digests its sign.request implies, as serve does. The listings
-// read signreq.LookupMsgTypes only: the Session rows they fold are among them.
-func signInfoOf(rows []cosl.Row) session.ReadOption {
-	return session.WithSignInfo(func(id [32]byte) (session.SignInfo, error) {
-		sg, err := signreq.Lookup(rows, id)
-		if err != nil {
-			return session.SignInfo{}, err
-		}
-		return session.SignInfo{Curve: sg.Curve, PublicKey: sg.PublicKey, T: sg.T, Digests: sg.Digests, Deadline: sg.Deadline}, nil
-	})
 }

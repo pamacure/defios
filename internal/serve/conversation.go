@@ -273,3 +273,11 @@ func (c Client) ConversationSendAs(ctx context.Context, text, handle string, dep
 	err := c.do(ctx, "/v1/conversation/send", req, &v)
 	return v, err
 }
+
+// ConversationSendAs is Client.ConversationSendAs in this process.
+func (r *Running) ConversationSendAs(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
+	if err := r.tailnet(); err != nil {
+		return SendView{}, err
+	}
+	return r.s.conversationSend(ctx, text, handle, depth, conversationID)
+}

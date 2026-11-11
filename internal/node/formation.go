@@ -9,6 +9,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/serve"
+	"defios.com/internal/session"
 )
 
 // Formation failures a front end tells apart, besides ErrNotServed and
@@ -62,37 +63,56 @@ type Formation struct {
 	Undelivered []string
 }
 
-// formationAPI is a serving Node's formation verbs: *serve.Running in
-// this process, serve.Client over the socket of another.
-type formationAPI interface {
+// servedAPI is a serving Node's verbs: *serve.Running in this process,
+// serve.Client over the socket of another.
+type servedAPI interface {
 	Nodes(ctx context.Context) ([]serve.NodeSummary, error)
 	GroupCreate(ctx context.Context, nodeIDs []identity.ID) (serve.GroupView, error)
 	GroupAccept(ctx context.Context, gid group.ID) (serve.GroupView, error)
 	GroupDecline(ctx context.Context, gid group.ID, reason string) (serve.GroupView, error)
+
+	ConversationSendAs(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (serve.SendView, error)
+	ConversationCancel(ctx context.Context, conversationID []byte, chain string) (serve.CancelView, error)
+	ConversationStream(ctx context.Context, conversationID []byte) (*serve.ChainStream, error)
+	OutboxDrop(ctx context.Context, msgID string) (serve.DropView, error)
+
+	SessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error)
+	SessionAccept(ctx context.Context, id session.ID, alias string) error
+	SessionAbort(ctx context.Context, id session.ID, reason string) error
+	KeyShares(ctx context.Context) ([]serve.KeyShare, error)
+	WaitingKeyAliases(ctx context.Context) (serve.WaitingKeyAliases, error)
 }
 
-// formation reaches the process serving groupAlias: this host, or another
+var (
+	_ servedAPI = (*serve.Running)(nil)
+	_ servedAPI = serve.Client{}
+)
+
+// reach reaches the process serving groupAlias: this host, or another
 // process on the Node's socket.
-func (h *Host) formation(ctx context.Context, groupAlias string) (formationAPI, error) {
+func (h *Host) reach(ctx context.Context, groupAlias string) (servedAPI, error) {
 	if cur := h.serving(); cur != nil {
 		if groupAlias != ServedGroup && groupAlias != cur.group {
 			return nil, servesOther(groupAlias, cur.group)
 		}
 		return cur.run, nil
 	}
-	c := serve.Client{Socket: h.p.Socket}
+	c := h.socket()
 	if groupAlias == ServedGroup {
 		return c, nil // a socket nobody serves fails the call itself
 	}
 	st, err := c.Status(ctx)
 	if err != nil {
-		return nil, wrapFormation(err)
+		return nil, wrapServed(err)
 	}
 	if st.Alias != groupAlias {
 		return nil, servesOther(groupAlias, st.Alias)
 	}
 	return c, nil
 }
+
+// socket reaches the process serving this Node over its socket.
+func (h *Host) socket() serve.Client { return serve.Client{Socket: h.p.Socket} }
 
 // serving is what this host serves now; nil when locked.
 func (h *Host) serving() *serving {
@@ -105,8 +125,8 @@ func servesOther(want, served string) error {
 	return &notServedError{fmt.Errorf("%w: %q (this Node serves %q)", ErrNotServed, want, served)}
 }
 
-// wrapFormation types the serving process's errors for a front end.
-func wrapFormation(err error) error {
+// wrapServed types the serving process's errors for a front end.
+func wrapServed(err error) error {
 	var unreachable *serve.UnreachableError
 	switch {
 	case err == nil:
@@ -125,17 +145,17 @@ func formationOf(v serve.GroupView) Formation {
 
 // Discover lists the Nodes on groupAlias's tailnet, which must be served.
 func (h *Host) Discover(ctx context.Context, groupAlias string) ([]DiscoveredNode, error) {
-	api, err := h.formation(ctx, groupAlias)
+	api, err := h.reach(ctx, groupAlias)
 	if err != nil {
 		return nil, err
 	}
 	return discover(ctx, api)
 }
 
-func discover(ctx context.Context, api formationAPI) ([]DiscoveredNode, error) {
+func discover(ctx context.Context, api servedAPI) ([]DiscoveredNode, error) {
 	nodes, err := api.Nodes(ctx)
 	if err != nil {
-		return nil, wrapFormation(err)
+		return nil, wrapServed(err)
 	}
 	out := make([]DiscoveredNode, 0, len(nodes))
 	for _, n := range nodes {
@@ -157,13 +177,13 @@ func (h *Host) Propose(ctx context.Context, groupAlias string, nodeIDs []string)
 		}
 		ids = append(ids, id)
 	}
-	api, err := h.formation(ctx, groupAlias)
+	api, err := h.reach(ctx, groupAlias)
 	if err != nil {
 		return Formation{}, err
 	}
 	v, err := api.GroupCreate(ctx, ids)
 	if err != nil {
-		return Formation{}, wrapFormation(err)
+		return Formation{}, wrapServed(err)
 	}
 	return formationOf(v), nil
 }
@@ -175,13 +195,13 @@ func (h *Host) Accept(ctx context.Context, groupAlias, groupID string) (Formatio
 	if err != nil {
 		return Formation{}, &InvalidError{Err: err}
 	}
-	api, err := h.formation(ctx, groupAlias)
+	api, err := h.reach(ctx, groupAlias)
 	if err != nil {
 		return Formation{}, err
 	}
 	v, err := api.GroupAccept(ctx, gid)
 	if err != nil {
-		return Formation{}, wrapFormation(err)
+		return Formation{}, wrapServed(err)
 	}
 	return formationOf(v), nil
 }
@@ -193,13 +213,13 @@ func (h *Host) Decline(ctx context.Context, groupAlias, groupID, reason string) 
 	if err != nil {
 		return Formation{}, &InvalidError{Err: err}
 	}
-	api, err := h.formation(ctx, groupAlias)
+	api, err := h.reach(ctx, groupAlias)
 	if err != nil {
 		return Formation{}, err
 	}
 	v, err := api.GroupDecline(ctx, gid, reason)
 	if err != nil {
-		return Formation{}, wrapFormation(err)
+		return Formation{}, wrapServed(err)
 	}
 	return formationOf(v), nil
 }
