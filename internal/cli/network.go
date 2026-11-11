@@ -1,13 +1,15 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/spf13/cobra"
 
 	"defios.com/internal/config"
 	"defios.com/internal/network"
+	"defios.com/internal/node"
 )
 
 // networkFlags are the per-type fields add and edit take.
@@ -29,27 +31,29 @@ func (f *networkFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.genesisHash, "genesis-hash", "", "solana: genesis hash (base58), optional")
 }
 
-// apply sets on n each field whose flag cmd was given.
-func (f *networkFlags) apply(cmd *cobra.Command, n *network.Network) {
+// edit is the node.NetworkEdit of each field whose flag cmd was given.
+func (f *networkFlags) edit(cmd *cobra.Command) node.NetworkEdit {
+	var e node.NetworkEdit
 	fl := cmd.Flags()
 	if fl.Changed("type") {
-		n.Type = f.typ
+		e.Type = &f.typ
 	}
 	if fl.Changed("rpc-url") {
-		n.RPCURLs = f.rpcURLs
+		e.RPCURLs = f.rpcURLs
 	}
 	if fl.Changed("chain-id") {
-		n.ChainID = f.chainID
+		e.ChainID = &f.chainID
 	}
 	if fl.Changed("bitcoin-network") {
-		n.BitcoinNetwork = f.btcNetwork
+		e.BitcoinNetwork = &f.btcNetwork
 	}
 	if fl.Changed("cluster") {
-		n.Cluster = f.cluster
+		e.Cluster = &f.cluster
 	}
 	if fl.Changed("genesis-hash") {
-		n.GenesisHash = f.genesisHash
+		e.GenesisHash = &f.genesisHash
 	}
+	return e
 }
 
 func networkCommand(g *globals) *cobra.Command {
@@ -70,14 +74,9 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 		Short: "Add a Network to the Group's config.toml",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return editNetworks(g, func(nets map[string]network.Network) (string, error) {
-				if _, ok := nets[args[0]]; ok {
-					return "", fmt.Errorf("%w: %q", network.ErrExists, args[0])
-				}
-				var n network.Network
-				add.apply(cmd, &n)
-				nets[args[0]] = n
-				return "added " + args[0], nil
+			return writeNetwork(g, "added "+args[0], func(h *node.Host, group string) error {
+				_, err := h.AddNetwork(cmd.Context(), group, node.GroupTalk, args[0], add.edit(cmd))
+				return err
 			})
 		},
 	}
@@ -90,19 +89,9 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 		Short: "Change fields of a Network; unspecified fields keep their value",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return editNetworks(g, func(nets map[string]network.Network) (string, error) {
-				cur, ok := nets[args[0]]
-				if !ok {
-					return "", fmt.Errorf("%w: %q", network.ErrUnknown, args[0])
-				}
-				n := cur
-				n.RPCURLs = append([]string(nil), cur.RPCURLs...)
-				edit.apply(cmd, &n)
-				if reflect.DeepEqual(n, cur) {
-					return "", fmt.Errorf("%w: %q", network.ErrUnchanged, args[0])
-				}
-				nets[args[0]] = n
-				return "edited " + args[0], nil
+			return writeNetwork(g, "edited "+args[0], func(h *node.Host, group string) error {
+				_, err := h.EditNetwork(cmd.Context(), group, node.GroupTalk, args[0], edit.edit(cmd))
+				return err
 			})
 		},
 	}
@@ -113,13 +102,9 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 		Use:   "remove <alias>",
 		Short: "Remove a Network from the Group's config.toml",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return editNetworks(g, func(nets map[string]network.Network) (string, error) {
-				if _, ok := nets[args[0]]; !ok {
-					return "", fmt.Errorf("%w: %q", network.ErrUnknown, args[0])
-				}
-				delete(nets, args[0])
-				return "removed " + args[0], nil
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return writeNetwork(g, "removed "+args[0], func(h *node.Host, group string) error {
+				return h.RemoveNetwork(cmd.Context(), group, node.GroupTalk, args[0])
 			})
 		},
 	}
@@ -130,7 +115,7 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 		Use:   "list",
 		Short: "List this Node's Networks: alias, type, chain",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return runNetworkList(g, keyQuery) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runNetworkList(cmd.Context(), g, keyQuery) },
 	}
 	bindGroupFlag(g, listCmd)
 	listCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
@@ -138,7 +123,9 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 		Use:   "show <alias>",
 		Short: "Show one Network, with the RPC endpoints this Node uses",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, args []string) error { return runNetworkShow(g, keyQuery, args[0]) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runNetworkShow(cmd.Context(), g, keyQuery, args[0])
+		},
 	}
 	bindGroupFlag(g, showCmd)
 	showCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
@@ -147,19 +134,15 @@ its key or basic auth (see secret). A Conversation's config.toml may override a 
 	return root
 }
 
-// editNetworks applies change to the Networks of the targeted Group's
-// config.toml and writes it back if they are then valid (ADR 0023).
-func editNetworks(g *globals, change func(map[string]network.Network) (string, error)) error {
-	var what string
-	_, err := writeGroupConfig(g, func(ws *config.Workspace) (err error) {
-		if what, err = change(ws.Networks); err != nil {
-			return err
-		}
-		_, err = network.List(ws.Networks)
-		return err
-	})
+// writeNetwork runs write on the targeted Group's Networks and prints
+// what, or {"result": what} as JSON.
+func writeNetwork(g *globals, what string, write func(*node.Host, string) error) error {
+	h, group, _, err := workspaceTarget(g, "")
 	if err != nil {
 		return err
+	}
+	if err := write(h, group); err != nil {
+		return networkError(err)
 	}
 	if g.json {
 		return g.emitJSON(struct {
@@ -168,6 +151,21 @@ func editNetworks(g *globals, change func(map[string]network.Network) (string, e
 	}
 	fmt.Fprintln(g.app.Stdout, what)
 	return nil
+}
+
+// networkError maps a failure of the library's Network writes: what is
+// refused is a usage error; a config.toml that does not load as it is, and
+// the rest, as talk's.
+func networkError(err error) error {
+	var broken *node.ConfigError
+	switch {
+	case errors.As(err, &broken):
+		return exitOperational(err)
+	case errors.Is(err, network.ErrExists), errors.Is(err, network.ErrUnknown), errors.Is(err, network.ErrUnchanged),
+		errors.Is(err, network.ErrInvalid), errors.Is(err, config.ErrNotWritten):
+		return exitUsagef("%w", err)
+	}
+	return talkError(err)
 }
 
 // networkView is one Network, human or JSON. RPCURLs are as written: a
@@ -184,36 +182,23 @@ type networkView struct {
 	RPCURLs     []string `json:"rpc_urls"`
 }
 
-// readNetworks is the Networks of the targeted Group's config.toml, with
-// the Conversation of the Key keyQuery names merged over it when one is
-// named. A Group with no config.toml has none.
-func readNetworks(g *globals, keyQuery string) ([]networkView, error) {
-	e, err := load(g, keyQuery)
+func networkViewOf(n node.Network) networkView {
+	return networkView{Alias: n.Alias, Type: n.Type, Chain: n.Chain, Curve: n.Curve, ChainID: n.ChainID,
+		Network: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash, RPCURLs: n.RPCURLs}
+}
+
+func runNetworkList(ctx context.Context, g *globals, keyQuery string) error {
+	h, group, conv, err := workspaceTarget(g, keyQuery)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	nets, err := e.Networks()
+	nets, err := h.Networks(ctx, group, conv)
 	if err != nil {
-		return nil, exitOperational(err)
+		return talkError(err)
 	}
 	views := make([]networkView, len(nets))
 	for i, n := range nets {
-		urls := n.RPCURLs
-		if urls == nil {
-			urls = []string{}
-		}
-		views[i] = networkView{
-			Alias: n.Alias, Type: n.Type, Chain: n.Chain().String(), Curve: n.Curve(), ChainID: n.ChainID,
-			Network: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash, RPCURLs: urls,
-		}
-	}
-	return views, nil
-}
-
-func runNetworkList(g *globals, keyQuery string) error {
-	views, err := readNetworks(g, keyQuery)
-	if err != nil {
-		return err
+		views[i] = networkViewOf(n)
 	}
 	if g.json {
 		return g.emitJSON(views)
@@ -225,24 +210,25 @@ func runNetworkList(g *globals, keyQuery string) error {
 	return nil
 }
 
-func runNetworkShow(g *globals, keyQuery, alias string) error {
-	views, err := readNetworks(g, keyQuery)
+func runNetworkShow(ctx context.Context, g *globals, keyQuery, alias string) error {
+	h, group, conv, err := workspaceTarget(g, keyQuery)
 	if err != nil {
 		return err
 	}
-	for _, v := range views {
-		if v.Alias != alias {
-			continue
-		}
-		if g.json {
-			return g.emitJSON(v)
-		}
-		out, p := g.app.Stdout, g.out()
-		fmt.Fprintf(out, "alias %s\ntype %s\nchain %s\ncurve %s\n", p.primary(v.Alias), v.Type, v.Chain, v.Curve)
-		for _, u := range v.RPCURLs {
-			fmt.Fprintf(out, "rpc_url %s\n", u)
-		}
-		return nil
+	n, err := h.Network(ctx, group, conv, alias)
+	if errors.Is(err, network.ErrUnknown) {
+		return exitUsagef("%w", err)
+	} else if err != nil {
+		return talkError(err)
 	}
-	return exitUsagef("%w: %q", network.ErrUnknown, alias)
+	v := networkViewOf(n)
+	if g.json {
+		return g.emitJSON(v)
+	}
+	out, p := g.app.Stdout, g.out()
+	fmt.Fprintf(out, "alias %s\ntype %s\nchain %s\ncurve %s\n", p.primary(v.Alias), v.Type, v.Chain, v.Curve)
+	for _, u := range v.RPCURLs {
+		fmt.Fprintf(out, "rpc_url %s\n", u)
+	}
+	return nil
 }

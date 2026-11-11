@@ -2,11 +2,8 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -208,40 +205,32 @@ func (h *Host) writeProviders(group, conv string, change func(own, inForce map[s
 	if err != nil {
 		return err
 	}
-	path := e.ConversationFile()
-	w, err := config.ReadWorkspace(path)
-	if errors.Is(err, os.ErrNotExist) {
-		w = config.Workspace{}
-	} else if err != nil {
-		return err
-	}
-	if w.Providers == nil {
-		w.Providers = map[string]config.Provider{}
-	}
-	if err := change(w.Providers, maps.Clone(e.Workspace.Providers)); err != nil {
-		return err
-	}
-	for a, p := range w.Providers {
-		if err := provider.ValidateOverride(p.Endpoint(a)); err != nil {
-			return fmt.Errorf("[providers.%s]: %w", a, err)
+	return writeConversationConfig(e, func(w *config.Workspace) error {
+		if w.Providers == nil {
+			w.Providers = map[string]config.Provider{}
 		}
-	}
-	merged, err := e.Group.Workspace.Merge(w)
-	if err != nil {
-		return err
-	}
-	for a := range merged.Providers {
-		if _, err := merged.Provider(a); err != nil {
+		if err := change(w.Providers, maps.Clone(e.Workspace.Providers)); err != nil {
 			return err
 		}
-	}
-	if len(w.Providers) == 0 {
-		w.Providers = nil
-	}
-	if err := mkdirPrivate(filepath.Dir(path)); err != nil {
-		return err
-	}
-	return config.WriteWorkspace(path, w)
+		for a, p := range w.Providers {
+			if err := provider.ValidateOverride(p.Endpoint(a)); err != nil {
+				return fmt.Errorf("[providers.%s]: %w", a, err)
+			}
+		}
+		merged, err := e.Group.Workspace.Merge(*w)
+		if err != nil {
+			return err
+		}
+		for a := range merged.Providers {
+			if _, err := merged.Provider(a); err != nil {
+				return err
+			}
+		}
+		if len(w.Providers) == 0 {
+			w.Providers = nil
+		}
+		return nil
+	})
 }
 
 func providerOf(alias string, p config.Provider) Provider {

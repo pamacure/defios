@@ -2,15 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"defios.com/internal/config"
+	"defios.com/internal/node"
 	"defios.com/internal/plugin"
 )
 
@@ -40,19 +39,13 @@ commit), or from a local path, copied and pinned to a hash of its contents. It s
 and the command line of each MCP Server it would run, and asks first.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := g.paths()
-			if existing, err := nodeExists(p); err != nil {
-				return exitOperational(err)
-			} else if !existing {
-				return errNoNode(p)
-			}
-			src, err := plugin.ParseSource(args[0])
+			h, err := openNode(g)
 			if err != nil {
-				return exitUsagef("%w", err)
+				return err
 			}
-			s, err := plugin.NewStore(p).StageInstall(cmd.Context(), src)
+			s, err := h.StagePluginInstall(cmd.Context(), args[0])
 			if err != nil {
-				return exitOperational(err)
+				return pluginError(err)
 			}
 			defer s.Close()
 			w := g.textOut()
@@ -74,9 +67,19 @@ and the command line of each MCP Server it would run, and asks first.`,
 	return cmd
 }
 
+// pluginError maps a failure of the library's Plugin operations: a source
+// that is none is a usage error, the rest operational.
+func pluginError(err error) error {
+	var invalid *node.InvalidError
+	if errors.As(err, &invalid) {
+		return exitUsagef("%w", invalid.Err)
+	}
+	return exitOperational(err)
+}
+
 // lockedJSON is an installed Plugin's lock entry as install and update print
 // it under --json.
-func lockedJSON(name string, e plugin.LockEntry) map[string]any {
+func lockedJSON(name string, e node.PluginPin) map[string]any {
 	return map[string]any{"name": name, "version": e.Version, "source": e.Source, "pin": e.Pin}
 }
 
@@ -91,7 +94,7 @@ func (g *globals) textOut() io.Writer {
 
 // describePlugin prints what a Plugin brings: its Skills, and the command
 // line each MCP Server would run with the variables it asks for.
-func describePlugin(w io.Writer, pl plugin.Plugin) {
+func describePlugin(w io.Writer, pl node.Plugin) {
 	fmt.Fprintf(w, "Plugin %s %s: %s\n", pl.Name, pl.Version, pl.Description)
 	if len(pl.Skills) == 0 {
 		fmt.Fprintln(w, "  Skills: none")
@@ -106,9 +109,8 @@ func describePlugin(w io.Writer, pl plugin.Plugin) {
 		return
 	}
 	fmt.Fprintln(w, "  MCP Servers, each a program it would run on this machine:")
-	for _, name := range pl.ServerNames() {
-		s := pl.Servers[name]
-		fmt.Fprintf(w, "    %s: %s\n", name, s.CommandLine())
+	for _, s := range pl.Servers {
+		fmt.Fprintf(w, "    %s: %s\n", s.Name, s.CommandLine)
 		if len(s.Env) > 0 {
 			fmt.Fprintf(w, "      asks for: %s\n", strings.Join(s.Env, ", "))
 		}
@@ -153,22 +155,29 @@ func pluginListCommand(g *globals) *cobra.Command {
 		Long: `List the built-in and installed Plugins, with their Skills and MCP Servers. A Plugin in plugins.lock
 with nothing installed, as a restore leaves one it could not fetch, is listed as missing.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			listed, err := plugin.NewStore(g.paths()).List()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
+			listed, err := h.Plugins(cmd.Context())
 			if err != nil {
 				return exitOperational(err)
 			}
 			rows := []pluginRow{}
 			for _, l := range listed {
 				row := pluginRow{
-					Name: l.Plugin.Name, Version: l.Plugin.Version, Source: l.Entry.Source, Pin: l.Entry.Pin,
-					BuiltIn: l.Plugin.BuiltIn, Missing: l.Missing, Skills: []string{}, Servers: l.Plugin.ServerNames(),
+					Name: l.Name, Version: l.Version, Source: l.Source, Pin: l.Pin,
+					BuiltIn: l.BuiltIn, Missing: l.Missing, Skills: []string{},
 				}
 				if row.BuiltIn {
 					row.Source = "built-in"
 				}
-				for _, s := range l.Plugin.Skills {
+				for _, s := range l.Skills {
 					row.Skills = append(row.Skills, s.Name)
+				}
+				for _, s := range l.Servers {
+					row.Servers = append(row.Servers, s.Name)
 				}
 				rows = append(rows, row)
 			}
@@ -207,18 +216,20 @@ ref it was installed at, a local-path Plugin copied again. It shows the Plugin, 
 its plugin.toml, and asks first. A Plugin in plugins.lock that is not installed is fetched again.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st := plugin.NewStore(g.paths())
+			h, err := openNode(g)
+			if err != nil {
+				return err
+			}
 			names := args
 			if len(names) == 0 {
-				var err error
-				if names, err = st.Installed(); err != nil {
+				if names, err = h.InstalledPlugins(cmd.Context()); err != nil {
 					return exitOperational(err)
 				}
 			}
 			rows := []map[string]any{}
 			var failed error
 			for _, name := range names {
-				e, err := updatePlugin(g, cmd, st, name, yes)
+				e, err := updatePlugin(g, cmd, h, name, yes)
 				if err != nil {
 					if len(names) == 1 {
 						return err
@@ -243,10 +254,10 @@ its plugin.toml, and asks first. A Plugin in plugins.lock that is not installed 
 
 // updatePlugin updates one Plugin, once confirmed, and returns its lock
 // entry.
-func updatePlugin(g *globals, cmd *cobra.Command, st plugin.Store, name string, yes bool) (plugin.LockEntry, error) {
-	s, err := st.StageUpdate(cmd.Context(), name)
+func updatePlugin(g *globals, cmd *cobra.Command, h *node.Host, name string, yes bool) (node.PluginPin, error) {
+	s, err := h.StagePluginUpdate(cmd.Context(), name)
 	if err != nil {
-		return plugin.LockEntry{}, exitOperational(err)
+		return node.PluginPin{}, pluginError(err)
 	}
 	defer s.Close()
 	w := g.textOut()
@@ -262,10 +273,10 @@ func updatePlugin(g *globals, cmd *cobra.Command, st plugin.Store, name string, 
 		fmt.Fprint(w, s.Diff)
 	}
 	if err := confirm(g, yes, w, fmt.Sprintf("Update %s from %s to %s?", name, s.Was.Version, s.Entry.Version), "plugin "+name+" not updated"); err != nil {
-		return plugin.LockEntry{}, err
+		return node.PluginPin{}, err
 	}
 	if err := s.Commit(); err != nil {
-		return plugin.LockEntry{}, exitOperational(err)
+		return node.PluginPin{}, exitOperational(err)
 	}
 	fmt.Fprintf(w, "Updated %s to %s at %s\n", name, s.Entry.Version, s.Entry.Pin)
 	return s.Entry, nil
@@ -276,17 +287,15 @@ func pluginRemoveCommand(g *globals) *cobra.Command {
 		Use:   "remove <plugin>",
 		Short: "Remove an installed Plugin and its lock entry",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			// A built-in is refused by Remove itself, granted or not.
-			_, builtIn, _ := plugin.BuiltIn(args[0])
-			grants, err := pluginGrants(g, args[0])
+		RunE: func(cmd *cobra.Command, args []string) error {
+			h, err := openNode(g)
 			if err != nil {
 				return err
 			}
-			if len(grants) > 0 && !builtIn {
-				return exitUsagef("Plugin %s is granted by %s; revoke it there first with `defios agent revoke`", args[0], strings.Join(grants, ", "))
-			}
-			if err := plugin.NewStore(g.paths()).Remove(args[0]); err != nil {
+			var granted *node.PluginGrantedError
+			if err := h.RemovePlugin(cmd.Context(), args[0]); errors.As(err, &granted) {
+				return exitUsagef("%v; revoke it there first with `defios agent revoke`", granted)
+			} else if err != nil {
 				return exitOperational(err)
 			}
 			if g.json {
@@ -324,29 +333,4 @@ func reinstalledJSON(plugins []plugin.Reinstalled) []map[string]any {
 		rows = append(rows, row)
 	}
 	return rows
-}
-
-// pluginGrants is every grant on this Node of a Skill or MCP Server of
-// Plugin name, sorted by Handle, as "<handle> (<plugin>/<name>, ...)".
-func pluginGrants(g *globals, name string) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(g.paths().AgentProfilesDir(), "*", "config.toml"))
-	if err != nil {
-		return nil, exitOperational(err)
-	}
-	sort.Strings(matches)
-	var out []string
-	for _, m := range matches {
-		h := filepath.Base(filepath.Dir(m))
-		if config.ValidateHandle(h) != nil {
-			continue
-		}
-		p, err := config.ReadProfile(m)
-		if err != nil {
-			return nil, exitOperational(err)
-		}
-		if refs := p.PluginGrants(name); len(refs) > 0 {
-			out = append(out, fmt.Sprintf("%s (%s)", h, strings.Join(refs, ", ")))
-		}
-	}
-	return out, nil
 }

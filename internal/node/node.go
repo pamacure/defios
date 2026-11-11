@@ -8,7 +8,8 @@
 // Hooks of this Node's that fired on them; and agents: the Node's Agent
 // Profiles, where each is included, and each Group's Providers; and the
 // Vault: each Group's Secrets, Backups and the passphrase change; and
-// Trigger config: each Group's Jobs, Hooks and Schedules.
+// Trigger config: each Group's Jobs, Hooks and Schedules; and the Node's
+// Plugins and each Group's Networks.
 package node
 
 import (
@@ -175,6 +176,23 @@ type Node interface {
 	GroupConfigTOML(ctx context.Context, group string) (string, error)
 	SetGroupConfigTOML(ctx context.Context, group, text string) error
 	RunJob(ctx context.Context, group, name string, ev *trigger.Event) (JobResult, error)
+
+	// Plugins, the whole Node's. An install or update is staged first, so
+	// a front end can show what it brings before committing it. None
+	// needs serve.
+	Plugins(ctx context.Context) ([]Plugin, error)
+	InstalledPlugins(ctx context.Context) ([]string, error)
+	StagePluginInstall(ctx context.Context, source string) (*PluginStage, error)
+	StagePluginUpdate(ctx context.Context, name string) (*PluginStage, error)
+	RemovePlugin(ctx context.Context, name string) error
+
+	// Networks, a Group's, whose tables a Conversation overrides whole.
+	// The Group need not be served.
+	Networks(ctx context.Context, group, conv string) ([]Network, error)
+	Network(ctx context.Context, group, conv, alias string) (Network, error)
+	AddNetwork(ctx context.Context, group, conv, alias string, e NetworkEdit) (Network, error)
+	EditNetwork(ctx context.Context, group, conv, alias string, e NetworkEdit) (Network, error)
+	RemoveNetwork(ctx context.Context, group, conv, alias string) error
 }
 
 // Errors a front end tells apart. Vault failures come through as the

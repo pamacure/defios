@@ -86,24 +86,6 @@ func providerReadError(err error) error {
 	return talkError(err)
 }
 
-// providerTarget is the Node, Group alias and Conversation a provider verb
-// acts on.
-func providerTarget(g *globals, keyQuery string) (*node.Host, string, string, error) {
-	h, err := openNode(g)
-	if err != nil {
-		return nil, "", "", err
-	}
-	alias, err := g.resolveAlias()
-	if err != nil {
-		return nil, "", "", err
-	}
-	conv, err := queriedConversation(g, h, keyQuery)
-	if err != nil {
-		return nil, "", "", err
-	}
-	return h, alias, conv, nil
-}
-
 func providerCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "provider",
@@ -203,7 +185,7 @@ its key reference.`,
 // writeProvider runs write on the targeted Group's Providers and prints
 // what it returns as JSON, or "<done> <alias> <prep> <config.toml>".
 func writeProvider(g *globals, done, prep, alias string, write func(*node.Host, string) (any, error)) error {
-	h, group, _, err := providerTarget(g, "")
+	h, group, _, err := workspaceTarget(g, "")
 	if err != nil {
 		return err
 	}
@@ -236,7 +218,7 @@ func providerViewOf(p node.Provider) providerView {
 }
 
 func runProviderList(ctx context.Context, g *globals, keyQuery string) error {
-	h, group, conv, err := providerTarget(g, keyQuery)
+	h, group, conv, err := workspaceTarget(g, keyQuery)
 	if err != nil {
 		return err
 	}
@@ -259,7 +241,7 @@ func runProviderList(ctx context.Context, g *globals, keyQuery string) error {
 }
 
 func runProviderShow(ctx context.Context, g *globals, keyQuery, alias string) error {
-	h, group, conv, err := providerTarget(g, keyQuery)
+	h, group, conv, err := workspaceTarget(g, keyQuery)
 	if err != nil {
 		return err
 	}

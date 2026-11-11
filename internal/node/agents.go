@@ -647,3 +647,23 @@ func (h *Host) writeGroupConfig(group string, change func(*config.Config) error)
 	}
 	return config.WriteFile(path, cfg)
 }
+
+// writeConversationConfig applies change to the config.toml of the
+// Conversation whose config e is, an absent one being empty, and writes it
+// back; a change refused writes nothing.
+func writeConversationConfig(e config.Effective, change func(*config.Workspace) error) error {
+	path := e.ConversationFile()
+	w, err := config.ReadWorkspace(path)
+	if errors.Is(err, os.ErrNotExist) {
+		w = config.Workspace{}
+	} else if err != nil {
+		return err
+	}
+	if err := change(&w); err != nil {
+		return err
+	}
+	if err := mkdirPrivate(filepath.Dir(path)); err != nil {
+		return err
+	}
+	return config.WriteWorkspace(path, w)
+}
