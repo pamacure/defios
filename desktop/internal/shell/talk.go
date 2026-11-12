@@ -478,7 +478,12 @@ func (t *talk) emit() {
 
 // snapshot is the TalkState; t.mu is held.
 func (t *talk) snapshot() TalkState {
-	st := TalkState{Seq: t.seq, Group: t.group}
+	// Lists are never nil: the page iterates them, and nil is JSON null.
+	st := TalkState{
+		Seq: t.seq, Group: t.group,
+		Conversations: []Conversation{}, Keygens: []Keygen{}, Roster: []RosterNode{},
+		Live: []LiveChain{}, Handles: []string{}, Agents: []Agent{}, Overrides: []Override{},
+	}
 	if t.group == "" {
 		return st
 	}
@@ -488,9 +493,9 @@ func (t *talk) snapshot() TalkState {
 			st.Problem = t.failed[what]
 		}
 	}
-	st.Handles = slices.Clone(t.handles)
-	st.Agents = slices.Clone(t.agents)
-	st.Overrides = slices.Clone(t.over)
+	st.Handles = append(st.Handles, t.handles...)
+	st.Agents = append(st.Agents, t.agents...)
+	st.Overrides = append(st.Overrides, t.over...)
 	st.MajorityReachable = t.status.MajorityReachable
 	for _, r := range t.status.Roster {
 		st.Roster = append(st.Roster, RosterNode{ID: r.NodeID, Name: r.DisplayName, Reachable: r.Reachable, Self: r.NodeID == t.self})
@@ -516,9 +521,9 @@ func (t *talk) snapshot() TalkState {
 	}
 	st.Items = t.items()
 	for _, c := range t.live[t.open] {
-		lc := LiveChain{Chain: c.Chain}
+		lc := LiveChain{Chain: c.Chain, Agents: []LiveAgent{}}
 		for _, a := range c.Agents {
-			lc.Agents = append(lc.Agents, LiveAgent{Handle: a.Handle, Depth: a.Depth, Blocks: slices.Clone(a.Blocks)})
+			lc.Agents = append(lc.Agents, LiveAgent{Handle: a.Handle, Depth: a.Depth, Blocks: append([]LiveBlock{}, a.Blocks...)})
 		}
 		st.Live = append(st.Live, lc)
 	}

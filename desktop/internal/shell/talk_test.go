@@ -417,3 +417,46 @@ func TestTalkReadsAgainOnceTheGroupsReplicaExists(t *testing.T) {
 		return ts.Problem == nil && len(ts.Conversations) == 1 && len(ts.Items) == 1
 	})
 }
+
+// The page lists what the TalkState holds; JSON null for an empty list
+// would break it. Only Key, Refused and Problem may be absent.
+func TestTheTalkStateSendsEmptyListsNotNull(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := served(t, r)
+	assertNoNullLists(t, eventuallyTalk(t, s, func(ts shell.TalkState) bool { return ts.Group != "" }))
+
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventChainStart, Chain: "c1"})
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentStart, Chain: "c1", Handle: "auditor", Depth: 1})
+	assertNoNullLists(t, eventuallyTalk(t, s, func(ts shell.TalkState) bool {
+		return len(ts.Live) == 1 && len(ts.Live[0].Agents) == 1
+	}))
+}
+
+func assertNoNullLists(t *testing.T, ts shell.TalkState) {
+	t.Helper()
+	b, err := json.Marshal(ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, x := range v {
+				if x == nil && k != "Key" && k != "Refused" && k != "Problem" {
+					t.Errorf("%s.%s is null", path, k)
+				}
+				walk(path+"."+k, x)
+			}
+		case []any:
+			for i, x := range v {
+				walk(fmt.Sprintf("%s[%d]", path, i), x)
+			}
+		}
+	}
+	walk("TalkState", v)
+}
