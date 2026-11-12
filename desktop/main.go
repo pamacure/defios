@@ -138,6 +138,7 @@ func run(dir string, atLogin bool) error {
 			app.Event.Emit(stateEvent, st)
 			ui.trayFor(st)
 		},
+		OnTalk: func(ts shell.TalkState) { app.Event.Emit(talkEvent, ts) },
 	})
 	ui.shell, ui.app, ui.win = sh, app, win
 

@@ -1,9 +1,9 @@
 // The DeFiOS desktop frontend. It renders the shell.State the Go side
 // reports (main.UI) and calls back into it; it holds no Node state of its
 // own beyond which page is open. UI text says "device" for a Node.
-import { Call, Events } from "/wails/runtime.js";
-
-const call = (method, ...args) => Call.ByName(`main.UI.${method}`, ...args);
+import { Events } from "/wails/runtime.js";
+import { call, h, icon } from "./dom.js";
+import { talkPage, talkUpdate } from "./talk.js";
 
 const SECTIONS = [
   { id: "talk", label: "Talk", issue: 149 },
@@ -15,49 +15,16 @@ const SECTIONS = [
 ];
 const SETTINGS = { id: "settings", label: "Settings", issue: 150 };
 
-const ICONS = {
-  talk: '<path d="M4 5h16v11H9l-5 4z"/>',
-  vault: '<rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M12 8.5V6M15.5 12H18"/>',
-  agents: '<rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01M9 16h6"/>',
-  plugins: '<path d="M9 4v4M15 4v4M7 8h10v4a5 5 0 0 1-10 0zM12 17v3"/>',
-  triggers: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
-  networks: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13.5 0 16M12 4c-2.5 2.5-2.5 13.5 0 16"/>',
-  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
-};
-
 // What only the frontend keeps: the open page and transient UI. For
 // onboarding, too: the Backup chosen at step 1, step 3's tab, the device
 // picked and whether a Decline is being written, and every typed field, so
 // a redraw never drops what was typed.
 const ui = {
-  page: "talk", menuOpen: false, addingGroup: false, busy: false,
+  page: "talk", focus: null, menuOpen: false, addingGroup: false, busy: false,
   restore: null, invite: "propose", pick: "", declining: false, form: {},
 };
 let state = null;
 let shownKey = "";
-
-// h builds an element; children are nodes or strings (never parsed as
-// HTML, so Group aliases and device names cannot inject markup).
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === false || v == null) continue;
-    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else if (k === "class") el.className = v;
-    else el.setAttribute(k, v === true ? "" : v);
-  }
-  for (const c of children.flat()) {
-    if (c == null || c === false) continue;
-    el.append(c instanceof Node ? c : String(c));
-  }
-  return el;
-}
-
-function icon(name) {
-  const span = h("span", { "aria-hidden": "true" });
-  span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
-  return span;
-}
 
 const logo = () => h("img", { class: "logo", src: "/logo.png", alt: "DeFiOS" });
 const mark = () => h("img", { class: "mark", src: "/mark.png", alt: "DeFiOS" });
@@ -115,7 +82,13 @@ function render(force = false) {
   if (!force && key === shownKey) return;
   shownKey = key;
   const root = document.getElementById("app");
+  // A field kept across redraws, as Talk's composer is, keeps focus.
+  const active = document.activeElement;
   root.replaceChildren(screen(s));
+  if (active && active !== document.body && active.isConnected) {
+    active.focus();
+    return;
+  }
   const focus = root.querySelector("[data-autofocus]");
   if (focus) focus.focus();
 }
@@ -485,7 +458,7 @@ function shell(s) {
 function rail() {
   const item = (sec) => h("button", {
     "aria-label": sec.label, "aria-current": ui.page === sec.id ? "page" : null,
-    onclick: () => { ui.page = sec.id; render(true); },
+    onclick: () => go(sec.id),
   }, icon(sec.id), h("span", { class: "tip" }, sec.label));
   return h("nav", { class: "rail", "aria-label": "Sections" },
     mark(), SECTIONS.map(item), h("div", { class: "spacer" }), item(SETTINGS));
@@ -518,8 +491,23 @@ function header(s) {
     h("div", { class: "who" }, "Device ", h("strong", {}, nodeName(s))));
 }
 
+// go opens a section page; focus is what on it to open, such as
+// { profile: "auditor" }, for the page to show once it has content
+// (#151 to #155).
+function go(id, focus = null) {
+  ui.page = id;
+  ui.focus = focus;
+  render(true);
+}
+
 function page(s) {
   const sec = [...SECTIONS, SETTINGS].find((x) => x.id === ui.page) ?? SECTIONS[0];
+  // Talk is the served Group's, so it has no This Device / Group parts.
+  if (sec.id === "talk") {
+    return h("main", { class: "page talkpage" },
+      s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
+      talkPage(go));
+  }
   return h("main", { class: "page" },
     h("h1", {}, sec.label),
     s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
@@ -529,16 +517,7 @@ function page(s) {
     h("section", { class: "part", "aria-label": "Group" },
       h("header", {}, h("h2", {}, "Group"), editTarget(s)),
       !s.EditGroupServed && h("div", { class: "notice" }, `${s.EditGroup} is not online on this device. Changes here apply the next time it is.`),
-      h("div", { class: "body" }, sec.id === "talk" ? talkEmpty() : h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`))));
-}
-
-// talkEmpty is Talk with Group talk only, before any Key; #149 brings
-// the rest.
-function talkEmpty() {
-  return h("div", { class: "empty" },
-    h("strong", {}, "Group talk"),
-    h("p", {}, "There are no Keys in this Group yet. Make the first with + New Key."),
-    h("button", { class: "btn", disabled: true, title: "Coming soon" }, "+ New Key"));
+      h("div", { class: "body" }, h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`))));
 }
 
 // editTarget picks the Group the Group parts edit. The choice is kept
@@ -571,4 +550,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 Events.On("shell:state", (ev) => apply(ev.data));
+Events.On("talk:state", (ev) => talkUpdate(ev.data));
 call("State").then(apply);
+call("Talk").then(talkUpdate);

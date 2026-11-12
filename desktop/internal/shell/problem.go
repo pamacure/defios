@@ -7,9 +7,14 @@ import (
 	"strings"
 
 	"defios.com/internal/backup"
+	"defios.com/internal/cosl"
 	"defios.com/internal/group"
+	"defios.com/internal/key"
 	"defios.com/internal/node"
+	"defios.com/internal/outbox"
+	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
+	"defios.com/internal/session"
 	"defios.com/internal/vault"
 )
 
@@ -72,6 +77,51 @@ func problemOf(err error) *Problem {
 		return &Problem{"not-served", "This Group is not online on this device."}
 	case errors.As(err, &ident):
 		return &Problem{"identity", "The Vault opened, but its keys do not match this device's identity."}
+	}
+	return talkProblem(err)
+}
+
+// talkProblem maps the Talk page's errors: talk, the Outbox, Keys, keygen
+// Sessions and which agents are included.
+func talkProblem(err error) *Problem {
+	var (
+		noReplica *node.NoReplicaError
+		taken     *node.KeyAliasTakenError
+	)
+	switch {
+	case errors.Is(err, serve.ErrBadHandle):
+		return &Problem{"not-included", "That message mentions an agent that isn't in this conversation."}
+	case errors.Is(err, cosl.ErrBadText):
+		return &Problem{"bad-text", "That message can't be sent: it is empty, too long or not valid text."}
+	case errors.Is(err, outbox.ErrCommitted):
+		return &Problem{"committed", "That message has already been delivered, so it can't be dropped."}
+	case errors.Is(err, outbox.ErrInFlight):
+		return &Problem{"in-flight", "That message may be being delivered right now. Try again in a moment."}
+	case errors.Is(err, outbox.ErrNotQueued):
+		return &Problem{"not-queued", "That message is no longer waiting to be sent."}
+	case errors.As(err, &taken):
+		if taken.Key == "" {
+			return &Problem{"alias-taken", fmt.Sprintf("“%s” is waiting on a Key being made in this Group.", taken.Alias)}
+		}
+		return &Problem{"alias-taken", fmt.Sprintf("Another Key in this Group is already called “%s”.", taken.Alias)}
+	case errors.Is(err, serve.ErrBadAlias):
+		return &Problem{"bad-alias", "That Key name can't be used: it is invalid or already taken here."}
+	case errors.Is(err, session.ErrBadCurve):
+		return &Problem{"bad-curve", "Choose ECDSA or EdDSA."}
+	case errors.Is(err, session.ErrUnknownSession):
+		return &Problem{"unknown-session", "That Key is no longer being made."}
+	case errors.Is(err, session.ErrNotParticipant):
+		return &Problem{"not-participant", "This device is not one of the devices making that Key."}
+	case errors.Is(err, raftx.ErrNoLeader):
+		return &Problem{"no-leader", "Not enough devices are online for that right now. Try again once they are."}
+	case errors.Is(err, raftx.ErrNotInserted):
+		return &Problem{"not-inserted", "That was delivered, but this device has not caught up with it yet."}
+	case errors.As(err, &noReplica):
+		return &Problem{"no-replica", "This Group's conversations aren't on this device yet. They appear once every device has joined."}
+	case errors.Is(err, node.ErrUnknownProfile):
+		return &Problem{"unknown-profile", "This device has no agent by that name."}
+	case errors.Is(err, key.ErrUnknown):
+		return &Problem{"unknown-key", "This Group has no such Key."}
 	}
 	return &Problem{"error", err.Error()}
 }

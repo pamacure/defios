@@ -10,8 +10,12 @@ import (
 	"defios.com/desktop/internal/shell"
 )
 
-// stateEvent carries each new shell.State to the frontend.
-const stateEvent = "shell:state"
+// stateEvent carries each new shell.State to the frontend, and
+// talkEvent each new shell.TalkState.
+const (
+	stateEvent = "shell:state"
+	talkEvent  = "talk:state"
+)
 
 // UI is the service the frontend calls, as main.UI.<Method>. Every method
 // returns the State after it; the same State also arrives as stateEvent.
@@ -48,6 +52,25 @@ func (u *UI) Discover() shell.State                { return u.shell.Discover() }
 func (u *UI) Propose(nodeIDs []string) shell.State { return u.shell.Propose(nodeIDs) }
 func (u *UI) Accept() shell.State                  { return u.shell.Accept() }
 func (u *UI) Decline(reason string) shell.State    { return u.shell.Decline(reason) }
+
+// Talk.
+
+func (u *UI) Talk() shell.TalkState                         { return u.shell.Talk() }
+func (u *UI) OpenConversation(conv string) shell.TalkState  { return u.shell.OpenConversation(conv) }
+func (u *UI) SendMessage(text string) shell.TalkState       { return u.shell.SendMessage(text) }
+func (u *UI) CancelChain(chain string) shell.TalkState      { return u.shell.CancelChain(chain) }
+func (u *UI) DropQueued(msgID string) shell.TalkState       { return u.shell.DropQueued(msgID) }
+func (u *UI) SetKeyAlias(alias string) shell.TalkState      { return u.shell.SetKeyAlias(alias) }
+func (u *UI) AcceptKeygen(id, alias string) shell.TalkState { return u.shell.AcceptKeygen(id, alias) }
+func (u *UI) AbortKeygen(id, reason string) shell.TalkState { return u.shell.AbortKeygen(id, reason) }
+func (u *UI) NewKey(curve string, t int, alias string) shell.TalkState {
+	return u.shell.NewKey(curve, t, alias)
+}
+func (u *UI) SetAgentIncluded(handle string, on bool) shell.TalkState {
+	return u.shell.SetAgentIncluded(handle, on)
+}
+
+func (u *UI) Transcript(msgID string) shell.TranscriptView { return u.shell.Transcript(msgID) }
 
 // ChooseBackup asks for a Backup file with the OS's file dialog; "" when
 // none was chosen.

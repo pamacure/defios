@@ -35,6 +35,8 @@ type Node interface {
 	Propose(ctx context.Context, group string, nodeIDs []string) (node.Formation, error)
 	Accept(ctx context.Context, group, groupID string) (node.Formation, error)
 	Decline(ctx context.Context, group, groupID, reason string) (node.Formation, error)
+
+	TalkNode
 }
 
 // PrefStore loads and saves the app's preferences.
@@ -77,6 +79,8 @@ type Deps struct {
 	Notify func(title, body string)
 	// OnChange receives every new State, from any goroutine.
 	OnChange func(State)
+	// OnTalk receives every new TalkState, from any goroutine.
+	OnTalk func(TalkState)
 	// RetryEvery is how often a Node another process serves is checked
 	// again; zero is 2 seconds.
 	RetryEvery time.Duration
@@ -198,6 +202,8 @@ type Shell struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	stopNode context.CancelFunc // ends the current Node's subscription
+
+	talk *talk
 }
 
 // New is a Shell that shows nothing until Start.
@@ -212,7 +218,7 @@ func New(d Deps) *Shell {
 		d.OnChange = func(State) {}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Shell{d: d, ctx: ctx, cancel: cancel, st: State{View: ViewStarting}}
+	return &Shell{d: d, ctx: ctx, cancel: cancel, st: State{View: ViewStarting}, talk: newTalk(ctx, d.OnTalk)}
 }
 
 // Start opens the Node and routes to the screen it calls for. atLogin
@@ -279,7 +285,8 @@ func (s *Shell) open() {
 	s.n, s.stopNode = n, stop
 	s.st.Node = NodeInfo{Name: name, ID: n.NodeID()}
 	s.mu.Unlock()
-	go s.follow(ctx, n)
+	// Subscribed here, not in follow, so no event after open is missed.
+	go s.follow(ctx, n, n.Subscribe(ctx))
 	s.route(nil)
 }
 
@@ -408,8 +415,9 @@ func (s *Shell) unlockAtLogin() {
 }
 
 // follow applies the Node's status as it changes, until ctx is done.
-func (s *Shell) follow(ctx context.Context, n Node) {
-	for ev := range n.Subscribe(ctx) {
+func (s *Shell) follow(ctx context.Context, n Node, events <-chan node.Event) {
+	for ev := range events {
+		s.talk.event(n, ev)
 		// A proposal or an acceptance moves step 3 on, as the status does.
 		if ev.Status == nil && ev.Proposal == nil && ev.Accepted == nil {
 			continue
@@ -467,6 +475,11 @@ func (s *Shell) apply(st node.Status) {
 				}
 			}
 		})
+		if forming == nil {
+			s.talk.serve(s.node(), s.State().Node.ID, st.Group, st)
+		} else {
+			s.talk.stop()
+		}
 		return
 	}
 	if v := s.State().View; v != ViewServed && v != ViewForming {
@@ -655,6 +668,7 @@ func (s *Shell) forget() {
 	s.mu.Lock()
 	s.pass = ""
 	s.mu.Unlock()
+	s.talk.stop()
 }
 
 // Close locks the Node and stops the Shell, as the app quits.

@@ -35,6 +35,8 @@ type fakeNode struct {
 	unreached   map[string]bool // Node IDs a proposal does not reach
 	undelivered []string        // what Accept reports undelivered
 	proposed    [][]string      // each Propose's Node IDs
+
+	talk *fakeTalk
 }
 
 // fakeForm is a Group's formation: unformed while proposal is nil.
