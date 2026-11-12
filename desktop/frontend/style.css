@@ -234,6 +234,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .msg .text { padding: 8px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
 .msg.right .text { background: var(--accent-wash); border-color: transparent; border-bottom-right-radius: 4px; }
 .msg.left .text { border-bottom-left-radius: 4px; }
+.msg.sending .text { opacity: 0.6; }
 .msg.pruned .text { color: var(--muted); font-style: italic; background: transparent; border-style: dashed; }
 .msg .actions { display: flex; gap: 12px; }
 .msg .actions .link { font-size: 12px; }

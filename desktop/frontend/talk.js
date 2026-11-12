@@ -29,6 +29,9 @@ const tui = {
   drafts: new Map(), // Conversation ID -> what was typed there
   form: { curve: "ecdsa", t: "", alias: "", reason: "", keyAlias: "" },
   shownOpen: null, // the Conversation the composer's draft belongs to
+  // The message being sent, shown at once: Send returns only once it
+  // commits, or after Raft's ApplyTimeout once it is queued.
+  sending: null, // { conv, text }
   // The transcript's scroll, kept as it scrolls: a redraw of the whole
   // app makes it anew.
   scroll: { top: 0, pinned: true },
@@ -247,8 +250,11 @@ function roster() {
 function transcript() {
   const items = ts.Items.map(item);
   const live = ts.Live.map(liveChain);
+  const sending = tui.sending && tui.sending.conv === ts.Open && h("div", { class: "msg right sending" },
+    h("div", { class: "meta" }, h("span", { class: "chip" }, "Sending…")),
+    h("div", { class: "text" }, tui.sending.text));
   let empty = null;
-  if (!items.length && !live.length) {
+  if (!items.length && !live.length && !sending) {
     empty = ts.Open === GROUP_TALK && ts.Conversations.length <= 1
       ? h("div", { class: "empty" },
         h("strong", {}, "Group talk"),
@@ -261,7 +267,7 @@ function transcript() {
       const el = e.target;
       tui.scroll = { top: el.scrollTop, pinned: el.scrollHeight - el.scrollTop - el.clientHeight < 40 };
     },
-  }, empty, items, live);
+  }, empty, items, live, sending);
 }
 
 function item(it) {
@@ -385,13 +391,26 @@ function makeComposer() {
   const submit = async () => {
     const text = textarea.value.trim();
     if (!text || tui.busy) return;
-    const next = await act("SendMessage", text);
+    const conv = ts.Open;
+    textarea.value = "";
+    tui.drafts.delete(conv);
+    list.hidden = true;
+    tui.scroll.pinned = true;
+    tui.sending = { conv, text };
+    let next;
+    try {
+      next = await act("SendMessage", text);
+    } finally {
+      tui.sending = null;
+    }
     refused = next?.Refused ?? null;
-    if (next && !next.Refused) {
-      textarea.value = "";
-      tui.drafts.delete(ts.Open);
+    // Refused: what was sent goes back to be fixed, unless more was typed.
+    if (!next || next.Refused) {
+      if (ts.Open !== conv) tui.drafts.set(conv, tui.drafts.get(conv) || text);
+      else if (!textarea.value) textarea.value = text;
     }
     update();
+    draw();
   };
   const update = () => {
     refusal.textContent = refused?.Message ?? "";
