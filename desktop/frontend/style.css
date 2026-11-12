@@ -261,6 +261,8 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .composer .btn { flex: none; }
 .composer .plus { width: 38px; padding: 0; font-size: 18px; }
 .composer .refusal[hidden] { display: none; }
+.composer .stop { color: var(--danger); border-color: var(--danger); }
+.composer .stop[hidden] { display: none; }
 .suggest { position: absolute; bottom: calc(100% - 6px); left: 62px; margin: 0; padding: 4px; list-style: none; min-width: 180px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(21, 26, 31, 0.14); z-index: 10; }
 .suggest li { padding: 6px 10px; border-radius: 6px; cursor: pointer; }
 .suggest li[aria-selected="true"] { background: var(--accent-wash); color: var(--accent-strong); }

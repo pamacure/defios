@@ -50,9 +50,10 @@ needs checking by hand:
 - Talk, with two devices: send in Group talk and see it on the other's left;
   "+ New Key" on one shows a provisional row on both, and Accept on the other
   turns it into a Key. Include an agent, mention it, watch its output stream,
-  Cancel one chain and expand another's Transcript. Quit the other device:
-  the header turns red, the banner says messages will queue, and Drop removes
-  a queued one. The window's look is checked on the PR.
+  Stop one chain (beside Send) while its text streams, and expand another's
+  Transcript. Quit the other device: the header turns red, the banner says
+  messages will queue, and Drop removes a queued one. The window's look is
+  checked on the PR.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
   then shows the lock screen once `serve` stops.
 - Close the window: the tray icon stays and the Node keeps serving. The tray's

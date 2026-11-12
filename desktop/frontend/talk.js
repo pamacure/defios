@@ -48,8 +48,28 @@ export function talkPage(go) {
 // talkUpdate shows next, unless it is older than what is shown.
 export function talkUpdate(next) {
   if (!next || (ts && next.Seq < ts.Seq)) return;
+  const streaming = ts && onlyLiveChanged(ts, next);
   ts = next;
-  draw();
+  if (!streaming || !patchLive()) draw();
+}
+
+// onlyLiveChanged: next differs from shown only in what the agents
+// running now have said so far, as for each streamed delta.
+function onlyLiveChanged(shown, next) {
+  const rest = (s) => JSON.stringify({ ...s, Seq: 0, Live: s.Live.map((c) => c.Chain) });
+  return rest(shown) === rest(next);
+}
+
+// patchLive redraws only the running chains' output, so a delta, many a
+// second, leaves the rest of the page as it is: a click there is never
+// lost to a redraw, and nothing flickers. It reports whether it could.
+function patchLive() {
+  const tr = mount?.isConnected && mount.querySelector(".transcript");
+  const shown = tr ? tr.querySelectorAll(":scope > .live") : [];
+  if (!tr || shown.length !== ts.Live.length) return false;
+  ts.Live.forEach((c, i) => shown[i].replaceWith(liveChain(c)));
+  if (tui.scroll.pinned) tr.scrollTop = tr.scrollHeight;
+  return true;
 }
 
 async function act(method, ...args) {
@@ -337,8 +357,7 @@ function liveChain(c) {
   return h("div", { class: "live" },
     h("div", { class: "live-head" },
       h("span", { class: "pulse", "aria-hidden": "true" }),
-      h("span", {}, c.Chain ? "Agents are answering…" : "Running…"),
-      c.Chain && h("button", { class: "btn small", type: "button", disabled: tui.busy, onclick: () => act("CancelChain", c.Chain) }, "Cancel")),
+      h("span", {}, c.Chain ? "Agents are answering…" : "Running…")),
     c.Agents.map((a) => h("div", { class: "msg left streaming" },
       h("div", { class: "meta" }, h("span", { class: "who" }, h("strong", {}, "This Device"), h("span", { class: "handle" }, `@${a.Handle}`))),
       a.Blocks.length
@@ -357,6 +376,14 @@ function makeComposer() {
   const refusal = h("p", { class: "error refusal", role: "alert" });
   const plus = h("button", { class: "btn plus", type: "button", "aria-label": "New Sign Request", title: "New Sign Request", onclick: () => hooks.signRequest() }, "+");
   const send = h("button", { class: "btn bright", type: "submit" }, "Send");
+  // Stop cancels the chains of agents answering here; it sits by Send, not
+  // in the output that grows above it.
+  const stop = h("button", {
+    class: "btn stop", type: "button", "aria-label": "Stop the agents answering", hidden: true,
+    onclick: async () => {
+      for (const c of ts.Live.filter((l) => l.Chain)) await act("CancelChain", c.Chain);
+    },
+  }, "Stop");
   let shown = []; // the Handles suggested
   let pick = 0;
   let refused = null; // the refusal shown, until the text changes
@@ -417,6 +444,8 @@ function makeComposer() {
     refusal.hidden = !refused;
     textarea.setAttribute("aria-invalid", refused ? "true" : "false");
     send.disabled = tui.busy;
+    stop.hidden = !ts?.Live?.some((c) => c.Chain);
+    stop.disabled = tui.busy;
   };
   textarea.addEventListener("input", () => { refused = null; update(); suggest(); });
   textarea.addEventListener("click", suggest);
@@ -444,7 +473,7 @@ function makeComposer() {
     }
   });
   const el = h("form", { class: "composer", onsubmit: (e) => { e.preventDefault(); submit(); } },
-    list, refusal, h("div", { class: "row" }, plus, textarea, send));
+    list, refusal, h("div", { class: "row" }, plus, textarea, stop, send));
   return {
     el, input: textarea, update,
     closeSuggestions: () => { list.hidden = true; refused = null; update(); },
