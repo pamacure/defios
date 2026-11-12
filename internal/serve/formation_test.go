@@ -28,6 +28,8 @@ func pairWith(t *testing.T, prep func(*node)) (a, b *node) {
 	a.tailnet.route("100.64.0.2", b.tailnet.formationAddr(t))
 	a.tailnet.peers = []serve.Peer{{Hostname: "defios-bob", IP: "100.64.0.2", Online: true}}
 	b.tailnet.route("100.64.0.1", a.tailnet.formationAddr(t))
+	n.at("100.64.0.1", a.tailnet)
+	n.at("100.64.0.2", b.tailnet)
 	b.tailnet.peers = []serve.Peer{{Hostname: "defios-alice", IP: "100.64.0.1", Online: true}}
 	return a, b
 }

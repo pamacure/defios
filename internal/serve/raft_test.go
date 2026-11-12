@@ -11,6 +11,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
+	"defios.com/internal/serve"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -114,6 +115,59 @@ func TestWipedReplicaCatchesUpWithoutRejoining(t *testing.T) {
 	if rows := b.joins(t, gid, 2); len(rows) != 2 {
 		t.Fatalf("%d membership.join rows after catch-up, want 2", len(rows))
 	}
+}
+
+// A Node restored from a Backup joins the tailnet as a new machine, and
+// while headscale still holds the original's registration it gets another
+// name: Raft still reaches it, by who it is rather than by the name the
+// Roster pinned (ADR 0035).
+func TestRestoredNodeUnderAnotherTailnetNameCatchesUp(t *testing.T) {
+	a, b := pair(t)
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	ctx := context.Background()
+	for i := range 3 {
+		if _, err := a.client().ConversationSend(ctx, fmt.Sprint("m", i), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := a.groupLevelRows(t, gid, 3)
+	b.groupLevelRows(t, gid, 3)
+
+	// Restored: the Record and identity kept, the replica and tailnet
+	// state not, as a Backup leaves them (ADR 0027).
+	b.stop()
+	for _, name := range []string{"cosl.sqlite", "cosl.sqlite-wal", "cosl.sqlite-shm", "raft.db", "raft-snap"} {
+		if err := os.RemoveAll(filepath.Join(b.paths.GroupDir(group.ImplicitAlias), name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// headscale keeps the original as defios-bob, offline at its old IP;
+	// the restored Node is defios-bob-1 at a new one.
+	tn := b.tailnet.net
+	tn.at("100.64.0.1", a.tailnet)
+	b.tailnet = newFakeTailnet(tn, "defios-bob-1")
+	b.tailnet.peers = []serve.Peer{{Hostname: "defios-alice", IP: "100.64.0.1", Online: true}}
+	tn.at("100.64.0.3", b.tailnet)
+	a.tailnet.mu.Lock()
+	a.tailnet.peers = []serve.Peer{
+		{Hostname: "defios-bob", IP: "100.64.0.2", Online: false},
+		{Hostname: "defios-bob-1", IP: "100.64.0.3", Online: true},
+	}
+	a.tailnet.mu.Unlock()
+	b.start(t)
+
+	got := b.groupLevelRows(t, gid, 3)
+	for i := range want {
+		if want[i].Seq != got[i].Seq || want[i].MsgID != got[i].MsgID {
+			t.Fatalf("row %d differs after catch-up:\n%+v\n%+v", i, want[i], got[i])
+		}
+	}
+	if _, err := b.client().ConversationSend(ctx, "back", nil); err != nil {
+		t.Fatalf("send after restore: %v", err)
+	}
+	a.groupLevelRows(t, gid, 4)
 }
 
 // joinSettle is how long a Node that was going to re-join would need.

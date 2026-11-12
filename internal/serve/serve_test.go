@@ -29,10 +29,18 @@ import (
 // dial by hostname the way tsnet does.
 type fakeNet struct {
 	mu     sync.Mutex
-	byName map[string]string // "defios-bob:4632" -> real addr
+	byName map[string]string       // "defios-bob:4632" -> real addr
+	byIP   map[string]*fakeTailnet // "100.64.0.2" -> the Node there, any port
 }
 
-func newFakeNet() *fakeNet { return &fakeNet{byName: map[string]string{}} }
+func newFakeNet() *fakeNet { return &fakeNet{byName: map[string]string{}, byIP: map[string]*fakeTailnet{}} }
+
+// at puts f at tailnet IP ip: every port it listens on is reachable there.
+func (n *fakeNet) at(ip string, f *fakeTailnet) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.byIP[ip] = f
+}
 
 // fakeTailnet is one Node's view: loopback listeners, routes from fake
 // tailnet IPs to them (formation HTTP), and the peers it is told about.
@@ -78,9 +86,44 @@ func (f *fakeTailnet) Dial(ctx context.Context, network, addr string) (net.Conn,
 		f.mu.Unlock()
 	}
 	if !ok {
+		real, ok = f.net.byIPAddr(addr)
+	}
+	if !ok {
 		return nil, errors.New("fake tailnet: no route to " + addr)
 	}
 	return (&net.Dialer{}).DialContext(ctx, network, real)
+}
+
+// moved puts to wherever from was: a restarted Node keeps its tailnet IP.
+func (n *fakeNet) moved(from, to *fakeTailnet) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for ip, f := range n.byIP {
+		if f == from {
+			n.byIP[ip] = to
+		}
+	}
+}
+
+// byIPAddr is where "<ip>:<port>" really listens, for a Node put at ip.
+func (n *fakeNet) byIPAddr(addr string) (string, bool) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", false
+	}
+	n.mu.Lock()
+	f, ok := n.byIP[host]
+	n.mu.Unlock()
+	if !ok {
+		return "", false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.listeners[":"+port]
+	if !ok {
+		return "", false
+	}
+	return l.Addr().String(), true
 }
 
 // formationAddr is where this fake's :4634 listener really is.
@@ -146,7 +189,10 @@ func newNodeOn(t *testing.T, n *fakeNet, name string) *node {
 func (n *node) restart(t *testing.T) {
 	t.Helper()
 	n.stop()
-	n.tailnet = newFakeTailnet(n.tailnet.net, n.tailnet.hostname)
+	old := n.tailnet
+	n.tailnet = newFakeTailnet(old.net, old.hostname)
+	n.tailnet.peers = old.peers
+	old.net.moved(old, n.tailnet)
 	n.start(t)
 }
 

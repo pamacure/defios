@@ -47,7 +47,7 @@ func (s *server) startReplica() {
 		Self:      s.opts.Node.NodeID,
 		Roster:    rec.Roster(),
 		Store:     store,
-		Transport: s.opts.Tailnet,
+		Transport: newRosterDialer(s, rec.Roster()),
 		Logf:      s.opts.Logf,
 	})
 	if err != nil {

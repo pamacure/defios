@@ -1,7 +1,6 @@
 package serve
 
 import (
-	"bytes"
 	"context"
 
 	"defios.com/internal/cosl"
@@ -66,8 +65,7 @@ func (r *Running) NodeStatus(ctx context.Context) NodeStatus {
 		row := RosterReach{NodeID: n.NodeID, DisplayName: n.DisplayName}
 		if n.NodeID == s.opts.Node.NodeID {
 			row.Reachable = true
-		} else if d, ok := live[n.NodeID]; ok &&
-			bytes.Equal(d.AuthPublicKey, n.AuthPublicKey) && bytes.Equal(d.EncryptionPublicKey, n.EncryptionPublicKey) {
+		} else if d, ok := live[n.NodeID]; ok && sameKeys(n, d.RosterNode) {
 			row.Reachable = true
 			row.DisplayName = d.DisplayName
 		}
