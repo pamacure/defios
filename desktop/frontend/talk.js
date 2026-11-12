@@ -20,6 +20,7 @@ const GROUP_TALK = "";
 // What only the frontend keeps.
 const tui = {
   roster: false, // the Roster popover is open
+  about: false, // the right column is open over the transcript, on a narrow window
   newKey: false, // the + New Key form is open
   aborting: "", // the keygen Session whose Abort reason is being written
   editAlias: false,
@@ -95,6 +96,7 @@ function draw() {
   const field = mount.contains(active) ? active.dataset?.field : undefined;
   const caret = field ? [active.selectionStart, active.selectionEnd] : null;
   const focused = active === composer.input;
+  mount.classList.toggle("about-open", tui.about);
   mount.replaceChildren(left(), center(), right());
   const tr = mount.querySelector(".transcript");
   const scroll = () => { if (tr.isConnected) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top; };
@@ -219,7 +221,11 @@ function center() {
     key.CanSign ? "can sign" : `can't sign: ${key.Reachable} of ${key.T} needed online`);
   return h("section", { class: "chat", "aria-label": convName(conv) },
     h("header", { class: "chat-head" },
-      h("h2", {}, convName(conv)), sign, h("span", { class: "spacer" }), online),
+      h("h2", {}, convName(conv)), sign, h("span", { class: "spacer" }), online,
+      h("button", {
+        class: "btn small about-toggle", type: "button", "aria-expanded": tui.about ? "true" : "false",
+        onclick: () => { tui.about = !tui.about; draw(); },
+      }, "About")),
     total > 0 && !ts.MajorityReachable && h("div", { class: "queue-banner", role: "status" },
       "Not enough devices are online for messages to be delivered. What you send waits here and goes once they are."),
     ts.Problem && h("div", { class: "banner", role: "alert" }, ts.Problem.Message),
@@ -491,8 +497,10 @@ function overrides() {
 }
 
 document.addEventListener("click", (e) => {
+  if (!e.target.isConnected) return; // a click that redrew the page
   if (tui.roster && !e.target.closest(".online-menu")) { tui.roster = false; draw(); }
+  if (tui.about && !e.target.closest(".about, .about-toggle")) { tui.about = false; draw(); }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && tui.roster) { tui.roster = false; draw(); }
+  if (e.key === "Escape" && tui.roster) { tui.roster = false; draw(); } else if (e.key === "Escape" && tui.about) { tui.about = false; draw(); }
 });

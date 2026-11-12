@@ -199,6 +199,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .conv .badge { position: absolute; right: 10px; top: 10px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; }
 .conv.provisional { cursor: default; border: 1px dashed var(--line); margin-top: 4px; gap: 6px; }
 .conv.provisional:hover { background: transparent; }
+.conv .chip { flex: 0 1 auto; }
 .conv .row, .newkey-form .row, .about .inline .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .conv .inline, .about .inline { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .conv .field, .newkey-form .field, .about .field { height: 32px; text-align: left; background: var(--bg); font-size: 13px; }
@@ -208,11 +209,11 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
 
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.chat-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .chat-head h2 { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .chat-head .spacer { flex: 1; }
 .online-menu { position: relative; }
-.online { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; font-size: 12px; }
+.online { display: flex; align-items: center; gap: 8px; height: 30px; white-space: nowrap; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; font-size: 12px; }
 .online.ok { color: var(--accent-strong); }
 .online.bad { color: var(--danger); border-color: var(--danger); }
 .online:disabled { cursor: default; color: var(--muted); }
@@ -277,4 +278,17 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 @media (max-width: 1100px) {
   .talk { grid-template-columns: 180px minmax(0, 1fr) 220px; }
   .msg { max-width: 92%; }
+}
+
+/* Below 1000px the right column leaves the grid; "About" opens it over
+   the transcript. */
+.about-toggle { display: none; align-items: center; }
+@media (max-width: 999px) {
+  .talk { position: relative; grid-template-columns: 180px minmax(0, 1fr); }
+  .about-toggle { display: inline-flex; }
+  .talk > .about { display: none; }
+  .talk.about-open > .about {
+    display: flex; position: absolute; top: 0; right: 0; bottom: 0; width: min(300px, 85%); z-index: 5;
+    box-shadow: -8px 0 24px rgba(21, 26, 31, 0.18);
+  }
 }
