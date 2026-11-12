@@ -97,7 +97,13 @@ function draw() {
   const focused = active === composer.input;
   mount.replaceChildren(left(), center(), right());
   const tr = mount.querySelector(".transcript");
-  if (tr) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top;
+  const scroll = () => { if (tr.isConnected) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top; };
+  if (tr) {
+    scroll();
+    // A redraw of the whole app moves the page out of the document and
+    // back, which resets its scroll: set it again once it is back.
+    queueMicrotask(scroll);
+  }
   composer.update();
   const again = field && mount.querySelector(`[data-field="${field}"]`);
   if (again) {
