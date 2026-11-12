@@ -51,7 +51,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 
 /* Centred screens: loading, lock, served elsewhere, onboarding. */
 .center { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 24px; text-align: center; }
-.logo { width: 132px; height: 132px; }
+.logo { width: 150px; height: auto; }
 .center h1 { margin: 0; font-size: 18px; font-weight: 600; }
 .center p { margin: 0; color: var(--text-soft); max-width: 440px; line-height: 1.5; }
 .form { display: flex; flex-direction: column; gap: 10px; width: 280px; }
@@ -74,7 +74,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 /* The shell: icon rail, header, page. */
 .shell { height: 100%; display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: 56px 1fr; }
 .rail { grid-row: 1 / 3; background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 4px; }
-.rail .mark { width: 36px; height: 36px; margin-bottom: 12px; }
+.rail .mark { width: 36px; height: auto; margin-bottom: 12px; }
 .rail .spacer { flex: 1; }
 .rail button { width: 44px; height: 44px; border: 0; border-radius: var(--radius); background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; position: relative; }
 .rail button:hover { background: var(--bg); color: var(--text); }

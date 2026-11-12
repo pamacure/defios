@@ -22,7 +22,7 @@ const ICONS = {
   plugins: '<path d="M9 4v4M15 4v4M7 8h10v4a5 5 0 0 1-10 0zM12 17v3"/>',
   triggers: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
   networks: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13.5 0 16M12 4c-2.5 2.5-2.5 13.5 0 16"/>',
-  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
 };
 
 // What only the frontend keeps: the open page and transient UI.
@@ -53,7 +53,8 @@ function icon(name) {
   return span;
 }
 
-const logo = (cls = "logo") => h("img", { class: cls, src: "/logo.png", alt: "DeFiOS" });
+const logo = () => h("img", { class: "logo", src: "/logo.png", alt: "DeFiOS" });
+const mark = () => h("img", { class: "mark", src: "/mark.png", alt: "DeFiOS" });
 const nodeName = (s) => s.Node.Name || s.Node.ID.slice(0, 12);
 
 function apply(next) {
@@ -179,7 +180,7 @@ function rail() {
     onclick: () => { ui.page = sec.id; render(true); },
   }, icon(sec.id), h("span", { class: "tip" }, sec.label));
   return h("nav", { class: "rail", "aria-label": "Sections" },
-    logo("mark"), SECTIONS.map(item), h("div", { class: "spacer" }), item(SETTINGS));
+    mark(), SECTIONS.map(item), h("div", { class: "spacer" }), item(SETTINGS));
 }
 
 function onlineDot(s) {
