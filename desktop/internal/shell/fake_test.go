@@ -3,6 +3,7 @@ package shell_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,205 @@ type fakeNode struct {
 	unlocks   int
 	status    node.Status // the last one published
 	subs      []chan node.Event
+
+	// Onboarding. A Group not in forms is valid.
+	forms       map[string]*fakeForm
+	secrets     map[string]map[string]string
+	discovered  []node.DiscoveredNode
+	unreached   map[string]bool // Node IDs a proposal does not reach
+	undelivered []string        // what Accept reports undelivered
+	proposed    [][]string      // each Propose's Node IDs
+}
+
+// fakeForm is a Group's formation: unformed while proposal is nil.
+type fakeForm struct {
+	groupID   string
+	initiator string
+	roster    []node.GroupNode
+}
+
+func (f *fakeForm) status() string {
+	if f.initiator == "" {
+		return node.StatusUnformed
+	}
+	for _, m := range f.roster {
+		if !m.Accepted {
+			return "pending"
+		}
+	}
+	return "valid"
+}
+
+func (n *fakeNode) form(group string) *fakeForm {
+	if n.forms == nil {
+		n.forms = map[string]*fakeForm{}
+	}
+	if n.forms[group] == nil {
+		n.forms[group] = &fakeForm{}
+	}
+	return n.forms[group]
+}
+
+func (n *fakeNode) groupStatus(group string) string {
+	if f, ok := n.forms[group]; ok {
+		return f.status()
+	}
+	return "valid"
+}
+
+func (n *fakeNode) CheckPassphrase(passphrase string) error {
+	if passphrase != pw {
+		return vault.ErrBadPassphrase
+	}
+	return nil
+}
+
+func (n *fakeNode) NewGroup(spec node.GroupSpec) (node.GroupConfig, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if spec.Alias == "" || strings.ContainsAny(spec.Alias, " ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+		return node.GroupConfig{}, &node.InvalidError{Err: errors.New("not a valid alias")}
+	}
+	if !strings.HasPrefix(spec.HeadscaleURL, "https://") {
+		return node.GroupConfig{}, &node.InvalidError{Err: errors.New("not a headscale URL")}
+	}
+	for _, g := range n.groups {
+		if g == spec.Alias {
+			return node.GroupConfig{}, node.ErrGroupExists
+		}
+	}
+	n.groups = append(n.groups, spec.Alias)
+	n.form(spec.Alias)
+	return node.GroupConfig{Alias: spec.Alias, HeadscaleURL: spec.HeadscaleURL}, nil
+}
+
+func (n *fakeNode) SetSecret(_ context.Context, group, name, value string, passphrase node.Passphrase) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	phrase := n.pass
+	if phrase == "" {
+		phrase, _, _ = passphrase()
+	}
+	if phrase != pw {
+		return vault.ErrBadPassphrase
+	}
+	if n.secrets == nil {
+		n.secrets = map[string]map[string]string{}
+	}
+	if n.secrets[group] == nil {
+		n.secrets[group] = map[string]string{}
+	}
+	n.secrets[group][name] = value
+	return nil
+}
+
+func (n *fakeNode) secret(group, name string) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.secrets[group][name]
+}
+
+func (n *fakeNode) servedOrErr(group string) error {
+	if n.served != group {
+		return node.ErrNotServed
+	}
+	return nil
+}
+
+func (n *fakeNode) Discover(_ context.Context, group string) ([]node.DiscoveredNode, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.servedOrErr(group); err != nil {
+		return nil, err
+	}
+	return n.discovered, nil
+}
+
+func (n *fakeNode) Propose(_ context.Context, group string, ids []string) (node.Formation, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.servedOrErr(group); err != nil {
+		return node.Formation{}, err
+	}
+	n.proposed = append(n.proposed, ids)
+	var missed []string
+	for _, id := range ids {
+		if n.unreached[id] {
+			missed = append(missed, id)
+		}
+	}
+	if missed != nil {
+		return node.Formation{}, &node.NotReachedError{NodeIDs: missed, Err: errors.New("not reached")}
+	}
+	f := n.form(group)
+	f.groupID, f.initiator, f.roster = "9r0up", n.NodeID(), nil
+	for _, id := range ids {
+		f.roster = append(f.roster, node.GroupNode{NodeID: id, DisplayName: "name-" + id, Accepted: id == n.NodeID()})
+	}
+	return node.Formation{GroupID: f.groupID, Status: f.status()}, nil
+}
+
+// receive is another Node, from, proposing group's Roster of ids.
+func (n *fakeNode) receive(group, from string, ids ...string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	f := n.form(group)
+	f.groupID, f.initiator, f.roster = "9r0up", from, nil
+	for _, id := range ids {
+		f.roster = append(f.roster, node.GroupNode{NodeID: id, DisplayName: "name-" + id, Accepted: id == from})
+	}
+	for _, ch := range n.subs {
+		ch <- node.Event{Proposal: &node.Proposal{Group: group, GroupID: f.groupID, Initiator: from}}
+	}
+}
+
+// acceptBy is Node id accepting group's proposal.
+func (n *fakeNode) acceptBy(group, id string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	f := n.form(group)
+	for i := range f.roster {
+		if f.roster[i].NodeID == id {
+			f.roster[i].Accepted = true
+		}
+	}
+	for _, ch := range n.subs {
+		ch <- node.Event{Accepted: &node.Accepted{Group: group, GroupID: f.groupID, NodeID: id, Status: f.status()}}
+	}
+}
+
+func (n *fakeNode) InspectGroup(_ context.Context, group string) (node.GroupDetail, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	f := n.forms[group]
+	if f == nil || f.initiator == "" {
+		return node.GroupDetail{}, errors.New("group: this Node has no Group")
+	}
+	return node.GroupDetail{Alias: group, GroupID: f.groupID, Initiator: f.initiator, Roster: append([]node.GroupNode(nil), f.roster...)}, nil
+}
+
+func (n *fakeNode) Accept(_ context.Context, group, groupID string) (node.Formation, error) {
+	n.mu.Lock()
+	f := n.forms[group]
+	n.mu.Unlock()
+	if f == nil || f.groupID != groupID {
+		return node.Formation{}, errors.New("group: no such proposal")
+	}
+	n.acceptBy(group, n.NodeID())
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return node.Formation{GroupID: groupID, Status: f.status(), Undelivered: n.undelivered}, nil
+}
+
+func (n *fakeNode) Decline(_ context.Context, group, groupID, reason string) (node.Formation, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	f := n.forms[group]
+	if f == nil || f.groupID != groupID {
+		return node.Formation{}, errors.New("group: no such proposal")
+	}
+	*f = fakeForm{}
+	return node.Formation{GroupID: groupID, Status: "declined"}, nil
 }
 
 func (n *fakeNode) NodeID() string { return "n0de" }
@@ -135,7 +335,7 @@ func (n *fakeNode) Groups(context.Context) ([]node.GroupSummary, error) {
 	defer n.mu.Unlock()
 	var out []node.GroupSummary
 	for _, g := range n.groups {
-		out = append(out, node.GroupSummary{Alias: g, Status: "unformed", Served: n.served == g || n.elsewhere})
+		out = append(out, node.GroupSummary{Alias: g, Status: n.groupStatus(g), Served: n.served == g || n.elsewhere})
 	}
 	return out, nil
 }
@@ -226,7 +426,12 @@ type rig struct {
 	mu        sync.Mutex
 	notes     []string
 	shell     *shell.Shell
+	// backupGroups are the Groups the Backup at backupFile holds.
+	backupGroups []string
+	progress     []string // the State's Progress as Create reported each line
 }
+
+const backupFile = "/backups/laptop.backup"
 
 func newRig(t *testing.T, groups ...string) *rig {
 	r := &rig{
@@ -246,6 +451,32 @@ func (r *rig) start(atLogin bool) *shell.Shell {
 				return nil, node.ErrNoNode
 			}
 			return r.node, nil
+		},
+		Create: func(c node.Creation) error {
+			if !r.noNode {
+				return node.ErrNodeExists
+			}
+			for _, line := range []string{"generating ECDSA preparams", "done"} {
+				c.Progress(line)
+				r.mu.Lock()
+				r.progress = append(r.progress, strings.Join(r.shell.State().Progress, "|"))
+				r.mu.Unlock()
+			}
+			r.noNode, r.node.name, r.node.groups = false, c.DisplayName, nil
+			return nil
+		},
+		CheckRestore: func(file string) error {
+			if file != backupFile {
+				return &node.NotAFileError{Path: file}
+			}
+			return nil
+		},
+		Restore: func(_ context.Context, file, passphrase string) (node.Restored, error) {
+			if passphrase != pw {
+				return node.Restored{}, vault.ErrBadPassphrase
+			}
+			r.noNode, r.node.groups = false, r.backupGroups
+			return node.Restored{NodeID: "n0de"}, nil
 		},
 		Prefs:     r.prefs,
 		Keychain:  r.keychain,

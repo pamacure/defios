@@ -45,6 +45,9 @@ func TestNewGroupRefusals(t *testing.T) {
 	for _, spec := range []node.GroupSpec{
 		{Alias: "Not An Alias", HeadscaleURL: "https://hs.example"},
 		{Alias: "beta"},
+		{Alias: "beta", HeadscaleURL: "hs.example"},
+		{Alias: "beta", HeadscaleURL: "ftp://hs.example"},
+		{Alias: "beta", HeadscaleURL: "https://"},
 		{Alias: "beta", HeadscaleURL: "https://hs.example", DisplayName: "two\nlines"},
 	} {
 		if _, err := h.NewGroup(spec); !errors.As(err, &invalid) {

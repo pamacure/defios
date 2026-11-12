@@ -158,6 +158,7 @@ type Node interface {
 	// The whole Node's Vault: a Backup, and a passphrase change, which is
 	// refused while the Node is hosted.
 	Backup(ctx context.Context, dst string, passphrase Passphrase) (backup.Manifest, error)
+	CheckPassphrase(passphrase string) error
 	CheckPassphraseChange() error
 	ChangePassphrase(ctx context.Context, old, next string) (vault.Change, error)
 

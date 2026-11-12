@@ -17,6 +17,7 @@ const stateEvent = "shell:state"
 // returns the State after it; the same State also arrives as stateEvent.
 type UI struct {
 	shell *shell.Shell
+	app   *application.App
 	win   *application.WebviewWindow
 
 	mu       sync.Mutex
@@ -33,6 +34,33 @@ func (u *UI) SetEditGroup(group string) shell.State       { return u.shell.SetEd
 func (u *UI) SetStartAtLogin(on bool) shell.State         { return u.shell.SetStartAtLogin(on) }
 func (u *UI) SetKeychain(on bool) shell.State             { return u.shell.SetKeychain(on) }
 func (u *UI) SetNotifications(on bool) shell.State        { return u.shell.SetNotifications(on) }
+
+// Onboarding.
+
+func (u *UI) CheckDisplayName(name string) *shell.Problem { return shell.CheckDisplayName(name) }
+func (u *UI) Create(name, passphrase string) shell.State  { return u.shell.Create(name, passphrase) }
+func (u *UI) CheckBackup(file string) shell.State         { return u.shell.CheckBackup(file) }
+func (u *UI) Restore(file, passphrase string) shell.State { return u.shell.Restore(file, passphrase) }
+func (u *UI) AddGroup(alias, headscaleURL, authKey, passphrase string) shell.State {
+	return u.shell.AddGroup(alias, headscaleURL, authKey, passphrase)
+}
+func (u *UI) Discover() shell.State                { return u.shell.Discover() }
+func (u *UI) Propose(nodeIDs []string) shell.State { return u.shell.Propose(nodeIDs) }
+func (u *UI) Accept() shell.State                  { return u.shell.Accept() }
+func (u *UI) Decline(reason string) shell.State    { return u.shell.Decline(reason) }
+
+// ChooseBackup asks for a Backup file with the OS's file dialog; "" when
+// none was chosen.
+func (u *UI) ChooseBackup() (string, error) {
+	d := u.app.Dialog.OpenFile().
+		SetTitle("Choose a DeFiOS Backup").
+		CanChooseFiles(true).
+		CanChooseDirectories(false)
+	if u.win != nil {
+		d = d.AttachToWindow(u.win)
+	}
+	return d.PromptForSingleSelection()
+}
 
 // show brings the window back from the tray.
 func (u *UI) show() {

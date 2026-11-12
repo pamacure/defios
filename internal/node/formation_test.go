@@ -293,3 +293,27 @@ func TestFormationNeedsItsGroupServed(t *testing.T) {
 		t.Fatalf("Propose with nothing served: %v; want ErrNotServed", err)
 	}
 }
+
+func TestInspectGroupShowsAPendingProposalsInitiatorAndWhoHasAccepted(t *testing.T) {
+	m := newMesh()
+	alice, bob := join(t, m, "alice"), join(t, m, "bob")
+	ctx := context.Background()
+	if _, err := alice.h.Propose(ctx, "alpha", []string{alice.id, bob.id}); err != nil {
+		t.Fatal(err)
+	}
+	next(t, bob.events, proposalEvent)
+	for _, mb := range []*member{alice, bob} {
+		d, err := mb.h.InspectGroup(ctx, "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Initiator != alice.id || d.Status.String() != "pending" {
+			t.Fatalf("%s inspects %+v", mb.id[:8], d)
+		}
+		for _, n := range d.Roster {
+			if want := n.NodeID == alice.id; n.Accepted != want {
+				t.Errorf("%s sees %s Accepted = %v; want %v", mb.id[:8], n.DisplayName, n.Accepted, want)
+			}
+		}
+	}
+}

@@ -387,7 +387,10 @@ func runGroupInspect(cmd *cobra.Command, g *globals, args []string) error {
 	}
 	v := groupView{GroupID: d.GroupID, Status: d.Status}
 	for _, n := range d.Roster {
-		v.Roster = append(v.Roster, rosterRow(n))
+		v.Roster = append(v.Roster, rosterRow{
+			NodeID: n.NodeID, DisplayName: n.DisplayName, Hostname: n.Hostname, Reachable: n.Reachable,
+			Joined: n.Joined, AuthPublicKey: n.AuthPublicKey, EncryptionPublicKey: n.EncryptionPublicKey,
+		})
 	}
 	if g.json {
 		return g.emitJSON(v)

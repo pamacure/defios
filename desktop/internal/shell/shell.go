@@ -25,6 +25,16 @@ type Node interface {
 	Status() node.Status
 	Subscribe(ctx context.Context) <-chan node.Event
 	Groups(ctx context.Context) ([]node.GroupSummary, error)
+
+	// Onboarding.
+	CheckPassphrase(passphrase string) error
+	NewGroup(spec node.GroupSpec) (node.GroupConfig, error)
+	SetSecret(ctx context.Context, group, name, value string, passphrase node.Passphrase) error
+	InspectGroup(ctx context.Context, group string) (node.GroupDetail, error)
+	Discover(ctx context.Context, group string) ([]node.DiscoveredNode, error)
+	Propose(ctx context.Context, group string, nodeIDs []string) (node.Formation, error)
+	Accept(ctx context.Context, group, groupID string) (node.Formation, error)
+	Decline(ctx context.Context, group, groupID, reason string) (node.Formation, error)
 }
 
 // PrefStore loads and saves the app's preferences.
@@ -53,10 +63,16 @@ type Autostart interface {
 // Deps are what a Shell runs on.
 type Deps struct {
 	// Open opens the Node directory; node.ErrNoNode when it holds none.
-	Open      func() (Node, error)
-	Prefs     PrefStore
-	Keychain  Keychain
-	Autostart Autostart
+	Open func() (Node, error)
+	// Create mints a Node in the directory Open opens, as node.Create.
+	Create func(node.Creation) error
+	// CheckRestore and Restore bring back the Node a Backup file holds
+	// into that directory, as node.CheckRestore and node.Restore.
+	CheckRestore func(file string) error
+	Restore      func(ctx context.Context, file, passphrase string) (node.Restored, error)
+	Prefs        PrefStore
+	Keychain     Keychain
+	Autostart    Autostart
 	// Notify posts an OS notification.
 	Notify func(title, body string)
 	// OnChange receives every new State, from any goroutine.
@@ -72,11 +88,16 @@ type View string
 const (
 	ViewStarting        View = "starting"
 	ViewNoNode          View = "no-node"  // onboarding step 1
+	ViewCreating        View = "creating" // step 1, Create running
+	ViewRestoring       View = "restoring"
 	ViewNoGroup         View = "no-group" // onboarding step 2
 	ViewLocked          View = "locked"
 	ViewUnlocking       View = "unlocking"
 	ViewServedElsewhere View = "served-elsewhere"
 	ViewServed          View = "served"
+	// ViewForming: the served Group has no valid Record yet; onboarding
+	// step 3 forms it.
+	ViewForming View = "forming"
 )
 
 // State is everything the frontend renders.
@@ -103,6 +124,24 @@ type State struct {
 	// Problem is what went wrong last, for the screen to show.
 	Problem *Problem
 	Prefs   Prefs
+
+	// Progress is the latest lines Create reported, while it runs.
+	Progress []string
+	// PassphraseHeld: the app holds the passphrase, so adding a Group
+	// needs none typed. It does while a Group serves, and from Create or
+	// Restore until the first Group serves.
+	PassphraseHeld bool
+	// Forming is the served Group's formation, in ViewForming.
+	Forming *Forming
+	// Restored is set once a Node comes back from a Backup, until a
+	// Group serves: the steps that are the person's own.
+	Restored *Restored
+}
+
+// Restored is what follows a Restore.
+type Restored struct {
+	// PluginsProblem is why the Plugins were not fetched again, if not.
+	PluginsProblem string
 }
 
 // NodeInfo names the Node.
@@ -142,10 +181,15 @@ type Shell struct {
 	st     State
 	p      prefs.Prefs
 	// pass is the passphrase the served Group was unlocked with, held
-	// only while it serves, to put in the keychain when that is turned on.
+	// only while it serves, to put in the keychain when that is turned on,
+	// and to add a Group with. Create and Restore hold theirs too, until
+	// the first Group serves.
 	pass string
 	// edit is the edit-target Group a person chose; "" follows the served.
 	edit string
+	// back is the Group served before the one served now, to go back to
+	// rather than form that one now.
+	back string
 	// loginUnlock: unlock from the keychain once another process stops
 	// serving this Node.
 	loginUnlock bool
@@ -366,7 +410,8 @@ func (s *Shell) unlockAtLogin() {
 // follow applies the Node's status as it changes, until ctx is done.
 func (s *Shell) follow(ctx context.Context, n Node) {
 	for ev := range n.Subscribe(ctx) {
-		if ev.Status == nil {
+		// A proposal or an acceptance moves step 3 on, as the status does.
+		if ev.Status == nil && ev.Proposal == nil && ev.Accepted == nil {
 			continue
 		}
 		// Applied under s.op, so never in the middle of an Unlock, Lock
@@ -387,23 +432,32 @@ func (s *Shell) follow(ctx context.Context, n Node) {
 func (s *Shell) apply(st node.Status) {
 	if st.Serving {
 		// The served Group changed only on Unlock or Switch, not on each
-		// status refresh: remember it and list the Groups again then.
+		// status refresh: remember it and list the Groups again then, and
+		// on each refresh while it forms.
 		s.mu.Lock()
 		changed := s.st.View != ViewServed || s.st.Served != st.Group
+		groups := s.st.Groups
 		remember := s.p.LastGroup != st.Group
 		s.p.LastGroup = st.Group
 		s.mu.Unlock()
 		if remember {
 			s.persist()
 		}
-		var groups []Group
 		if changed {
-			groups, _ = s.groups(s.node())
+			if listed, err := s.groups(s.node()); err == nil {
+				groups = listed
+			}
 		}
+		forming := s.formingOf(st.Group, groups)
 		s.set(func(v *State) {
-			v.View, v.Served = ViewServed, st.Group
-			if groups != nil {
-				v.Groups = groups
+			if forming != nil && v.Forming != nil && v.Forming.Group == forming.Group {
+				// Discover writes these without s.op: keep what it found
+				// since formingOf copied them.
+				forming.Discovered, forming.DiscoverProblem = v.Forming.Discovered, v.Forming.DiscoverProblem
+			}
+			v.View, v.Served, v.Groups, v.Forming, v.Restored = ViewServed, st.Group, groups, forming, nil
+			if forming != nil {
+				v.View = ViewForming
 			}
 			v.TailnetUp, v.MajorityReachable = st.TailnetUp, st.MajorityReachable
 			v.RosterSize, v.Online = len(st.Roster), 0
@@ -415,7 +469,7 @@ func (s *Shell) apply(st node.Status) {
 		})
 		return
 	}
-	if s.State().View != ViewServed {
+	if v := s.State().View; v != ViewServed && v != ViewForming {
 		return // never served, or Unlock is under way
 	}
 	// Serving stopped, on its own when st.Err is set.
@@ -436,6 +490,9 @@ func (s *Shell) unlock(group, passphrase string) State {
 	if n == nil {
 		return s.State()
 	}
+	s.mu.Lock()
+	s.back = ""
+	s.mu.Unlock()
 	s.set(func(st *State) { st.View, st.Selected, st.Problem = ViewUnlocking, group, nil })
 	if err := n.Unlock(passphrase, group); err != nil {
 		if errors.Is(err, node.ErrServedElsewhere) {
@@ -482,9 +539,13 @@ func (s *Shell) Switch(group string) State {
 	s.op.Lock()
 	defer s.op.Unlock()
 	n := s.node()
-	if n == nil || s.State().Served == group {
+	from := s.State().Served
+	if n == nil || from == group {
 		return s.State()
 	}
+	s.mu.Lock()
+	s.back = from
+	s.mu.Unlock()
 	s.set(func(st *State) { st.View, st.Problem = ViewUnlocking, nil })
 	if err := n.Switch(group); err != nil {
 		// A failed Switch leaves the Node locked.
@@ -632,6 +693,10 @@ func (s *Shell) set(change func(*State)) {
 		st.EditGroup = s.edit
 	}
 	st.EditGroupServed = st.EditGroup != "" && st.EditGroup == st.Served
+	st.PassphraseHeld = s.pass != ""
+	if st.View != ViewForming {
+		st.Forming = nil
+	}
 	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications()}
 	st.Seq++
 	out := *st

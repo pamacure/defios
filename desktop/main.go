@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -110,6 +111,14 @@ func run(dir string, atLogin bool) error {
 		autostartArgs = append(autostartArgs, "--dir", dir)
 	}
 	sh := shell.New(shell.Deps{
+		Create: func(c node.Creation) error {
+			_, err := node.Create(paths, c)
+			return err
+		},
+		CheckRestore: func(file string) error { return node.CheckRestore(paths, file) },
+		Restore: func(ctx context.Context, file, passphrase string) (node.Restored, error) {
+			return node.Restore(ctx, paths, file, passphrase)
+		},
 		Open: func() (shell.Node, error) {
 			h, err := node.Open(paths, node.Options{Logf: log.Printf})
 			if err != nil {
@@ -130,7 +139,7 @@ func run(dir string, atLogin bool) error {
 			ui.trayFor(st)
 		},
 	})
-	ui.shell, ui.win = sh, win
+	ui.shell, ui.app, ui.win = sh, app, win
 
 	// Closing the window hides it; the Node keeps serving.
 	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {

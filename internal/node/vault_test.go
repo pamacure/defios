@@ -235,3 +235,13 @@ func TestRevealSecretNeedsThePassphraseEnteredEvenWhenHosted(t *testing.T) {
 		t.Fatalf("reveal of one never set = %q, %q, %v", value, source, err)
 	}
 }
+
+func TestCheckPassphraseTellsWhetherThePassphraseOpensTheVault(t *testing.T) {
+	h := open(t, create(t, "laptop"))
+	if err := h.CheckPassphrase(passphrase); err != nil {
+		t.Fatalf("the right passphrase: %v", err)
+	}
+	if err := h.CheckPassphrase("nope"); !errors.Is(err, vault.ErrBadPassphrase) {
+		t.Fatalf("a wrong passphrase: %v; want vault.ErrBadPassphrase", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -59,7 +60,9 @@ type GroupDetail struct {
 	Alias   string
 	GroupID string
 	Status  group.Status
-	Roster  []GroupNode
+	// Initiator is the Node ID of the Node that proposed the Group.
+	Initiator string
+	Roster    []GroupNode
 }
 
 // GroupNode is one Roster Node as GroupDetail shows it. Reachability and
@@ -71,6 +74,7 @@ type GroupNode struct {
 	Hostname            string
 	Reachable           bool
 	Joined              bool   // its membership.join is on the COSL
+	Accepted            bool   // its Accept is held here; the initiator's always is
 	AuthPublicKey       string // hex
 	EncryptionPublicKey string // hex
 }
@@ -80,10 +84,10 @@ type GroupNode struct {
 // tailnet_auth_key names the TailnetAuthKeySecret, for SetSecret.
 func (h *Host) NewGroup(spec GroupSpec) (GroupConfig, error) {
 	if err := group.ValidateAlias(spec.Alias); err != nil {
-		return GroupConfig{}, &InvalidError{Err: err}
+		return GroupConfig{}, invalidf("%q is not a valid Group alias: use 1–64 lowercase letters, digits, - and _, starting with a letter or digit", spec.Alias)
 	}
-	if spec.HeadscaleURL == "" {
-		return GroupConfig{}, invalidf("a headscale URL is required")
+	if err := validHeadscaleURL(spec.HeadscaleURL); err != nil {
+		return GroupConfig{}, err
 	}
 	if _, err := os.Stat(h.p.GroupConfigFile(spec.Alias)); err == nil {
 		return GroupConfig{}, fmt.Errorf("%w: %q", ErrGroupExists, spec.Alias)
@@ -120,6 +124,19 @@ func (h *Host) NewGroup(spec GroupSpec) (GroupConfig, error) {
 		return GroupConfig{}, err
 	}
 	return GroupConfig{Alias: spec.Alias, DisplayName: name, Hostname: hostname, HeadscaleURL: spec.HeadscaleURL}, nil
+}
+
+// validHeadscaleURL refuses a headscale URL that is not an absolute http
+// or https URL with a host.
+func validHeadscaleURL(s string) error {
+	if s == "" {
+		return invalidf("a headscale URL is required")
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return invalidf("headscale URL %q must be an http:// or https:// URL with a host, such as https://headscale.example.com", s)
+	}
+	return nil
 }
 
 // knownGroup refuses an alias the Node has no Group by.
@@ -232,13 +249,14 @@ func (h *Host) InspectGroup(ctx context.Context, groupAlias string) (GroupDetail
 			}
 		}
 	}
-	d := GroupDetail{Alias: groupAlias, GroupID: rec.GroupID().String(), Status: rec.Status()}
+	d := GroupDetail{Alias: groupAlias, GroupID: rec.GroupID().String(), Status: rec.Status(), Initiator: rec.Initiator().String()}
 	for _, n := range rec.Roster().Nodes() {
 		row := GroupNode{
 			NodeID:              n.NodeID.String(),
 			DisplayName:         n.DisplayName,
 			Hostname:            n.TsnetHostname,
 			Joined:              joined[n.NodeID],
+			Accepted:            rec.Accepted(n.NodeID),
 			AuthPublicKey:       hex.EncodeToString(n.AuthPublicKey),
 			EncryptionPublicKey: hex.EncodeToString(n.EncryptionPublicKey),
 		}

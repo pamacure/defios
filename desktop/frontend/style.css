@@ -17,6 +17,8 @@
   --danger: #DF2935;
   --danger-bg: #FBE3E5;
   --bar: #6C8E88;
+  --soft: #ADDFD7;
+  --on-bright: #151A1F;
   --radius: 8px;
   --rail: 64px;
   color-scheme: light;
@@ -39,6 +41,7 @@
     --warn-text: #FDCA40;
     --danger-bg: #3B1216;
     --bar: #8BB5AE;
+    --soft: #23524A;
     color-scheme: dark;
   }
 }
@@ -61,7 +64,13 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .btn { height: 38px; padding: 0 16px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); cursor: pointer; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+.btn.bright { background: var(--accent-bright); border-color: var(--accent-bright); color: var(--on-bright); }
+.btn.bright:hover:not(:disabled) { filter: brightness(0.95); }
+.btn.soft { background: var(--soft); border-color: var(--soft); }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn:disabled { opacity: 0.6; cursor: default; }
+.link { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--accent-strong); text-decoration: underline; cursor: pointer; font-size: 13px; }
+.link:disabled { opacity: 0.6; cursor: default; }
 .error { color: var(--danger); font-size: 13px; margin: 0; }
 .device { color: var(--muted); font-size: 13px; }
 .device strong { color: var(--text); font-weight: 600; }
@@ -119,3 +128,53 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .toggle .text { display: flex; flex-direction: column; gap: 3px; }
 .toggle .text strong { color: var(--text); font-weight: 600; }
 .toggle .warn { color: var(--warn-text); font-size: 13px; }
+
+/* Onboarding: one card per step (the Figma "Welcome" and "Build from
+   Backup" frames; steps 2 and 3 follow their style). */
+.onboard { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
+.card { width: min(500px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px 30px; display: flex; flex-direction: column; gap: 14px; }
+.card h1 { margin: 0; font-size: 20px; font-weight: 500; }
+.card .sub { margin: -6px 0 4px; color: var(--text-soft); line-height: 1.5; }
+.card .sub.file { overflow-wrap: anywhere; }
+.card .eyebrow { margin: 0; color: var(--muted); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
+.card .stack { display: flex; flex-direction: column; gap: 8px; }
+.card .lead { margin: 6px 0 0; font-size: 13px; color: var(--text); }
+.card .hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.card .field { text-align: left; background: var(--bg); }
+.card .error:empty { display: none; }
+.card .btn { width: 100%; margin-top: 6px; }
+.card .row { display: flex; gap: 10px; }
+.card .row .btn { flex: 1; }
+.card .later { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.or { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; margin: 6px 0; }
+.or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.warning { padding: 10px 12px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-text); font-size: 13px; line-height: 1.5; display: flex; flex-direction: column; gap: 6px; }
+.warning ul { margin: 0; padding-left: 18px; }
+.warning p { margin: 0; }
+.warning .btn { margin-top: 2px; }
+.center .warning { max-width: 440px; text-align: left; }
+.card .notice { margin: 6px 0 0; }
+.progress.wide { width: 100%; }
+.lines { margin: 0; padding: 0; list-style: none; font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+
+.tabs { display: flex; gap: 4px; padding: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
+.tabs button { flex: 1; height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(21, 26, 31, 0.12); }
+.devices { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); }
+.devrow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.devices .devrow + .devrow { border-top: 1px solid var(--line); }
+.devrow.pick { cursor: pointer; }
+.devrow.pick input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.devrow.self { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.devrow .who { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.devrow .who code { background: none; border: 0; padding: 0; color: var(--muted); font-size: 12px; }
+.devrow .who code.full { overflow-wrap: anywhere; user-select: all; }
+.chip { flex: none; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+.chip.ok { background: var(--accent-wash); color: var(--accent-strong); border-color: transparent; }
+.chip.bad { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
+.searching { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
+
+.empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.empty strong { color: var(--text); }
+.empty p { margin: 0; }
+.empty .btn { height: 32px; }

@@ -354,6 +354,23 @@ func (h *Host) Backup(ctx context.Context, dst string, passphrase Passphrase) (b
 	return m, err
 }
 
+// CheckPassphrase reports whether passphrase opens the Vault:
+// vault.ErrBadPassphrase when it does not. A front end checks it before an
+// operation that would act first and need the passphrase only later.
+func (h *Host) CheckPassphrase(passphrase string) error {
+	unlock, err := useVault(h.p)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, err := vault.Open(h.p.VaultSharedFile(), passphrase); errors.Is(err, os.ErrNotExist) {
+		return ErrNoNode
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
 // CheckPassphraseChange reports what would stop ChangePassphrase that needs
 // no passphrase to find, so a front end can refuse before asking for two:
 // ErrHosted while this host serves the Node, ErrServedElsewhere while

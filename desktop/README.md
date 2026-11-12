@@ -40,6 +40,11 @@ service `DeFiOS`, keyed by Node ID. Start at login registers the app with
 The tray, start at login, keychain and notifications are the OS's, so each OS
 needs checking by hand:
 
+- Onboarding, on a fresh `--dir`: create a device (progress shows while the
+  keys are made), join a tailnet on a real headscale, and form a Group with a
+  second machine: one invites, the other accepts, and both land on Talk.
+  Restore from a Backup through the file dialog, once with a wrong passphrase.
+  From a served Group, "+ Add Group" asks for no passphrase.
 - Unlock from the lock screen; `defios group list` in a terminal shows the
   Group served.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
