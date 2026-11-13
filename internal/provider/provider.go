@@ -106,6 +106,22 @@ func validate(p Provider, complete bool) error {
 	return nil
 }
 
+// CheckBaseURL is Validate's check of a base_url alone.
+func CheckBaseURL(base string) error {
+	if s := baseURLProblem(base); s != "" {
+		return invalidf("%s", s)
+	}
+	return nil
+}
+
+// CheckAPIPath is Validate's check of an api_path alone.
+func CheckAPIPath(path string) error {
+	if s := apiPathProblem(path); s != "" {
+		return invalidf("%s", s)
+	}
+	return nil
+}
+
 // baseURLProblem is what is wrong with base, or "".
 func baseURLProblem(base string) string {
 	if base == "" {

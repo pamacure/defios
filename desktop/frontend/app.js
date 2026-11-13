@@ -2,14 +2,15 @@
 // reports (main.UI) and calls back into it; it holds no Node state of its
 // own beyond which page is open. UI text says "device" for a Node.
 import { Events } from "/wails/runtime.js";
+import { agentsDevicePart, agentsGroupPart } from "./agents.js";
 import { call, h, icon } from "./dom.js";
 import { settingsPart } from "./settings.js";
 import { talkPage, talkUpdate } from "./talk.js";
 
 const SECTIONS = [
   { id: "talk", label: "Talk", issue: 149 },
-  { id: "vault", label: "Vault", issue: 151 },
-  { id: "agents", label: "Agents", issue: 152 },
+  { id: "vault", label: "Vault", issue: 152 },
+  { id: "agents", label: "Agents", issue: 151 },
   { id: "plugins", label: "Plugins", issue: 153 },
   { id: "triggers", label: "Triggers", issue: 154 },
   { id: "networks", label: "Networks", issue: 155 },
@@ -514,13 +515,29 @@ function page(s) {
     s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
     h("section", { class: "part", "aria-label": "This Device" },
       h("header", {}, h("h2", {}, "This Device")),
-      h("div", { class: "body" }, sec.id === "settings" ? nodeSettings(s) : h("p", { class: "placeholder" }, `${sec.label} for this device comes later.`))),
+      h("div", { class: "body" }, nodePart(sec, s))),
     h("section", { class: "part", "aria-label": "Group" },
       h("header", {}, h("h2", {}, "Group"), editTarget(s)),
       !s.EditGroupServed && h("div", { class: "notice" }, `${s.EditGroup} is not online on this device. Changes here apply the next time it is.`),
-      h("div", { class: "body" }, sec.id === "settings"
-        ? settingsPart(s)
-        : h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`))));
+      h("div", { class: "body" }, groupPart(sec, s))));
+}
+
+// nodePart is a section page's This Device part.
+function nodePart(sec, s) {
+  switch (sec.id) {
+    case "settings": return nodeSettings(s);
+    case "agents": return agentsDevicePart(s, ui.focus);
+  }
+  return h("p", { class: "placeholder" }, `${sec.label} for this device comes later.`);
+}
+
+// groupPart is a section page's Group part, for s.EditGroup.
+function groupPart(sec, s) {
+  switch (sec.id) {
+    case "settings": return settingsPart(s);
+    case "agents": return agentsGroupPart(s);
+  }
+  return h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`);
 }
 
 // editTarget picks the Group the Group parts edit. The choice is kept

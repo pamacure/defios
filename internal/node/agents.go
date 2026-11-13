@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"defios.com/internal/config"
+	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
 )
@@ -31,6 +32,14 @@ var (
 	// ErrFollowsGroup: an exclude from a Conversation that has no list of
 	// its own, so follows the Group's.
 	ErrFollowsGroup = errors.New("node: the Conversation follows the Group's list of agents")
+)
+
+// The fields of an Agent Profile, as an InvalidError from AddAgentProfile
+// or EditAgentProfile names them.
+const (
+	FieldHandle   = "handle"
+	FieldProvider = "provider"
+	FieldMaxTurns = "max_turns"
 )
 
 // ProfileIncludedError: a delete refused because the Agent Profile is
@@ -98,11 +107,17 @@ type ProfileEdit struct {
 // apply sets e on p.
 func (e ProfileEdit) apply(p *config.Profile) error {
 	if e.Provider != nil {
+		if *e.Provider == "" {
+			return onField(FieldProvider, invalidf("a Provider is required: the alias of the Provider it runs on"))
+		}
+		if err := group.ValidateAlias(*e.Provider); err != nil {
+			return onField(FieldProvider, invalidf("provider: %w", err))
+		}
 		p.Provider = *e.Provider
 	}
 	if e.MaxTurns != nil {
 		if *e.MaxTurns < 1 {
-			return invalidf("max turns %d must be a positive integer", *e.MaxTurns)
+			return onField(FieldMaxTurns, invalidf("max turns %d must be a positive integer", *e.MaxTurns))
 		}
 		p.MaxTurns = *e.MaxTurns
 	}
@@ -124,7 +139,7 @@ func (e ProfileEdit) apply(p *config.Profile) error {
 // validHandle refuses an invalid Handle.
 func validHandle(handle string) error {
 	if err := config.ValidateHandle(handle); err != nil {
-		return &InvalidError{Err: err}
+		return &InvalidError{Err: err, Field: FieldHandle}
 	}
 	return nil
 }
@@ -171,7 +186,7 @@ func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit
 		return AgentProfile{}, err
 	}
 	if e.Provider == nil {
-		return AgentProfile{}, invalidf("a Provider is required: the alias of the Provider it runs on")
+		return AgentProfile{}, onField(FieldProvider, invalidf("a Provider is required: the alias of the Provider it runs on"))
 	}
 	var p config.Profile
 	if err := e.apply(&p); err != nil {

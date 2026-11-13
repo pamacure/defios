@@ -377,3 +377,56 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .tx-review dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
 .tx-review dt { color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .tx-review dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Agents: the Agent Profiles list and form, grants, and the Group's
+   Providers. The shared Secret field is styled here too. */
+.agents h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text); }
+.agents h4 { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--text-soft); text-transform: uppercase; letter-spacing: .04em; }
+.agents .hint.lead { margin: 0 0 14px; }
+.agents .saved { display: block; margin-bottom: 10px; }
+.agents .factions .saved { display: inline; margin: 0; }
+.pgrid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
+.plist { display: flex; flex-direction: column; gap: 4px; }
+.pitem { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; min-width: 0; }
+.pitem strong { color: var(--text); font-weight: 600; }
+.pitem span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.pitem:hover:not(:disabled) { background: var(--bg); }
+.pitem[aria-current="true"] { background: var(--accent-wash); border-color: transparent; }
+.pitem[aria-current="true"] strong { color: var(--accent-strong); }
+.pitem.add { color: var(--accent-strong); font-weight: 600; margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; }
+.pdetail { min-width: 0; }
+.pdetail .gsec:last-child { padding-bottom: 0; }
+.field.area { height: auto; padding: 8px 12px; resize: vertical; line-height: 1.45; font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 13px; }
+.pdetail .fcell, .providers .fcell { max-width: 560px; }
+.agents select.field { height: 40px; background: var(--surface); }
+.grants { display: flex; flex-direction: column; gap: 2px; }
+.grant { padding: 6px 0; }
+.grant .check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.grant .check > span { display: flex; flex-direction: column; gap: 2px; }
+.grant input[type="checkbox"], .env input[type="checkbox"] { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+.grant .error { margin: 4px 0 0 26px; }
+.grant.server { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 6px; }
+.envs { margin: 8px 0 0 26px; display: flex; flex-direction: column; gap: 6px; }
+.env { display: flex; align-items: flex-start; gap: 10px; }
+.places { margin: 0; padding-left: 18px; color: var(--text); }
+.warning .row { display: flex; gap: 10px; }
+.providers { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.provider { width: 100%; border: 1px solid var(--line); border-radius: var(--radius); }
+.prow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
+.prow .who { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.prow .who strong { color: var(--text); }
+.prow .who code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: flex-start; max-width: 100%; }
+.provider .pform { border-top: 1px solid var(--line); padding: 12px; }
+.pform.new { width: 100%; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.confirm { display: inline-flex; align-items: center; gap: 8px; color: var(--warn-text); font-size: 13px; }
+.secretfield { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.secretfield .secretrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 26px; }
+.newsecret { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px dashed var(--line); border-radius: var(--radius); background: var(--bg); }
+.newsecret .row { display: flex; gap: 8px; }
+.newsecret .btn { height: 32px; }
+@media (max-width: 860px) {
+  .pgrid { grid-template-columns: minmax(0, 1fr); }
+  .plist { flex-direction: row; flex-wrap: wrap; }
+  .pitem.add { border-top: 0; margin-top: 0; }
+}
+.agents .factions { max-width: 776px; }

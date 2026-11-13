@@ -69,6 +69,14 @@ needs checking by hand:
   changes. Devices shows "2 of 2 devices online", then 1 of 2 with the
   other quit. Mention an agent: its Token Usage goes up, shown apart from
   Node Usage ("Device Usage"). Choose a Group that is not online: no device shows online.
+- Agents: add a Provider from a preset with its API key through "New
+  Secret…", then add an agent on it. Include it on Talk, mention it, and it
+  answers; change its SYSTEM.md and the next answer follows it. Grant an
+  MCP Server with one of its Secrets, then revoke it: `defios agent show`
+  agrees each time. Delete warns where the agent is included. A max turns
+  of 0, or an API path such as `/v1/foo`, is refused beside its field and
+  nothing changes. Choose a Group that is not online: its Providers show,
+  and edits note they apply the next time it is.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
   then shows the lock screen once `serve` stops.
 - Close the window: the tray icon stays and the Node keeps serving. The tray's

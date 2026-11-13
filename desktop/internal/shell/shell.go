@@ -38,6 +38,7 @@ type Node interface {
 
 	TalkNode
 	SettingsNode
+	AgentsNode
 }
 
 // PrefStore loads and saves the app's preferences.

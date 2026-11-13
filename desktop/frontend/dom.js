@@ -36,3 +36,9 @@ export function icon(name) {
   span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
   return span;
 }
+
+// put replaces el's children as h adds them: null and false are none.
+export function put(el, ...children) {
+  el.replaceChildren(...children.flat().filter((c) => c != null && c !== false));
+  return el;
+}

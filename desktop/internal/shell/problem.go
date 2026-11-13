@@ -84,6 +84,9 @@ func problemOf(err error) *Problem {
 	if p := signProblem(err); p != nil {
 		return p
 	}
+	if p := agentsProblem(err); p != nil {
+		return p
+	}
 	return talkProblem(err)
 }
 

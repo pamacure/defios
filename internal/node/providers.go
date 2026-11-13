@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"defios.com/internal/config"
+	"defios.com/internal/group"
 	"defios.com/internal/provider"
 	"defios.com/internal/secret"
 )
@@ -18,6 +19,16 @@ import (
 // config.ErrNotWritten: provider.ErrExists, provider.ErrUnknown,
 // provider.ErrUnchanged and provider.ErrInvalid (a Provider left with no
 // base URL or an API path no API Shape matches).
+
+// The fields of a Provider, as an InvalidError from AddProvider or
+// EditProvider names them.
+const (
+	FieldAlias   = "alias"
+	FieldPreset  = "preset"
+	FieldBaseURL = "base_url"
+	FieldAPIPath = "api_path"
+	FieldAPIKey  = "api_key"
+)
 
 // Provider is one Provider in force in Group-level talk or a
 // Conversation (ADR 0022). Its APIKey is the Secret reference the config
@@ -57,7 +68,7 @@ func (e ProviderEdit) apply(p *config.Provider) error {
 	if e.APIKey != nil {
 		if *e.APIKey != "" {
 			if _, err := secret.ParseRef(*e.APIKey); err != nil {
-				return &InvalidError{Err: fmt.Errorf("API key: %w", err)}
+				return &InvalidError{Err: fmt.Errorf("API key: %w", err), Field: FieldAPIKey}
 			}
 		}
 		p.APIKey = *e.APIKey
@@ -128,12 +139,12 @@ func (h *Host) AddProvider(ctx context.Context, group, conv, alias string, e Pro
 	if pre, ok := provider.Preset(name); ok {
 		p.BaseURL, p.APIPath = pre.BaseURL, pre.APIPath
 	} else if e.Preset != "" {
-		return Provider{}, invalidf("no preset %q; the presets are %s", e.Preset, strings.Join(provider.PresetNames(), ", "))
+		return Provider{}, onField(FieldPreset, invalidf("no preset %q; the presets are %s", e.Preset, strings.Join(provider.PresetNames(), ", ")))
 	}
 	if err := e.apply(&p); err != nil {
 		return Provider{}, err
 	}
-	err := h.writeProviders(group, conv, func(own, inForce map[string]config.Provider) error {
+	err := h.writeProviders(group, conv, alias, func(own, inForce map[string]config.Provider) error {
 		if _, ok := inForce[alias]; ok {
 			return fmt.Errorf("%w: %q", provider.ErrExists, alias)
 		}
@@ -149,7 +160,7 @@ func (h *Host) AddProvider(ctx context.Context, group, conv, alias string, e Pro
 // EditProvider changes the fields of Provider alias e sets: in group's
 // config, or in Conversation conv's override of a Provider in force there.
 func (h *Host) EditProvider(ctx context.Context, group, conv, alias string, e ProviderEdit) (Provider, error) {
-	err := h.writeProviders(group, conv, func(own, inForce map[string]config.Provider) error {
+	err := h.writeProviders(group, conv, alias, func(own, inForce map[string]config.Provider) error {
 		if _, ok := inForce[alias]; !ok {
 			return fmt.Errorf("%w: %q", provider.ErrUnknown, alias)
 		}
@@ -174,7 +185,7 @@ func (h *Host) EditProvider(ctx context.Context, group, conv, alias string, e Pr
 // body with it: group's, or Conversation conv's override, which leaves the
 // Group's in force there.
 func (h *Host) RemoveProvider(ctx context.Context, group, conv, alias string) error {
-	return h.writeProviders(group, conv, func(own, _ map[string]config.Provider) error {
+	return h.writeProviders(group, conv, alias, func(own, _ map[string]config.Provider) error {
 		if _, ok := own[alias]; !ok {
 			return fmt.Errorf("%w: %q", provider.ErrUnknown, alias)
 		}
@@ -186,8 +197,9 @@ func (h *Host) RemoveProvider(ctx context.Context, group, conv, alias string) er
 // writeProviders applies change to the Providers of group's config.toml,
 // or of Conversation conv's, and writes it back if every Provider in force
 // there is then valid. change is given the file's own Providers, to
-// change, and those in force before it.
-func (h *Host) writeProviders(group, conv string, change func(own, inForce map[string]config.Provider) error) error {
+// change, and those in force before it. A refusal of Provider alias's own
+// table is an InvalidError naming the field it is about.
+func (h *Host) writeProviders(group, conv, alias string, change func(own, inForce map[string]config.Provider) error) error {
 	if conv == GroupTalk {
 		return h.writeGroupConfig(group, func(c *config.Config) error {
 			if err := change(c.Providers, maps.Clone(c.Providers)); err != nil {
@@ -195,7 +207,7 @@ func (h *Host) writeProviders(group, conv string, change func(own, inForce map[s
 			}
 			for a, p := range c.Providers {
 				if err := provider.Validate(p.Endpoint(a)); err != nil {
-					return fmt.Errorf("[providers.%s]: %w", a, err)
+					return providerRefused(a, alias, p, true, err)
 				}
 			}
 			return nil
@@ -214,7 +226,7 @@ func (h *Host) writeProviders(group, conv string, change func(own, inForce map[s
 		}
 		for a, p := range w.Providers {
 			if err := provider.ValidateOverride(p.Endpoint(a)); err != nil {
-				return fmt.Errorf("[providers.%s]: %w", a, err)
+				return providerRefused(a, alias, p, false, err)
 			}
 		}
 		merged, err := e.Group.Workspace.Merge(*w)
@@ -233,8 +245,30 @@ func (h *Host) writeProviders(group, conv string, change func(own, inForce map[s
 	})
 }
 
+// providerRefused is err, Provider a's table refused: an InvalidError
+// naming the field first refused when a is the alias edited, whose
+// message tells every problem. complete is whether base_url and api_path
+// are required, as in a Group's table.
+func providerRefused(a, edited string, p config.Provider, complete bool, err error) error {
+	err = fmt.Errorf("[providers.%s]: %w", a, err)
+	if a != edited {
+		return err
+	}
+	field := FieldAlias // Validate tells of the alias alone when it is wrong
+	switch {
+	case groupAliasValid(a) && (complete || p.BaseURL != "") && provider.CheckBaseURL(p.BaseURL) != nil:
+		field = FieldBaseURL
+	case groupAliasValid(a) && (complete || p.APIPath != "") && provider.CheckAPIPath(p.APIPath) != nil:
+		field = FieldAPIPath
+	}
+	return &InvalidError{Err: err, Field: field}
+}
+
 func providerOf(alias string, p config.Provider) Provider {
 	at := p.Endpoint(alias)
 	return Provider{Alias: alias, BaseURL: p.BaseURL, APIPath: p.APIPath, Shape: at.Shape().Name, URL: at.URL(),
 		APIKey: p.APIKey, Body: p.Body}
 }
+
+// groupAliasValid: a is a valid alias, as a Provider's must be.
+func groupAliasValid(a string) bool { return group.ValidateAlias(a) == nil }

@@ -52,6 +52,32 @@ func (u *UI) SaveGroupSettings(d shell.SettingsDraft) shell.GroupSettingsView {
 	return u.shell.SaveGroupSettings(d)
 }
 
+// Agents: this Node's Agent Profiles and the edit-target Group's
+// Providers.
+
+func (u *UI) Agents(open string) shell.AgentsView { return u.shell.Agents(open) }
+func (u *UI) SaveAgentProfile(d shell.ProfileDraft) shell.AgentsView {
+	return u.shell.SaveAgentProfile(d)
+}
+func (u *UI) DeleteAgentProfile(handle string) shell.AgentsView {
+	return u.shell.DeleteAgentProfile(handle)
+}
+func (u *UI) GrantAgent(handle, item string, secrets []string) shell.AgentsView {
+	return u.shell.GrantAgent(handle, item, secrets)
+}
+func (u *UI) RevokeAgent(handle, item string) shell.AgentsView {
+	return u.shell.RevokeAgent(handle, item)
+}
+func (u *UI) SaveProvider(d shell.ProviderDraft) shell.AgentsView {
+	return u.shell.SaveProvider(d)
+}
+func (u *UI) RemoveProvider(alias string) shell.AgentsView { return u.shell.RemoveProvider(alias) }
+
+// The shared Secret field: the edit-target Group's Secrets.
+
+func (u *UI) Secrets() shell.SecretsView                     { return u.shell.Secrets() }
+func (u *UI) NewSecret(name, value string) shell.SecretsView { return u.shell.NewSecret(name, value) }
+
 // Onboarding.
 
 func (u *UI) CheckDisplayName(name string) *shell.Problem { return shell.CheckDisplayName(name) }
