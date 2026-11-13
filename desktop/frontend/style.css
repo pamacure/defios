@@ -164,8 +164,6 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .saved { color: var(--accent-strong); font-size: 13px; }
 .gsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
 .gsec > .hint { margin: -6px 0 10px; }
-.gsec .devices .devrow { padding: 8px 0; border-bottom: 1px solid var(--line); }
-.gsec .devices .devrow:last-child { border-bottom: 0; }
 .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
 .stat .label { font-size: 12px; color: var(--muted); }
