@@ -90,6 +90,10 @@ type Deps struct {
 	// RetryEvery is how often a Node another process serves is checked
 	// again; zero is 2 seconds.
 	RetryEvery time.Duration
+	// ConnectWindow is how long a Group just served may stay Connecting,
+	// waiting for every Roster device to be reachable; zero is 15
+	// seconds.
+	ConnectWindow time.Duration
 }
 
 // View is the screen the app shows.
@@ -131,6 +135,10 @@ type State struct {
 	Online            int // Roster Nodes reachable, this one included
 	RosterSize        int
 	MajorityReachable bool
+	// Connecting: the Group was just served and not every Roster device
+	// is reachable yet, so the app waits on them before it shows the
+	// Group, until Deps.ConnectWindow passes or ContinueNow.
+	Connecting bool
 	// Problem is what went wrong last, for the screen to show.
 	Problem *Problem
 	Prefs   Prefs
@@ -180,6 +188,8 @@ type Prefs struct {
 	Notifications bool
 	// MessageNotifications also notifies of each new message.
 	MessageNotifications bool
+	// Theme is "system", "light" or "dark".
+	Theme string
 }
 
 // Shell is the app's state. Its methods are safe from any goroutine; each
@@ -208,6 +218,9 @@ type Shell struct {
 	// back is the Group served before the one served now, to go back to
 	// rather than form that one now.
 	back string
+	// connects counts the times a Group was served, so the end of one's
+	// ConnectWindow never ends a later one's Connecting.
+	connects int
 	// loginUnlock: unlock from the keychain once another process stops
 	// serving this Node.
 	loginUnlock bool
@@ -225,6 +238,9 @@ type Shell struct {
 func New(d Deps) *Shell {
 	if d.RetryEvery <= 0 {
 		d.RetryEvery = 2 * time.Second
+	}
+	if d.ConnectWindow <= 0 {
+		d.ConnectWindow = 15 * time.Second
 	}
 	if d.Notify == nil {
 		d.Notify = func(Notice) {}
@@ -479,6 +495,7 @@ func (s *Shell) apply(st node.Status) {
 			}
 		}
 		forming := s.formingOf(st.Group, groups)
+		connect := changed && forming == nil
 		s.set(func(v *State) {
 			if forming != nil && v.Forming != nil && v.Forming.Group == forming.Group {
 				// Discover writes these without s.op: keep what it found
@@ -496,7 +513,20 @@ func (s *Shell) apply(st node.Status) {
 					v.Online++
 				}
 			}
+			if connect {
+				v.Connecting = true
+			}
+			if v.RosterSize > 0 && v.Online == v.RosterSize {
+				v.Connecting = false // every device is in
+			}
 		})
+		if connect {
+			s.mu.Lock()
+			s.connects++
+			n := s.connects
+			s.mu.Unlock()
+			time.AfterFunc(s.d.ConnectWindow, func() { s.connected(n) })
+		}
 		if forming == nil {
 			s.talk.serve(s.node(), s.State().Node.ID, st.Group, st)
 		} else {
@@ -510,6 +540,27 @@ func (s *Shell) apply(st node.Status) {
 	// Serving stopped, on its own when st.Err is set.
 	s.forget()
 	s.route(problemOrNil(st.Err))
+}
+
+// connected ends the Connecting of the n-th Group served, if still on.
+func (s *Shell) connected(n int) {
+	s.mu.Lock()
+	current := s.connects == n && s.st.Connecting
+	s.mu.Unlock()
+	if current {
+		s.set(func(v *State) {
+			if s.connects == n { // set holds s.mu
+				v.Connecting = false
+			}
+		})
+	}
+}
+
+// ContinueNow shows the served Group without waiting longer for its
+// devices.
+func (s *Shell) ContinueNow() State {
+	s.set(func(v *State) { v.Connecting = false })
+	return s.State()
 }
 
 // Unlock serves group with passphrase.
@@ -661,6 +712,29 @@ func (s *Shell) SetMessageNotifications(on bool) State {
 	return s.State()
 }
 
+// SetTheme picks the app's colours: "system" follows the OS, "light" or
+// "dark" overrides it.
+func (s *Shell) SetTheme(name string) State {
+	s.op.Lock()
+	defer s.op.Unlock()
+	t, ok := themes[name]
+	if !ok {
+		s.set(func(st *State) { st.Problem = &Problem{"bad-theme", "Choose System, Light or Dark."} })
+		return s.State()
+	}
+	s.savePrefs(func(p *prefs.Prefs) { p.Theme = t })
+	return s.State()
+}
+
+var themes = map[string]prefs.Theme{"system": prefs.ThemeSystem, "light": prefs.ThemeLight, "dark": prefs.ThemeDark}
+
+func themeName(t prefs.Theme) string {
+	if t == prefs.ThemeSystem {
+		return "system"
+	}
+	return string(t)
+}
+
 // SetWindowSize keeps the window's size for the next start.
 func (s *Shell) SetWindowSize(width, height int) {
 	s.mu.Lock()
@@ -742,8 +816,11 @@ func (s *Shell) set(change func(*State)) {
 	if st.View != ViewForming {
 		st.Forming = nil
 	}
+	if st.View != ViewServed {
+		st.Connecting = false
+	}
 	st.BackupDue = s.p.BackupDue
-	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications(), MessageNotifications: s.p.MessageNotifications}
+	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications(), MessageNotifications: s.p.MessageNotifications, Theme: themeName(s.p.Theme)}
 	st.Seq++
 	out := *st
 	s.mu.Unlock()

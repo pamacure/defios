@@ -375,6 +375,11 @@ type Options struct {
 	// StatusInterval is how often a serving Node's status is refreshed;
 	// zero is 5 seconds.
 	StatusInterval time.Duration
+	// For ConnectWindow after Unlock or Switch, until every Roster Node is
+	// reachable, the status is refreshed every ConnectInterval instead, so
+	// a Group's devices show as online as soon as the tailnet reaches
+	// them. Zero is 15 seconds and 1 second.
+	ConnectWindow, ConnectInterval time.Duration
 }
 
 // Sessions is how a Node runs Sessions.
@@ -436,6 +441,13 @@ func Open(p nodedir.Paths, o Options) (*Host, error) {
 	if o.StatusInterval <= 0 {
 		o.StatusInterval = 5 * time.Second
 	}
+	if o.ConnectWindow <= 0 {
+		o.ConnectWindow = 15 * time.Second
+	}
+	if o.ConnectInterval <= 0 {
+		o.ConnectInterval = time.Second
+	}
+	o.ConnectInterval = min(o.ConnectInterval, o.StatusInterval)
 	return &Host{p: p, o: o, pub: pub, subs: map[*subscriber]struct{}{}}, nil
 }
 
@@ -678,8 +690,7 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 // Vault and, when the serve stopped on its own, locks the Node.
 func (h *Host) watch(sv *serving, ctx context.Context, unlockVault func()) {
 	defer close(sv.done)
-	tick := time.NewTicker(h.o.StatusInterval)
-	defer tick.Stop()
+	connectUntil := time.Now().Add(h.o.ConnectWindow)
 	for stopped := false; !stopped; {
 		select {
 		case <-sv.run.Done():
@@ -687,9 +698,14 @@ func (h *Host) watch(sv *serving, ctx context.Context, unlockVault func()) {
 			continue
 		default:
 		}
-		h.refresh(sv, ctx)
+		every := h.o.StatusInterval
+		if !h.refresh(sv, ctx) && time.Now().Before(connectUntil) {
+			every = h.o.ConnectInterval // still connecting
+		} else {
+			connectUntil = time.Time{} // connected: no going back to quick
+		}
 		select {
-		case <-tick.C:
+		case <-time.After(every):
 		case <-sv.run.Done():
 			stopped = true
 		}
@@ -704,8 +720,9 @@ func (h *Host) watch(sv *serving, ctx context.Context, unlockVault func()) {
 	}
 }
 
-// refresh publishes sv's status, if sv is still what this host serves.
-func (h *Host) refresh(sv *serving, ctx context.Context) {
+// refresh publishes sv's status, if sv is still what this host serves,
+// and reports whether every Roster Node is reachable.
+func (h *Host) refresh(sv *serving, ctx context.Context) (allReachable bool) {
 	ctx, cancel := context.WithTimeout(ctx, h.o.StatusInterval+10*time.Second)
 	defer cancel()
 	ns := sv.run.NodeStatus(ctx)
@@ -737,6 +754,7 @@ func (h *Host) refresh(sv *serving, ctx context.Context) {
 	if h.cur == sv {
 		h.setStatus(st)
 	}
+	return len(st.Roster) > 0 && reachable == len(st.Roster)
 }
 
 // Lock implements Node.

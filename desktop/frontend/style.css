@@ -26,8 +26,10 @@
   font-size: 14px;
 }
 
+/* Dark: the OS asks for it and the app has no Light override, or the
+   app forces it (Settings, Appearance; app.js sets data-theme). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #151A1F;
     --surface: #1A2523;
     --line: #303940;
@@ -44,6 +46,23 @@
     --soft: #23524A;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #151A1F;
+  --surface: #1A2523;
+  --line: #303940;
+  --muted: #8EA4B7;
+  --text: #EDF1F4;
+  --text-soft: #BBCAD8;
+  --accent: #32CD8B;
+  --accent-strong: #3FF9AA;
+  --accent-wash: #0E5336;
+  --warn-bg: #3A2E0A;
+  --warn-text: #FDCA40;
+  --danger-bg: #3B1216;
+  --bar: #8BB5AE;
+  --soft: #23524A;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -129,6 +148,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .toggle .text strong { color: var(--text); font-weight: 600; }
 .toggle .warn { color: var(--warn-text); font-size: 13px; }
 .toggle.sub { padding-left: 28px; }
+.toggle select.theme { margin-left: auto; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .toggle input:disabled + .text { opacity: 0.6; }
 
 /* Settings: the Group part's form, devices and the two usages. */

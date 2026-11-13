@@ -20,6 +20,8 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -68,6 +70,7 @@ func run(dir string, atLogin bool) error {
 		return err
 	}
 	store := prefs.Store{File: prefsFile}
+	noticeIcon := notificationIcon()
 	saved, _ := store.Load() // a bad file shows in the app once Start loads it
 
 	assets, err := fs.Sub(frontend, "frontend")
@@ -136,6 +139,9 @@ func run(dir string, atLogin bool) error {
 				ID: fmt.Sprintf("defios-%d", noticeSeq.Add(1)), Title: n.Title, Body: n.Body,
 				Data: map[string]any{"group": n.Group, "conversation": n.Conversation, "signRequest": n.SignRequestID},
 			}
+			if noticeIcon != "" {
+				opts.Attachments = []notifications.NotificationAttachment{{Path: noticeIcon}}
+			}
 			if err := notifier.SendNotification(opts); err != nil {
 				log.Printf("notification: %v", err)
 			}
@@ -188,4 +194,32 @@ func run(dir string, atLogin bool) error {
 		return fmt.Errorf("desktop: %w", err)
 	}
 	return nil
+}
+
+// notificationIcon is the app icon as a file for Linux notifications,
+// which Wails sends with no icon: the daemon then draws a placeholder.
+// Attached, it goes as the image-path hint, which daemons show as the
+// notification's icon. macOS takes the bundle's icon, so it is "" there,
+// as on Windows, and when the file cannot be written.
+func notificationIcon() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	file := filepath.Join(cache, "defios-desktop", "notification-icon.png")
+	if old, err := os.ReadFile(file); err == nil && string(old) == string(appIcon) {
+		return file
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		log.Printf("notification icon: %v", err)
+		return ""
+	}
+	if err := os.WriteFile(file, appIcon, 0o600); err != nil {
+		log.Printf("notification icon: %v", err)
+		return ""
+	}
+	return file
 }

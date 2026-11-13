@@ -445,6 +445,8 @@ type rig struct {
 	// backupGroups are the Groups the Backup at backupFile holds.
 	backupGroups []string
 	progress     []string // the State's Progress as Create reported each line
+	// connectWindow is the Shell's ConnectWindow; zero is its default.
+	connectWindow time.Duration
 }
 
 const backupFile = "/backups/laptop.backup"
@@ -502,8 +504,9 @@ func (r *rig) start(atLogin bool) *shell.Shell {
 			defer r.mu.Unlock()
 			r.notes = append(r.notes, n)
 		},
-		HookGrace:  20 * time.Millisecond,
-		RetryEvery: 5 * time.Millisecond,
+		HookGrace:     20 * time.Millisecond,
+		RetryEvery:    5 * time.Millisecond,
+		ConnectWindow: r.connectWindow,
 	})
 	r.shell.Start(atLogin)
 	r.t.Cleanup(r.shell.Close)

@@ -125,6 +125,7 @@ async function act(method, ...args) {
 function render(force = false) {
   if (!state) return;
   const s = state;
+  applyTheme(s.Prefs.Theme);
   const key = JSON.stringify([s.View, s.Selected, s.Groups, s.Problem, s.Node, ui.addingGroup,
     s.Progress, s.Forming, s.Restored, s.PassphraseHeld, ui.restore, ui.invite, ui.pick, ui.declining,
     s.View === "served" && !ui.addingGroup ? [s.Seq, ui.page, ui.menuOpen, ui.busy] : ui.busy]);
@@ -153,13 +154,27 @@ function screen(s) {
     case "locked": return lockScreen(s);
     case "unlocking": return loading(s.Selected ? `Unlocking ${s.Selected}…` : "Unlocking…");
     case "served-elsewhere": return servedElsewhere(s);
-    case "served": return shell(s);
+    case "served": return s.Connecting ? connecting(s) : shell(s);
     default: return loading("Starting…");
   }
 }
 
 function loading(text) {
   return h("main", { class: "center" }, logo(), h("div", { class: "progress", role: "progressbar", "aria-label": text }), h("p", {}, text));
+}
+
+// connecting stands for the served Group while its devices are reached,
+// so it shows with each one online, or with those that are not after a
+// while. Every page loads meanwhile.
+function connecting(s) {
+  const text = `Connecting to ${s.Served}'s devices…`;
+  return h("main", { class: "center" }, logo(),
+    h("div", { class: "progress", role: "progressbar", "aria-label": text }),
+    h("p", {}, text),
+    h("p", { class: "hint", "aria-live": "polite" }, s.RosterSize
+      ? `${s.Online} of ${s.RosterSize} devices online`
+      : s.TailnetUp ? "Reaching the other devices over the tailnet." : "Joining the tailnet."),
+    h("button", { class: "btn", type: "button", onclick: () => act("ContinueNow") }, "Continue now"));
 }
 
 function problemText(s) {
@@ -646,6 +661,24 @@ function editTarget(s) {
       g.Alias === s.Served ? `${g.Alias} (online)` : g.Alias)));
 }
 
+// applyTheme sets the colours: "light" or "dark" override the OS, any
+// other follows it (style.css).
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "light" || theme === "dark") root.dataset.theme = theme;
+  else delete root.dataset.theme;
+}
+
+// themePicker chooses System, Light or Dark.
+function themePicker(s) {
+  return h("label", { class: "toggle" },
+    h("span", { class: "text" }, h("strong", {}, "Appearance"),
+      h("span", {}, "System follows this computer's light or dark setting.")),
+    h("select", { class: "theme", "aria-label": "Appearance", disabled: ui.busy, onchange: (e) => act("SetTheme", e.target.value) },
+      [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([v, label]) =>
+        h("option", { value: v, selected: s.Prefs.Theme === v }, label))));
+}
+
 // nodeSettings are This Device's preferences: the app's own, kept outside
 // the Node directory.
 function nodeSettings(s) {
@@ -653,6 +686,7 @@ function nodeSettings(s) {
     h("input", { type: "checkbox", checked, disabled: ui.busy || attrs.disabled, onchange: (e) => act(method, e.target.checked) }),
     h("span", { class: "text" }, h("strong", {}, label), ...extra));
   return h("div", {},
+    themePicker(s),
     toggle("Notifications", s.Prefs.Notifications, "SetNotifications", {},
       h("span", {}, "Let DeFiOS notify you, such as when a Sign Request needs you.")),
     toggle("New-message notifications", s.Prefs.Notifications && s.Prefs.MessageNotifications, "SetMessageNotifications",

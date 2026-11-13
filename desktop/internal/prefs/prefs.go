@@ -30,6 +30,9 @@ type Prefs struct {
 	MuteNotifications bool `json:"mute_notifications,omitempty"`
 	// MessageNotifications also notifies of each new message, an opt-in.
 	MessageNotifications bool `json:"message_notifications,omitempty"`
+	// Theme is the app's colours: ThemeLight or ThemeDark, or empty to
+	// follow the OS.
+	Theme Theme `json:"theme,omitempty"`
 	// LastGroup is the Group the app last served, which the lock screen
 	// preselects.
 	LastGroup string `json:"last_group,omitempty"`
@@ -42,6 +45,16 @@ type Prefs struct {
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
 }
+
+// Theme picks the app's colours.
+type Theme string
+
+// The Themes; the zero value follows the OS.
+const (
+	ThemeSystem Theme = ""
+	ThemeLight  Theme = "light"
+	ThemeDark   Theme = "dark"
+)
 
 // Notifications reports whether the app may post notifications.
 func (p Prefs) Notifications() bool { return !p.MuteNotifications }

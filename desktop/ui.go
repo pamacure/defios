@@ -39,6 +39,7 @@ func (u *UI) State() shell.State                          { return u.shell.State
 func (u *UI) Refresh() shell.State                        { return u.shell.Refresh() }
 func (u *UI) Unlock(group, passphrase string) shell.State { return u.shell.Unlock(group, passphrase) }
 func (u *UI) Lock() shell.State                           { return u.shell.Lock() }
+func (u *UI) ContinueNow() shell.State                    { return u.shell.ContinueNow() }
 func (u *UI) Switch(group string) shell.State             { return u.shell.Switch(group) }
 func (u *UI) SetEditGroup(group string) shell.State       { return u.shell.SetEditGroup(group) }
 func (u *UI) SetStartAtLogin(on bool) shell.State         { return u.shell.SetStartAtLogin(on) }
@@ -47,6 +48,7 @@ func (u *UI) SetNotifications(on bool) shell.State        { return u.shell.SetNo
 func (u *UI) SetMessageNotifications(on bool) shell.State {
 	return u.shell.SetMessageNotifications(on)
 }
+func (u *UI) SetTheme(name string) shell.State { return u.shell.SetTheme(name) }
 
 // Settings: the edit-target Group's part.
 

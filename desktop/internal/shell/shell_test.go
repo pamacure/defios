@@ -145,6 +145,28 @@ func TestTheEditTargetDefaultsToTheServedGroupAndIsKept(t *testing.T) {
 	}
 }
 
+// The theme follows the OS until Light or Dark is chosen, is kept across
+// starts, and refuses a name it does not know.
+func TestTheThemeFollowsTheOSUntilOneIsChosen(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := r.start(false)
+	if st := s.State(); st.Prefs.Theme != "system" {
+		t.Fatalf("default theme = %q", st.Prefs.Theme)
+	}
+	if st := s.SetTheme("dark"); st.Prefs.Theme != "dark" || st.Problem != nil || r.prefs.get().Theme != prefs.ThemeDark {
+		t.Fatalf("dark: %+v, saved %q", st, r.prefs.get().Theme)
+	}
+	if st := r.start(false).State(); st.Prefs.Theme != "dark" {
+		t.Fatalf("after a restart: %q", st.Prefs.Theme)
+	}
+	if st := s.SetTheme("sepia"); st.Problem == nil || st.Problem.Code != "bad-theme" || st.Prefs.Theme != "dark" {
+		t.Fatalf("an unknown theme: %+v", st)
+	}
+	if st := s.SetTheme("system"); st.Prefs.Theme != "system" || st.Problem != nil || r.prefs.get().Theme != prefs.ThemeSystem {
+		t.Fatalf("back to system: %+v", st)
+	}
+}
+
 func TestStartAtLoginRegistersWithTheOS(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := r.start(false)

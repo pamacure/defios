@@ -29,9 +29,11 @@ needs no GTK. Running needs the GTK 4 and WebKitGTK 6.0 runtime libraries
 ## What it keeps where
 
 The app's own preferences (start at login, keychain, notifications and the
-opt-in new-message notifications, the last served Group, the window size,
+opt-in new-message notifications, the appearance, the last served Group, the window size,
 when the app last wrote a Backup and whether a Key was minted since) are in `defios-desktop/prefs.json` under the OS
 user config directory, never in the Node directory, so no Backup carries them.
+On Linux the app icon is also written to `defios-desktop/notification-icon.png`
+under the OS user cache directory, for notifications to show as their icon.
 With the keychain option on, the passphrase is in the OS keychain under the
 service `DeFiOS`, keyed by Node ID. Start at login registers the app with
 `--login`.
@@ -103,3 +105,6 @@ needs checking by hand:
   - on, keychain off: hidden in the tray, with a notification that it is locked;
   - on, keychain on: hidden in the tray, the last Group served;
   - turning the keychain off removes the `DeFiOS` entry from the keychain.
+- Settings, Appearance: Light and Dark override the OS's setting at once,
+  on every page and the lock screen, and stay after a restart; System
+  follows the OS again.
