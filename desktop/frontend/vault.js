@@ -202,7 +202,7 @@ function secretRow(s) {
         s.Source !== "none" && h("button", { class: "link danger", type: "button", disabled: busy, onclick: open("remove") }, "Remove"))),
     h("p", { class: "hint" },
       (s.Uses ?? []).length === 0 ? "No config field uses it."
-        : ["Used by ", (s.Uses).map((u, i) => [i > 0 && ", ", h("code", {}, u.Field), ` (${u.Place})`])]),
+        : ["Used by ", ...s.Uses.flatMap((u, i) => [i > 0 && ", ", h("code", {}, u.Field), ` (${u.Place})`])]),
     s.Source === "env" && setting === s.Name && h("p", { class: "notice inline" }, "This device's environment supplies it, so a value set here is used only once the environment's is gone."),
     setting === s.Name && valueForm(s.Name),
     revealing === s.Name && revealForm(s.Name),
@@ -273,7 +273,7 @@ function revealForm(name) {
     },
   },
   pass,
-  h("p", { class: "hint" }, "Enter this device's passphrase to show the value. It is asked for every time."),
+  h("p", { class: "hint" }, "Enter this device's passphrase to show the value."),
   err,
   h("div", { class: "row" }, go, h("button", { class: "btn", type: "button", onclick: () => { revealing = ""; draw(); } }, "Cancel")));
 }
