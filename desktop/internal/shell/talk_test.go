@@ -395,12 +395,19 @@ func TestAConversationShowsTheProvidersAndNetworksItOverrides(t *testing.T) {
 	}
 }
 
-func TestPrunedMessagesArePlaceholders(t *testing.T) {
+// A pruned message is left out of the transcript; one that does not read
+// is a placeholder.
+func TestPrunedMessagesAreLeftOutAndUnreadableOnesArePlaceholders(t *testing.T) {
 	r := newRig(t, "alpha")
 	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Pruned: true})
-	ts := eventuallyTalk(t, served(t, r), items(1))
-	if it := ts.Items[0]; it.Kind != "pruned" || it.From != "bob" || it.Side != "left" || it.Text != "" {
-		t.Fatalf("pruned: %+v", it)
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Unreadable: true})
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "hi"})
+	ts := eventuallyTalk(t, served(t, r), items(2))
+	if it := ts.Items[0]; it.Kind != "unreadable" || it.From != "bob" || it.Side != "left" || it.Text != "" {
+		t.Fatalf("unreadable: %+v", it)
+	}
+	if it := ts.Items[1]; it.Kind != "message" || it.Text != "hi" {
+		t.Fatalf("readable: %+v", it)
 	}
 }
 

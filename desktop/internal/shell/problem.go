@@ -144,6 +144,8 @@ func talkProblem(err error) *Problem {
 		taken     *node.KeyAliasTakenError
 	)
 	switch {
+	case errors.Is(err, errNotOpen):
+		return &Problem{"not-open", "Another conversation was opened meanwhile, so nothing was cleared."}
 	case errors.Is(err, serve.ErrBadHandle):
 		return &Problem{"not-included", "That message mentions an agent that isn't in this conversation."}
 	case errors.Is(err, cosl.ErrBadText):

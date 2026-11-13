@@ -53,7 +53,10 @@ needs checking by hand:
   turns it into a Key. Include an agent, mention it, watch its output stream,
   Stop one chain (beside Send) while its text streams, and expand another's
   Transcript. Quit the other device: the header turns red, the banner says
-  messages will queue, and Drop removes a queued one. The window's look is
+  messages will queue, and Drop removes a queued one. Clear on one device
+  says how many messages go and warns that agents forget them and that a
+  Group with no "Delete old talk after" can get them back; once cleared,
+  that transcript is empty there and unchanged on the other device. The window's look is
   checked on the PR.
 - Sign Requests, with two devices and a Key: "+" proposes one (Fill, review,
   Propose) and its card shows on both, on the right only for the proposer.

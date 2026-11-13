@@ -266,7 +266,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .msg.right .text { background: var(--accent-wash); border-color: transparent; border-bottom-right-radius: 4px; }
 .msg.left .text { border-bottom-left-radius: 4px; }
 .msg.sending .text { opacity: 0.6; }
-.msg.pruned .text { color: var(--muted); font-style: italic; background: transparent; border-style: dashed; }
+.msg.unreadable .text { color: var(--muted); font-style: italic; background: transparent; border-style: dashed; }
 .msg .actions { display: flex; gap: 12px; }
 .msg .actions .link { font-size: 12px; }
 .sysline { align-self: center; display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 12px; text-align: center; max-width: 80%; }
@@ -460,3 +460,10 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .revealed code.value { user-select: all; overflow-wrap: anywhere; max-width: 100%; color: var(--text); }
 .secret .confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--text-soft); }
 .vault .newsecret { max-width: 460px; }
+
+/* Talk's Clear */
+.clear-confirm { margin: 10px 16px 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.clear-confirm p { margin: 0; line-height: 1.4; color: var(--text-soft); }
+.clear-confirm p strong { color: var(--text); }
+.clear-confirm .warn { color: var(--warn-text); }
+.clear-confirm .row { display: flex; gap: 8px; justify-content: flex-end; }

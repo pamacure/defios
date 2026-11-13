@@ -132,6 +132,11 @@ func (u *UI) SetAgentIncluded(handle string, on bool) shell.TalkState {
 
 func (u *UI) Transcript(msgID string) shell.TranscriptView { return u.shell.Transcript(msgID) }
 
+func (u *UI) ClearCheck() shell.ClearView { return u.shell.ClearCheck() }
+func (u *UI) ClearConversation(conv string, through uint64) shell.TalkState {
+	return u.shell.ClearConversation(conv, through)
+}
+
 // Sign Requests.
 
 func (u *UI) AcceptSign(msgID string) shell.TalkState { return u.shell.AcceptSign(msgID) }

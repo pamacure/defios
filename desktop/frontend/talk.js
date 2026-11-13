@@ -33,6 +33,7 @@ const tui = {
   // app makes it anew.
   scroll: { top: 0, pinned: true },
   focused: "", // the Sign Request whose card was last brought into view
+  clearing: null, // the shell.ClearView Clear asks to confirm
 };
 
 // talkPage is the page, drawn into a new element; go opens another page.
@@ -110,6 +111,7 @@ function draw() {
     composer.input.value = tui.drafts.get(ts.Open) ?? "";
     tui.shownOpen = ts.Open;
     tui.editAlias = false;
+    tui.clearing = null;
     composer.closeSuggestions();
   }
   // A field being typed in is made anew: focus its successor.
@@ -264,6 +266,7 @@ function center() {
   return h("section", { class: "chat", "aria-label": convName(conv) },
     h("header", { class: "chat-head" },
       h("h2", {}, convName(conv)), sign, h("span", { class: "spacer" }), online,
+      h("button", { class: "btn small", type: "button", disabled: tui.busy || !!tui.clearing, onclick: askClear }, "Clear"),
       h("button", {
         class: "btn small about-toggle", type: "button", "aria-expanded": tui.about ? "true" : "false",
         onclick: () => { tui.about = !tui.about; draw(); },
@@ -271,8 +274,40 @@ function center() {
     total > 0 && !ts.MajorityReachable && h("div", { class: "queue-banner", role: "status" },
       "Not enough devices are online for messages to be delivered. What you send waits here and goes once they are."),
     ts.Problem && h("div", { class: "banner", role: "alert" }, ts.Problem.Message),
+    tui.clearing && clearConfirm(conv),
     transcript(),
     composer.el);
+}
+
+// askClear asks what Clear would destroy, to confirm it.
+async function askClear() {
+  const v = await call("ClearCheck");
+  if (!v || v.Conversation !== ts.Open && !v.Problem) return;
+  tui.clearing = v;
+  draw();
+}
+
+// clearConfirm says what Clear destroys on this device, and what follows.
+function clearConfirm(conv) {
+  const v = tui.clearing;
+  const cancel = h("button", { class: "btn small", type: "button", onclick: () => { tui.clearing = null; draw(); } }, v.Messages ? "Cancel" : "OK");
+  if (v.Problem || !v.Messages) {
+    return h("div", { class: "clear-confirm", role: "status" },
+      h("p", {}, v.Problem ? v.Problem.Message : "There is nothing to clear here."), h("div", { class: "row" }, cancel));
+  }
+  const n = v.Messages === 1 ? "1 message" : `${v.Messages} messages`;
+  return h("div", { class: "clear-confirm", role: "alertdialog", "aria-label": "Clear" },
+    h("p", {}, h("strong", {}, `Clear ${n} from ${convName(conv)} on this device?`),
+      " They are deleted here for good. The other devices keep their copies."),
+    v.Unaccounted && h("p", { class: "warn" }, "This device's agents have no recap of this talk, so they forget it too."),
+    v.NoPolicy && h("p", { class: "warn" }, "This Group deletes no talk on its own, so it can come back if this device restores talk from another device. Set \u201cDelete old talk after\u201d in Settings to keep it cleared."),
+    h("div", { class: "row" },
+      h("button", { class: "btn small danger", type: "button", disabled: tui.busy, onclick: async () => {
+        const at = tui.clearing;
+        tui.clearing = null;
+        await act("ClearConversation", at.Conversation, at.Through);
+      } }, "Clear"),
+      cancel));
 }
 
 function roster() {
@@ -298,7 +333,7 @@ function transcript() {
       ? h("div", { class: "empty" },
         h("strong", {}, "Group talk"),
         h("p", {}, "There are no Keys in this Group yet. Make the first with + New Key."))
-      : h("p", { class: "placeholder" }, "Nothing has been said here yet.");
+      : h("p", { class: "placeholder" }, "No messages here.");
   }
   return h("div", {
     class: "transcript", role: "log", "aria-live": "polite",
@@ -331,8 +366,8 @@ function item(it) {
     it.Job && h("span", { class: "handle" }, "Job"));
   const meta = h("div", { class: "meta" }, who, h("time", {}, time(it.At)),
     it.Queued && h("span", { class: "chip warn" }, "Queued"));
-  if (it.Kind === "pruned") {
-    return h("div", { class: `msg ${it.Side} pruned` }, meta, h("p", { class: "text" }, "This message was pruned on this device."));
+  if (it.Kind === "unreadable") {
+    return h("div", { class: `msg ${it.Side} unreadable` }, meta, h("p", { class: "text" }, "This message can't be read."));
   }
   const open = tui.expanded.get(it.MsgID);
   return h("div", { class: `msg ${it.Side}` },

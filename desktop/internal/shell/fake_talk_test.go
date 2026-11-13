@@ -38,6 +38,7 @@ type fakeTalk struct {
 	accepted  []string // Session IDs
 	aborted   []string
 	sign      *fakeSign
+	pruned    uint64 // the highest seq a Prune reached
 }
 
 func (n *fakeNode) tk() *fakeTalk {
@@ -356,4 +357,41 @@ func (n *fakeNode) Networks(_ context.Context, group, conv string) ([]node.Netwo
 		return slices.Clone(l), nil
 	}
 	return slices.Clone(t.networks[node.GroupTalk]), nil
+}
+
+func (n *fakeNode) PruneCheck(_ context.Context, group, conv string, through uint64) (node.Pruning, error) {
+	return n.prune(conv, through, false), nil
+}
+
+func (n *fakeNode) Prune(_ context.Context, group, conv string, through uint64) (node.Pruning, error) {
+	return n.prune(conv, through, true), nil
+}
+
+// prune is the fake's Pruning: no Recap and no prune policy.
+func (n *fakeNode) prune(conv string, through uint64, destroy bool) node.Pruning {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	t := n.tk()
+	var out node.Pruning
+	for i, m := range t.committed[conv] {
+		if m.Seq <= through && !m.Pruned {
+			out.Messages++
+			if destroy {
+				t.committed[conv][i] = node.Message{Seq: m.Seq, Term: m.Term, MsgID: m.MsgID, CreatedAt: m.CreatedAt,
+					NodeID: m.NodeID, DisplayName: m.DisplayName, Pruned: true}
+				t.pruned = max(t.pruned, through)
+			}
+		}
+	}
+	if out.Messages > 0 {
+		out.Unaccounted, out.NoPolicy = true, true
+	}
+	return out
+}
+
+// prunedThrough is the highest seq a Prune reached.
+func (n *fakeNode) prunedThrough() uint64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.tk().pruned
 }

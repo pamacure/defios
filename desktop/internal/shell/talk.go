@@ -36,6 +36,8 @@ type TalkNode interface {
 	Providers(ctx context.Context, group, conv string) ([]node.Provider, error)
 	Networks(ctx context.Context, group, conv string) ([]node.Network, error)
 	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)
+	PruneCheck(ctx context.Context, group, conv string, through uint64) (node.Pruning, error)
+	Prune(ctx context.Context, group, conv string, through uint64) (node.Pruning, error)
 
 	// Sign Requests.
 	SignRequests(ctx context.Context, group string) ([]node.SignRequest, error)
@@ -129,10 +131,10 @@ type ItemKind string
 
 const (
 	KindMessage ItemKind = "message"
-	// KindPruned is a placeholder for a message whose payload is gone or
-	// unreadable.
-	KindPruned ItemKind = "pruned"
-	KindSystem ItemKind = "system"
+	// KindUnreadable is a placeholder for a message whose payload does
+	// not read. A pruned message is left out.
+	KindUnreadable ItemKind = "unreadable"
+	KindSystem     ItemKind = "system"
 )
 
 // Side is where a message sits in the transcript.
@@ -650,6 +652,9 @@ func (t *talk) items() []Item {
 	}
 	logged := make([]Item, 0, len(t.msgs)+len(cards))
 	for _, m := range t.msgs {
+		if m.Pruned {
+			continue
+		}
 		for len(cards) > 0 && (m.Queued || cards[0].Seq < m.Seq) {
 			logged = append(logged, t.signItem(cards[0]))
 			cards = cards[1:]
@@ -680,7 +685,7 @@ func (t *talk) items() []Item {
 func (t *talk) item(m node.Message) Item {
 	it := Item{Kind: KindMessage, MsgID: m.MsgID, At: m.CreatedAt, Text: m.Text, Queued: m.Queued}
 	if !m.Readable() {
-		it.Kind = KindPruned
+		it.Kind = KindUnreadable
 	}
 	if m.Mine {
 		it.Side, it.Droppable = Right, m.Queued
