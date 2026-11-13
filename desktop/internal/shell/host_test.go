@@ -265,7 +265,7 @@ func TestARenamedDeviceShowsItsNewNameToTheOtherOnceServedAgain(t *testing.T) {
 	}
 	id := alice.State().Node.ID
 	eventually(t, bob, func(shell.State) bool {
-		for _, dev := range bob.GroupSettings().Roster {
+		for _, dev := range bob.GroupRoster().Roster {
 			if dev.ID == id {
 				return dev.Name == "alice-desk" && dev.Reachable
 			}

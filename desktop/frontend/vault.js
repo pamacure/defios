@@ -16,30 +16,56 @@ let setting = ""; // the Secret whose value form shows; NEW for a new one
 let revealing = ""; // the Secret whose passphrase prompt shows
 let removing = ""; // the Secret whose Remove asks to confirm
 let shown = null; // { name, value } revealed, until the next draw
-let deviceMount = null;
-let groupMount = null;
+// The parts' bodies, made once: a view loaded while the page is not on
+// screen draws into them, ready for when it is.
+const deviceMount = h("div", { class: "vault" });
+const groupMount = h("div", { class: "vault" });
+let pending = null; // the load under way: its promise
 // The passphrase form's fields, kept across draws so nothing typed is lost.
 let passFields = null;
 
 const NEW = "\u0000new";
 
-// vaultDevicePart is This Device's part: Backup and the passphrase.
-export function vaultDevicePart(s) {
-  deviceMount ??= h("div", { class: "vault" });
-  ensure(s);
+// vaultDevicePart is This Device's part: Backup and the passphrase. The
+// app shows it only once vaultReady.
+export function vaultDevicePart() {
   return deviceMount;
 }
 
 // vaultGroupPart is the Group part: the edit-target Group's Secrets.
-export function vaultGroupPart(s) {
-  groupMount ??= h("div", { class: "vault" });
+export function vaultGroupPart() {
   if (shown && !groupMount.isConnected) {
     // Back on the page: a value revealed before is hidden again.
     shown = null;
     draw();
   }
-  ensure(s);
   return groupMount;
+}
+
+// vaultReady: the view for s.EditGroup is loaded, so the page can show
+// whole.
+export const vaultReady = (s) => !!vv && group === s.EditGroup;
+
+// vaultLoad loads the view for s.EditGroup unless it is loaded or loading,
+// and resolves once that load is done.
+export function vaultLoad(s) {
+  if (vaultReady(s)) return Promise.resolve();
+  if (loading === s.EditGroup) return pending;
+  pending = load(s.EditGroup);
+  return pending;
+}
+
+// vaultRefresh reads the view again, as when the page is opened anew, and
+// redraws only if it changed and no form is open: what is typed stays.
+export async function vaultRefresh() {
+  if (!vv || loading || busy) return;
+  const g = group;
+  const next = await call("Vault");
+  if (!next || next.Group !== g || g !== group || busy || setting || revealing || removing) return;
+  if (deviceMount.contains(document.activeElement) || groupMount.contains(document.activeElement)) return; // being typed in
+  if (JSON.stringify(next) === JSON.stringify(vv)) return;
+  vv = next;
+  draw();
 }
 
 // backupNow asks where to write a Backup, then writes it: from the page
@@ -56,15 +82,6 @@ export async function backupNow() {
   return next;
 }
 
-function ensure(s) {
-  if (group === s.EditGroup || loading === s.EditGroup) return;
-  deviceMount?.replaceChildren();
-  groupMount?.replaceChildren();
-  setting = revealing = removing = "";
-  shown = null;
-  load(s.EditGroup);
-}
-
 async function load(g) {
   loading = g;
   let next;
@@ -74,6 +91,11 @@ async function load(g) {
     loading = "";
   }
   if (!next || next.Group !== g) return;
+  if (g !== group) {
+    // A Group not shown before: nothing of the one before carries over.
+    setting = revealing = removing = "";
+    shown = null;
+  }
   group = g;
   vv = next;
   draw();

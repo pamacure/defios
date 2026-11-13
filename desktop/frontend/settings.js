@@ -2,14 +2,21 @@
 // form, its devices (the Roster), Device Usage (Node Usage) and Token
 // Usage. It renders the shell.GroupSettingsView the Go side reports
 // (main.UI.GroupSettings) and keeps the devices and usage current while it
-// is on screen. The form is drawn once per Group, so a redraw of the app
-// never drops what is being typed. UI text says "device" for a Node.
+// is on screen. The devices come apart (main.UI.GroupRoster): which are
+// online is asked of them over the tailnet, so they may come last. The
+// form is drawn once per Group, so a redraw of the app never drops what is
+// being typed. UI text says "device" for a Node.
 import { call, h } from "./dom.js";
 
 let gv = null; // the GroupSettingsView shown
-let mount = null; // the part's body, while on screen
-let formBox = null; // the form, kept across redraws
-let statusBox = null; // devices and usage, redrawn as they change
+let rv = null; // the Roster shown: the GroupRoster view, for gv's Group
+// The part's body, made once: the form, kept across redraws, and the
+// devices and usage, redrawn as they change.
+const formBox = h("div", {});
+const statusBox = h("div", { class: "gstatus" });
+const mount = h("div", { class: "gsettings" }, formBox, statusBox);
+let pending = null; // the settings load under way: its promise
+let rosterLoading = ""; // the Group whose Roster is being read
 let formGroup = ""; // the Group the form is drawn for
 let dirty = false; // something has been typed since the form was drawn
 let busy = false;
@@ -19,26 +26,41 @@ let unreadable = false; // the settings could not be read, so no form shows
 
 const REFRESH_MS = 5000;
 
-// settingsPart is the Group part's body for s.EditGroup.
-export function settingsPart(s) {
-  mount ??= h("div", { class: "gsettings" });
-  if (!formBox) {
-    formBox = h("div", {});
-    statusBox = h("div", { class: "gstatus" });
-    mount.append(formBox, statusBox);
-  }
-  if (gv?.Group !== s.EditGroup && loading !== s.EditGroup) {
-    // Show nothing of the Group chosen before while this one loads.
-    formBox.replaceChildren();
-    statusBox.replaceChildren();
-    load(s.EditGroup);
-  }
+// settingsPart is the Group part's body for s.EditGroup. The app shows it
+// only once settingsReady.
+export function settingsPart() {
   poll();
   return mount;
 }
 
+// settingsReady: the settings for s.EditGroup are loaded, so the page can
+// show whole. The devices need not be: they say they are being checked.
+export const settingsReady = (s) => gv?.Group === s.EditGroup;
+
+// settingsLoad loads the settings for s.EditGroup unless loaded or
+// loading, and resolves once they are; the devices load alongside.
+export function settingsLoad(s) {
+  if (settingsReady(s)) return Promise.resolve();
+  if (loading === s.EditGroup) return pending;
+  pending = load(s.EditGroup);
+  return pending;
+}
+
+// settingsRefresh reads the settings again, as when the page is opened
+// anew. The form is drawn anew only if nothing was typed in it.
+export async function settingsRefresh() {
+  if (!gv || loading || busy) return;
+  const g = gv.Group;
+  loadRoster(g);
+  const next = await call("GroupSettings");
+  if (!next || next.Group !== g || gv.Group !== g || busy) return;
+  unreadable = !!next.Problem;
+  show(next, false);
+}
+
 async function load(group) {
   loading = group;
+  loadRoster(group);
   let next;
   try {
     next = await call("GroupSettings");
@@ -46,8 +68,27 @@ async function load(group) {
     loading = "";
   }
   if (!next || next.Group !== group) return;
+  if (rv && rv.Group !== group) rv = null;
   unreadable = !!next.Problem;
   show(next, true);
+}
+
+// loadRoster reads group's Roster, which asks the devices over the
+// tailnet, and shows it once in.
+async function loadRoster(group) {
+  if (rosterLoading === group) return;
+  rosterLoading = group;
+  let next;
+  try {
+    next = await call("GroupRoster");
+  } catch {
+    return; // the next poll tries again
+  } finally {
+    if (rosterLoading === group) rosterLoading = "";
+  }
+  if (!next || next.Group !== group) return;
+  rv = next;
+  if (gv?.Group === group) drawStatus();
 }
 
 // show takes next as the view; redrawForm draws the form from it anew.
@@ -61,17 +102,18 @@ function show(next, redrawForm) {
 function poll() {
   if (timer) return;
   timer = setInterval(async () => {
-    if (!mount?.isConnected) {
+    if (!mount.isConnected) {
       clearInterval(timer);
       timer = null;
       return;
     }
     if (busy || !gv) return;
+    loadRoster(gv.Group);
     const next = await call("GroupSettings");
     if (!next || next.Group !== gv.Group) return;
     // Only the status: the form keeps what was typed and any refusal.
-    gv = { ...gv, Roster: next.Roster, RosterProblem: next.RosterProblem, Served: next.Served,
-      Usage: next.Usage, UsageProblem: next.UsageProblem, Tokens: next.Tokens, TokensProblem: next.TokensProblem };
+    gv = { ...gv, Served: next.Served, Usage: next.Usage, UsageProblem: next.UsageProblem,
+      Tokens: next.Tokens, TokensProblem: next.TokensProblem };
     drawStatus();
   }, REFRESH_MS);
 }
@@ -170,21 +212,33 @@ function drawStatus() {
 const shortID = (id) => (id.length > 16 ? `${id.slice(0, 16)}…` : id);
 
 function devices() {
-  const list = gv.Roster ?? [];
+  const r = rv?.Group === gv.Group ? rv : null;
+  if (!r) {
+    // The Roster is asked of the devices over the tailnet: say so, so the
+    // wait reads as the network's and not the app's.
+    return h("section", { class: "gsec", "aria-label": "Devices", "aria-busy": "true" },
+      h("h3", {}, "Devices"),
+      h("div", { class: "pinging", role: "status" },
+        h("div", { class: "progress" }),
+        h("p", { class: "hint" }, gv.Served
+          ? `Pinging ${gv.Group}'s devices over the tailnet to see which are online…`
+          : `Reading ${gv.Group}'s devices…`)));
+  }
+  const list = r.Roster ?? [];
   const online = list.filter((d) => d.Reachable).length;
   return h("section", { class: "gsec", "aria-label": "Devices" },
     h("h3", {}, "Devices",
-      gv.Served && list.length > 0 && h("span", { class: "count" }, `${online} of ${list.length} devices online`)),
-    gv.RosterProblem
-      ? h("p", { class: "hint" }, gv.RosterProblem.Message)
+      r.Served && list.length > 0 && h("span", { class: "count" }, `${online} of ${list.length} devices online`)),
+    r.RosterProblem
+      ? h("p", { class: "hint" }, r.RosterProblem.Message)
       : h("div", { class: "devices" }, list.map((d) => h("div", { class: "devrow" },
         h("div", { class: "who" },
           h("strong", {}, d.Name || "Unnamed device", d.Self ? " (This Device)" : ""),
           h("code", { title: d.ID }, `Device ID ${shortID(d.ID)}`)),
-        gv.Served
+        r.Served
           ? h("span", { class: `chip ${d.Reachable ? "ok" : "bad"}` }, d.Reachable ? "Online" : "Offline")
           : null))),
-    !gv.Served && !gv.RosterProblem && h("p", { class: "hint" }, "Which devices are online shows while this Group is online here."));
+    !r.Served && !r.RosterProblem && h("p", { class: "hint" }, "Which devices are online shows while this Group is online here."));
 }
 
 function bytes(n) {

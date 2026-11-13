@@ -22,38 +22,56 @@ let provDraft = null;
 let profInputs = null; // the profile form's fields, while it shows
 // The Secrets chosen for an MCP Server not granted yet, by its ref.
 const pendingEnv = new Map();
-let deviceMount = null;
-let groupMount = null;
+// The parts' bodies, made once: a view loaded while the page is not on
+// screen draws into them, ready for when it is.
+const deviceMount = h("div", { class: "agents" });
+const groupMount = h("div", { class: "agents" });
+let pending = null; // the load under way: its promise
 
 const NEW = "\u0000new";
 
-// agentsDevicePart is This Device's part: the Agent Profiles. focus may
-// name one to open, as { profile: "auditor" }.
-export function agentsDevicePart(s, focus) {
-  deviceMount ??= h("div", { class: "agents" });
-  if (focus?.profile && focus.profile !== open && !creating) {
-    open = focus.profile;
-    group = ""; // load it
-  }
-  ensure(s);
+// agentsDevicePart is This Device's part: the Agent Profiles. The app
+// shows it only once agentsReady.
+export function agentsDevicePart() {
   return deviceMount;
 }
 
 // agentsGroupPart is the Group part: the edit-target Group's Providers.
-export function agentsGroupPart(s) {
-  groupMount ??= h("div", { class: "agents" });
-  ensure(s);
+export function agentsGroupPart() {
   return groupMount;
 }
 
-function ensure(s) {
-  if (group === s.EditGroup || loading === s.EditGroup) return;
-  // Show nothing of the Group chosen before while this one loads.
-  deviceMount?.replaceChildren();
-  groupMount?.replaceChildren();
-  provOpen = removing = "";
-  provDraft = null;
-  load(s.EditGroup);
+// agentsReady: the view for s.EditGroup is loaded, so the page can show
+// whole.
+export const agentsReady = (s) => !!av && group === s.EditGroup;
+
+// agentsLoad loads the view for s.EditGroup unless it is loaded or
+// loading, and resolves once that load is done.
+export function agentsLoad(s) {
+  if (agentsReady(s)) return Promise.resolve();
+  if (loading === s.EditGroup) return pending;
+  pending = load(s.EditGroup);
+  return pending;
+}
+
+// agentsRefresh reads the view again, as when the page is opened anew, and
+// redraws only if it changed and no form is open: what is typed stays.
+export async function agentsRefresh() {
+  if (!av || loading || busy) return;
+  const g = group;
+  const next = await call("Agents", open);
+  if (!next || next.Group !== g || g !== group || busy || creating || deleting || provOpen || removing) return;
+  if (deviceMount.contains(document.activeElement) || groupMount.contains(document.activeElement)) return; // being typed in
+  if (JSON.stringify(next) === JSON.stringify(av)) return;
+  av = next;
+  if (!av.Open) open = "";
+  draw();
+}
+
+// agentsOpen opens the profile handle, as from Talk's "Profile" link.
+export function agentsOpen(handle) {
+  if (av && !loading) openProfile(handle);
+  else open = handle; // the load under way, or the next, opens it
 }
 
 async function load(g) {
@@ -65,6 +83,11 @@ async function load(g) {
     loading = "";
   }
   if (!next || next.Group !== g) return;
+  if (g !== group) {
+    // A Group not shown before: nothing of the one before carries over.
+    provOpen = removing = "";
+    provDraft = null;
+  }
   group = g;
   av = next;
   if (!av.Open) open = "";

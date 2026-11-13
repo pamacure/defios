@@ -86,7 +86,9 @@ type ProcessUse struct {
 }
 
 // GroupSettings is the Settings page's Group part for the edit-target
-// Group.
+// Group: its settings, Node Usage and Token Usage, all read on this
+// device. The Roster is GroupRoster's, since which devices are online is
+// asked of them over the tailnet.
 func (s *Shell) GroupSettings() GroupSettingsView {
 	v, ok := s.settingsTarget()
 	if !ok {
@@ -99,7 +101,19 @@ func (s *Shell) GroupSettings() GroupSettingsView {
 	} else {
 		v.Settings, v.AuthKeySecret = draftOf(gs), authKeySecret(gs.TailnetAuthKey)
 	}
-	s.fillRosterAndUsage(n, &v)
+	s.fillUsage(n, &v)
+	return v
+}
+
+// GroupRoster is the edit-target Group's Roster, with which devices are
+// online while it is served: those the tailnet reaches. Only the Group,
+// Served and Roster fields are set.
+func (s *Shell) GroupRoster() GroupSettingsView {
+	v, ok := s.settingsTarget()
+	if !ok {
+		return v
+	}
+	s.fillRoster(s.node(), &v)
 	return v
 }
 
@@ -118,7 +132,7 @@ func (s *Shell) SaveGroupSettings(d SettingsDraft) GroupSettingsView {
 	fail := func(field string, p *Problem) GroupSettingsView {
 		v.Field, v.Problem = field, p
 		v.Settings.AuthKey = ""
-		s.fillRosterAndUsage(n, &v)
+		s.fillUsage(n, &v)
 		return v
 	}
 	var prune config.Age
@@ -167,7 +181,7 @@ func (s *Shell) SaveGroupSettings(d SettingsDraft) GroupSettingsView {
 			v.Problem = &Problem{"auth-key-not-saved", "The other settings were saved, but the tailnet auth key was not: " + problemOf(err).Message}
 		}
 	}
-	s.fillRosterAndUsage(n, &v)
+	s.fillUsage(n, &v)
 	return v
 }
 
@@ -179,8 +193,8 @@ func (s *Shell) settingsTarget() (GroupSettingsView, bool) {
 	return v, s.node() != nil && st.View == ViewServed && v.Group != ""
 }
 
-// fillRosterAndUsage adds v.Group's Roster, Node Usage and Token Usage.
-func (s *Shell) fillRosterAndUsage(n Node, v *GroupSettingsView) {
+// fillRoster adds v.Group's Roster.
+func (s *Shell) fillRoster(n Node, v *GroupSettingsView) {
 	if d, err := n.InspectGroup(s.ctx, v.Group); err != nil {
 		v.RosterProblem = rosterProblem(err)
 	} else {
@@ -192,6 +206,10 @@ func (s *Shell) fillRosterAndUsage(n Node, v *GroupSettingsView) {
 			})
 		}
 	}
+}
+
+// fillUsage adds v.Group's Node Usage and Token Usage.
+func (s *Shell) fillUsage(n Node, v *GroupSettingsView) {
 	if u, err := n.Usage(s.ctx, v.Group); err != nil {
 		v.UsageProblem = problemOf(err)
 	} else {

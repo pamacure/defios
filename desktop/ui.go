@@ -51,6 +51,7 @@ func (u *UI) SetMessageNotifications(on bool) shell.State {
 // Settings: the edit-target Group's part.
 
 func (u *UI) GroupSettings() shell.GroupSettingsView { return u.shell.GroupSettings() }
+func (u *UI) GroupRoster() shell.GroupSettingsView   { return u.shell.GroupRoster() }
 func (u *UI) SaveGroupSettings(d shell.SettingsDraft) shell.GroupSettingsView {
 	return u.shell.SaveGroupSettings(d)
 }

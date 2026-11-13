@@ -37,8 +37,11 @@ func TestSettingsShowTheServedGroupsSettingsRosterAndBothUsages(t *testing.T) {
 		{Name: "laptop", ID: "n0de", Self: true, Reachable: true},
 		{Name: "phone", ID: "pe3r"},
 	}
-	if !reflect.DeepEqual(v.Roster, wantRoster) || v.RosterProblem != nil {
-		t.Fatalf("roster %+v, %+v", v.Roster, v.RosterProblem)
+	if v.Roster != nil {
+		t.Fatalf("the settings carry the Roster: %+v", v.Roster)
+	}
+	if r := s.GroupRoster(); r.Group != "alpha" || !reflect.DeepEqual(r.Roster, wantRoster) || r.RosterProblem != nil {
+		t.Fatalf("roster %+v, %+v", r.Roster, r.RosterProblem)
 	}
 	u := v.Usage
 	if u == nil || u.GroupBytes != 1<<10 || u.NodeBytes != 10<<10 || u.Process == nil ||
@@ -58,7 +61,7 @@ func TestAGroupNotServedShowsNoDeviceReachableAndAnUnformedOneNoRoster(t *testin
 	s.Unlock("alpha", pw)
 
 	s.SetEditGroup("beta")
-	v := s.GroupSettings()
+	v := s.GroupRoster()
 	if v.Group != "beta" || v.Served || len(v.Roster) != 2 {
 		t.Fatalf("beta: %+v", v)
 	}
@@ -68,7 +71,7 @@ func TestAGroupNotServedShowsNoDeviceReachableAndAnUnformedOneNoRoster(t *testin
 		}
 	}
 	s.SetEditGroup("gamma")
-	if v := s.GroupSettings(); v.Roster != nil || v.RosterProblem == nil || v.RosterProblem.Code != "unformed" {
+	if v := s.GroupRoster(); v.Roster != nil || v.RosterProblem == nil || v.RosterProblem.Code != "unformed" {
 		t.Fatalf("gamma: %+v %+v", v.Roster, v.RosterProblem)
 	}
 }
@@ -78,6 +81,9 @@ func TestSettingsShowNothingWhileLocked(t *testing.T) {
 	s := r.start(false)
 	if v := s.GroupSettings(); v.Group != "" || v.Roster != nil || v.Usage != nil {
 		t.Fatalf("locked: %+v", v)
+	}
+	if v := s.GroupRoster(); v.Group != "" || v.Roster != nil {
+		t.Fatalf("locked roster: %+v", v)
 	}
 	if v := s.SaveGroupSettings(shell.SettingsDraft{DisplayName: "x"}); v.Saved {
 		t.Fatalf("saved while locked: %+v", v)

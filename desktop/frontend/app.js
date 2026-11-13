@@ -2,11 +2,11 @@
 // reports (main.UI) and calls back into it; it holds no Node state of its
 // own beyond which page is open. UI text says "device" for a Node.
 import { Events } from "/wails/runtime.js";
-import { agentsDevicePart, agentsGroupPart } from "./agents.js";
+import { agentsDevicePart, agentsGroupPart, agentsLoad, agentsOpen, agentsReady, agentsRefresh } from "./agents.js";
 import { call, h, icon } from "./dom.js";
-import { settingsPart } from "./settings.js";
-import { talkPage, talkUpdate } from "./talk.js";
-import { backupNow, vaultDevicePart, vaultGroupPart } from "./vault.js";
+import { settingsLoad, settingsPart, settingsReady, settingsRefresh } from "./settings.js";
+import { talkPage, talkReady, talkUpdate } from "./talk.js";
+import { backupNow, vaultDevicePart, vaultGroupPart, vaultLoad, vaultReady, vaultRefresh } from "./vault.js";
 
 const SECTIONS = [
   { id: "talk", label: "Talk", issue: 149 },
@@ -17,6 +17,22 @@ const SECTIONS = [
   { id: "networks", label: "Networks", issue: 155 },
 ];
 const SETTINGS = { id: "settings", label: "Settings", issue: 155 };
+
+// What each page with content needs read before it shows: ready, whether
+// it is for the State s; load, to read it; refresh, to read it again when
+// the page is opened while already loaded. A page shows nothing of itself
+// until ready, so it never fills in part by part.
+const loadTalk = () => call("Talk").then(talkUpdate);
+const LOADS = {
+  talk: { ready: talkReady, load: loadTalk, refresh: () => {} },
+  agents: { ready: agentsReady, load: agentsLoad, refresh: agentsRefresh },
+  vault: { ready: vaultReady, load: vaultLoad, refresh: vaultRefresh },
+  settings: { ready: settingsReady, load: settingsLoad, refresh: settingsRefresh },
+};
+// The loads the gate waits on, by page and Group: "loading" until done,
+// then "failed" if the page is still not ready, so a load that keeps
+// failing asks for a retry rather than trying again on every redraw.
+const attempts = new Map();
 
 // What only the frontend keeps: the open page and transient UI. For
 // onboarding, too: the Backup chosen at step 1, step 3's tab, the device
@@ -45,8 +61,37 @@ function apply(next) {
   if (!["no-node", "creating", "restoring", "no-group"].includes(state.View) && !ui.addingGroup) ui.form = {};
   if (state.View !== "forming") { ui.pick = ""; ui.declining = false; }
   if (was === "forming" && state.View === "served") ui.page = "talk";
+  preload(state);
   discovery();
   render();
+}
+
+// preload reads every page's content in the background once a Group is
+// served, and again for a new edit-target Group, so that opening a page
+// seldom waits.
+let preloaded = "";
+function preload(s) {
+  const key = s.View === "served" ? `${s.Served}\u0000${s.EditGroup}` : "";
+  if (key === preloaded) return;
+  preloaded = key;
+  attempts.clear();
+  if (!key) return;
+  for (const [id, p] of Object.entries(LOADS)) {
+    if (!p.ready(s)) wait(id, s);
+  }
+}
+
+// wait runs page id's load for s unless one is under way or failed, and
+// redraws once it is done.
+function wait(id, s) {
+  const key = `${id}\u0000${s.EditGroup}`;
+  if (attempts.has(key)) return;
+  attempts.set(key, "loading");
+  const p = LOADS[id];
+  p.load(s).catch(() => {}).finally(() => {
+    attempts.set(key, p.ready(state) ? "done" : "failed");
+    if (ui.page === id) render(true);
+  });
 }
 
 // discovery looks for devices every few seconds while step 3 lists them.
@@ -497,15 +542,34 @@ function header(s) {
 
 // go opens a section page; focus is what on it to open, such as
 // { profile: "auditor" }, for the page to show once it has content
-// (#151 to #155).
+// (#151 to #155). A page opened anew reads its content again.
 function go(id, focus = null) {
+  const again = ui.page !== id;
   ui.page = id;
   ui.focus = focus;
+  if (id === "agents" && focus?.profile) agentsOpen(focus.profile);
+  if (again && state && LOADS[id]?.ready(state)) LOADS[id].refresh();
   render(true);
+}
+
+// pageLoading stands for page sec until its content is in: nothing of the
+// page itself, so it shows whole or not at all.
+function pageLoading(sec, s) {
+  const key = `${sec.id}\u0000${s.EditGroup}`;
+  if (attempts.get(key) === "failed") {
+    return h("main", { class: "page center" },
+      h("p", { role: "alert" }, `${sec.label} could not be loaded.`),
+      h("button", { class: "btn", type: "button", onclick: () => { attempts.delete(key); render(true); } }, "Try again"));
+  }
+  wait(sec.id, s);
+  const text = `Loading ${sec.label}…`;
+  return h("main", { class: "page center", "aria-busy": "true" },
+    h("div", { class: "progress", role: "progressbar", "aria-label": text }), h("p", {}, text));
 }
 
 function page(s) {
   const sec = [...SECTIONS, SETTINGS].find((x) => x.id === ui.page) ?? SECTIONS[0];
+  if (LOADS[sec.id] && !LOADS[sec.id].ready(s)) return pageLoading(sec, s);
   // Talk is the served Group's, so it has no This Device / Group parts.
   if (sec.id === "talk") {
     return h("main", { class: "page talkpage" },
@@ -530,8 +594,8 @@ function page(s) {
 function nodePart(sec, s) {
   switch (sec.id) {
     case "settings": return nodeSettings(s);
-    case "agents": return agentsDevicePart(s, ui.focus);
-    case "vault": return vaultDevicePart(s);
+    case "agents": return agentsDevicePart();
+    case "vault": return vaultDevicePart();
   }
   return h("p", { class: "placeholder" }, `${sec.label} for this device comes later.`);
 }
@@ -539,9 +603,9 @@ function nodePart(sec, s) {
 // groupPart is a section page's Group part, for s.EditGroup.
 function groupPart(sec, s) {
   switch (sec.id) {
-    case "settings": return settingsPart(s);
-    case "agents": return agentsGroupPart(s);
-    case "vault": return vaultGroupPart(s);
+    case "settings": return settingsPart();
+    case "agents": return agentsGroupPart();
+    case "vault": return vaultGroupPart();
   }
   return h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`);
 }
@@ -609,7 +673,11 @@ document.addEventListener("keydown", (e) => {
 });
 
 Events.On("shell:state", (ev) => apply(ev.data));
-Events.On("talk:state", (ev) => talkUpdate(ev.data));
+Events.On("talk:state", (ev) => {
+  const was = talkReady();
+  talkUpdate(ev.data);
+  if (!was && talkReady() && ui.page === "talk") render(true);
+});
 // A notification was clicked: show the page it is about. The Go side has
 // already opened its Conversation and card on Talk.
 Events.On("app:notice", (ev) => {
@@ -620,4 +688,4 @@ Events.On("app:notice", (ev) => {
   }
 });
 call("State").then(apply);
-call("Talk").then(talkUpdate);
+loadTalk();

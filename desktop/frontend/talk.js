@@ -44,6 +44,10 @@ export function talkPage(go) {
   return mount;
 }
 
+// talkReady: Talk has the served Group's state, so the page can show
+// whole.
+export const talkReady = () => !!ts?.Group;
+
 // talkUpdate shows next, unless it is older than what is shown.
 export function talkUpdate(next) {
   if (!next || (ts && next.Seq < ts.Seq)) return;
