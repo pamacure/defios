@@ -6,6 +6,7 @@ import { agentsDevicePart, agentsGroupPart } from "./agents.js";
 import { call, h, icon } from "./dom.js";
 import { settingsPart } from "./settings.js";
 import { talkPage, talkUpdate } from "./talk.js";
+import { backupNow, vaultDevicePart, vaultGroupPart } from "./vault.js";
 
 const SECTIONS = [
   { id: "talk", label: "Talk", issue: 149 },
@@ -24,6 +25,7 @@ const SETTINGS = { id: "settings", label: "Settings", issue: 155 };
 const ui = {
   page: "talk", focus: null, menuOpen: false, addingGroup: false, busy: false,
   restore: null, invite: "propose", pick: "", declining: false, form: {},
+  backingUp: false, backupProblem: null,
 };
 let state = null;
 let shownKey = "";
@@ -508,11 +510,13 @@ function page(s) {
   if (sec.id === "talk") {
     return h("main", { class: "page talkpage" },
       s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
+      backupBanner(s),
       talkPage(go));
   }
   return h("main", { class: "page" },
     h("h1", {}, sec.label),
     s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
+    backupBanner(s),
     h("section", { class: "part", "aria-label": "This Device" },
       h("header", {}, h("h2", {}, "This Device")),
       h("div", { class: "body" }, nodePart(sec, s))),
@@ -527,6 +531,7 @@ function nodePart(sec, s) {
   switch (sec.id) {
     case "settings": return nodeSettings(s);
     case "agents": return agentsDevicePart(s, ui.focus);
+    case "vault": return vaultDevicePart(s);
   }
   return h("p", { class: "placeholder" }, `${sec.label} for this device comes later.`);
 }
@@ -536,8 +541,34 @@ function groupPart(sec, s) {
   switch (sec.id) {
     case "settings": return settingsPart(s);
     case "agents": return agentsGroupPart(s);
+    case "vault": return vaultGroupPart(s);
   }
   return h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`);
+}
+
+// backupBanner asks for a Backup once a Key is minted, until one is
+// taken from the app.
+function backupBanner(s) {
+  if (!s.BackupDue) return null;
+  const run = async () => {
+    if (ui.backingUp) return;
+    ui.backingUp = true;
+    ui.backupProblem = null;
+    render(true);
+    try {
+      const v = await backupNow();
+      ui.backupProblem = v?.Problem ?? null;
+    } finally {
+      ui.backingUp = false;
+      render(true);
+    }
+  };
+  return h("div", { class: "backupbanner", role: "status" },
+    h("div", { class: "text" },
+      h("strong", {}, "Back up this device"),
+      h("span", {}, "A new Key was made. Its share on this device is in no Backup yet, so losing this computer would lose it."),
+      ui.backupProblem && h("span", { class: "error", role: "alert" }, ui.backupProblem.Message)),
+    h("button", { class: "btn bright", type: "button", disabled: ui.backingUp, onclick: run }, "Back up now"));
 }
 
 // editTarget picks the Group the Group parts edit. The choice is kept

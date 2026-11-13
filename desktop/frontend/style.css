@@ -434,3 +434,27 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
   .pitem.add { border-top: 0; margin-top: 0; }
 }
 .agents .factions { max-width: 776px; }
+
+/* The Vault page and the "Back up now" banner */
+.backupbanner { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; padding: 12px 16px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-text); }
+.backupbanner .text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; }
+.backupbanner .text strong { font-size: 14px; }
+.talkpage .backupbanner { margin: 12px 16px 0; }
+.vault h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text); }
+.vault .notice.inline { margin: 0 0 12px; }
+.vsec + .vsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.vsec > .hint { margin: -4px 0 12px; max-width: 640px; }
+.vrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.secrets { display: flex; flex-direction: column; margin-bottom: 12px; }
+.secret { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.secret:last-child { border-bottom: 0; }
+.secrethead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.secrethead > code { color: var(--text); }
+.secrethead .actions { margin-left: auto; display: flex; gap: 14px; }
+.secret .hint code { font-size: 11px; padding: 0 4px; }
+.link.danger { color: var(--danger); }
+.link:disabled { opacity: 0.6; cursor: default; }
+.revealed { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.revealed code.value { user-select: all; overflow-wrap: anywhere; max-width: 100%; color: var(--text); }
+.secret .confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--text-soft); }
+.vault .newsecret { max-width: 460px; }

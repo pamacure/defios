@@ -205,6 +205,14 @@ func backupProblem(err error) *Problem {
 	return problemOf(err)
 }
 
+// backupWriteProblem is problemOf for writing a Backup file.
+func backupWriteProblem(err error) *Problem {
+	if errors.Is(err, fs.ErrExist) {
+		return &Problem{"file-exists", "A file is already there. Choose a new name; a Backup never replaces a file."}
+	}
+	return problemOf(err)
+}
+
 // sentence punctuates an InvalidError's message, which internal/node
 // writes for a person, as a sentence: capitalized, ending in a full stop.
 func sentence(msg string) string {

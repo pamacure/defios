@@ -48,20 +48,26 @@ func (s *Shell) NewSecret(name, value string) SecretsView {
 	if !ok {
 		return v
 	}
-	switch {
-	case secret.ValidateName(name) != nil:
-		v.Field, v.Problem = "name", &Problem{"invalid", "A Secret's name is capital letters, digits and _, starting with a letter, such as ANTHROPIC_API_KEY."}
-	case value == "":
-		v.Field, v.Problem = "value", &Problem{"invalid", "Enter the Secret's value."}
-	default:
-		if err := s.node().SetSecret(s.ctx, v.Group, name, value, s.held()); err != nil {
-			v.Field, v.Problem = "value", problemOf(err)
-		} else {
-			v.Set = name
-		}
+	if v.Field, v.Problem = s.setSecret(v.Group, name, value); v.Problem == nil {
+		v.Set = name
 	}
 	s.fillSecrets(&v)
 	return v
+}
+
+// setSecret keeps value in group's Vault as Secret name. A refusal names
+// the field it is about: "name" or "value".
+func (s *Shell) setSecret(group, name, value string) (field string, p *Problem) {
+	switch {
+	case secret.ValidateName(name) != nil:
+		return "name", &Problem{"invalid", "A Secret's name is capital letters, digits and _, starting with a letter, such as ANTHROPIC_API_KEY."}
+	case value == "":
+		return "value", &Problem{"invalid", "Enter the Secret's value."}
+	}
+	if err := s.node().SetSecret(s.ctx, group, name, value, s.held()); err != nil {
+		return "value", problemOf(err)
+	}
+	return "", nil
 }
 
 func (s *Shell) secretsTarget() (SecretsView, bool) {

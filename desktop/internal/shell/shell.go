@@ -39,6 +39,7 @@ type Node interface {
 	TalkNode
 	SettingsNode
 	AgentsNode
+	VaultNode
 }
 
 // PrefStore loads and saves the app's preferences.
@@ -145,6 +146,9 @@ type State struct {
 	// Restored is set once a Node comes back from a Backup, until a
 	// Group serves: the steps that are the person's own.
 	Restored *Restored
+	// BackupDue: a Key was minted since the last Backup taken from the
+	// app, so the app shows "Back up now".
+	BackupDue bool
 }
 
 // Restored is what follows a Restore.
@@ -432,6 +436,7 @@ func (s *Shell) follow(ctx context.Context, n Node, events <-chan node.Event) {
 	for ev := range events {
 		s.talk.event(n, ev)
 		s.notify.event(s.State().Served, n.NodeID(), ev)
+		s.keyMinted(s.State().Served, ev.Session)
 		// A proposal or an acceptance moves step 3 on, as the status does.
 		if ev.Status == nil && ev.Proposal == nil && ev.Accepted == nil {
 			continue
@@ -734,6 +739,7 @@ func (s *Shell) set(change func(*State)) {
 	if st.View != ViewForming {
 		st.Forming = nil
 	}
+	st.BackupDue = s.p.BackupDue
 	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications(), MessageNotifications: s.p.MessageNotifications}
 	st.Seq++
 	out := *st

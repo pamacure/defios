@@ -3,7 +3,10 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -78,6 +81,24 @@ func (u *UI) RemoveProvider(alias string) shell.AgentsView { return u.shell.Remo
 func (u *UI) Secrets() shell.SecretsView                     { return u.shell.Secrets() }
 func (u *UI) NewSecret(name, value string) shell.SecretsView { return u.shell.NewSecret(name, value) }
 
+// Vault: this device's Backup and passphrase, and the edit-target
+// Group's Secrets.
+
+func (u *UI) Vault() shell.VaultView               { return u.shell.Vault() }
+func (u *UI) BackupTo(file string) shell.VaultView { return u.shell.BackupTo(file) }
+func (u *UI) RemoveVaultSecret(name string) shell.VaultView {
+	return u.shell.RemoveVaultSecret(name)
+}
+func (u *UI) SaveVaultSecret(d shell.SecretDraft) shell.VaultView {
+	return u.shell.SaveVaultSecret(d)
+}
+func (u *UI) ChangePassphrase(old, next, again string) shell.VaultView {
+	return u.shell.ChangePassphrase(old, next, again)
+}
+func (u *UI) RevealSecret(name, passphrase string) shell.RevealView {
+	return u.shell.RevealSecret(name, passphrase)
+}
+
 // Onboarding.
 
 func (u *UI) CheckDisplayName(name string) *shell.Problem { return shell.CheckDisplayName(name) }
@@ -147,6 +168,28 @@ func (u *UI) ChooseBackup() (string, error) {
 		SetTitle("Choose a DeFiOS Backup").
 		CanChooseFiles(true).
 		CanChooseDirectories(false)
+	if u.win != nil {
+		d = d.AttachToWindow(u.win)
+	}
+	return d.PromptForSingleSelection()
+}
+
+// ChooseBackupDestination asks where to write a new Backup with the OS's
+// save dialog; "" when none was chosen.
+func (u *UI) ChooseBackupDestination() (string, error) {
+	name := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' {
+			return '-'
+		}
+		return r
+	}, u.shell.State().Node.Name)
+	if name == "" {
+		name = "device"
+	}
+	d := u.app.Dialog.SaveFile().
+		SetMessage("Save a Backup of this device").
+		SetFilename(fmt.Sprintf("defios-%s-%s.backup", name, time.Now().Format("2006-01-02"))).
+		CanCreateDirectories(true)
 	if u.win != nil {
 		d = d.AttachToWindow(u.win)
 	}

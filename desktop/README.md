@@ -29,7 +29,8 @@ needs no GTK. Running needs the GTK 4 and WebKitGTK 6.0 runtime libraries
 ## What it keeps where
 
 The app's own preferences (start at login, keychain, notifications and the
-opt-in new-message notifications, the last served Group, the window size) are in `defios-desktop/prefs.json` under the OS
+opt-in new-message notifications, the last served Group, the window size,
+when the app last wrote a Backup and whether a Key was minted since) are in `defios-desktop/prefs.json` under the OS
 user config directory, never in the Node directory, so no Backup carries them.
 With the keychain option on, the passphrase is in the OS keychain under the
 service `DeFiOS`, keyed by Node ID. Start at login registers the app with
@@ -77,6 +78,17 @@ needs checking by hand:
   of 0, or an API path such as `/v1/foo`, is refused beside its field and
   nothing changes. Choose a Group that is not online: its Providers show,
   and edits note they apply the next time it is.
+- Vault, with two devices: "+ New Key" on Talk and accept it on the other;
+  once it is made, "Back up now" shows above every page. Click it, save the
+  file through the dialog, and the banner goes; the Vault page says when.
+  Restore that file with `defios init --from-backup` and the same
+  passphrase in an empty `--dir`. Saving over an existing file is refused.
+  Change the passphrase: the device goes offline, comes back, and Lock then
+  Unlock refuses the old one. With the keychain on, the next login unlocks
+  with the new one. Each Secret lists its source and the fields that use
+  it; Reveal asks for the passphrase each time and shows nothing for a
+  wrong one. A Secret set through "New Secret…" on the Agents page lists
+  here as In the Vault.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
   then shows the lock screen once `serve` stops.
 - Close the window: the tray icon stays and the Node keeps serving. The tray's

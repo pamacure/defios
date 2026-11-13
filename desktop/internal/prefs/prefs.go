@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"defios.com/internal/nodedir"
 )
@@ -32,6 +33,11 @@ type Prefs struct {
 	// LastGroup is the Group the app last served, which the lock screen
 	// preselects.
 	LastGroup string `json:"last_group,omitempty"`
+	// BackupDue: a Key was minted since the last Backup taken from the
+	// app, so the app asks for one.
+	BackupDue bool `json:"backup_due,omitempty"`
+	// LastBackup is when the app last wrote a Backup; nil for never.
+	LastBackup *time.Time `json:"last_backup,omitempty"`
 	// Width and Height are the window's size when it was last hidden.
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`

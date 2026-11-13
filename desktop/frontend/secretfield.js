@@ -4,10 +4,17 @@
 // name for a Secret the environment supplies. A fixed field is one whose
 // name is given, such as a variable an MCP Server asks for: it shows
 // where that Secret comes from and sets its value. Values are never read
-// back. The Go side is main.UI.Secrets and main.UI.NewSecret.
+// back here; the Vault page reveals one behind the passphrase. The Go side
+// is main.UI.Secrets and main.UI.NewSecret.
 import { call, h, put } from "./dom.js";
 
 let listed = null; // { group, names: Promise<SecretName[]> }
+
+// forgetSecrets has the next field list the Secrets anew, as after the
+// Vault page changes them.
+export function forgetSecrets() {
+  listed = null;
+}
 
 // secrets is the edit-target Group's Secrets, fetched once per Group until
 // a new one is set.
@@ -18,7 +25,9 @@ function secrets(group) {
   return listed.names;
 }
 
-const SOURCE = { env: "From the environment", vault: "In the Vault", none: "Not set" };
+// SOURCE names where a Secret comes from; sourceChip is its chip class.
+export const SOURCE = { env: "From the environment", vault: "In the Vault", none: "Not set" };
+export const sourceChip = (source) => `chip ${source === "none" ? "warn" : "ok"}`;
 const NEW = "\u0000new";
 const OTHER = "\u0000other";
 
@@ -46,7 +55,7 @@ function newSecret(group, fixed, done) {
   });
   const box = h("div", { class: "newsecret" },
     !fixed && name, value,
-    h("p", { class: "hint" }, "Kept in this device's Vault for this Group. It is never shown again here."),
+    h("p", { class: "hint" }, "Kept in this device's Vault for this Group. The Vault page reveals it with the passphrase."),
     err,
     h("div", { class: "row" }, save, h("button", { class: "btn", type: "button", onclick: () => done(null) }, "Cancel")));
   setTimeout(() => (fixed ? value : name).focus());
@@ -72,7 +81,7 @@ export function secretField({ group, id, value = "", fixed = null, noneLabel = "
       put(el,
         h("div", { class: "secretrow" },
           h("code", {}, `$${fixed}`),
-          h("span", { class: `chip ${source === "none" ? "warn" : "ok"}` }, SOURCE[source]),
+          h("span", { class: sourceChip(source) }, SOURCE[source]),
           // The environment wins over the Vault, so a value set here would not be used.
           mode !== "new" && source !== "env" && h("button", { class: "link", type: "button", onclick: () => draw("new") }, source === "vault" ? "Replace value…" : "Set value…")),
         mode === "new" && newSecret(group, fixed, () => draw()));

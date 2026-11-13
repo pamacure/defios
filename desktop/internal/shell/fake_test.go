@@ -45,6 +45,9 @@ type fakeNode struct {
 	tokens   map[string][]node.HandleTokens
 	// secretErr, when set, is what SetSecret fails with.
 	secretErr error
+
+	// written are the files each Backup wrote.
+	written []string
 }
 
 // fakeForm is a Group's formation: unformed while proposal is nil.
