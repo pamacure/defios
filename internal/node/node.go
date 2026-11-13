@@ -209,6 +209,11 @@ type Node interface {
 	// Usage is the Node's disk, every Group's or one's, and the serving
 	// process's own use. It needs no Group served.
 	Usage(ctx context.Context, group string) (Usage, error)
+
+	// TokenUsage is a Group's Token Usage: per Handle, the input and
+	// output tokens of the Chains this Node ran. It is apart from Usage,
+	// which is Node Usage only, and needs no Group served.
+	TokenUsage(ctx context.Context, group string) (TokenUsage, error)
 }
 
 // Errors a front end tells apart. Vault failures come through as the

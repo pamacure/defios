@@ -22,8 +22,13 @@ import (
 var ErrNodeExists = errors.New("node: a Node already exists here")
 
 // InvalidError: an input the operation refuses before touching anything,
-// such as a malformed alias, display name or ID.
-type InvalidError struct{ Err error }
+// such as a malformed alias, display name or ID. Field, when set, names
+// the input refused, one of the Field constants, so a form can show the
+// refusal beside it.
+type InvalidError struct {
+	Err   error
+	Field string
+}
 
 func (e *InvalidError) Error() string { return e.Err.Error() }
 func (e *InvalidError) Unwrap() error { return e.Err }

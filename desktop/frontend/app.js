@@ -3,6 +3,7 @@
 // own beyond which page is open. UI text says "device" for a Node.
 import { Events } from "/wails/runtime.js";
 import { call, h, icon } from "./dom.js";
+import { settingsPart } from "./settings.js";
 import { talkPage, talkUpdate } from "./talk.js";
 
 const SECTIONS = [
@@ -13,7 +14,7 @@ const SECTIONS = [
   { id: "triggers", label: "Triggers", issue: 154 },
   { id: "networks", label: "Networks", issue: 155 },
 ];
-const SETTINGS = { id: "settings", label: "Settings", issue: 150 };
+const SETTINGS = { id: "settings", label: "Settings", issue: 155 };
 
 // What only the frontend keeps: the open page and transient UI. For
 // onboarding, too: the Backup chosen at step 1, step 3's tab, the device
@@ -517,7 +518,9 @@ function page(s) {
     h("section", { class: "part", "aria-label": "Group" },
       h("header", {}, h("h2", {}, "Group"), editTarget(s)),
       !s.EditGroupServed && h("div", { class: "notice" }, `${s.EditGroup} is not online on this device. Changes here apply the next time it is.`),
-      h("div", { class: "body" }, h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`))));
+      h("div", { class: "body" }, sec.id === "settings"
+        ? settingsPart(s)
+        : h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`))));
 }
 
 // editTarget picks the Group the Group parts edit. The choice is kept
@@ -528,18 +531,23 @@ function editTarget(s) {
       g.Alias === s.Served ? `${g.Alias} (online)` : g.Alias)));
 }
 
+// nodeSettings are This Device's preferences: the app's own, kept outside
+// the Node directory.
 function nodeSettings(s) {
-  const toggle = (label, checked, method, ...extra) => h("label", { class: "toggle" },
-    h("input", { type: "checkbox", checked, disabled: ui.busy, onchange: (e) => act(method, e.target.checked) }),
+  const toggle = (label, checked, method, attrs, ...extra) => h("label", { class: attrs.sub ? "toggle sub" : "toggle" },
+    h("input", { type: "checkbox", checked, disabled: ui.busy || attrs.disabled, onchange: (e) => act(method, e.target.checked) }),
     h("span", { class: "text" }, h("strong", {}, label), ...extra));
   return h("div", {},
-    toggle("Start at login", s.Prefs.StartAtLogin, "SetStartAtLogin",
+    toggle("Notifications", s.Prefs.Notifications, "SetNotifications", {},
+      h("span", {}, "Let DeFiOS notify you, such as when a Sign Request needs you.")),
+    toggle("New-message notifications", s.Prefs.Notifications && s.Prefs.MessageNotifications, "SetMessageNotifications",
+      { sub: true, disabled: !s.Prefs.Notifications },
+      h("span", {}, "Also notify of each new message from another device or an agent.")),
+    toggle("Start at login", s.Prefs.StartAtLogin, "SetStartAtLogin", {},
       h("span", {}, "Start DeFiOS hidden in the tray when you log in. Without the keychain, it tells you it is locked.")),
-    toggle("Keep the passphrase in the keychain", s.Prefs.Keychain, "SetKeychain",
+    toggle("Keep the passphrase in the keychain", s.Prefs.Keychain, "SetKeychain", {},
       h("span", {}, "Unlock the last Group automatically when DeFiOS starts at login."),
-      h("span", { class: "warn" }, "Anyone who can use this computer account can unlock DeFiOS on this device.")),
-    toggle("Notifications", s.Prefs.Notifications, "SetNotifications",
-      h("span", {}, "Let DeFiOS post notifications.")));
+      s.Prefs.Keychain && h("span", { class: "warn", role: "note" }, "Anyone who can use this computer account can unlock this device.")));
 }
 
 document.addEventListener("click", (e) => {

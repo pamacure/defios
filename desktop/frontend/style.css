@@ -128,6 +128,37 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .toggle .text { display: flex; flex-direction: column; gap: 3px; }
 .toggle .text strong { color: var(--text); font-weight: 600; }
 .toggle .warn { color: var(--warn-text); font-size: 13px; }
+.toggle.sub { padding-left: 28px; }
+.toggle input:disabled + .text { opacity: 0.6; }
+
+/* Settings: the Group part's form, devices and the two usages. */
+.gsettings h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: baseline; gap: 10px; }
+.gsettings h3 .count { font-weight: 400; color: var(--muted); font-size: 12px; }
+.gsettings .notice.inline { margin: 0 0 12px; }
+.gform { display: flex; flex-direction: column; gap: 12px; }
+.frow { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 4px 16px; align-items: start; }
+.frow > label { padding-top: 10px; color: var(--text); font-weight: 500; }
+.fcell { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 460px; }
+.field.left { text-align: left; }
+.factions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; max-width: 676px; }
+.saved { color: var(--accent-strong); font-size: 13px; }
+.gsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.gsec > .hint { margin: -6px 0 10px; }
+.gsec .devices .devrow { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.gsec .devices .devrow:last-child { border-bottom: 0; }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.stat .label { font-size: 12px; color: var(--muted); }
+.stat strong { color: var(--text); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tokens { border-collapse: collapse; width: 100%; max-width: 520px; font-variant-numeric: tabular-nums; }
+.tokens th, .tokens td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.tokens th:first-child, .tokens td:first-child { text-align: left; padding-left: 0; }
+.tokens th { font-size: 12px; font-weight: 500; color: var(--muted); }
+.tokens td:first-child { color: var(--text); }
+@media (max-width: 860px) {
+  .frow { grid-template-columns: minmax(0, 1fr); }
+  .frow > label { padding-top: 0; }
+}
 
 /* Onboarding: one card per step (the Figma "Welcome" and "Build from
    Backup" frames; steps 2 and 3 follow their style). */

@@ -45,6 +45,13 @@ func (u *UI) SetMessageNotifications(on bool) shell.State {
 	return u.shell.SetMessageNotifications(on)
 }
 
+// Settings: the edit-target Group's part.
+
+func (u *UI) GroupSettings() shell.GroupSettingsView { return u.shell.GroupSettings() }
+func (u *UI) SaveGroupSettings(d shell.SettingsDraft) shell.GroupSettingsView {
+	return u.shell.SaveGroupSettings(d)
+}
+
 // Onboarding.
 
 func (u *UI) CheckDisplayName(name string) *shell.Problem { return shell.CheckDisplayName(name) }

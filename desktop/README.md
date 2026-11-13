@@ -62,8 +62,13 @@ needs checking by hand:
   Accept shows Queued until it is back. Add a Hook on `sign.request` with an
   agent Job: the notification says "@agent is on it", and a failing Job
   notifies again that the request needs you. Turn new-message notifications
-  on in the preferences file (`message_notifications`) until Settings shows
-  the toggle (#155): another device's message notifies.
+  on in Settings: another device's message notifies.
+- Settings, with two devices: rename this device in the Group, Lock and
+  Unlock, and the other device's Settings lists the new name. A headscale
+  URL such as `headscale.example` is refused beside its field and nothing
+  changes. Devices shows "2 of 2 devices online", then 1 of 2 with the
+  other quit. Mention an agent: its Token Usage goes up, shown apart from
+  Node Usage ("Device Usage"). Choose a Group that is not online: no device shows online.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
   then shows the lock screen once `serve` stops.
 - Close the window: the tray icon stays and the Node keeps serving. The tray's

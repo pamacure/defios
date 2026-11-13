@@ -146,8 +146,12 @@ type Transcript struct {
 // empty if it has none. A line it cannot read, such as one cut off by a
 // stop, is passed over.
 func Read(p nodedir.Paths, alias string, conv []byte, chain string) (Transcript, error) {
+	return readFile(path(p, alias, conv, chain))
+}
+
+func readFile(file string) (Transcript, error) {
 	var t Transcript
-	data, err := os.ReadFile(path(p, alias, conv, chain))
+	data, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
 		return t, nil
 	}
@@ -245,4 +249,61 @@ func (t Transcript) Runs() []Run {
 		return cmp.Compare(a.Step, b.Step)
 	})
 	return runs
+}
+
+// Tokens are the input and output tokens a usage line bills, whichever
+// API Shape wrote it: input_tokens, with the Messages API's
+// cache_creation_input_tokens and cache_read_input_tokens added, or
+// prompt_tokens; output_tokens or completion_tokens. Usage it cannot read
+// bills nothing.
+func Tokens(usage json.RawMessage) (input, output int64) {
+	var u struct {
+		Input       int64 `json:"input_tokens"`
+		CacheWrite  int64 `json:"cache_creation_input_tokens"`
+		CacheRead   int64 `json:"cache_read_input_tokens"`
+		Prompt      int64 `json:"prompt_tokens"`
+		Output      int64 `json:"output_tokens"`
+		Completions int64 `json:"completion_tokens"`
+	}
+	if json.Unmarshal(usage, &u) != nil {
+		return 0, 0
+	}
+	return u.Input + u.CacheWrite + u.CacheRead + u.Prompt, u.Output + u.Completions
+}
+
+// ReadAll is every Transcript of alias's Conversations, Group-level talk
+// included, as Read reads each.
+func ReadAll(p nodedir.Paths, alias string) ([]Transcript, error) {
+	convs, err := os.ReadDir(p.ConversationsDir(alias))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Transcript
+	for _, c := range convs {
+		if !c.IsDir() {
+			continue
+		}
+		dir := p.TranscriptsDir(alias, c.Name())
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if _, ok := nodedir.TranscriptChain(e.Name()); !ok || !e.Type().IsRegular() {
+				continue
+			}
+			t, err := readFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }

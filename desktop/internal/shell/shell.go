@@ -37,6 +37,7 @@ type Node interface {
 	Decline(ctx context.Context, group, groupID, reason string) (node.Formation, error)
 
 	TalkNode
+	SettingsNode
 }
 
 // PrefStore loads and saves the app's preferences.

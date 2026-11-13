@@ -217,6 +217,12 @@ func TestTwoAppsFormAGroupEntirelyThroughOnboarding(t *testing.T) {
 		t.Fatalf("auth key Secret = %q from %q, %v", v, src, err)
 	}
 
+	form(t, alice, bob)
+}
+
+// form forms alice's and bob's Group, each at step 3, through the app.
+func form(t *testing.T, alice, bob *shell.Shell) {
+	t.Helper()
 	var st shell.State
 	eventually(t, alice, func(shell.State) bool {
 		st = alice.Discover()
@@ -238,4 +244,32 @@ func TestTwoAppsFormAGroupEntirelyThroughOnboarding(t *testing.T) {
 		t.Fatalf("bob after Accept: %+v %+v", st, st.Forming)
 	}
 	eventually(t, alice, view(shell.ViewServed))
+}
+
+// A new display name, once the Group is served again, is what the other
+// device's Roster shows.
+func TestARenamedDeviceShowsItsNewNameToTheOtherOnceServedAgain(t *testing.T) {
+	m := &mesh{addrs: map[string]string{}}
+	alice, _ := onboard(t, m, "alice")
+	bob, _ := onboard(t, m, "bob")
+	form(t, alice, bob)
+
+	d := alice.GroupSettings().Settings
+	d.DisplayName = "alice-desk"
+	if v := alice.SaveGroupSettings(d); !v.Saved || !v.Served {
+		t.Fatalf("save: %+v %+v", v, v.Problem)
+	}
+	alice.Lock()
+	if st := alice.Unlock("home", pw); st.View != shell.ViewServed {
+		t.Fatalf("serve again: %+v", st)
+	}
+	id := alice.State().Node.ID
+	eventually(t, bob, func(shell.State) bool {
+		for _, dev := range bob.GroupSettings().Roster {
+			if dev.ID == id {
+				return dev.Name == "alice-desk" && dev.Reachable
+			}
+		}
+		return false
+	})
 }

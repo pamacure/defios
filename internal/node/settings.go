@@ -23,6 +23,16 @@ type GroupSettings struct {
 	Prune config.Age
 }
 
+// The fields of GroupSettings, as an InvalidError from EditGroupSettings
+// names the one it refuses.
+const (
+	FieldDisplayName    = "display_name"
+	FieldHeadscaleURL   = "headscale_url"
+	FieldHostname       = "hostname"
+	FieldTailnetAuthKey = "tailnet_auth_key"
+	FieldPrune          = "prune"
+)
+
 // SettingsEdit is a change to GroupSettings; a nil field is left as it is.
 type SettingsEdit struct {
 	DisplayName    *string
@@ -48,33 +58,33 @@ func (h *Host) EditGroupSettings(ctx context.Context, group string, e SettingsEd
 	err := h.writeGroupConfig(group, func(c *config.Config) error {
 		if e.DisplayName != nil {
 			if err := ValidateDisplayName(*e.DisplayName); err != nil {
-				return err
+				return onField(FieldDisplayName, err)
 			}
 			c.DisplayName = *e.DisplayName
 		}
 		if e.HeadscaleURL != nil {
-			if *e.HeadscaleURL == "" {
-				return invalidf("a headscale URL is required")
+			if err := validHeadscaleURL(*e.HeadscaleURL); err != nil {
+				return onField(FieldHeadscaleURL, err)
 			}
 			c.HeadscaleURL = *e.HeadscaleURL
 		}
 		if e.Hostname != nil {
 			if *e.Hostname == "" {
-				return invalidf("a hostname is required")
+				return onField(FieldHostname, invalidf("a hostname is required"))
 			}
 			c.Hostname = *e.Hostname
 		}
 		if e.TailnetAuthKey != nil {
 			if ref := *e.TailnetAuthKey; ref != "" {
 				if _, err := secret.ParseRef(ref); err != nil {
-					return invalidf("tailnet auth key: %w", err)
+					return onField(FieldTailnetAuthKey, invalidf("tailnet auth key: %w", err))
 				}
 			}
 			c.TailnetAuthKey = *e.TailnetAuthKey
 		}
 		if e.Prune != nil {
 			if *e.Prune < 0 {
-				return invalidf("prune age %s must be positive, or 0 for none", *e.Prune)
+				return onField(FieldPrune, invalidf("prune age %s must be positive, or 0 for none", *e.Prune))
 			}
 			c.Prune = *e.Prune
 		}
@@ -98,4 +108,13 @@ func settingsOf(c config.Config) GroupSettings {
 		TailnetAuthKey: c.TailnetAuthKey,
 		Prune:          c.Prune,
 	}
+}
+
+// onField names field as the input err, an InvalidError, refuses.
+func onField(field string, err error) error {
+	var inv *InvalidError
+	if errors.As(err, &inv) {
+		return &InvalidError{Err: inv.Err, Field: field}
+	}
+	return err
 }

@@ -10,6 +10,7 @@ import (
 
 	"defios.com/desktop/internal/prefs"
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/group"
 	"defios.com/internal/node"
 	"defios.com/internal/vault"
 )
@@ -37,6 +38,13 @@ type fakeNode struct {
 	proposed    [][]string      // each Propose's Node IDs
 
 	talk *fakeTalk
+
+	// Settings: each Group's, as GroupSettings reads them, and the
+	// Token Usage its Transcripts sum to.
+	settings map[string]node.GroupSettings
+	tokens   map[string][]node.HandleTokens
+	// secretErr, when set, is what SetSecret fails with.
+	secretErr error
 }
 
 // fakeForm is a Group's formation: unformed while proposal is nil.
@@ -110,6 +118,9 @@ func (n *fakeNode) SetSecret(_ context.Context, group, name, value string, passp
 	}
 	if phrase != pw {
 		return vault.ErrBadPassphrase
+	}
+	if n.secretErr != nil {
+		return n.secretErr
 	}
 	if n.secrets == nil {
 		n.secrets = map[string]map[string]string{}
@@ -196,14 +207,14 @@ func (n *fakeNode) acceptBy(group, id string) {
 	}
 }
 
-func (n *fakeNode) InspectGroup(_ context.Context, group string) (node.GroupDetail, error) {
+func (n *fakeNode) InspectGroup(_ context.Context, alias string) (node.GroupDetail, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	f := n.forms[group]
+	f := n.forms[alias]
 	if f == nil || f.initiator == "" {
-		return node.GroupDetail{}, errors.New("group: this Node has no Group")
+		return node.GroupDetail{}, group.ErrNoGroup
 	}
-	return node.GroupDetail{Alias: group, GroupID: f.groupID, Initiator: f.initiator, Roster: append([]node.GroupNode(nil), f.roster...)}, nil
+	return node.GroupDetail{Alias: alias, GroupID: f.groupID, Initiator: f.initiator, Roster: append([]node.GroupNode(nil), f.roster...)}, nil
 }
 
 func (n *fakeNode) Accept(_ context.Context, group, groupID string) (node.Formation, error) {

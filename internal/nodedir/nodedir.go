@@ -170,7 +170,12 @@ func (p Paths) TsnetDir(alias string) string {
 // Node's data for one Conversation, conversation being its hex Conversation
 // ID, or "group" for Group-level talk (ADR 0024).
 func (p Paths) ConversationDir(alias, conversation string) string {
-	return filepath.Join(p.GroupDir(alias), "conversations", conversation)
+	return filepath.Join(p.ConversationsDir(alias), conversation)
+}
+
+// ConversationsDir holds a Group's ConversationDirs.
+func (p Paths) ConversationsDir(alias string) string {
+	return filepath.Join(p.GroupDir(alias), "conversations")
 }
 
 // ConversationName is the name of a Conversation's directory: its hex

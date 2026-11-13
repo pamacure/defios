@@ -59,17 +59,26 @@ func TestAGroupsSettingsAreReadAndEdited(t *testing.T) {
 		t.Fatalf("second edit: %#v, %v\nwant %#v", got, err, want)
 	}
 
+	// Each refusal names the field it is about, for a form to show it
+	// beside that field.
 	var invalid *node.InvalidError
-	for name, e := range map[string]node.SettingsEdit{
-		"empty display name": {DisplayName: ptr("")},
-		"long display name":  {DisplayName: ptr(strings.Repeat("x", 65))},
-		"no headscale URL":   {HeadscaleURL: ptr("")},
-		"no hostname":        {Hostname: ptr("")},
-		"literal auth key":   {TailnetAuthKey: ptr("tskey-auth-abc")},
-		"negative prune":     {Prune: ptr(config.Age(-time.Hour))},
+	for name, c := range map[string]struct {
+		edit  node.SettingsEdit
+		field string
+	}{
+		"empty display name":     {node.SettingsEdit{DisplayName: ptr("")}, node.FieldDisplayName},
+		"long display name":      {node.SettingsEdit{DisplayName: ptr(strings.Repeat("x", 65))}, node.FieldDisplayName},
+		"no headscale URL":       {node.SettingsEdit{HeadscaleURL: ptr("")}, node.FieldHeadscaleURL},
+		"not a headscale URL":    {node.SettingsEdit{HeadscaleURL: ptr("headscale.example")}, node.FieldHeadscaleURL},
+		"ftp headscale URL":      {node.SettingsEdit{HeadscaleURL: ptr("ftp://hs.example")}, node.FieldHeadscaleURL},
+		"no hostname":            {node.SettingsEdit{Hostname: ptr("")}, node.FieldHostname},
+		"literal auth key":       {node.SettingsEdit{TailnetAuthKey: ptr("tskey-auth-abc")}, node.FieldTailnetAuthKey},
+		"negative prune":         {node.SettingsEdit{Prune: ptr(config.Age(-time.Hour))}, node.FieldPrune},
+		"bad URL, good hostname": {node.SettingsEdit{Hostname: ptr("fine"), HeadscaleURL: ptr("nope")}, node.FieldHeadscaleURL},
 	} {
-		if _, err := h.EditGroupSettings(ctx, "alpha", e); !errors.As(err, &invalid) {
-			t.Errorf("%s: %v; want an InvalidError", name, err)
+		_, err := h.EditGroupSettings(ctx, "alpha", c.edit)
+		if !errors.As(err, &invalid) || invalid.Field != c.field {
+			t.Errorf("%s: %v; want an InvalidError on %s", name, err, c.field)
 		}
 	}
 	if after, err := h.GroupSettings(ctx, "alpha"); err != nil || after != want {
