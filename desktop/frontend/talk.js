@@ -22,7 +22,7 @@ const tui = {
   aborting: "", // the keygen Session whose Abort reason is being written
   editAlias: false,
   busy: false,
-  expanded: new Map(), // msg_id -> its Transcript: { blocks } | { problem } | {} while loading
+  expanded: new Map(), // msg_id, or run:chain/handle for a silent run -> its Transcript: { blocks } | { problem } | {} while loading
   drafts: new Map(), // Conversation ID -> what was typed there
   form: { curve: "ecdsa", t: "", alias: "", reason: "", keyAlias: "" },
   shownOpen: null, // the Conversation the composer's draft belongs to
@@ -311,7 +311,20 @@ function transcript() {
 
 function item(it) {
   if (it.Kind === "sign") return signCard(it, tui.busy);
-  if (it.Kind === "system") return h("div", { class: "sysline" }, h("span", {}, it.Text), h("time", {}, time(it.At)));
+  if (it.Kind === "system") {
+    if (!it.Transcript) return h("div", { class: "sysline" }, h("span", {}, it.Text), h("time", {}, time(it.At)));
+    // An agent's run that posted nothing: what it wrote is in its Transcript.
+    const key = `run:${it.Chain}/${it.Handle}`;
+    const open = tui.expanded.get(key);
+    return h("div", { class: "sysrun" },
+      h("div", { class: "sysline" }, h("span", {}, it.Text),
+        h("button", {
+          class: "link", type: "button", "aria-expanded": open ? "true" : "false",
+          onclick: () => toggleTranscript(key, () => call("RunTranscript", tui.shownOpen, it.Chain, it.Handle)),
+        }, open ? "Hide transcript" : "Transcript"),
+        h("time", {}, time(it.At))),
+      open && transcriptBlocks(open));
+  }
   const who = it.Side === "left" && h("span", { class: "who" },
     h("strong", {}, it.From),
     it.Handle && h("span", { class: "handle" }, `@${it.Handle}`),
@@ -328,21 +341,22 @@ function item(it) {
     (it.Droppable || it.Transcript) && h("div", { class: "actions" },
       it.Droppable && h("button", { class: "link", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop"),
       it.Transcript && h("button", {
-        class: "link", type: "button", "aria-expanded": open ? "true" : "false", onclick: () => toggleTranscript(it.MsgID),
+        class: "link", type: "button", "aria-expanded": open ? "true" : "false", onclick: () => toggleTranscript(it.MsgID, () => call("Transcript", it.MsgID)),
       }, open ? "Hide transcript" : "Transcript")),
     open && transcriptBlocks(open));
 }
 
-async function toggleTranscript(msgID) {
-  if (tui.expanded.has(msgID)) {
-    tui.expanded.delete(msgID);
+// toggleTranscript shows or hides the Transcript under key, read by fetch.
+async function toggleTranscript(key, fetch) {
+  if (tui.expanded.has(key)) {
+    tui.expanded.delete(key);
     draw();
     return;
   }
-  tui.expanded.set(msgID, {});
+  tui.expanded.set(key, {});
   draw();
-  const v = await call("Transcript", msgID);
-  if (tui.expanded.has(msgID)) tui.expanded.set(msgID, v.Problem ? { problem: v.Problem } : { blocks: v.Blocks ?? [] });
+  const v = await fetch();
+  if (tui.expanded.has(key)) tui.expanded.set(key, v.Problem ? { problem: v.Problem } : { blocks: v.Blocks ?? [] });
   draw();
 }
 

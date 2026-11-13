@@ -162,8 +162,10 @@ type Item struct {
 	// from it, being this person's.
 	Queued, Droppable bool
 	// Transcript: this device ran the chain that said it, and Transcript
-	// gives its run.
+	// gives its run. On a system line about an agent's run, Chain and
+	// Handle name the run and RunTranscript gives it.
 	Transcript bool
+	Chain      string
 	// Sign is a Sign Request's card, for KindSign.
 	Sign *SignCard
 }
@@ -808,8 +810,15 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 		}
 	case serve.EventAgentReset:
 		agent().Blocks = nil
-	case serve.EventAgentCommit, serve.EventAgentSilent:
+	case serve.EventAgentCommit:
 		done()
+	case serve.EventAgentSilent:
+		done()
+		// What it wrote was its own, but it went without a trace.
+		t.system[conv] = append(t.system[conv], Item{
+			Kind: KindSystem, At: time.Now(), Handle: ev.Handle, Chain: ev.Chain, Transcript: true,
+			Text: fmt.Sprintf("@%s ended its turn without posting: it never called say.", ev.Handle),
+		})
 	case serve.EventAgentError:
 		done()
 		t.say(conv, fmt.Sprintf("@%s failed: %s", ev.Handle, ev.Error))

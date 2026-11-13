@@ -11,6 +11,7 @@ import (
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/signreq"
+	"defios.com/internal/transcript"
 	"defios.com/internal/trigger"
 )
 
@@ -191,6 +192,38 @@ func TestAnAgentsChainStreamsLiveCancelsAndLeavesATranscript(t *testing.T) {
 	}
 	if v := s.Transcript(said); v.Problem != nil || len(v.Blocks) != 1 {
 		t.Fatalf("transcript: %+v", v)
+	}
+}
+
+// An agent that ends its turn without say leaves a line saying so, with
+// what it wrote in its Transcript, not nothing.
+func TestAnAgentThatStaysSilentLeavesALineWithItsTranscript(t *testing.T) {
+	r := newRig(t, "alpha")
+	r.node.tk().included[node.GroupTalk] = []string{"auditor"}
+	s := served(t, r)
+	s.SendMessage("@auditor state your purpose")
+	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
+	r.node.mu.Lock()
+	r.node.sg().runs[chain] = []transcript.Run{{Handle: "auditor", Depth: 1, Blocks: []json.RawMessage{json.RawMessage(`{"type":"text","text":"I audit."}`)}}}
+	r.node.mu.Unlock()
+
+	for _, ev := range []node.ChainEvent{
+		{Type: serve.EventChainStart, Chain: chain},
+		{Type: serve.EventAgentStart, Chain: chain, Handle: "auditor", Depth: 1},
+		{Type: serve.EventAgentDelta, Chain: chain, Kind: "text", Text: "I audit."},
+		{Type: serve.EventAgentSilent, Chain: chain, Handle: "auditor"},
+		{Type: serve.EventChainEnd, Chain: chain},
+	} {
+		chainEvent(r.node, node.GroupTalk, ev)
+	}
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 0 && len(ts.Items) == 2 })
+	line := ts.Items[1]
+	if line.Kind != shell.KindSystem || line.Handle != "auditor" || line.Chain != chain || !line.Transcript ||
+		!strings.Contains(line.Text, "@auditor") || !strings.Contains(line.Text, "without posting") {
+		t.Fatalf("silent line: %+v", line)
+	}
+	if v := s.RunTranscript(node.GroupTalk, chain, "auditor"); v.Problem != nil || len(v.Blocks) != 1 {
+		t.Fatalf("its transcript: %+v", v)
 	}
 }
 

@@ -149,7 +149,7 @@ async function toggleRun(j) {
   }
   cui.runs.set(key, {});
   ctx.draw();
-  const v = await call("SignJobRun", j.Conversation, j.Chain, j.Handle);
+  const v = await call("RunTranscript", j.Conversation, j.Chain, j.Handle);
   if (cui.runs.has(key)) cui.runs.set(key, v.Problem ? { problem: v.Problem } : { blocks: v.Blocks ?? [] });
   ctx.draw();
 }

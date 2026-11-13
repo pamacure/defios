@@ -189,6 +189,9 @@ func (s *Shell) SaveAgentProfile(d ProfileDraft) AgentsView {
 	} else {
 		v.Saved = true
 	}
+	if d.New {
+		s.talk.loadSide() // Talk lists the agents to include
+	}
 	s.fillAgents(n, &v, open)
 	return v
 }
@@ -263,6 +266,7 @@ func (s *Shell) DeleteAgentProfile(handle string) AgentsView {
 		v.Problem, open = problemOf(err), handle
 	} else {
 		v.Saved = true
+		s.talk.loadSide()
 	}
 	s.fillAgents(n, &v, open)
 	return v

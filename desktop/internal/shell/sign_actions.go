@@ -1,8 +1,6 @@
 package shell
 
 import (
-	"encoding/json"
-
 	"defios.com/internal/node"
 )
 
@@ -20,12 +18,6 @@ func (s *Shell) RefuseSign(msgID, reason string) TalkState { return s.talk.refus
 // this device's Networks; each chain that went out gets a Broadcast
 // Receipt. A chain that failed shows as the page's Problem.
 func (s *Shell) BroadcastSign(msgID string) TalkState { return s.talk.broadcastSign(msgID) }
-
-// SignJobRun is the run of this device's agent Job handle, in chain of
-// conv: its blocks of thinking, text, tool calls and their results.
-func (s *Shell) SignJobRun(conv, chain, handle string) TranscriptView {
-	return s.talk.jobRun(conv, chain, handle)
-}
 
 // FocusSign opens conv, in the served Group, and brings Sign Request
 // msgID's card into view ("" for none), as a notification is clicked.
@@ -70,24 +62,6 @@ func (t *talk) broadcastSign(msgID string) TalkState {
 		}
 		return err
 	}, func() { t.loadCard(msgID) })
-}
-
-func (t *talk) jobRun(conv, chain, handle string) TranscriptView {
-	a, ok := t.now()
-	if !ok {
-		return TranscriptView{Problem: problemOf(node.ErrNotServed)}
-	}
-	tr, err := a.n.Transcript(t.ctx, a.group, conv, chain)
-	if err != nil {
-		return TranscriptView{Problem: problemOf(err)}
-	}
-	out := TranscriptView{Blocks: []json.RawMessage{}}
-	for _, r := range tr.Runs {
-		if r.Handle == handle {
-			out.Blocks = append(out.Blocks, r.Blocks...)
-		}
-	}
-	return out
 }
 
 // broadcastFailed is a broadcast some chain of which did not go out.

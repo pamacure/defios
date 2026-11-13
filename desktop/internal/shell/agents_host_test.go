@@ -98,6 +98,8 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsSystemPrompt(t *testing.T) {
 	if len(v.Providers) != 1 || v.Providers[0].Alias != "claude" || v.Providers[0].APIKey != "ANTHROPIC_KEY" {
 		t.Fatalf("providers: %+v", v.Providers)
 	}
+	ready := func(ts shell.TalkState) bool { return ts.MajorityReachable && len(ts.Conversations) == 1 }
+	talkWithin(t, alice, 20*time.Second, ready)
 	v = agentsOK(t, "add profile", alice.SaveAgentProfile(shell.ProfileDraft{
 		New: true, Handle: "auditor", Provider: "claude", Model: "claude-test",
 		Body: `{"max_tokens": 1024}`, MaxTurns: "4", System: "You audit, v1.",
@@ -106,9 +108,11 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsSystemPrompt(t *testing.T) {
 		o.System != "You audit, v1." || o.Body != "{\n  \"max_tokens\": 1024\n}" {
 		t.Fatalf("open: %+v", v.Open)
 	}
+	// Talk, already open, lists it to include.
+	if agents := alice.Talk().Agents; !slices.Contains(agents, shell.Agent{Handle: "auditor"}) {
+		t.Fatalf("Talk's agents after adding one: %+v", agents)
+	}
 
-	ready := func(ts shell.TalkState) bool { return ts.MajorityReachable && len(ts.Conversations) == 1 }
-	talkWithin(t, alice, 20*time.Second, ready)
 	if ts := alice.SetAgentIncluded("auditor", true); ts.Problem != nil {
 		t.Fatalf("include: %+v", ts.Problem)
 	}

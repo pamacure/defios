@@ -34,6 +34,13 @@ func (s *Shell) CancelChain(chain string) TalkState { return s.talk.cancelChain(
 // Conversation: its blocks of thinking, text, tool calls and their results.
 func (s *Shell) Transcript(msgID string) TranscriptView { return s.talk.transcript(msgID) }
 
+// RunTranscript is the run of this device's agent handle in chain of
+// conv, an agent Job's or one that stayed silent: its blocks of
+// thinking, text, tool calls and their results.
+func (s *Shell) RunTranscript(conv, chain, handle string) TranscriptView {
+	return s.talk.runTranscript(conv, chain, handle)
+}
+
 // NewKey starts a keygen Session for a Key on curve, with threshold t,
 // proposing alias ("" for none); this device accepts it.
 func (s *Shell) NewKey(curve string, t int, alias string) TalkState {
@@ -267,4 +274,22 @@ func (t *talk) setAgentIncluded(handle string, on bool) TalkState {
 		_, err = a.n.ExcludeAgent(t.ctx, a.group, a.conv, handle)
 		return err
 	}, t.loadSide)
+}
+
+func (t *talk) runTranscript(conv, chain, handle string) TranscriptView {
+	a, ok := t.now()
+	if !ok {
+		return TranscriptView{Problem: problemOf(node.ErrNotServed)}
+	}
+	tr, err := a.n.Transcript(t.ctx, a.group, conv, chain)
+	if err != nil {
+		return TranscriptView{Problem: problemOf(err)}
+	}
+	out := TranscriptView{Blocks: []json.RawMessage{}}
+	for _, r := range tr.Runs {
+		if r.Handle == handle {
+			out.Blocks = append(out.Blocks, r.Blocks...)
+		}
+	}
+	return out
 }

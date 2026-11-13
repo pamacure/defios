@@ -126,8 +126,8 @@ func (u *UI) FocusSign(group, conv, msgID string) shell.TalkState {
 func (u *UI) ProposeSign(conv, reason string, txs []node.TxSpec) shell.SignFormView {
 	return u.shell.ProposeSign(conv, reason, txs)
 }
-func (u *UI) SignJobRun(conv, chain, handle string) shell.TranscriptView {
-	return u.shell.SignJobRun(conv, chain, handle)
+func (u *UI) RunTranscript(conv, chain, handle string) shell.TranscriptView {
+	return u.shell.RunTranscript(conv, chain, handle)
 }
 
 // opened shows the window on what clicked notice n is about: its

@@ -271,6 +271,10 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .msg .actions .link { font-size: 12px; }
 .sysline { align-self: center; display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 12px; text-align: center; max-width: 80%; }
 .sysline time { opacity: .8; }
+.sysrun { align-self: center; display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 80%; }
+.sysrun .sysline { max-width: none; }
+.sysline .link { font-size: inherit; }
+.sysrun .blocks { align-self: stretch; text-align: left; }
 .blocks { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-left: 2px solid var(--line); margin-left: 4px; }
 .blk { font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .blk .kind { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
