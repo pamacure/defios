@@ -218,3 +218,17 @@ func TestDecliningAProposalFreesTheGroupForAnother(t *testing.T) {
 		t.Fatalf("after Decline: %+v %+v", st, st.Forming)
 	}
 }
+
+// A step 2 refusal while adding a Group is the add form's: leaving the form
+// dismisses it, so the served pages do not keep showing it.
+func TestLeavingAddGroupDismissesItsProblem(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := r.start(false)
+	s.Unlock("alpha", pw)
+	if st := s.AddGroup("", "", "", ""); st.View != shell.ViewServed || st.Problem == nil {
+		t.Fatalf("empty add: %+v", st)
+	}
+	if st := s.DismissProblem(); st.View != shell.ViewServed || st.Problem != nil {
+		t.Fatalf("after DismissProblem: %+v", st)
+	}
+}

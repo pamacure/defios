@@ -120,6 +120,12 @@ async function act(method, ...args) {
   }
 }
 
+// dismissProblem drops the Problem shown as the user leaves what it was
+// about (a page, or the add-Group form), so it does not follow them.
+function dismissProblem() {
+  if (state?.Problem) call("DismissProblem").then(apply);
+}
+
 // render redraws the app, unless only fields the current screen does not
 // show changed: a redraw would drop a half-typed passphrase.
 function render(force = false) {
@@ -388,7 +394,7 @@ function stepTwo(s, adding) {
     s.Restored && restoredNote(s),
     form,
     problemFor(s),
-    adding && h("button", { class: "link", type: "button", onclick: () => { ui.addingGroup = false; ui.form = {}; render(true); } }, "Cancel"));
+    adding && h("button", { class: "link", type: "button", onclick: () => { ui.addingGroup = false; ui.form = {}; dismissProblem(); render(true); } }, "Cancel"));
 }
 
 // deviceRow shows a device by name and Device ID, with what follows.
@@ -545,7 +551,7 @@ function header(s) {
     h("span", { class: "state" }, g.Alias === s.Served ? "Online" : formed(g) ? "Offline" : "Not set up"))),
     others.length > 0 && h("div", { class: "note" },
       `This device serves one Group at a time: while ${s.Served} is online, ${others.length === 1 ? others[0].Alias + " is" : "your other Groups are"} offline here. Choosing one switches to it.`),
-    h("button", { class: "item add", role: "menuitem", onclick: () => { ui.menuOpen = false; ui.addingGroup = true; render(true); } }, "+ Add Group"));
+    h("button", { class: "item add", role: "menuitem", onclick: () => { ui.menuOpen = false; ui.addingGroup = true; dismissProblem(); render(true); } }, "+ Add Group"));
   return h("header", { class: "header" },
     h("div", { class: "groupmenu" },
       h("button", { "aria-haspopup": "menu", "aria-expanded": ui.menuOpen ? "true" : "false", onclick: () => { ui.menuOpen = !ui.menuOpen; render(true); } },
@@ -560,6 +566,7 @@ function header(s) {
 // (#151 to #155). A page opened anew reads its content again.
 function go(id, focus = null) {
   const again = ui.page !== id;
+  if (again) dismissProblem();
   ui.page = id;
   ui.focus = focus;
   if (id === "agents" && focus?.profile) agentsOpen(focus.profile);

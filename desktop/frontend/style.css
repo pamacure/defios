@@ -232,6 +232,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
    it is about. Built from the main page frame's columns. */
 .page.talkpage { padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
 .page.talkpage > .banner { margin: 12px 16px 0; }
+.page.talkpage > :is(.banner, .backupbanner) + .talk { margin-top: 12px; }
 .talk { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr) 280px; }
 .talk-empty { padding: 24px; }
 .btn.small { height: 30px; padding: 0 10px; font-size: 13px; }

@@ -652,6 +652,13 @@ func (s *Shell) SetEditGroup(group string) State {
 	return s.State()
 }
 
+// DismissProblem drops the Problem shown, as the user leaves the screen
+// or form it was about, without changing the View.
+func (s *Shell) DismissProblem() State {
+	s.set(func(st *State) { st.Problem = nil })
+	return s.State()
+}
+
 // SetStartAtLogin registers or unregisters the app to start at login.
 func (s *Shell) SetStartAtLogin(on bool) State {
 	s.op.Lock()

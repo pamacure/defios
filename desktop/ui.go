@@ -42,6 +42,7 @@ func (u *UI) Lock() shell.State                           { return u.shell.Lock(
 func (u *UI) ContinueNow() shell.State                    { return u.shell.ContinueNow() }
 func (u *UI) Switch(group string) shell.State             { return u.shell.Switch(group) }
 func (u *UI) SetEditGroup(group string) shell.State       { return u.shell.SetEditGroup(group) }
+func (u *UI) DismissProblem() shell.State                 { return u.shell.DismissProblem() }
 func (u *UI) SetStartAtLogin(on bool) shell.State         { return u.shell.SetStartAtLogin(on) }
 func (u *UI) SetKeychain(on bool) shell.State             { return u.shell.SetKeychain(on) }
 func (u *UI) SetNotifications(on bool) shell.State        { return u.shell.SetNotifications(on) }
