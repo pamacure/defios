@@ -25,7 +25,7 @@ const SETTINGS = { id: "settings", label: "Settings", issue: 155 };
 const ui = {
   page: "talk", focus: null, menuOpen: false, addingGroup: false, busy: false,
   restore: null, invite: "propose", pick: "", declining: false, form: {},
-  backingUp: false, backupProblem: null, backupDismissed: false,
+  backingUp: false, backupProblem: null, backupDismissed: -1,
 };
 let state = null;
 let shownKey = "";
@@ -547,9 +547,10 @@ function groupPart(sec, s) {
 }
 
 // backupBanner asks for a Backup once a Key is minted, until one is
-// taken from the app. Dismissed, it stays away until the app starts again.
+// taken from the app. Dismissed, it stays away until the next Key or until
+// the app starts again: backupDismissed is the KeysMinted it was dismissed at.
 function backupBanner(s) {
-  if (!s.BackupDue || ui.backupDismissed) return null;
+  if (!s.BackupDue || ui.backupDismissed === s.KeysMinted) return null;
   const run = async () => {
     if (ui.backingUp) return;
     ui.backingUp = true;
@@ -569,8 +570,8 @@ function backupBanner(s) {
       h("span", {}, "A new Key was made. Its share on this device is in no Backup yet, so losing this computer would lose it."),
       ui.backupProblem && h("span", { class: "error", role: "alert" }, ui.backupProblem.Message)),
     h("button", { class: "btn bright", type: "button", disabled: ui.backingUp, onclick: run }, "Back up now"),
-    h("button", { class: "dismiss", type: "button", "aria-label": "Dismiss until DeFiOS starts again", title: "Dismiss",
-      onclick: () => { ui.backupDismissed = true; render(true); } }, "\u00d7"));
+    h("button", { class: "dismiss", type: "button", "aria-label": "Dismiss until the next Key or until DeFiOS starts again", title: "Dismiss",
+      onclick: () => { ui.backupDismissed = s.KeysMinted; render(true); } }, "\u00d7"));
 }
 
 // editTarget picks the Group the Group parts edit. The choice is kept

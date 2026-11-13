@@ -94,3 +94,15 @@ func TestRevealWhileLockedSaysWhy(t *testing.T) {
 		t.Fatalf("reveal while locked: %+v", r)
 	}
 }
+
+// Each Key minted counts in the State, so a banner dismissed for one shows
+// again for the next.
+func TestEachMintedKeyCounts(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := served(t, r)
+	for i := 1; i <= 2; i++ {
+		ts := s.NewKey("ecdsa", 2, "")
+		r.node.mint(ts.Keygens[len(ts.Keygens)-1].SessionID)
+		eventually(t, s, func(st shell.State) bool { return st.BackupDue && st.KeysMinted == i })
+	}
+}

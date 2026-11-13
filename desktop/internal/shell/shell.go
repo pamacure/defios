@@ -149,6 +149,9 @@ type State struct {
 	// BackupDue: a Key was minted since the last Backup taken from the
 	// app, so the app shows "Back up now".
 	BackupDue bool
+	// KeysMinted counts the Keys minted since the app started, so a
+	// dismissed "Back up now" shows again for the next one.
+	KeysMinted int
 }
 
 // Restored is what follows a Restore.

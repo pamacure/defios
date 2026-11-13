@@ -270,12 +270,10 @@ func (s *Shell) keyMinted(served string, ev *node.SessionEvent) {
 	due := s.p.BackupDue
 	s.p.BackupDue = true
 	s.mu.Unlock()
-	if due {
-		return
+	if !due {
+		if err := s.persist(); err != nil {
+			s.fail(appProblem("prefs", err))
+		}
 	}
-	if err := s.persist(); err != nil {
-		s.fail(appProblem("prefs", err))
-		return
-	}
-	s.set(func(*State) {})
+	s.set(func(st *State) { st.KeysMinted++ })
 }
