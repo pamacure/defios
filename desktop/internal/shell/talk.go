@@ -35,6 +35,17 @@ type TalkNode interface {
 	ExcludeAgent(ctx context.Context, group, conv, handle string) (node.Inclusion, error)
 	Providers(ctx context.Context, group, conv string) ([]node.Provider, error)
 	Networks(ctx context.Context, group, conv string) ([]node.Network, error)
+	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)
+
+	// Sign Requests.
+	SignRequests(ctx context.Context, group string) ([]node.SignRequest, error)
+	InspectSignRequest(ctx context.Context, group, msgID string) (node.SignRequestDetail, error)
+	TransferTx(ctx context.Context, group, keyQuery string, tr node.Transfer) (node.TxSpec, error)
+	FillTransactions(ctx context.Context, group, keyQuery string, txs []node.TxSpec) (node.Filled, error)
+	ProposeSignRequest(ctx context.Context, group, keyQuery string, spec node.SignSpec) (node.Sent, error)
+	AcceptSignRequest(ctx context.Context, group, msgID string) (node.Answered, error)
+	RefuseSignRequest(ctx context.Context, group, msgID, reason string) (node.Answered, error)
+	BroadcastSignRequest(ctx context.Context, group, msgID string) (node.Broadcast, error)
 }
 
 // TalkState is everything the Talk page renders, for the served Group.
@@ -57,10 +68,14 @@ type TalkState struct {
 	Online            int
 	MajorityReachable bool
 
-	// The transcript: what was said, in order, with system lines among
-	// it; then the chains of agents running now.
+	// The transcript: what was said and the Sign Requests proposed, in
+	// order, with system lines among them; then the chains of agents
+	// running now.
 	Items []Item
 	Live  []LiveChain
+	// Focus is the Sign Request whose card to bring into view, as a
+	// notification about it was clicked; "" for none.
+	Focus string
 
 	// Handles are the agents' Handles a message here may mention.
 	Handles []string
@@ -68,9 +83,11 @@ type TalkState struct {
 	// The right column: the open Conversation's Key, nil for Group talk;
 	// every Agent Profile and whether it is included here; and the
 	// Providers and Networks this Conversation overrides.
-	Key       *KeyDetail
-	Agents    []Agent
-	Overrides []Override
+	// The open Key's Sign Requests are listed too.
+	Key          *KeyDetail
+	SignRequests []SignRow
+	Agents       []Agent
+	Overrides    []Override
 
 	// Refused is why the composer's message was not sent; it keeps what
 	// was typed.
@@ -147,6 +164,8 @@ type Item struct {
 	// Transcript: this device ran the chain that said it, and Transcript
 	// gives its run.
 	Transcript bool
+	// Sign is a Sign Request's card, for KindSign.
+	Sign *SignCard
 }
 
 // LiveChain is a chain of agents running here now.
@@ -231,10 +250,19 @@ type talk struct {
 	over      []Override
 	system    map[string][]Item // by Conversation
 	live      map[string][]*LiveChain
-	accepted  map[string]bool   // keygen Sessions this device accepted
-	signed    map[string]string // each Sign Request's last status seen
-	refused   *Problem
-	problem   *Problem // an action's
+	accepted  map[string]bool // keygen Sessions this device accepted
+	starting  int             // StartKeygen calls under way
+	// reqs are the Group's Sign Requests, in log order; cards are the
+	// open Conversation's, decoded, by msg_id.
+	reqs  []node.SignRequest
+	cards map[string]node.SignRequestDetail
+	focus string
+	// signVer counts what changed reqs or cards since they were read
+	// whole, so a read that overlapped one is read again, not applied.
+	signVer uint64
+	signed  map[string]string // each Sign Request's last status seen
+	refused *Problem
+	problem *Problem // an action's
 	// failed is why each read last failed, by what it reads; while one
 	// has, the next status change reads everything again, as a Group just
 	// formed has no replica until Raft starts.
@@ -261,6 +289,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 		t.handles, t.agents, t.over = nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
+		t.reqs, t.cards, t.focus = nil, map[string]node.SignRequestDetail{}, ""
 		t.refused, t.problem = nil, nil
 		t.failed = map[string]*Problem{}
 	}
@@ -339,10 +368,74 @@ func (t *talk) read(what string, err error) bool {
 	return true
 }
 
-// loadOpen reads the open Conversation: its talk and its right column.
+// loadOpen reads the open Conversation: its talk, its Sign Requests and
+// its right column.
 func (t *talk) loadOpen() {
 	t.loadMessages()
+	t.loadSigns()
 	t.loadSide()
+}
+
+// loadSigns reads the Group's Sign Requests again, and the open
+// Conversation's decoded for their cards.
+func (t *talk) loadSigns() {
+	a, ok := t.now()
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	ver := t.signVer
+	t.mu.Unlock()
+	t.loadMu.Lock()
+	reqs, err := a.n.SignRequests(t.ctx, a.group)
+	cards := map[string]node.SignRequestDetail{}
+	for _, r := range reqs {
+		if err != nil {
+			break
+		}
+		if r.Conversation == a.conv {
+			cards[r.MsgID], err = a.n.InspectSignRequest(t.ctx, a.group, r.MsgID)
+		}
+	}
+	t.loadMu.Unlock()
+	t.mu.Lock()
+	if !t.still(a) {
+		t.mu.Unlock()
+		return
+	}
+	if t.signVer != ver {
+		// An event or a card read came since: what was read may be older.
+		t.mu.Unlock()
+		go t.loadSigns()
+		return
+	}
+	if t.read("signs", err) {
+		t.reqs, t.cards = reqs, cards
+	}
+	t.mu.Unlock()
+	t.emit()
+}
+
+// loadCard reads Sign Request msgID's card again.
+func (t *talk) loadCard(msgID string) {
+	a, ok := t.now()
+	if !ok {
+		return
+	}
+	t.loadMu.Lock()
+	d, err := a.n.InspectSignRequest(t.ctx, a.group, msgID)
+	t.loadMu.Unlock()
+	t.mu.Lock()
+	if !t.still(a) {
+		t.mu.Unlock()
+		return
+	}
+	if t.read("signs", err) {
+		t.cards[msgID] = d
+		t.signVer++
+	}
+	t.mu.Unlock()
+	t.emit()
 }
 
 // loadMessages reads the open Conversation's talk again, queued messages
@@ -483,12 +576,14 @@ func (t *talk) snapshot() TalkState {
 		Seq: t.seq, Group: t.group,
 		Conversations: []Conversation{}, Keygens: []Keygen{}, Roster: []RosterNode{},
 		Live: []LiveChain{}, Handles: []string{}, Agents: []Agent{}, Overrides: []Override{},
+		SignRequests: []SignRow{},
 	}
 	if t.group == "" {
 		return st
 	}
-	st.Open, st.Refused, st.Problem = t.open, t.refused, t.problem
-	for _, what := range []string{"conversations", "messages", "side"} {
+	st.Open, st.Refused, st.Problem, st.Focus = t.open, t.refused, t.problem, t.focus
+	st.SignRequests = t.signRows()
+	for _, what := range []string{"conversations", "messages", "signs", "side"} {
 		if st.Problem == nil {
 			st.Problem = t.failed[what]
 		}
@@ -540,14 +635,31 @@ func (t *talk) keyDetail(k node.Key) *KeyDetail {
 	return d
 }
 
-// items are the open Conversation's messages in log order, queued ones
-// last, with its system lines merged in by time; t.mu is held.
+// items are the open Conversation's messages and Sign Requests in log
+// order, queued messages last, with its system lines merged in by time;
+// t.mu is held.
 func (t *talk) items() []Item {
 	sys := t.system[t.open]
-	out := make([]Item, 0, len(t.msgs)+len(sys))
-	i := 0
+	var cards []node.SignRequestDetail
+	for _, r := range t.reqs {
+		if d, ok := t.cards[r.MsgID]; ok && r.Conversation == t.open {
+			cards = append(cards, d)
+		}
+	}
+	logged := make([]Item, 0, len(t.msgs)+len(cards))
 	for _, m := range t.msgs {
-		it := t.item(m)
+		for len(cards) > 0 && (m.Queued || cards[0].Seq < m.Seq) {
+			logged = append(logged, t.signItem(cards[0]))
+			cards = cards[1:]
+		}
+		logged = append(logged, t.item(m))
+	}
+	for _, d := range cards {
+		logged = append(logged, t.signItem(d))
+	}
+	out := make([]Item, 0, len(logged)+len(sys))
+	i := 0
+	for _, it := range logged {
 		for i < len(sys) && sys[i].At.Before(it.At) {
 			out = append(out, sys[i])
 			i++
@@ -616,8 +728,18 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 		t.session(ev.Session.Session)
 		reload = t.loadConversations
 	case ev.SignRequest != nil && ev.SignRequest.Group == group:
-		t.signRequest(ev.SignRequest.Request)
+		r := ev.SignRequest.Request
+		t.signRequest(r)
+		t.setRequest(r)
 		reload = t.loadConversations
+		if r.Conversation == open {
+			reload = func() {
+				t.loadCard(r.MsgID)
+				t.loadConversations()
+			}
+		}
+	case ev.HookRun != nil && ev.HookRun.Group == group:
+		t.setRun(ev.HookRun.Run)
 	case ev.Chain != nil && ev.Chain.Group == group:
 		if t.chain(ev.Chain.Conversation, ev.Chain.Event) && ev.Chain.Conversation == open {
 			t.saidStale = true

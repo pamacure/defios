@@ -426,7 +426,7 @@ type rig struct {
 	keychain  *memKeychain
 	autostart *fakeAutostart
 	mu        sync.Mutex
-	notes     []string
+	notes     []shell.Notice
 	shell     *shell.Shell
 	// backupGroups are the Groups the Backup at backupFile holds.
 	backupGroups []string
@@ -483,11 +483,12 @@ func (r *rig) start(atLogin bool) *shell.Shell {
 		Prefs:     r.prefs,
 		Keychain:  r.keychain,
 		Autostart: r.autostart,
-		Notify: func(title, body string) {
+		Notify: func(n shell.Notice) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
-			r.notes = append(r.notes, title)
+			r.notes = append(r.notes, n)
 		},
+		HookGrace:  20 * time.Millisecond,
 		RetryEvery: 5 * time.Millisecond,
 	})
 	r.shell.Start(atLogin)
@@ -499,6 +500,13 @@ func (r *rig) notifications() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.notes)
+}
+
+// noticesNow are the notifications posted so far.
+func (r *rig) noticesNow() []shell.Notice {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]shell.Notice(nil), r.notes...)
 }
 
 // eventually waits for the Shell's state to satisfy ok.

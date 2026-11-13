@@ -5,10 +5,7 @@
 // it holds only what is being typed or is open on screen. UI text says
 // "device" for a Node.
 import { call, h } from "./dom.js";
-
-// hooks are where other pages plug in. The composer's "+" opens the Sign
-// Request form (#150); until then it does nothing.
-export const hooks = { signRequest: () => {} };
+import { openSignForm, signCard, signForm, signInit, statusChip } from "./sign.js";
 
 let ts = null; // the TalkState shown
 let mount = null; // the element the page draws into, while on screen
@@ -35,6 +32,7 @@ const tui = {
   // The transcript's scroll, kept as it scrolls: a redraw of the whole
   // app makes it anew.
   scroll: { top: 0, pinned: true },
+  focused: "", // the Sign Request whose card was last brought into view
 };
 
 // talkPage is the page, drawn into a new element; go opens another page.
@@ -120,7 +118,7 @@ function draw() {
   const caret = field ? [active.selectionStart, active.selectionEnd] : null;
   const focused = active === composer.input;
   mount.classList.toggle("about-open", tui.about);
-  mount.replaceChildren(left(), center(), right());
+  mount.replaceChildren(left(), center(), right(), signForm() ?? "");
   const tr = mount.querySelector(".transcript");
   const scroll = () => { if (tr.isConnected) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top; };
   if (tr) {
@@ -130,6 +128,7 @@ function draw() {
     queueMicrotask(scroll);
   }
   composer.update();
+  focusCard();
   const again = field && mount.querySelector(`[data-field="${field}"]`);
   if (again) {
     again.focus();
@@ -139,6 +138,26 @@ function draw() {
   } else if (!mount.contains(document.activeElement)) {
     mount.querySelector("[data-autofocus]")?.focus();
   }
+}
+
+// focusCard brings the card ts.Focus names into view, once, as a
+// notification about it was clicked.
+function focusCard() {
+  if (!ts.Focus || ts.Focus === tui.focused) return;
+  const el = mount.querySelector(`#card-${CSS.escape(ts.Focus)}`);
+  if (!el) return; // its card is not read yet
+  tui.focused = ts.Focus;
+  showCard(el);
+}
+
+// showCard scrolls the transcript to a card and marks it for a moment.
+function showCard(el) {
+  tui.scroll.pinned = false;
+  queueMicrotask(() => {
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1600);
+  });
 }
 
 // The left column: Group, then each Key, then Keys being made.
@@ -291,6 +310,7 @@ function transcript() {
 }
 
 function item(it) {
+  if (it.Kind === "sign") return signCard(it, tui.busy);
   if (it.Kind === "system") return h("div", { class: "sysline" }, h("span", {}, it.Text), h("time", {}, time(it.At)));
   const who = it.Side === "left" && h("span", { class: "who" },
     h("strong", {}, it.From),
@@ -374,7 +394,7 @@ function makeComposer() {
   const textarea = h("textarea", { class: "field", rows: 2, placeholder: "Write a message — @ to summon an agent", "aria-label": "Message" });
   const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
   const refusal = h("p", { class: "error refusal", role: "alert" });
-  const plus = h("button", { class: "btn plus", type: "button", "aria-label": "New Sign Request", title: "New Sign Request", onclick: () => hooks.signRequest() }, "+");
+  const plus = h("button", { class: "btn plus", type: "button", "aria-label": "New Sign Request", title: "New Sign Request", onclick: () => openSignForm() }, "+");
   const send = h("button", { class: "btn bright", type: "submit" }, "Send");
   // Stop cancels the chains of agents answering here; it sits by Send, not
   // in the output that grows above it.
@@ -487,6 +507,7 @@ function right() {
     ts.Key ? keyDetails(ts.Key) : h("section", {},
       h("h3", {}, "Group talk"),
       h("p", { class: "hint" }, "Talk with everyone in the Group. Each Key has a conversation of its own.")),
+    ts.Key && signRequests(),
     agents(),
     overrides());
 }
@@ -519,6 +540,25 @@ function keyDetails(k) {
     row("This device", h("div", { class: "value" }, k.Share ? "Holds a share" : "Holds no share")));
 }
 
+// signRequests lists this Key's Sign Requests, newest first; each scrolls
+// to its card.
+function signRequests() {
+  const rows = [...ts.SignRequests].reverse();
+  return h("section", {},
+    h("h3", {}, "Sign Requests"),
+    rows.length
+      ? h("div", { class: "signrows" }, rows.map((r) => h("button", {
+        class: "signrow", type: "button",
+        onclick: () => {
+          tui.about = false;
+          draw();
+          const el = mount.querySelector(`#card-${CSS.escape(r.MsgID)}`);
+          if (el) showCard(el);
+        },
+      }, h("span", { class: "text" }, r.Reason || "No reason"), statusChip(r.Status))))
+      : h("p", { class: "hint" }, "None yet. Propose one with + beside the message box."));
+}
+
 function agents() {
   const list = ts.Agents.length
     ? ts.Agents.map((a) => h("label", { class: "toggle" },
@@ -543,6 +583,8 @@ function overrides() {
           h("button", { class: "link", type: "button", onclick: () => nav(o.Kind === "provider" ? "agents" : "networks", { [o.Kind]: o.Alias, conversation: ts.Open }) }, "Edit"))))
       : h("p", { class: "hint" }, "Uses the Group's Providers and Networks."));
 }
+
+signInit({ ts: () => ts, act, draw, blocks: transcriptBlocks });
 
 document.addEventListener("click", (e) => {
   if (!e.target.isConnected) return; // a click that redrew the page

@@ -8,13 +8,16 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/node"
 )
 
-// stateEvent carries each new shell.State to the frontend, and
-// talkEvent each new shell.TalkState.
+// stateEvent carries each new shell.State to the frontend, talkEvent
+// each new shell.TalkState, and noticeEvent a clicked notification's
+// shell.Notice, to show the page it is about.
 const (
-	stateEvent = "shell:state"
-	talkEvent  = "talk:state"
+	stateEvent  = "shell:state"
+	talkEvent   = "talk:state"
+	noticeEvent = "app:notice"
 )
 
 // UI is the service the frontend calls, as main.UI.<Method>. Every method
@@ -38,6 +41,9 @@ func (u *UI) SetEditGroup(group string) shell.State       { return u.shell.SetEd
 func (u *UI) SetStartAtLogin(on bool) shell.State         { return u.shell.SetStartAtLogin(on) }
 func (u *UI) SetKeychain(on bool) shell.State             { return u.shell.SetKeychain(on) }
 func (u *UI) SetNotifications(on bool) shell.State        { return u.shell.SetNotifications(on) }
+func (u *UI) SetMessageNotifications(on bool) shell.State {
+	return u.shell.SetMessageNotifications(on)
+}
 
 // Onboarding.
 
@@ -71,6 +77,35 @@ func (u *UI) SetAgentIncluded(handle string, on bool) shell.TalkState {
 }
 
 func (u *UI) Transcript(msgID string) shell.TranscriptView { return u.shell.Transcript(msgID) }
+
+// Sign Requests.
+
+func (u *UI) AcceptSign(msgID string) shell.TalkState { return u.shell.AcceptSign(msgID) }
+func (u *UI) RefuseSign(msgID, reason string) shell.TalkState {
+	return u.shell.RefuseSign(msgID, reason)
+}
+func (u *UI) BroadcastSign(msgID string) shell.TalkState    { return u.shell.BroadcastSign(msgID) }
+func (u *UI) SignForm(conv string) shell.SignFormView       { return u.shell.SignForm(conv) }
+func (u *UI) FillSign(d shell.SignDraft) shell.SignFormView { return u.shell.FillSign(d) }
+func (u *UI) FocusSign(group, conv, msgID string) shell.TalkState {
+	return u.shell.FocusSign(group, conv, msgID)
+}
+func (u *UI) ProposeSign(conv, reason string, txs []node.TxSpec) shell.SignFormView {
+	return u.shell.ProposeSign(conv, reason, txs)
+}
+func (u *UI) SignJobRun(conv, chain, handle string) shell.TranscriptView {
+	return u.shell.SignJobRun(conv, chain, handle)
+}
+
+// opened shows the window on what clicked notice n is about: its
+// Conversation and card, while its Group is the one served.
+func (u *UI) opened(n shell.Notice) {
+	u.show()
+	if n.Group != "" {
+		u.shell.FocusSign(n.Group, n.Conversation, n.SignRequestID)
+	}
+	u.app.Event.Emit(noticeEvent, n)
+}
 
 // ChooseBackup asks for a Backup file with the OS's file dialog; "" when
 // none was chosen.

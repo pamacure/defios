@@ -295,3 +295,54 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
     box-shadow: -8px 0 24px rgba(21, 26, 31, 0.18);
   }
 }
+
+/* Sign Requests: the card in the transcript, the right column's list, and
+   the "+" form. */
+.msg.signmsg { width: min(560px, 92%); }
+.signcard { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 12px; font-size: 13px; transition: box-shadow .3s; }
+.msg.right .signcard { border-left-color: var(--line); border-right: 3px solid var(--accent); }
+.signmsg.flash .signcard { box-shadow: 0 0 0 3px var(--accent-bright); }
+.signcard header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.signcard .reason, .signform .reason { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.signcard .label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.signcard .txs { display: flex; flex-direction: column; gap: 8px; }
+.signcard .tx ul { margin: 0; padding: 6px 10px; list-style: none; background: var(--bg); border-radius: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.signcard .stances { display: flex; flex-direction: column; gap: 4px; }
+.signcard .stance { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.signcard .stance .who strong { color: var(--text-soft); font-weight: 600; }
+.signcard .stance .handle { color: var(--accent-strong); font-weight: 600; margin-left: 4px; }
+.signcard .stance .why { color: var(--text-soft); font-style: italic; flex-basis: 100%; padding-left: 16px; }
+.signcard .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.signcard .row > .btn { flex: none; min-width: 96px; }
+.signcard .refuse { display: flex; flex-direction: column; gap: 8px; }
+.signcard .refuse textarea, .signform textarea { height: auto; padding: 8px 10px; text-align: left; resize: vertical; font: inherit; }
+.warn-text { margin: 0; padding: 6px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-text); font-size: 12px; }
+.signcard .queued { color: var(--warn-text); }
+.signcard .receipts, .signcard .runs { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.signcard .receipt { display: flex; flex-direction: column; gap: 2px; }
+.signcard .receipt code { font-size: 12px; overflow-wrap: anywhere; user-select: all; }
+.signcard .run { display: flex; flex-direction: column; gap: 4px; }
+.signcard .job { display: flex; flex-direction: column; gap: 4px; }
+
+.signrows { display: flex; flex-direction: column; gap: 4px; }
+.signrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; text-align: left; background: none; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; font: inherit; font-size: 13px; color: var(--text); }
+.signrow:hover { background: var(--bg); }
+.signrow .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.modal-back { position: fixed; inset: 0; z-index: 20; background: rgba(21, 26, 31, 0.4); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--surface); border-radius: 12px; box-shadow: 0 16px 48px rgba(21, 26, 31, 0.25); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.modal header { display: flex; align-items: center; justify-content: space-between; }
+.modal h2 { margin: 0; font-size: 17px; }
+.modal .banner { margin: 0; }
+.signform .stack { display: flex; flex-direction: column; gap: 12px; }
+.signform label { display: flex; flex-direction: column; gap: 4px; color: var(--text-soft); font-size: 13px; }
+.signform .field { text-align: left; }
+.signform .field.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.signform .row { display: flex; gap: 12px; align-items: center; }
+.signform .row.end { justify-content: flex-end; gap: 8px; }
+.tx-fields { margin: 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.tx-fields legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
+.tx-review { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.tx-review dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
+.tx-review dt { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.tx-review dd { margin: 0; overflow-wrap: anywhere; }

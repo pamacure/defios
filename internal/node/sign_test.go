@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"defios.com/internal/identity"
+	"defios.com/internal/network"
 	"defios.com/internal/node"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -327,5 +328,18 @@ func TestARefusalQueuedInTheOutboxIsSeenAsThisNodesStance(t *testing.T) {
 	})
 	if ev.Request.Status != signreq.Open || len(ev.Request.Refusals) != 0 {
 		t.Fatalf("bob's event = %+v; want open, with the refusal not on the log yet", ev.Request)
+	}
+}
+
+// A Transfer is built on the Key's Network named, ready to fill.
+func TestATransferIsBuiltOnANetworkOfTheKeysConversation(t *testing.T) {
+	alice, _, key := keyed(t, ethNetwork, ethNetwork)
+	ctx := context.Background()
+	tx, err := alice.h.TransferTx(ctx, "alpha", key, node.Transfer{Network: "eth", To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "1000"})
+	if err != nil || tx.Network != "eth" || tx.Ethereum == nil {
+		t.Fatalf("transfer = %+v, %v", tx, err)
+	}
+	if _, err := alice.h.TransferTx(ctx, "alpha", key, node.Transfer{Network: "nope", To: "0x01", Amount: "1"}); !errors.Is(err, network.ErrUnknown) {
+		t.Fatalf("an unknown Network: %v; want network.ErrUnknown", err)
 	}
 }

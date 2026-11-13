@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -74,6 +75,7 @@ func run(dir string, atLogin bool) error {
 		return err
 	}
 	notifier := notifications.New()
+	var noticeSeq atomic.Uint64
 	ui := &UI{}
 	app := application.New(application.Options{
 		Name:        "DeFiOS",
@@ -129,8 +131,12 @@ func run(dir string, atLogin bool) error {
 		Prefs:     store,
 		Keychain:  osKeychain{},
 		Autostart: autostart{app: app, args: append(autostartArgs, loginFlag)},
-		Notify: func(title, body string) {
-			if err := notifier.SendNotification(notifications.NotificationOptions{ID: "defios-locked", Title: title, Body: body}); err != nil {
+		Notify: func(n shell.Notice) {
+			opts := notifications.NotificationOptions{
+				ID: fmt.Sprintf("defios-%d", noticeSeq.Add(1)), Title: n.Title, Body: n.Body,
+				Data: map[string]any{"group": n.Group, "conversation": n.Conversation, "signRequest": n.SignRequestID},
+			}
+			if err := notifier.SendNotification(opts); err != nil {
 				log.Printf("notification: %v", err)
 			}
 		},
@@ -141,6 +147,16 @@ func run(dir string, atLogin bool) error {
 		OnTalk: func(ts shell.TalkState) { app.Event.Emit(talkEvent, ts) },
 	})
 	ui.shell, ui.app, ui.win = sh, app, win
+
+	// Clicking a notification opens the app on what it is about.
+	notifier.OnNotificationResponse(func(r notifications.NotificationResult) {
+		if r.Error != nil {
+			log.Printf("notification: %v", r.Error)
+			return
+		}
+		data := func(k string) string { s, _ := r.Response.UserInfo[k].(string); return s }
+		ui.opened(shell.Notice{Group: data("group"), Conversation: data("conversation"), SignRequestID: data("signRequest")})
+	})
 
 	// Closing the window hides it; the Node keeps serving.
 	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {

@@ -551,5 +551,14 @@ document.addEventListener("keydown", (e) => {
 
 Events.On("shell:state", (ev) => apply(ev.data));
 Events.On("talk:state", (ev) => talkUpdate(ev.data));
+// A notification was clicked: show the page it is about. The Go side has
+// already opened its Conversation and card on Talk.
+Events.On("app:notice", (ev) => {
+  if (ev.data?.Group && state?.View === "served") {
+    ui.page = "talk";
+    ui.menuOpen = false;
+    render(true);
+  }
+});
 call("State").then(apply);
 call("Talk").then(talkUpdate);

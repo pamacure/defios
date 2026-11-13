@@ -5,15 +5,23 @@ import (
 	"time"
 
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/nodedir"
 )
 
 // formed is two apps, alice and bob, whose Nodes formed Group home on m
 // through onboarding, each landed on Talk.
 func formed(t *testing.T) (alice, bob *shell.Shell) {
 	t.Helper()
+	alice, bob, _, _ = formedAt(t)
+	return alice, bob
+}
+
+// formedAt is formed, with alice's and bob's Node directories.
+func formedAt(t *testing.T) (alice, bob *shell.Shell, ap, bp nodedir.Paths) {
+	t.Helper()
 	m := &mesh{addrs: map[string]string{}}
-	alice, _ = onboard(t, m, "alice")
-	bob, _ = onboard(t, m, "bob")
+	alice, ap = onboard(t, m, "alice")
+	bob, bp = onboard(t, m, "bob")
 	var st shell.State
 	eventually(t, alice, func(shell.State) bool {
 		st = alice.Discover()
@@ -24,7 +32,7 @@ func formed(t *testing.T) (alice, bob *shell.Shell) {
 	bob.Accept()
 	eventually(t, alice, view(shell.ViewServed))
 	eventually(t, bob, view(shell.ViewServed))
-	return alice, bob
+	return alice, bob, ap, bp
 }
 
 func hasText(text string) func(shell.TalkState) bool {

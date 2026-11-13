@@ -37,6 +37,7 @@ type fakeTalk struct {
 	cancelled []string // chains
 	accepted  []string // Session IDs
 	aborted   []string
+	sign      *fakeSign
 }
 
 func (n *fakeNode) tk() *fakeTalk {

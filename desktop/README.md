@@ -28,8 +28,8 @@ needs no GTK. Running needs the GTK 4 and WebKitGTK 6.0 runtime libraries
 
 ## What it keeps where
 
-The app's own preferences (start at login, keychain, notifications, the last
-served Group, the window size) are in `defios-desktop/prefs.json` under the OS
+The app's own preferences (start at login, keychain, notifications and the
+opt-in new-message notifications, the last served Group, the window size) are in `defios-desktop/prefs.json` under the OS
 user config directory, never in the Node directory, so no Backup carries them.
 With the keychain option on, the passphrase is in the OS keychain under the
 service `DeFiOS`, keyed by Node ID. Start at login registers the app with
@@ -54,6 +54,16 @@ needs checking by hand:
   Transcript. Quit the other device: the header turns red, the banner says
   messages will queue, and Drop removes a queued one. The window's look is
   checked on the PR.
+- Sign Requests, with two devices and a Key: "+" proposes one (Fill, review,
+  Propose) and its card shows on both, on the right only for the proposer.
+  The other device gets a notification; clicking it opens the card. Refuse
+  asks for a reason and warns a stance is final; Accept signs it, and
+  Broadcast lists a receipt beneath on both. With the other device quit,
+  Accept shows Queued until it is back. Add a Hook on `sign.request` with an
+  agent Job: the notification says "@agent is on it", and a failing Job
+  notifies again that the request needs you. Turn new-message notifications
+  on in the preferences file (`message_notifications`) until Settings shows
+  the toggle (#155): another device's message notifies.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
   then shows the lock screen once `serve` stops.
 - Close the window: the tray icon stays and the Node keeps serving. The tray's

@@ -76,7 +76,10 @@ type Deps struct {
 	Keychain     Keychain
 	Autostart    Autostart
 	// Notify posts an OS notification.
-	Notify func(title, body string)
+	Notify func(Notice)
+	// HookGrace is how long a new Sign Request's notification waits for a
+	// Hook of this device's to fire on it; zero is 2 seconds.
+	HookGrace time.Duration
 	// OnChange receives every new State, from any goroutine.
 	OnChange func(State)
 	// OnTalk receives every new TalkState, from any goroutine.
@@ -166,6 +169,8 @@ type Prefs struct {
 	StartAtLogin  bool
 	Keychain      bool
 	Notifications bool
+	// MessageNotifications also notifies of each new message.
+	MessageNotifications bool
 }
 
 // Shell is the app's state. Its methods are safe from any goroutine; each
@@ -203,7 +208,8 @@ type Shell struct {
 	cancel   context.CancelFunc
 	stopNode context.CancelFunc // ends the current Node's subscription
 
-	talk *talk
+	talk   *talk
+	notify *notifier
 }
 
 // New is a Shell that shows nothing until Start.
@@ -212,13 +218,18 @@ func New(d Deps) *Shell {
 		d.RetryEvery = 2 * time.Second
 	}
 	if d.Notify == nil {
-		d.Notify = func(string, string) {}
+		d.Notify = func(Notice) {}
+	}
+	if d.HookGrace <= 0 {
+		d.HookGrace = 2 * time.Second
 	}
 	if d.OnChange == nil {
 		d.OnChange = func(State) {}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Shell{d: d, ctx: ctx, cancel: cancel, st: State{View: ViewStarting}, talk: newTalk(ctx, d.OnTalk)}
+	s := &Shell{d: d, ctx: ctx, cancel: cancel, st: State{View: ViewStarting}, talk: newTalk(ctx, d.OnTalk)}
+	s.notify = newNotifier(s)
+	return s
 }
 
 // Start opens the Node and routes to the screen it calls for. atLogin
@@ -410,7 +421,7 @@ func (s *Shell) unlockAtLogin() {
 		}
 	}
 	if p.Notifications() {
-		s.d.Notify("DeFiOS is locked", "Open DeFiOS and enter your passphrase to bring this device online.")
+		s.d.Notify(Notice{Title: "DeFiOS is locked", Body: "Open DeFiOS and enter your passphrase to bring this device online."})
 	}
 }
 
@@ -418,6 +429,7 @@ func (s *Shell) unlockAtLogin() {
 func (s *Shell) follow(ctx context.Context, n Node, events <-chan node.Event) {
 	for ev := range events {
 		s.talk.event(n, ev)
+		s.notify.event(s.State().Served, n.NodeID(), ev)
 		// A proposal or an acceptance moves step 3 on, as the status does.
 		if ev.Status == nil && ev.Proposal == nil && ev.Accepted == nil {
 			continue
@@ -630,6 +642,15 @@ func (s *Shell) SetNotifications(on bool) State {
 	return s.State()
 }
 
+// SetMessageNotifications turns notifications of each new message on or
+// off; they are off by default.
+func (s *Shell) SetMessageNotifications(on bool) State {
+	s.op.Lock()
+	defer s.op.Unlock()
+	s.savePrefs(func(p *prefs.Prefs) { p.MessageNotifications = on })
+	return s.State()
+}
+
 // SetWindowSize keeps the window's size for the next start.
 func (s *Shell) SetWindowSize(width, height int) {
 	s.mu.Lock()
@@ -711,7 +732,7 @@ func (s *Shell) set(change func(*State)) {
 	if st.View != ViewForming {
 		st.Forming = nil
 	}
-	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications()}
+	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications(), MessageNotifications: s.p.MessageNotifications}
 	st.Seq++
 	out := *st
 	s.mu.Unlock()

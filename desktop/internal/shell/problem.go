@@ -7,14 +7,17 @@ import (
 	"strings"
 
 	"defios.com/internal/backup"
+	"defios.com/internal/chainfill"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/key"
+	"defios.com/internal/network"
 	"defios.com/internal/node"
 	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 	"defios.com/internal/vault"
 )
 
@@ -78,7 +81,56 @@ func problemOf(err error) *Problem {
 	case errors.As(err, &ident):
 		return &Problem{"identity", "The Vault opened, but its keys do not match this device's identity."}
 	}
+	if p := signProblem(err); p != nil {
+		return p
+	}
 	return talkProblem(err)
+}
+
+// signProblem maps the Sign Request errors: proposing, filling, answering
+// and broadcasting; nil for another error.
+func signProblem(err error) *Problem {
+	var failed *broadcastFailed
+	switch {
+	case errors.As(err, &failed):
+		var lines []string
+		for _, c := range failed.Chains {
+			if c.Error != "" {
+				lines = append(lines, fmt.Sprintf("%s: %s", c.Chain, c.Error))
+			}
+		}
+		return &Problem{"broadcast-failed", "Broadcasting failed on " + strings.Join(lines, "; ") + ". The other chains went out."}
+	case errors.Is(err, session.ErrAlreadyRefused):
+		return &Problem{"already-refused", "This device has already refused this Sign Request, and a stance is final."}
+	case errors.Is(err, session.ErrAlreadyAccepted):
+		return &Problem{"already-accepted", "This device has already accepted this Sign Request, and a stance is final."}
+	case errors.Is(err, session.ErrSignerSetFull):
+		return &Problem{"signer-set-full", "Enough devices have already accepted; this one is not needed to sign."}
+	case errors.Is(err, session.ErrUnsupported):
+		return &Problem{"unsupported", "This device can't sign with this Key's curve."}
+	case errors.Is(err, signreq.ErrUnknown):
+		return &Problem{"unknown-sign-request", "That Sign Request is not on this device."}
+	case errors.Is(err, signreq.ErrAmbiguous):
+		return &Problem{"ambiguous-sign-request", "That names more than one Sign Request."}
+	case errors.Is(err, signreq.ErrNotSigned):
+		return &Problem{"not-signed", "That Sign Request is not signed yet, so there is nothing to broadcast."}
+	case errors.Is(err, signreq.ErrCurveMismatch):
+		return &Problem{"curve-mismatch", "That Network's chain is not signed with this Key's curve."}
+	case errors.Is(err, signreq.ErrInvalid):
+		// The detail is shown as the library words it, not read.
+		return &Problem{"invalid-request", "That Sign Request is not valid (" + err.Error() + ")."}
+	case errors.Is(err, chainfill.ErrBitcoin):
+		return &Problem{"bitcoin-fill", "A Bitcoin transaction can't be filled: give its inputs and fee yourself, then propose without filling."}
+	case errors.Is(err, network.ErrNoChain):
+		return &Problem{"no-network", "This device has no Network for that chain. Add one on the Networks page."}
+	case errors.Is(err, network.ErrUnknown):
+		return &Problem{"unknown-network", "This device has no Network by that name."}
+	case errors.Is(err, network.ErrInvalid):
+		return &Problem{"invalid-network", "This device's Networks config is not valid (" + err.Error() + "). Fix it on the Networks page."}
+	case errors.Is(err, key.ErrAmbiguous):
+		return &Problem{"ambiguous-key", "That names more than one Key."}
+	}
+	return nil
 }
 
 // talkProblem maps the Talk page's errors: talk, the Outbox, Keys, keygen

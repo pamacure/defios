@@ -18,7 +18,7 @@ import (
 var ErrInsideNode = errors.New("prefs: the app's preferences would be written under the Node directory")
 
 // Prefs are the app's preferences. The zero value is the default: every
-// opt-in off, notifications on.
+// opt-in off, new-message notifications included; notifications on.
 type Prefs struct {
 	// StartAtLogin starts the app at login, hidden in the tray.
 	StartAtLogin bool `json:"start_at_login,omitempty"`
@@ -27,6 +27,8 @@ type Prefs struct {
 	Keychain bool `json:"keychain,omitempty"`
 	// MuteNotifications turns the app's notifications off.
 	MuteNotifications bool `json:"mute_notifications,omitempty"`
+	// MessageNotifications also notifies of each new message, an opt-in.
+	MessageNotifications bool `json:"message_notifications,omitempty"`
 	// LastGroup is the Group the app last served, which the lock screen
 	// preselects.
 	LastGroup string `json:"last_group,omitempty"`

@@ -92,8 +92,9 @@ func (t *talk) openConversation(conv string) TalkState {
 	if t.open != conv {
 		t.open, t.msgs, t.said, t.saidStale = conv, nil, nil, true
 		t.handles, t.agents, t.over = nil, nil, nil
+		t.cards = map[string]node.SignRequestDetail{}
 	}
-	t.refused, t.problem = nil, nil
+	t.refused, t.problem, t.focus = nil, nil, ""
 	t.mu.Unlock()
 	t.emit()
 	t.loadAll()
@@ -168,6 +169,14 @@ func (t *talk) transcript(msgID string) TranscriptView {
 }
 
 func (t *talk) newKey(curve string, threshold int, alias string) TalkState {
+	t.mu.Lock()
+	t.starting++
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.starting--
+		t.mu.Unlock()
+	}()
 	return t.act(func(a at) error {
 		sum, err := a.n.StartKeygen(t.ctx, a.group, node.Keygen{Curve: curve, T: threshold, Alias: alias})
 		if err == nil {
