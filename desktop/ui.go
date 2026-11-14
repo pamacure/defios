@@ -80,6 +80,22 @@ func (u *UI) SaveProvider(d shell.ProviderDraft) shell.AgentsView {
 }
 func (u *UI) RemoveProvider(alias string) shell.AgentsView { return u.shell.RemoveProvider(alias) }
 
+// Triggers: the edit-target Group's Jobs, Hooks and Schedules, and its
+// config.toml as text.
+
+func (u *UI) Triggers() shell.TriggersView                  { return u.shell.Triggers() }
+func (u *UI) SaveJob(d shell.JobDraft) shell.TriggersView   { return u.shell.SaveJob(d) }
+func (u *UI) DeleteJob(name string) shell.TriggersView      { return u.shell.DeleteJob(name) }
+func (u *UI) SaveHook(d shell.HookDraft) shell.TriggersView { return u.shell.SaveHook(d) }
+func (u *UI) DeleteHook(name string) shell.TriggersView     { return u.shell.DeleteHook(name) }
+func (u *UI) SaveSchedule(d shell.ScheduleDraft) shell.TriggersView {
+	return u.shell.SaveSchedule(d)
+}
+func (u *UI) DeleteSchedule(name string) shell.TriggersView { return u.shell.DeleteSchedule(name) }
+func (u *UI) RunJob(name string) shell.TriggersView         { return u.shell.RunJob(name) }
+func (u *UI) TriggersTOML() shell.TOMLView                  { return u.shell.TriggersTOML() }
+func (u *UI) SaveTriggersTOML(text string) shell.TOMLView   { return u.shell.SaveTriggersTOML(text) }
+
 // The shared Secret field: the edit-target Group's Secrets.
 
 func (u *UI) Secrets() shell.SecretsView                     { return u.shell.Secrets() }

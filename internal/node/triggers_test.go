@@ -143,7 +143,7 @@ func TestTriggerWritesKeepTheRestOfConfigTOML(t *testing.T) {
 }
 
 // A write the config loader would refuse writes nothing: a Trigger naming
-// no Job, a Job a Trigger still names, an agent Job in Group-level talk by
+// no Job, an agent Job in Group-level talk by
 // an agent not included there, a name already defined or not defined.
 func TestTriggerWritesAreValidated(t *testing.T) {
 	p, h := triggerNode(t)
@@ -159,7 +159,6 @@ func TestTriggerWritesAreValidated(t *testing.T) {
 	invalid("a Hook naming no Job", h.AddHook(ctx, "alpha", "x", config.Hook{Jobs: []string{"ghost"}}))
 	invalid("a Schedule naming no Job", h.AddSchedule(ctx, "alpha", "x", config.Schedule{Cron: "0 9 * * *", Jobs: []string{"ghost"}}))
 	invalid("a Schedule with no time", h.AddSchedule(ctx, "alpha", "x", config.Schedule{Jobs: []string{"ping"}}))
-	invalid("deleting a Job a Hook names", h.DeleteJob(ctx, "alpha", "ping"))
 	invalid("a Job of two kinds", h.AddJob(ctx, "alpha", "x", config.Job{Exec: []string{"true"}, Webhook: "https://x.example"}))
 	invalid("a bad name", h.AddJob(ctx, "alpha", "Bad Name", config.Job{Exec: []string{"true"}}))
 	invalid("an agent Job with a malformed Handle", h.AddJob(ctx, "alpha", "x", config.Job{Agent: "Not A Handle"}))
@@ -260,5 +259,27 @@ func TestRunJobNeedsTheGroupServed(t *testing.T) {
 	_, h := triggerNode(t)
 	if _, err := h.RunJob(context.Background(), "alpha", "ping", nil); !errors.Is(err, node.ErrNotServed) {
 		t.Fatalf("RunJob with nothing served: %v; want ErrNotServed", err)
+	}
+}
+
+// Deleting a Job a Trigger runs is refused naming every Hook and Schedule
+// that runs it, and writes nothing.
+func TestDeletingAJobInUseNamesItsTriggers(t *testing.T) {
+	p, h := triggerNode(t)
+	ctx := context.Background()
+	if err := h.AddHook(ctx, "alpha", "requests", config.Hook{Events: []string{"sign.request"}, Jobs: []string{"notify", "ping"}}); err != nil {
+		t.Fatal(err)
+	}
+	before := readConfig(t, p)
+
+	var inUse *node.JobInUseError
+	if err := h.DeleteJob(ctx, "alpha", "ping"); !errors.As(err, &inUse) {
+		t.Fatalf("deleting ping: %v; want JobInUseError", err)
+	}
+	if inUse.Job != "ping" || !reflect.DeepEqual(inUse.Hooks, []string{"everything", "requests"}) || !reflect.DeepEqual(inUse.Schedules, []string{"launch"}) {
+		t.Fatalf("in use: %+v", inUse)
+	}
+	if got := readConfig(t, p); got != before {
+		t.Fatalf("a refused delete changed config.toml:\n%s", got)
 	}
 }

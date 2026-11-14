@@ -87,6 +87,9 @@ func problemOf(err error) *Problem {
 	if p := agentsProblem(err); p != nil {
 		return p
 	}
+	if p := triggersProblem(err); p != nil {
+		return p
+	}
 	return talkProblem(err)
 }
 

@@ -462,7 +462,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .backupbanner .dismiss { flex: none; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
 .backupbanner .dismiss:hover { background: rgba(0, 0, 0, 0.08); }
 .vault h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text); }
-.vault .notice.inline { margin: 0 0 12px; }
+.vault .notice.inline, .triggers .notice.inline { margin: 0 0 12px; }
 .vsec + .vsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
 .vsec > .hint { margin: -4px 0 12px; max-width: 640px; }
 .vrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -491,3 +491,28 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .pinging { display: flex; align-items: center; gap: 12px; }
 .pinging .progress { width: 120px; flex: none; }
 .pinging p { margin: 0; }
+
+/* The Triggers page */
+.trighead { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 4px; }
+.trighead .hint { flex: 1; max-width: 640px; }
+.trighead .btn { flex: none; }
+.tsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.tsec h3, .tomledit h3, .triggers .pform.new h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.tsec > .hint { margin: 0 0 12px; max-width: 640px; }
+.triggers .stack { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.triggers .header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.triggers .header .secretfield { grid-column: 1 / -1; }
+.triggers .jobpick { display: flex; align-items: center; gap: 8px; }
+.triggers .jobpick .hint { flex: none; width: 18px; }
+.triggers .events { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 12px; }
+.triggers .events .check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.triggers .events input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+.triggers .ranline { padding: 0 12px 10px; }
+.triggers .prow > .link { align-self: center; }
+.triggers .error .btn { margin-top: 6px; }
+.tomledit { display: flex; flex-direction: column; gap: 10px; }
+.tomledit .tomlarea { max-width: none; min-height: 360px; }
+@media (max-width: 860px) {
+  .trighead { flex-direction: column; }
+  .triggers .header { grid-template-columns: minmax(0, 1fr); }
+}

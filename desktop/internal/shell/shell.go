@@ -40,6 +40,7 @@ type Node interface {
 	SettingsNode
 	AgentsNode
 	VaultNode
+	TriggersNode
 }
 
 // PrefStore loads and saves the app's preferences.

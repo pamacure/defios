@@ -399,6 +399,16 @@ func ValidateEvent(ev string) error {
 	return nil
 }
 
+// Events are every event name a Hook may filter on: the COSL message
+// types, then each Sign Request status as request.<status>.
+func Events() []string {
+	out := cosl.TypeNames()
+	for _, st := range signreq.Statuses {
+		out = append(out, RequestEventPrefix+st)
+	}
+	return out
+}
+
 // DefaultJobs are the Jobs a new Group's config.toml is written with, and
 // no Trigger runs them until the operator writes one that does: sign_accept
 // and sign_refuse, which take this Node's stance on the Sign Request the

@@ -116,5 +116,6 @@ made up later.
   2xx response succeeds. 5xx responses and dropped connections are retried up
   to 3 times with backoff, 4xx is not.
 - **CLI.** `hook list`, `schedule list` (with next firing) and
-  `job run <name> [--event file.json]`. Definitions are edited in
-  `config.toml` only. The stream gains `trigger.fire` and `job.end`.
+  `job run <name> [--event file.json]`. Definitions live in
+  `config.toml`; the CLI does not write them. A front end writes them
+  through internal/node (ADR 0034), one table at a time, or the file whole. The stream gains `trigger.fire` and `job.end`.

@@ -6,16 +6,18 @@ import { agentsDevicePart, agentsGroupPart, agentsLoad, agentsOpen, agentsReady,
 import { call, h, icon } from "./dom.js";
 import { settingsLoad, settingsPart, settingsReady, settingsRefresh } from "./settings.js";
 import { talkPage, talkReady, talkUpdate } from "./talk.js";
+import { triggersGroupPart, triggersLoad, triggersReady, triggersRefresh } from "./triggers.js";
 import { backupNow, vaultDevicePart, vaultGroupPart, vaultLoad, vaultReady, vaultRefresh } from "./vault.js";
 
 const SECTIONS = [
   { id: "talk", label: "Talk", issue: 149 },
   { id: "vault", label: "Vault", issue: 152 },
   { id: "agents", label: "Agents", issue: 151 },
-  { id: "plugins", label: "Plugins", issue: 153 },
-  { id: "triggers", label: "Triggers", issue: 154 },
-  { id: "networks", label: "Networks", issue: 155 },
+  { id: "plugins", label: "Plugins", issue: 154 },
+  { id: "triggers", label: "Triggers", issue: 153 },
+  { id: "networks", label: "Networks", issue: 154 },
 ];
+const GROUP_ONLY = new Set(["triggers"]);
 const SETTINGS = { id: "settings", label: "Settings", issue: 155 };
 
 // What each page with content needs read before it shows: ready, whether
@@ -27,6 +29,7 @@ const LOADS = {
   talk: { ready: talkReady, load: loadTalk, refresh: () => {} },
   agents: { ready: agentsReady, load: agentsLoad, refresh: agentsRefresh },
   vault: { ready: vaultReady, load: vaultLoad, refresh: vaultRefresh },
+  triggers: { ready: triggersReady, load: triggersLoad, refresh: triggersRefresh },
   settings: { ready: settingsReady, load: settingsLoad, refresh: settingsRefresh },
 };
 // The loads the gate waits on, by page and Group: "loading" until done,
@@ -603,7 +606,8 @@ function page(s) {
     h("h1", {}, sec.label),
     s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
     backupBanner(s),
-    h("section", { class: "part", "aria-label": "This Device" },
+    // Triggers are the Group's only: they have no This Device part.
+    !GROUP_ONLY.has(sec.id) && h("section", { class: "part", "aria-label": "This Device" },
       h("header", {}, h("h2", {}, "This Device")),
       h("div", { class: "body" }, nodePart(sec, s))),
     h("section", { class: "part", "aria-label": "Group" },
@@ -628,6 +632,7 @@ function groupPart(sec, s) {
     case "settings": return settingsPart();
     case "agents": return agentsGroupPart();
     case "vault": return vaultGroupPart();
+    case "triggers": return triggersGroupPart();
   }
   return h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`);
 }

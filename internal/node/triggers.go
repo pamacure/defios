@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"defios.com/internal/config"
@@ -29,6 +30,30 @@ var (
 	// not define.
 	ErrNoJob = serve.ErrNoJob
 )
+
+// JobInUseError is a DeleteJob refused because Triggers still run the
+// Job: the Hooks and Schedules that do, by name.
+type JobInUseError struct {
+	Job              string
+	Hooks, Schedules []string
+}
+
+func (e *JobInUseError) Error() string {
+	return fmt.Sprintf("node: Job %s is run by %s", e.Job, strings.Join(e.Triggers(), ", "))
+}
+
+// Triggers are the Hooks and Schedules that run the Job, as "Hook <name>"
+// and "Schedule <name>".
+func (e *JobInUseError) Triggers() []string {
+	var by []string
+	for _, n := range e.Hooks {
+		by = append(by, "Hook "+n)
+	}
+	for _, n := range e.Schedules {
+		by = append(by, "Schedule "+n)
+	}
+	return by
+}
 
 // Job is one Job of a Group's config.toml (ADR 0032).
 type Job struct {
@@ -121,8 +146,27 @@ func (h *Host) EditJob(ctx context.Context, group, name string, j config.Job) er
 	return h.setEntry(group, config.TableJobs, name, j, true)
 }
 
-// DeleteJob removes Job name, which no Trigger may still run.
+// DeleteJob removes Job name, which no Trigger may still run: one that
+// does is a JobInUseError.
 func (h *Host) DeleteJob(ctx context.Context, group, name string) error {
+	c, err := h.groupConfig(group)
+	if err != nil {
+		return err
+	}
+	inUse := &JobInUseError{Job: name}
+	for _, n := range slices.Sorted(maps.Keys(c.Hooks)) {
+		if slices.Contains(c.Hooks[n].Jobs, name) {
+			inUse.Hooks = append(inUse.Hooks, n)
+		}
+	}
+	for _, n := range slices.Sorted(maps.Keys(c.Schedules)) {
+		if slices.Contains(c.Schedules[n].Jobs, name) {
+			inUse.Schedules = append(inUse.Schedules, n)
+		}
+	}
+	if len(inUse.Hooks)+len(inUse.Schedules) > 0 {
+		return inUse
+	}
 	return h.setEntry(group, config.TableJobs, name, nil, true)
 }
 

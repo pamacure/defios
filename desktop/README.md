@@ -94,6 +94,15 @@ needs checking by hand:
   it; Reveal asks for the passphrase each time and shows nothing for a
   wrong one. A Secret set through "New Secret…" on the Agents page lists
   here as In the Vault.
+- Triggers: add an exec Job, a webhook Job whose URL is a Secret, a Hook
+  on `sign.request` running both, and a Schedule; `defios job list`,
+  `hook list` and `schedule list` show the same, and the Schedule shows its
+  next firing. Run now on the exec Job: Talk shows "Job … finished". Delete
+  a Job a Hook runs: it names the Hook and nothing changes. In Edit TOML,
+  write a Hook as an inline table and save, then edit it in its form: it
+  says to use Edit TOML and opens there at it. Save text that doesn't load:
+  the error shows and nothing changes. Choose a Group that is not online:
+  Run now is disabled and says why.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
   then shows the lock screen once `serve` stops.
 - Close the window: the tray icon stays and the Node keeps serving. The tray's

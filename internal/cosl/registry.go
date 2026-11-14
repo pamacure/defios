@@ -6,6 +6,7 @@ package cosl
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 
@@ -69,6 +70,16 @@ func TypeName(id uint32) string {
 		return k.name
 	}
 	return fmt.Sprintf("unknown(%d)", id)
+}
+
+// TypeNames are the registry's names, sorted.
+func TypeNames() []string {
+	names := make([]string, 0, len(registry))
+	for _, k := range registry {
+		names = append(names, k.name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // TypeByName resolves a registry name to its id.
