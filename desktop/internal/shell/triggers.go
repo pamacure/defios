@@ -438,9 +438,10 @@ func secretName(ref string) (string, bool) {
 	return name, ok && name != ""
 }
 
-func orEmpty[T ~[]string](list T) []string {
+// orEmpty is list, or an empty one for nil, so the frontend gets [].
+func orEmpty[T any](list []T) []T {
 	if list == nil {
-		return []string{}
+		return []T{}
 	}
 	return list
 }

@@ -37,6 +37,14 @@ export const triggersGroupPart = () => mount;
 // triggersReady: the view for s.EditGroup is loaded, as served or not.
 export const triggersReady = (s) => !!tv && group === s.EditGroup && tv.Served === s.EditGroupServed;
 
+// triggersOpenTOML opens Edit TOML, as from the Networks page when the
+// config.toml does not load: now if the page is loaded, else once it is.
+let tomlWanted = false;
+export function triggersOpenTOML() {
+  if (tv && !loading) openTOML("");
+  else tomlWanted = true;
+}
+
 export function triggersLoad(s) {
   if (triggersReady(s)) return Promise.resolve();
   if (loading === s.EditGroup) return pending;
@@ -75,6 +83,10 @@ async function load(g) {
   group = g;
   tv = next;
   draw();
+  if (tomlWanted) {
+    tomlWanted = false;
+    openTOML("");
+  }
 }
 
 // act calls method; on success the form closes and done says what it did.

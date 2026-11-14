@@ -96,6 +96,24 @@ func (u *UI) RunJob(name string) shell.TriggersView         { return u.shell.Run
 func (u *UI) TriggersTOML() shell.TOMLView                  { return u.shell.TriggersTOML() }
 func (u *UI) SaveTriggersTOML(text string) shell.TOMLView   { return u.shell.SaveTriggersTOML(text) }
 
+// Plugins: this device's Plugins, each install or update staged for its
+// preview before CommitPlugins.
+
+func (u *UI) Plugins() shell.PluginsView { return u.shell.Plugins() }
+func (u *UI) StagePluginInstall(source string) shell.PluginsView {
+	return u.shell.StagePluginInstall(source)
+}
+func (u *UI) StagePluginUpdate(name string) shell.PluginsView { return u.shell.StagePluginUpdate(name) }
+func (u *UI) CommitPlugins(id uint64) shell.PluginsView       { return u.shell.CommitPlugins(id) }
+func (u *UI) CancelPlugins() shell.PluginsView                { return u.shell.CancelPlugins() }
+func (u *UI) RemovePlugin(name string) shell.PluginsView      { return u.shell.RemovePlugin(name) }
+
+// Networks: the edit-target Group's Networks.
+
+func (u *UI) Networks() shell.NetworksView                        { return u.shell.Networks() }
+func (u *UI) SaveNetwork(d shell.NetworkDraft) shell.NetworksView { return u.shell.SaveNetwork(d) }
+func (u *UI) RemoveNetwork(alias string) shell.NetworksView       { return u.shell.RemoveNetwork(alias) }
+
 // The shared Secret field: the edit-target Group's Secrets.
 
 func (u *UI) Secrets() shell.SecretsView                     { return u.shell.Secrets() }

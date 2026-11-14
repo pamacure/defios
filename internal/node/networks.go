@@ -2,13 +2,13 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 
 	"defios.com/internal/config"
+	"defios.com/internal/key"
 	"defios.com/internal/network"
 )
 
@@ -73,7 +73,7 @@ func (e NetworkEdit) apply(n *network.Network) {
 // Conversation conv with its tables over the Group's, by alias. The Group
 // need not be served.
 func (h *Host) Networks(ctx context.Context, group, conv string) ([]Network, error) {
-	e, err := h.loadConfig(group, conv)
+	e, err := h.networkConfig(group, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +157,9 @@ func (h *Host) RemoveNetwork(ctx context.Context, group, conv, alias string) err
 	})
 }
 
-// ConfigError: the config.toml a change would edit does not load as it
-// is, so nothing was written; fix the file first.
+// ConfigError: the config.toml the Networks are read from, or a change
+// would edit, does not load as it is, so nothing was listed or written;
+// fix the file first.
 type ConfigError struct{ Err error }
 
 func (e *ConfigError) Error() string { return e.Err.Error() }
@@ -170,10 +171,8 @@ func (e *ConfigError) Unwrap() error { return e.Err }
 // and those in force before it. A config whose Networks do not load as
 // they are is a ConfigError.
 func (h *Host) writeNetworks(group, conv string, change func(own, inForce map[string]network.Network) error) error {
-	e, err := h.loadConfig(group, conv)
-	if errors.Is(err, network.ErrInvalid) {
-		return &ConfigError{Err: err}
-	} else if err != nil {
+	e, err := h.networkConfig(group, conv)
+	if err != nil {
 		return err
 	}
 	if conv == GroupTalk {
@@ -204,6 +203,28 @@ func (h *Host) writeNetworks(group, conv string, change func(own, inForce map[st
 		}
 		return nil
 	})
+}
+
+// networkConfig is loadConfig for the Networks: a config.toml that does
+// not load, as TOML or with Networks that are not valid, is a ConfigError,
+// told apart from an unknown Group or Conversation.
+func (h *Host) networkConfig(group, conv string) (config.Effective, error) {
+	if err := h.knownGroup(group); err != nil {
+		return config.Effective{}, err
+	}
+	var keys []key.Key
+	if conv != GroupTalk {
+		var err error
+		if _, keys, err = h.workspace(group, conv); err != nil {
+			return config.Effective{}, err
+		}
+	}
+	id, _ := conversationID(conv)
+	e, err := config.Load(h.p, group, id, keys)
+	if err != nil {
+		return config.Effective{}, &ConfigError{Err: err}
+	}
+	return e, nil
 }
 
 func networkOf(n network.Network) Network {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -42,6 +43,12 @@ var (
 	solanaClusters  = []string{"mainnet-beta", "devnet", "testnet", "localnet"}
 	base58          = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 )
+
+// BitcoinNetworks are the networks a bitcoin Network may name.
+func BitcoinNetworks() []string { return slices.Clone(bitcoinNetworks) }
+
+// SolanaClusters are the clusters a solana Network may name.
+func SolanaClusters() []string { return slices.Clone(solanaClusters) }
 
 // Network is one [networks.<alias>] table: a type, that type's identity
 // fields, and the RPC endpoints, each a plain URL or a "$NAME" Secret

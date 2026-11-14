@@ -41,6 +41,8 @@ type Node interface {
 	AgentsNode
 	VaultNode
 	TriggersNode
+	PluginsNode
+	NetworksNode
 }
 
 // PrefStore loads and saves the app's preferences.
@@ -233,6 +235,8 @@ type Shell struct {
 
 	talk   *talk
 	notify *notifier
+	// plugins is the Plugin install or update the Plugins page previews.
+	plugins pluginStages
 }
 
 // New is a Shell that shows nothing until Start.
@@ -790,6 +794,7 @@ func (s *Shell) Close() {
 	defer s.op.Unlock()
 	// Stop following first, so the Lock below routes nothing.
 	s.cancel()
+	s.plugins.drop()
 	if n := s.node(); n != nil {
 		if err := n.Lock(); err != nil {
 			s.fail(problemOf(err))

@@ -516,3 +516,41 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
   .trighead { flex-direction: column; }
   .triggers .header { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* The Plugins page */
+.plugins .plinstall { margin-bottom: 18px; }
+.plugins .inline { display: flex; gap: 8px; }
+.plugins .inline .field { flex: 1; min-width: 0; }
+.plugins .inline .btn { flex: none; height: 40px; }
+.field.mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 13px; }
+.plpreview { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; padding: 14px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-wash); }
+.plpreview h3 { margin: 0; }
+.plpreview .provider { background: var(--surface); }
+.pldetail { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 2px; }
+.pldetail > p { margin: 0 0 4px; }
+.pldetail h4 { margin: 10px 0 4px; }
+.pldetail h4:first-of-type { margin-top: 2px; }
+.plitems { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.plitems li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; font-size: 13px; overflow-wrap: anywhere; }
+.plitems li > code { color: var(--text); }
+.plugins .fcell > .btn.start { align-self: flex-start; }
+.plitems code.cmd { font-size: 12px; }
+.pldetail details { margin-top: 8px; font-size: 13px; }
+.pldetail summary { cursor: pointer; color: var(--text); }
+.diff { margin: 6px 0 0; padding: 8px 10px; max-height: 280px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; line-height: 1.45; white-space: pre; }
+.plugins .notice.inline, .plerr { margin: 0 12px 10px; }
+.plerr .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.plugins .provider > .warning { margin: 0 12px 12px; }
+.plugins .prow > .link { align-self: center; }
+
+/* The Networks page */
+.networks .stack { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.networks .endpoint { display: flex; align-items: flex-start; gap: 8px; }
+.networks .endpoint > .hint { flex: none; width: 18px; padding-top: 12px; }
+.networks .endpoint > .stack { flex: 1; }
+.networks .endpoint > .link { align-self: center; }
+.networks .prow > .link { align-self: center; }
+.networks .pform.new h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+@media (max-width: 860px) {
+  .plugins .inline { flex-direction: column; }
+}

@@ -156,3 +156,27 @@ func TestANetworkChangeToABrokenConfigIsAConfigError(t *testing.T) {
 		t.Fatalf("config.toml rewritten:\n%s", after)
 	}
 }
+
+// A config.toml that is not TOML at all is as much a ConfigError, for a
+// list as for a change.
+func TestNetworksOfAConfigThatDoesNotParseAreAConfigError(t *testing.T) {
+	p := nodeDir(t)
+	h, err := node.Open(p, node.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.GroupConfigFile("alpha"), []byte("not = [toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	var cfgErr *node.ConfigError
+	if _, err := h.Networks(ctx, "alpha", node.GroupTalk); !errors.As(err, &cfgErr) {
+		t.Fatalf("list: %v; want a ConfigError", err)
+	}
+	if _, err := h.AddNetwork(ctx, "alpha", node.GroupTalk, "eth", node.NetworkEdit{Type: ptr("ethereum"), ChainID: ptr(uint64(1))}); !errors.As(err, &cfgErr) {
+		t.Fatalf("add: %v; want a ConfigError", err)
+	}
+	if _, err := h.Networks(ctx, "nope", node.GroupTalk); errors.As(err, &cfgErr) || !errors.Is(err, node.ErrUnknownGroup) {
+		t.Fatalf("an unknown Group: %v; want ErrUnknownGroup, no ConfigError", err)
+	}
+}

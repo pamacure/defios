@@ -1,7 +1,6 @@
 package shell_test
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -12,8 +11,6 @@ import (
 
 	"defios.com/desktop/internal/shell"
 	"defios.com/internal/base58"
-	"defios.com/internal/node"
-	"defios.com/internal/nodedir"
 )
 
 // solanaRPC is a Solana cluster's RPC endpoint as Fill and Broadcast use
@@ -48,16 +45,19 @@ func (s *solanaRPC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
 }
 
-// addSolana gives the Node at p Network "sol", a localnet whose RPC is url.
-func addSolana(t *testing.T, p nodedir.Paths, url string) {
+// addSolana gives s Network "sol", a localnet whose RPC is url, from the
+// Networks page; with secret, url is kept as that Secret, which it names.
+func addSolana(t *testing.T, s *shell.Shell, url, secret string) {
 	t.Helper()
-	h, err := node.Open(p, node.Options{Getenv: func(string) string { return "" }})
-	if err != nil {
-		t.Fatal(err)
+	rpc := shell.RPCURL{URL: url}
+	if secret != "" {
+		if sv := s.NewSecret(secret, url); sv.Problem != nil {
+			t.Fatalf("new Secret: %+v", sv.Problem)
+		}
+		rpc = shell.RPCURL{Secret: secret}
 	}
-	typ, cluster := "solana", "localnet"
-	if _, err := h.AddNetwork(context.Background(), "home", node.GroupTalk, "sol", node.NetworkEdit{Type: &typ, Cluster: &cluster, RPCURLs: []string{url}}); err != nil {
-		t.Fatal(err)
+	if v := s.SaveNetwork(shell.NetworkDraft{New: true, Alias: "sol", Type: "solana", Cluster: "localnet", RPCURLs: []shell.RPCURL{rpc}}); v.Problem != nil || !v.Saved {
+		t.Fatalf("add Network: %+v (field %q)", v.Problem, v.Field)
 	}
 }
 
@@ -68,9 +68,9 @@ func TestTwoDevicesProposeAcceptSignAndBroadcastASignRequest(t *testing.T) {
 	rpc := &solanaRPC{}
 	srv := httptest.NewServer(rpc)
 	defer srv.Close()
-	alice, bob, ap, bp := formedAt(t)
-	addSolana(t, ap, srv.URL)
-	addSolana(t, bp, srv.URL)
+	alice, bob := formed(t)
+	addSolana(t, alice, srv.URL, "SOLANA_RPC")
+	addSolana(t, bob, srv.URL, "")
 	ready := func(ts shell.TalkState) bool { return ts.MajorityReachable && len(ts.Conversations) == 1 }
 	talkWithin(t, alice, 20*time.Second, ready)
 	talkWithin(t, bob, 20*time.Second, ready)

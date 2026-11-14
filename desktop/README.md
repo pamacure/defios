@@ -103,6 +103,17 @@ needs checking by hand:
   says to use Edit TOML and opens there at it. Save text that doesn't load:
   the error shows and nothing changes. Choose a Group that is not online:
   Run now is disabled and says why.
+- Plugins: install one from a local path: the preview shows its Skills
+  and MCP Servers (each command and the variables it asks for) before
+  Install, and once installed its Skills are grantable on the Agents page.
+  Grant one, then Remove: refused, naming the agent, with a link to it.
+  Install from a git URL@ref, then Update and Update all: each previews
+  first, and one already current says so.
+- Networks: add one with its RPC URL a Secret through "New Secret…", and
+  `defios network list` shows it; Fill on a Sign Request uses it. Choose a
+  Group that is not online: the note says changes apply the next time it
+  is. Break config.toml by hand: the page says it does not load, apart from
+  a refused edit, and links to Edit TOML.
 - Start the app while `defios serve` runs: it says DeFiOS is running elsewhere,
   then shows the lock screen once `serve` stops.
 - Close the window: the tray icon stays and the Node keeps serving. The tray's

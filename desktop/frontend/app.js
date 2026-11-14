@@ -4,9 +4,11 @@
 import { Events } from "/wails/runtime.js";
 import { agentsDevicePart, agentsGroupPart, agentsLoad, agentsOpen, agentsReady, agentsRefresh } from "./agents.js";
 import { call, h, icon } from "./dom.js";
+import { networksGroupPart, networksLoad, networksReady, networksRefresh } from "./networks.js";
+import { pluginsDevicePart, pluginsLoad, pluginsReady, pluginsRefresh } from "./plugins.js";
 import { settingsLoad, settingsPart, settingsReady, settingsRefresh } from "./settings.js";
 import { talkPage, talkReady, talkUpdate } from "./talk.js";
-import { triggersGroupPart, triggersLoad, triggersReady, triggersRefresh } from "./triggers.js";
+import { triggersGroupPart, triggersLoad, triggersOpenTOML, triggersReady, triggersRefresh } from "./triggers.js";
 import { backupNow, vaultDevicePart, vaultGroupPart, vaultLoad, vaultReady, vaultRefresh } from "./vault.js";
 
 const SECTIONS = [
@@ -17,7 +19,9 @@ const SECTIONS = [
   { id: "triggers", label: "Triggers", issue: 153 },
   { id: "networks", label: "Networks", issue: 154 },
 ];
-const GROUP_ONLY = new Set(["triggers"]);
+// Triggers and Networks are the Group's only, Plugins this device's only.
+const GROUP_ONLY = new Set(["triggers", "networks"]);
+const DEVICE_ONLY = new Set(["plugins"]);
 const SETTINGS = { id: "settings", label: "Settings", issue: 155 };
 
 // What each page with content needs read before it shows: ready, whether
@@ -30,6 +34,8 @@ const LOADS = {
   agents: { ready: agentsReady, load: agentsLoad, refresh: agentsRefresh },
   vault: { ready: vaultReady, load: vaultLoad, refresh: vaultRefresh },
   triggers: { ready: triggersReady, load: triggersLoad, refresh: triggersRefresh },
+  plugins: { ready: pluginsReady, load: pluginsLoad, refresh: pluginsRefresh },
+  networks: { ready: networksReady, load: networksLoad, refresh: networksRefresh },
   settings: { ready: settingsReady, load: settingsLoad, refresh: settingsRefresh },
 };
 // The loads the gate waits on, by page and Group: "loading" until done,
@@ -573,6 +579,7 @@ function go(id, focus = null) {
   ui.page = id;
   ui.focus = focus;
   if (id === "agents" && focus?.profile) agentsOpen(focus.profile);
+  if (id === "triggers" && focus?.toml) triggersOpenTOML();
   if (again && state && LOADS[id]?.ready(state)) LOADS[id].refresh();
   render(true);
 }
@@ -606,11 +613,10 @@ function page(s) {
     h("h1", {}, sec.label),
     s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
     backupBanner(s),
-    // Triggers are the Group's only: they have no This Device part.
     !GROUP_ONLY.has(sec.id) && h("section", { class: "part", "aria-label": "This Device" },
       h("header", {}, h("h2", {}, "This Device")),
       h("div", { class: "body" }, nodePart(sec, s))),
-    h("section", { class: "part", "aria-label": "Group" },
+    !DEVICE_ONLY.has(sec.id) && h("section", { class: "part", "aria-label": "Group" },
       h("header", {}, h("h2", {}, "Group"), editTarget(s)),
       !s.EditGroupServed && h("div", { class: "notice" }, `${s.EditGroup} is not online on this device. Changes here apply the next time it is.`),
       h("div", { class: "body" }, groupPart(sec, s))));
@@ -622,6 +628,7 @@ function nodePart(sec, s) {
     case "settings": return nodeSettings(s);
     case "agents": return agentsDevicePart();
     case "vault": return vaultDevicePart();
+    case "plugins": return pluginsDevicePart(go);
   }
   return h("p", { class: "placeholder" }, `${sec.label} for this device comes later.`);
 }
@@ -633,6 +640,7 @@ function groupPart(sec, s) {
     case "agents": return agentsGroupPart();
     case "vault": return vaultGroupPart();
     case "triggers": return triggersGroupPart();
+    case "networks": return networksGroupPart(go);
   }
   return h("p", { class: "placeholder" }, `${sec.label} for ${s.EditGroup} comes later.`);
 }

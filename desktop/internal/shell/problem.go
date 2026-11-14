@@ -90,6 +90,9 @@ func problemOf(err error) *Problem {
 	if p := triggersProblem(err); p != nil {
 		return p
 	}
+	if p := pluginsProblem(err); p != nil {
+		return p
+	}
 	return talkProblem(err)
 }
 
