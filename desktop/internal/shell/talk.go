@@ -92,10 +92,13 @@ type TalkState struct {
 	Overrides    []Override
 
 	// Refused is why the composer's message was not sent; it keeps what
-	// was typed.
+	// was typed. Problem is why another action failed. Each is on the
+	// TalkState that action returns only, never kept for the next: it
+	// happened once, and the page shows it once.
 	Refused *Problem
-	// Problem is what went wrong last, elsewhere on the page.
 	Problem *Problem
+	// Unread is why reading the page last failed, kept while it does.
+	Unread *Problem
 }
 
 // Conversation is one row of the left column.
@@ -265,8 +268,6 @@ type talk struct {
 	// whole, so a read that overlapped one is read again, not applied.
 	signVer uint64
 	signed  map[string]string // each Sign Request's last status seen
-	refused *Problem
-	problem *Problem // an action's
 	// failed is why each read last failed, by what it reads; while one
 	// has, the next status change reads everything again, as a Group just
 	// formed has no replica until Raft starts.
@@ -294,7 +295,6 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
 		t.reqs, t.cards, t.focus = nil, map[string]node.SignRequestDetail{}, ""
-		t.refused, t.problem = nil, nil
 		t.failed = map[string]*Problem{}
 	}
 	t.mu.Unlock()
@@ -585,11 +585,11 @@ func (t *talk) snapshot() TalkState {
 	if t.group == "" {
 		return st
 	}
-	st.Open, st.Refused, st.Problem, st.Focus = t.open, t.refused, t.problem, t.focus
+	st.Open, st.Focus = t.open, t.focus
 	st.SignRequests = t.signRows()
 	for _, what := range []string{"conversations", "messages", "signs", "side"} {
-		if st.Problem == nil {
-			st.Problem = t.failed[what]
+		if st.Unread == nil {
+			st.Unread = t.failed[what]
 		}
 	}
 	st.Handles = append(st.Handles, t.handles...)

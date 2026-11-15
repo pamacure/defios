@@ -447,19 +447,19 @@ func TestTalkReadsAgainOnceTheGroupsReplicaExists(t *testing.T) {
 	r.node.tk().noReplica = true
 	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "hi"})
 	s := served(t, r)
-	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return ts.Problem != nil && ts.Problem.Code == "no-replica" })
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return ts.Unread != nil && ts.Unread.Code == "no-replica" })
 
 	r.node.mu.Lock()
 	r.node.tk().noReplica = false
 	r.node.publish(node.Status{Group: "alpha", Serving: true, MajorityReachable: true})
 	r.node.mu.Unlock()
 	eventuallyTalk(t, s, func(ts shell.TalkState) bool {
-		return ts.Problem == nil && len(ts.Conversations) == 1 && len(ts.Items) == 1
+		return ts.Unread == nil && len(ts.Conversations) == 1 && len(ts.Items) == 1
 	})
 }
 
 // The page lists what the TalkState holds; JSON null for an empty list
-// would break it. Only Key, Refused and Problem may be absent.
+// would break it. Only Key, Refused, Problem and Unread may be absent.
 func TestTheTalkStateSendsEmptyListsNotNull(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)
@@ -487,7 +487,7 @@ func assertNoNullLists(t *testing.T, ts shell.TalkState) {
 		switch v := v.(type) {
 		case map[string]any:
 			for k, x := range v {
-				if x == nil && k != "Key" && k != "Refused" && k != "Problem" {
+				if x == nil && k != "Key" && k != "Refused" && k != "Problem" && k != "Unread" {
 					t.Errorf("%s.%s is null", path, k)
 				}
 				walk(path+"."+k, x)

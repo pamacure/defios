@@ -71,23 +71,25 @@ type TranscriptView struct {
 }
 
 // act runs do against the served Group and the open Conversation, then
-// reads again what then. Its error shows as the page's Problem.
+// reads again what then. Its error is the Problem of the TalkState it
+// returns, unless another Group was shown meanwhile.
 func (t *talk) act(do func(a at) error, then ...func()) TalkState {
 	a, ok := t.now()
 	if !ok {
 		return t.State()
 	}
 	err := do(a)
-	t.mu.Lock()
-	if t.gen == a.gen {
-		t.problem = problemOrNil(err)
-	}
-	t.mu.Unlock()
 	for _, f := range then {
 		f()
 	}
 	t.emit()
-	return t.State()
+	st := t.State()
+	t.mu.Lock()
+	if t.gen == a.gen {
+		st.Problem = problemOrNil(err)
+	}
+	t.mu.Unlock()
+	return st
 }
 
 func (t *talk) openConversation(conv string) TalkState {
@@ -101,7 +103,7 @@ func (t *talk) openConversation(conv string) TalkState {
 		t.handles, t.agents, t.over = nil, nil, nil
 		t.cards = map[string]node.SignRequestDetail{}
 	}
-	t.refused, t.problem, t.focus = nil, nil, ""
+	t.focus = ""
 	t.mu.Unlock()
 	t.emit()
 	t.loadAll()
@@ -118,13 +120,9 @@ func (t *talk) send(text string) TalkState {
 		return t.State()
 	}
 	refused := func(p *Problem) TalkState {
-		t.mu.Lock()
-		if t.gen == a.gen {
-			t.refused = p
-		}
-		t.mu.Unlock()
-		t.emit()
-		return t.State()
+		st := t.State()
+		st.Refused = p
+		return st
 	}
 	if names := mention.Handles(text); len(names) > 0 {
 		handles, err := a.n.Handles(t.ctx, a.group, a.conv)
@@ -140,9 +138,6 @@ func (t *talk) send(text string) TalkState {
 	if _, err := a.n.Send(t.ctx, a.group, a.conv, node.Outgoing{Text: text}); err != nil {
 		return refused(problemOf(err))
 	}
-	t.mu.Lock()
-	t.refused = nil
-	t.mu.Unlock()
 	t.loadMessages()
 	return t.State()
 }
