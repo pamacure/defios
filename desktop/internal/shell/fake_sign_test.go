@@ -24,6 +24,8 @@ type fakeSign struct {
 	reqs     []*node.SignRequestDetail
 	proposed []node.SignSpec
 	filled   [][]node.TxSpec
+	// transfers are the Transfers TransferTx was asked to build.
+	transfers []node.Transfer
 	// runs are the Transcript runs of this Node's chains, by chain.
 	runs map[string][]transcript.Run
 }
@@ -148,6 +150,9 @@ func (n *fakeNode) InspectSignRequest(_ context.Context, group, msgID string) (n
 // TransferTx builds an Ethereum transfer, the recipient as protojson
 // bytes; a recipient that is not hex is invalid.
 func (n *fakeNode) TransferTx(_ context.Context, group, keyQuery string, tr node.Transfer) (node.TxSpec, error) {
+	n.mu.Lock()
+	n.sg().transfers = append(n.sg().transfers, tr)
+	n.mu.Unlock()
 	to, err := hex.DecodeString(strings.TrimPrefix(tr.To, "0x"))
 	if err != nil || tr.To == "" {
 		return node.TxSpec{}, &node.InvalidError{Err: fmt.Errorf("the recipient must be a 0x address")}

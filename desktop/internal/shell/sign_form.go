@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"defios.com/internal/evmabi"
 	"defios.com/internal/node"
 )
 
@@ -26,12 +27,15 @@ type SignDraft struct {
 
 // DraftTx is one transaction of a SignDraft on Network, whose chain is of
 // Type ethereum, solana or bitcoin: a transfer (node.Transfer) To an
-// address, of Amount in the chain's least unit, with Ethereum call Data;
+// address, of Amount in the chain's least unit, with Ethereum call Data,
+// or an Ethereum contract Call, its signature, with its Args written out;
 // or Intent, its intent written out as JSON, for anything else (a Bitcoin
 // transaction, a Solana program call), which is sent as written.
 type DraftTx struct {
 	Network, Type    string
 	To, Amount, Data string
+	Call             string
+	Args             []string
 	Intent           string
 }
 
@@ -132,7 +136,7 @@ func (t *talk) fillSign(d SignDraft) SignFormView {
 	}
 	out := SignFormView{Transactions: f.Transactions, Review: []ReviewTx{}}
 	for i, tx := range f.Transactions {
-		rv := ReviewTx{Network: tx.Network, Fields: reviewFields(tx), Filled: []string{}}
+		rv := ReviewTx{Network: tx.Network, Fields: append(callFields(d.Transactions[i]), reviewFields(tx)...), Filled: []string{}}
 		for _, n := range f.Notes {
 			if n.Index == i {
 				rv.Chain, rv.Filled, rv.Warning = n.Chain, append(rv.Filled, n.Filled...), n.Warning
@@ -162,7 +166,7 @@ func (t *talk) proposeSign(conv, reason string, txs []node.TxSpec) SignFormView 
 // internal/node builds from the Key's Network; or its intent as written.
 func (t *talk) spec(a at, conv string, d DraftTx) (node.TxSpec, error) {
 	if strings.TrimSpace(d.Intent) == "" {
-		return a.n.TransferTx(t.ctx, a.group, conv, node.Transfer{Network: d.Network, To: d.To, Amount: d.Amount, Data: d.Data})
+		return a.n.TransferTx(t.ctx, a.group, conv, node.Transfer{Network: d.Network, To: d.To, Amount: d.Amount, Data: d.Data, Call: d.Call, Args: d.Args})
 	}
 	tx := node.TxSpec{Network: d.Network}
 	var obj map[string]json.RawMessage
@@ -180,6 +184,21 @@ func (t *talk) spec(a at, conv string, d DraftTx) (node.TxSpec, error) {
 		return tx, &node.InvalidError{Err: fmt.Errorf("choose a Network")}
 	}
 	return tx, nil
+}
+
+// callFields are d's contract call as the ABI reads it, its signature
+// canonical and each argument by its type, to check against the call data
+// it made; none for a transaction that is no call.
+func callFields(d DraftTx) []ReviewField {
+	f, err := evmabi.Parse(d.Call)
+	if strings.TrimSpace(d.Call) == "" || err != nil || len(f.Inputs) != len(d.Args) {
+		return nil
+	}
+	out := []ReviewField{{Name: "function", Value: f.Signature()}}
+	for i, typ := range f.Inputs {
+		out = append(out, ReviewField{Name: fmt.Sprintf("argument %d · %s", i+1, typ), Value: strings.TrimSpace(d.Args[i])})
+	}
+	return out
 }
 
 // reviewFields are tx's intent's fields, as a person reads them: an

@@ -10,16 +10,21 @@ import (
 	"strings"
 
 	"defios.com/internal/base58"
+	"defios.com/internal/evmabi"
 	"defios.com/internal/network"
 )
 
 // Transfer is a payment to propose, as a person states it: on Network, one
 // of the Key's Conversation's Networks by alias, To an address, of Amount
 // in the chain's least unit (wei, lamports), with Data, Ethereum call data
-// as hex. A Bitcoin payment needs its inputs chosen, so it is no Transfer:
-// its intent is written out.
+// as hex. Or, on Ethereum, a contract call: Call, the function's signature,
+// and Args, its arguments written out (internal/evmabi), make the Data. A
+// Bitcoin payment needs its inputs chosen, so it is no Transfer: its intent
+// is written out.
 type Transfer struct {
 	Network, To, Amount, Data string
+	Call                      string
+	Args                      []string
 }
 
 // systemProgram is Solana's System Program; its instruction 2 is a
@@ -67,7 +72,16 @@ func transferTx(typ string, pub []byte, tr Transfer) (TxSpec, error) {
 			return tx, invalidf("the recipient must be a 0x address of 20 bytes")
 		}
 		intent = map[string]any{"to": base64.StdEncoding.EncodeToString(to), "value": amount.String()}
-		if strings.TrimSpace(tr.Data) != "" {
+		if strings.TrimSpace(tr.Call) != "" {
+			if strings.TrimSpace(tr.Data) != "" {
+				return tx, invalidf("give the call data or the call, not both")
+			}
+			data, err := evmabi.Call(tr.Call, tr.Args)
+			if err != nil {
+				return tx, &InvalidError{Err: err}
+			}
+			intent["data"] = base64.StdEncoding.EncodeToString(data)
+		} else if strings.TrimSpace(tr.Data) != "" {
 			data, err := hexBytes(tr.Data)
 			if err != nil {
 				return tx, invalidf("the data must be hex")
@@ -75,6 +89,9 @@ func transferTx(typ string, pub []byte, tr Transfer) (TxSpec, error) {
 			intent["data"] = base64.StdEncoding.EncodeToString(data)
 		}
 	case network.Solana:
+		if strings.TrimSpace(tr.Call) != "" {
+			return tx, invalidf("a contract call is an Ethereum transaction: write a Solana program's instruction out in its intent")
+		}
 		if len(pub) != 32 {
 			return tx, invalidf("this Key does not sign Solana transactions")
 		}

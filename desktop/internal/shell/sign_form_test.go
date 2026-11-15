@@ -81,6 +81,28 @@ func TestAnIntentWrittenOutIsSentAsWrittenAndBadFieldsAreRefused(t *testing.T) {
 	}
 }
 
+func TestAContractCallReachesTheNodeAndIsReviewedAsWritten(t *testing.T) {
+	r := newRig(t, "alpha")
+	s, k := keyServed(t, r)
+	v := s.FillSign(shell.SignDraft{Conversation: k.ConversationID, Reason: "approve", Transactions: []shell.DraftTx{{
+		Network: "eth", Type: "ethereum", To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "0",
+		Call: "approve(address spender, uint amount)", Args: []string{"0x0000000000000000000000000000000000000009", "16"},
+	}}})
+	if v.Problem != nil {
+		t.Fatalf("fill: %+v", v.Problem)
+	}
+	if tr := r.node.sg().transfers[0]; tr.Call != "approve(address spender, uint amount)" || len(tr.Args) != 2 || tr.Args[1] != "16" {
+		t.Fatalf("transfer: %+v", tr)
+	}
+	// The call comes first, as the ABI reads it, then the intent's fields.
+	fs := v.Review[0].Fields
+	if len(fs) < 3 || fs[0] != (shell.ReviewField{Name: "function", Value: "approve(address,uint256)"}) ||
+		fs[1] != (shell.ReviewField{Name: "argument 1 · address", Value: "0x0000000000000000000000000000000000000009"}) ||
+		fs[2] != (shell.ReviewField{Name: "argument 2 · uint256", Value: "16"}) {
+		t.Fatalf("review fields: %+v", fs)
+	}
+}
+
 func hasField(fs []shell.ReviewField, name, value string) bool {
 	for _, f := range fs {
 		if f.Name == name && f.Value == value {

@@ -1,8 +1,11 @@
 package node
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"defios.com/internal/base58"
@@ -18,6 +21,24 @@ func TestAnEthereumTransferIsAnIntentToTheRecipient(t *testing.T) {
 	// protojson: bytes are base64.
 	if tx.Network != "eth" || in["to"] != "AQIDBAUGBwgJCgsMDQ4PEBESExQ=" || in["value"] != "1000" || in["data"] != "3q2+7w==" || len(in) != 3 {
 		t.Fatalf("tx = %+v, intent %v", tx, in)
+	}
+}
+
+func TestAnEthereumContractCallEncodesItsDataFromTheSignature(t *testing.T) {
+	tx, err := transferTx("ethereum", nil, Transfer{
+		Network: "eth", To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "0",
+		Call: "approve(address spender, uint256 amount)", Args: []string{"0x0000000000000000000000000000000000000009", "0x10"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in map[string]any
+	json.Unmarshal(tx.Ethereum, &in)
+	data, _ := base64.StdEncoding.DecodeString(in["data"].(string))
+	// approve(address,uint256) is 0x095ea7b3.
+	want := "095ea7b3" + strings.Repeat("0", 63) + "9" + strings.Repeat("0", 62) + "10"
+	if hex.EncodeToString(data) != want || in["value"] != "0" {
+		t.Fatalf("intent %v, data %x", in, data)
 	}
 }
 
@@ -66,6 +87,9 @@ func TestATransferWithBadFieldsIsInvalid(t *testing.T) {
 		{"ethereum", nil, Transfer{To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "ten"}},
 		{"ethereum", nil, Transfer{To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "-1"}},
 		{"ethereum", nil, Transfer{To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "1", Data: "zz"}},
+		{"ethereum", nil, Transfer{To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "0", Data: "0x01", Call: "f()"}},
+		{"ethereum", nil, Transfer{To: "0x0102030405060708090a0b0c0d0e0f1011121314", Amount: "0", Call: "f(uint8)", Args: []string{"256"}}},
+		{"solana", key, Transfer{To: "11111111111111111111111111111112", Amount: "1", Call: "f()"}},
 		{"solana", key, Transfer{To: "not base58!", Amount: "1"}},
 		{"solana", key, Transfer{To: "11111111111111111111111111111112", Amount: "18446744073709551616"}},
 		{"solana", make([]byte, 33), Transfer{To: "11111111111111111111111111111112", Amount: "1"}},

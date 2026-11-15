@@ -4,7 +4,7 @@
 // and the talk:state event), which it keeps current from the Node's events;
 // it holds only what is being typed or is open on screen. UI text says
 // "device" for a Node.
-import { call, h, put } from "./dom.js";
+import { call, h, icon, put } from "./dom.js";
 import { callFailed, problemBox, problemLine, showProblem } from "./notice.js";
 import { openSignForm, signCard, signForm, signInit, statusChip } from "./sign.js";
 
@@ -463,7 +463,7 @@ function makeComposer() {
   const textarea = h("textarea", { class: "field", rows: 2, placeholder: "Write a message — @ to summon an agent", "aria-label": "Message" });
   const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
   const refusal = h("div", { class: "refusal" });
-  const plus = h("button", { class: "btn plus", type: "button", "aria-label": "New Sign Request", title: "New Sign Request", onclick: () => openSignForm() }, "+");
+  const plus = h("button", { class: "btn plus", type: "button", "aria-label": "New Sign Request", title: "New Sign Request", onclick: () => openSignForm() }, icon("plus"));
   const send = h("button", { class: "btn bright", type: "submit" }, "Send");
   // Stop cancels the chains of agents answering here; it sits by Send, not
   // in the output that grows above it.
@@ -535,6 +535,7 @@ function makeComposer() {
     send.disabled = tui.busy;
     stop.hidden = !ts?.Live?.some((c) => c.Chain);
     stop.disabled = tui.busy;
+    plus.hidden = !ts || ts.Open === GROUP_TALK;
   };
   textarea.addEventListener("input", () => { refused = null; update(); suggest(); });
   textarea.addEventListener("click", suggest);
@@ -653,7 +654,7 @@ function overrides() {
       : h("p", { class: "hint" }, "Uses the Group's Providers and Networks."));
 }
 
-signInit({ ts: () => ts, act, draw, blocks: transcriptBlocks });
+signInit({ ts: () => ts, act, draw, blocks: transcriptBlocks, convName, curveName });
 
 document.addEventListener("click", (e) => {
   if (!e.target.isConnected) return; // a click that redrew the page

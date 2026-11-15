@@ -7,7 +7,8 @@ import { call, h } from "./dom.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 
 // ctx is the Talk page's: { ts() the TalkState, act(method, ...args),
-// draw(), blocks(view) rendering a Transcript view }.
+// draw(), blocks(view) rendering a Transcript view, convName(c) and
+// curveName(curve) as the Conversations list words them }.
 let ctx = null;
 export function signInit(c) { ctx = c; }
 
@@ -173,10 +174,60 @@ async function toggleRun(j) {
   ctx.draw();
 }
 
-// The "+" form: Key, a Network and a transfer (or the intent written out)
-// per transaction, and a reason; Fill completes them for review; Propose.
+// The "+" form, for the Key of the Conversation open when it opened: per
+// transaction a Network and what it does, as a transfer, an Ethereum
+// contract call or its intent written out; and a reason. Fill completes
+// them for review; Propose.
 
-const blankTx = () => ({ network: "", to: "", amount: "", data: "", intent: "", raw: false });
+const blankTx = () => ({ network: "", mode: "transfer", to: "", amount: "", data: "", sig: "", args: [], intent: "" });
+
+// MODES are the ways to write a transaction, by its chain: a Bitcoin
+// payment needs its inputs chosen, so its intent is written out.
+const MODES = { ethereum: ["transfer", "call", "intent"], solana: ["transfer", "intent"] };
+const MODE_LABEL = { transfer: "Transfer", call: "Contract call", intent: "Intent JSON" };
+const modesOf = (type) => MODES[type] ?? ["intent"];
+const modeOf = (tx, type) => (modesOf(type).includes(tx.mode) ? tx.mode : modesOf(type)[0]);
+
+// callParams are the parameters of signature sig as written, for a field
+// each: [{ type, name }], or [] until it reads as name(...). The Go side
+// (internal/evmabi) reads it again, and says what is wrong with it.
+function callParams(sig) {
+  const m = /^\s*(?:function\s+)?[A-Za-z_$][\w$]*\s*\(([\s\S]*)\)\s*$/.exec(sig);
+  if (!m || !m[1].trim()) return [];
+  const parts = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < m[1].length; i++) {
+    const c = m[1][i];
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "," && depth === 0) { parts.push(m[1].slice(from, i)); from = i + 1; }
+  }
+  parts.push(m[1].slice(from));
+  return parts.map((p) => {
+    const words = [];
+    let d = 0;
+    let w = "";
+    for (const c of p.trim()) {
+      if (c === "(" || c === "[") d++;
+      else if (c === ")" || c === "]") d--;
+      if (d === 0 && /\s/.test(c)) { if (w) words.push(w); w = ""; } else w += c;
+    }
+    if (w) words.push(w);
+    const named = words.slice(1).filter((x) => !["memory", "calldata", "storage", "payable"].includes(x));
+    return { type: words[0] ?? "", name: named.at(-1) ?? "" };
+  });
+}
+
+// argHint is the placeholder for an argument of type typ.
+function argHint(typ) {
+  if (typ.endsWith("]") || typ.startsWith("(")) return "JSON array, such as [1, 2]";
+  if (typ === "address") return "0x address";
+  if (typ === "bool") return "true or false";
+  if (/^u?int\d*$/.test(typ)) return "0";
+  if (/^bytes\d*$/.test(typ)) return "0x";
+  return "";
+}
 
 const form = {
   open: false,
@@ -192,18 +243,17 @@ const form = {
 
 export const formOpen = () => form.open;
 
-// openSignForm opens the form on the Key of conv, or the first Key.
+// openSignForm opens the form on the Key of the open Conversation. Group
+// talk has no Key, so no form; the Key stays the one opened on.
 export async function openSignForm() {
-  const ts = ctx.ts();
-  const keys = ts.Conversations.filter((c) => c.ID !== "");
-  Object.assign(form, { open: true, step: "edit", reason: "", txs: [blankTx()], filled: null, unread: null, networks: [] });
-  form.conv = keys.some((k) => k.ID === ts.Open) ? ts.Open : keys[0]?.ID ?? "";
+  const conv = ctx.ts().Open;
+  if (conv === "") return;
+  Object.assign(form, { open: true, step: "edit", conv, reason: "", txs: [blankTx()], filled: null, unread: null, networks: [] });
   ctx.draw();
   await loadNetworks();
 }
 
 async function loadNetworks() {
-  if (!form.conv) return;
   let v;
   try {
     v = await call("SignForm", form.conv);
@@ -226,8 +276,18 @@ function draft() {
     Reason: form.reason.trim(),
     Transactions: form.txs.map((tx) => {
       const type = netOf(tx.network)?.Type ?? "";
-      const raw = tx.raw || type === "bitcoin";
-      return { Network: tx.network, Type: type, To: raw ? "" : tx.to, Amount: raw ? "" : tx.amount, Data: raw ? "" : tx.data, Intent: raw ? tx.intent : "" };
+      const out = { Network: tx.network, Type: type, To: "", Amount: "", Data: "", Call: "", Args: [], Intent: "" };
+      switch (modeOf(tx, type)) {
+        case "transfer":
+          return { ...out, To: tx.to, Amount: tx.amount, Data: type === "ethereum" ? tx.data : "" };
+        case "call":
+          return {
+            ...out, To: tx.to, Amount: tx.amount.trim() || "0", Call: tx.sig,
+            Args: callParams(tx.sig).map((_, i) => tx.args[i] ?? ""),
+          };
+        default:
+          return { ...out, Intent: tx.intent };
+      }
     }),
   };
 }
@@ -275,32 +335,27 @@ function field(obj, name, attrs = {}, tag = "input") {
 
 export function signForm() {
   if (!form.open) return null;
-  const ts = ctx.ts();
-  const keys = ts.Conversations.filter((c) => c.ID !== "");
-  const body = form.step === "review" ? review() : edit(keys);
+  const key = ctx.ts().Conversations.find((c) => c.ID === form.conv);
+  const body = !key ? h("p", { class: "hint" }, "This Key is no longer in the Group.")
+    : form.step === "review" ? review() : edit();
   return h("div", { class: "modal-back", onclick: (e) => { if (e.target === e.currentTarget) closeForm(); } },
     h("div", { class: "modal signform", role: "dialog", "aria-modal": "true", "aria-label": "New Sign Request" },
       h("header", {}, h("h2", {}, form.step === "review" ? "Review the Sign Request" : "New Sign Request"),
         h("button", { class: "btn small", type: "button", "aria-label": "Close", onclick: closeForm }, "✕")),
+      key && h("p", { class: "for" },
+        h("span", { class: "label" }, "Key"),
+        h("strong", {}, ctx.convName(key)),
+        h("span", { class: "sub" }, `${ctx.curveName(key.Curve)} · ${key.T} of ${key.N}`)),
       problemBox(form.unread),
       body));
 }
 
-function edit(keys) {
-  if (!keys.length) {
-    return h("p", { class: "hint" }, "This Group has no Keys yet. Make one with + New Key first.");
-  }
-  const key = h("select", {
-    class: "field", "aria-label": "Key",
-    onchange: (e) => { form.conv = e.target.value; loadNetworks(); },
-  }, keys.map((k) => h("option", { value: k.ID, selected: k.ID === form.conv },
-    `${k.Alias || k.ShortKey} · ${k.T} of ${k.N}`)));
+function edit() {
   const noNets = form.networks.length === 0;
   return h("form", {
     class: "stack",
     onsubmit: (e) => { e.preventDefault(); fill(); },
   },
-  h("label", {}, "Key", key),
   noNets
     ? h("p", { class: "hint" }, "This device has no Network for this Key's chains. Add one on the Networks page.")
     : form.txs.map((tx, i) => txFields(tx, i)),
@@ -315,27 +370,64 @@ function edit(keys) {
 function txFields(tx, i) {
   const net = netOf(tx.network);
   const type = net?.Type ?? "";
-  const raw = tx.raw || type === "bitcoin";
+  const mode = modeOf(tx, type);
   const sel = h("select", {
     class: "field", "aria-label": "Network",
     onchange: (e) => { tx.network = e.target.value; ctx.draw(); },
   }, form.networks.map((n) => h("option", { value: n.Alias, selected: n.Alias === tx.network }, `${n.Alias} · ${n.Chain}`)));
-  const unit = type === "solana" ? "lamports" : "wei";
+  const modes = modesOf(type);
+  const tabs = modes.length > 1 && h("div", { class: "tabs", role: "tablist", "aria-label": "Write it as" },
+    modes.map((m) => h("button", {
+      type: "button", role: "tab", "aria-selected": m === mode ? "true" : "false",
+      onclick: () => { tx.mode = m; ctx.draw(); },
+    }, MODE_LABEL[m])));
+  const body = { transfer: transferFields, call: callFields, intent: intentFields }[mode](tx, i, type);
   return h("fieldset", { class: "tx-fields" },
     h("legend", {}, `Transaction ${i + 1}`),
     h("label", {}, "Network", sel),
-    raw
-      ? h("label", {}, `Intent (${type || "chain"} JSON)`,
-        field(tx, "intent", { rows: 5, required: true, class: "field mono", "data-field": `intent-${i}`, placeholder: type === "bitcoin" ? '{"inputs": [...], "outputs": [...]}' : "{ ... }" }, "textarea"))
-      : [
-        h("label", {}, "To", field(tx, "to", { required: true, "data-field": `to-${i}`, placeholder: type === "solana" ? "Solana address" : "0x address" })),
-        h("label", {}, `Amount (${unit})`, field(tx, "amount", { required: true, inputmode: "numeric", "data-field": `amount-${i}`, placeholder: "0" })),
-        type === "ethereum" && h("label", {}, "Data (optional hex)", field(tx, "data", { "data-field": `data-${i}`, placeholder: "0x" })),
-      ],
-    h("div", { class: "row" },
-      type !== "bitcoin" && h("button", { class: "link", type: "button", onclick: () => { tx.raw = !tx.raw; ctx.draw(); } },
-        tx.raw ? "Use a transfer instead" : "Write the intent out"),
-      form.txs.length > 1 && h("button", { class: "link", type: "button", onclick: () => { form.txs.splice(i, 1); ctx.draw(); } }, "Remove")));
+    tabs,
+    body,
+    form.txs.length > 1 && h("div", { class: "row" },
+      h("button", { class: "link", type: "button", onclick: () => { form.txs.splice(i, 1); ctx.draw(); } }, "Remove")));
+}
+
+function transferFields(tx, i, type) {
+  const unit = type === "solana" ? "lamports" : "wei";
+  return [
+    h("label", {}, "To", field(tx, "to", { required: true, "data-field": `to-${i}`, placeholder: type === "solana" ? "Solana address" : "0x address" })),
+    h("label", {}, `Amount (${unit})`, field(tx, "amount", { required: true, inputmode: "numeric", "data-field": `amount-${i}`, placeholder: "0" })),
+    type === "ethereum" && h("label", {}, "Data (optional hex)", field(tx, "data", { "data-field": `data-${i}`, placeholder: "0x" })),
+  ];
+}
+
+// callFields are a contract call's: its address, the function's signature,
+// a field per parameter as the signature names them, and the value sent.
+function callFields(tx, i) {
+  const params = callParams(tx.sig);
+  const sig = field(tx, "sig", { required: true, class: "field mono", "data-field": `sig-${i}`, placeholder: "transfer(address to, uint256 amount)" });
+  // The argument fields follow the signature as it is typed.
+  sig.addEventListener("input", () => {
+    const next = callParams(tx.sig);
+    if (next.map((p) => p.type + " " + p.name).join() !== params.map((p) => p.type + " " + p.name).join()) ctx.draw();
+  });
+  return [
+    h("label", {}, "Contract", field(tx, "to", { required: true, "data-field": `to-${i}`, placeholder: "0x address" })),
+    h("label", {}, "Function", sig),
+    h("p", { class: "hint" }, "Paste it from the contract's source or an explorer; names are fine. Arrays and tuples are written as JSON."),
+    params.map((p, n) => h("label", {}, h("span", {}, `${p.name || `Argument ${n + 1}`} `, h("span", { class: "type" }, p.type)),
+      field(tx.args, n, { required: true, class: "field mono", "data-field": `arg-${i}-${n}`, placeholder: argHint(p.type) }))),
+    h("label", {}, "Value (wei)", field(tx, "amount", { inputmode: "numeric", "data-field": `amount-${i}`, placeholder: "0" })),
+  ];
+}
+
+function intentFields(tx, i, type) {
+  return [
+    h("label", {}, `Intent (${type || "chain"} JSON)`,
+      field(tx, "intent", { rows: 5, required: true, class: "field mono", "data-field": `intent-${i}`, placeholder: type === "bitcoin" ? '{"inputs": [...], "outputs": [...]}' : "{ ... }" }, "textarea")),
+    h("p", { class: "hint" }, type === "bitcoin"
+      ? "A Bitcoin payment needs its inputs chosen, so it is written out as the chain's intent. Fill completes the fees."
+      : "The transaction as the chain's intent, as defios sign propose --transactions takes it. Fill completes what it leaves out."),
+  ];
 }
 
 function review() {

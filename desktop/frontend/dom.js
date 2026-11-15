@@ -6,6 +6,7 @@ export const call = (method, ...args) => Call.ByName(`main.UI.${method}`, ...arg
 
 export const ICONS = {
   talk: '<path d="M4 5h16v11H9l-5 4z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
   vault: '<rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M12 8.5V6M15.5 12H18"/>',
   agents: '<rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01M9 16h6"/>',
   plugins: '<path d="M9 4v4M15 4v4M7 8h10v4a5 5 0 0 1-10 0zM12 17v3"/>',
@@ -15,7 +16,8 @@ export const ICONS = {
 };
 
 // h builds an element; children are nodes or strings (never parsed as
-// HTML, so Group aliases and device names cannot inject markup).
+// HTML, so Group aliases and device names cannot inject markup), or arrays
+// of them nested to any depth.
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -24,7 +26,7 @@ export function h(tag, attrs = {}, ...children) {
     else if (k === "class") el.className = v;
     else el.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of children.flat()) {
+  for (const c of children.flat(Infinity)) {
     if (c == null || c === false) continue;
     el.append(c instanceof Node ? c : String(c));
   }
@@ -39,6 +41,6 @@ export function icon(name) {
 
 // put replaces el's children as h adds them: null and false are none.
 export function put(el, ...children) {
-  el.replaceChildren(...children.flat().filter((c) => c != null && c !== false));
+  el.replaceChildren(...children.flat(Infinity).filter((c) => c != null && c !== false));
   return el;
 }
