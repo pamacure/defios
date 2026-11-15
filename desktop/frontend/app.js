@@ -5,6 +5,7 @@ import { Events } from "/wails/runtime.js";
 import { agentsDevicePart, agentsGroupPart, agentsLoad, agentsOpen, agentsReady, agentsRefresh } from "./agents.js";
 import { call, h, icon } from "./dom.js";
 import "./motion.js";
+import { callFailed, dismissScope, leavePage, problemLine, showProblem } from "./notice.js";
 import { networksGroupPart, networksLoad, networksReady, networksRefresh } from "./networks.js";
 import { pluginsDevicePart, pluginsLoad, pluginsReady, pluginsRefresh } from "./plugins.js";
 import { settingsLoad, settingsPart, settingsReady, settingsRefresh } from "./settings.js";
@@ -51,7 +52,10 @@ const attempts = new Map();
 const ui = {
   page: "talk", focus: null, menuOpen: false, addingGroup: false, busy: false,
   restore: null, invite: "propose", pick: "", declining: false, form: {},
-  backingUp: false, backupProblem: null, backupDismissed: -1,
+  backingUp: false, backupDismissed: -1,
+  // The onboarding or lock screen's Problem typed past: hidden, as its
+  // JSON, until the next attempt says again or otherwise.
+  typedPast: "",
 };
 let state = null;
 let shownKey = "";
@@ -71,6 +75,14 @@ function apply(next) {
   if (!["no-node", "creating", "restoring", "no-group"].includes(state.View) && !ui.addingGroup) ui.form = {};
   if (state.View !== "forming") { ui.pick = ""; ui.declining = false; }
   if (was === "forming" && state.View === "served") ui.page = "talk";
+  // Once served, a Problem is something that happened, as a setting not
+  // saved: it shows as a toast and is dropped, so it never stays on a page.
+  // Before then (and on the add-Group form) it is the screen's, inline.
+  if (state.View === "served" && !ui.addingGroup && state.Problem) {
+    showProblem(state.Problem);
+    state = { ...state, Problem: null };
+    call("DismissProblem").then(apply, () => {});
+  }
   preload(state);
   discovery();
   render();
@@ -121,9 +133,12 @@ function discovery() {
 
 async function act(method, ...args) {
   ui.busy = true;
+  ui.typedPast = "";
   render(true);
   try {
     apply(await call(method, ...args));
+  } catch (err) {
+    showProblem(callFailed(err));
   } finally {
     ui.busy = false;
     render(true);
@@ -147,6 +162,8 @@ function render(force = false) {
     s.View === "served" && !ui.addingGroup ? [s.Seq, ui.page, ui.menuOpen, ui.busy] : ui.busy]);
   if (!force && key === shownKey) return;
   shownKey = key;
+  // The page shown, for the toasts to sit clear of its controls.
+  document.body.dataset.page = s.View === "served" && !ui.addingGroup ? ui.page : "";
   const root = document.getElementById("app");
   // A field kept across redraws, as Talk's composer is, keeps focus.
   const active = document.activeElement;
@@ -193,9 +210,17 @@ function connecting(s) {
     h("button", { class: "btn", type: "button", onclick: () => act("ContinueNow") }, "Continue now"));
 }
 
+// problemText is the screen's Problem inline, beside the form it answers:
+// on a screen that is one form, a toast would take it away from where it
+// is read. Typing into the form hides it (see the input listener below).
 function problemText(s) {
-  return s.Problem ? h("p", { class: "error", role: "alert" }, s.Problem.Message) : null;
+  if (!s.Problem || JSON.stringify(s.Problem) === ui.typedPast) return null;
+  return problemLine(s.Problem);
 }
+
+// invalidPass is aria-invalid for a passphrase field, while the screen
+// shows that the passphrase was wrong.
+const invalidPass = (s) => (problemText(s) && s.Problem.Code === "bad-passphrase" ? "true" : null);
 
 function lockScreen(s) {
   const select = h("select", { class: "field", "aria-label": "Group", disabled: ui.busy },
@@ -203,7 +228,7 @@ function lockScreen(s) {
   const pass = h("input", {
     class: "field", type: "password", placeholder: "Vault Locked", "aria-label": "Passphrase",
     autocomplete: "current-password", "data-autofocus": true, disabled: ui.busy,
-    "aria-invalid": s.Problem?.Code === "bad-passphrase" ? "true" : null,
+    "aria-invalid": invalidPass(s), "data-problem-field": !!invalidPass(s),
   });
   const form = h("form", {
     class: "form",
@@ -327,7 +352,7 @@ function restorePage(s) {
   const pass = field("restorePass", {
     id: "restore-pass", type: "password", placeholder: "Passphrase", autocomplete: "current-password",
     "data-autofocus": true, disabled: ui.busy,
-    "aria-invalid": s.Problem?.Code === "bad-passphrase" ? "true" : null,
+    "aria-invalid": invalidPass(s), "data-problem-field": !!invalidPass(s),
   });
   return card(
     h("h1", {}, "Build from Backup"),
@@ -374,7 +399,7 @@ function stepTwo(s, adding) {
   const key = field("authKey", { id: "auth-key", type: "password", placeholder: "Tailnet auth key", autocomplete: "off", disabled: ui.busy });
   const pass = !s.PassphraseHeld && field("groupPass", {
     id: "group-pass", type: "password", placeholder: "Passphrase", autocomplete: "current-password", disabled: ui.busy,
-    "aria-invalid": s.Problem?.Code === "bad-passphrase" ? "true" : null,
+    "aria-invalid": invalidPass(s), "data-problem-field": !!invalidPass(s),
   });
   const form = h("form", {
     class: "stack",
@@ -577,7 +602,10 @@ function header(s) {
 // (#151 to #155). A page opened anew reads its content again.
 function go(id, focus = null) {
   const again = ui.page !== id;
-  if (again) dismissProblem();
+  if (again) {
+    dismissProblem();
+    leavePage(id);
+  }
   ui.page = id;
   ui.focus = focus;
   if (id === "agents" && focus?.profile) agentsOpen(focus.profile);
@@ -607,13 +635,11 @@ function page(s) {
   // Talk is the served Group's, so it has no This Device / Group parts.
   if (sec.id === "talk") {
     return h("main", { class: "page talkpage" },
-      s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
       backupBanner(s),
       talkPage(go));
   }
   return h("main", { class: "page" },
     h("h1", {}, sec.label),
-    s.Problem && h("div", { class: "banner", role: "alert" }, s.Problem.Message),
     backupBanner(s),
     !GROUP_ONLY.has(sec.id) && h("section", { class: "part", "aria-label": "This Device" },
       h("header", {}, h("h2", {}, "This Device")),
@@ -655,11 +681,9 @@ function backupBanner(s) {
   const run = async () => {
     if (ui.backingUp) return;
     ui.backingUp = true;
-    ui.backupProblem = null;
     render(true);
     try {
-      const v = await backupNow();
-      ui.backupProblem = v?.Problem ?? null;
+      await backupNow(); // a refusal shows as a toast
     } finally {
       ui.backingUp = false;
       render(true);
@@ -668,8 +692,7 @@ function backupBanner(s) {
   return h("div", { class: "backupbanner", role: "status" },
     h("div", { class: "text" },
       h("strong", {}, "Back up this device"),
-      h("span", {}, "A new Key was made. Its share on this device is in no Backup yet, so losing this computer would lose it."),
-      ui.backupProblem && h("span", { class: "error", role: "alert" }, ui.backupProblem.Message)),
+      h("span", {}, "A new Key was made. Its share on this device is in no Backup yet, so losing this computer would lose it.")),
     h("button", { class: "btn bright", type: "button", disabled: ui.backingUp, onclick: run }, "Back up now"),
     h("button", { class: "dismiss", type: "button", "aria-label": "Dismiss until the next Key or until DeFiOS starts again", title: "Dismiss",
       onclick: () => { ui.backupDismissed = s.KeysMinted; render(true); } }, "\u00d7"));
@@ -678,7 +701,8 @@ function backupBanner(s) {
 // editTarget picks the Group the Group parts edit. The choice is kept
 // across pages.
 function editTarget(s) {
-  return h("select", { "aria-label": "Group to edit", onchange: (e) => act("SetEditGroup", e.target.value) },
+  // A toast about the Group edited before is not about the one chosen.
+  return h("select", { "aria-label": "Group to edit", onchange: (e) => { dismissScope(ui.page); act("SetEditGroup", e.target.value); } },
     s.Groups.map((g) => h("option", { value: g.Alias, selected: g.Alias === s.EditGroup },
       g.Alias === s.Served ? `${g.Alias} (online)` : g.Alias)));
 }
@@ -726,6 +750,15 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && ui.menuOpen) { ui.menuOpen = false; render(true); }
+});
+// Typing into an onboarding or lock screen's form is fixing what its
+// Problem says: it goes at once, in place, as a redraw would drop what is
+// being typed.
+document.addEventListener("input", (e) => {
+  if (!state?.Problem || (state.View === "served" && !ui.addingGroup) || !e.target.closest("#app form")) return;
+  ui.typedPast = JSON.stringify(state.Problem);
+  for (const el of document.querySelectorAll("#app .problemline")) el.remove();
+  for (const el of document.querySelectorAll("#app [data-problem-field]")) { el.removeAttribute("aria-invalid"); el.removeAttribute("data-problem-field"); }
 });
 
 Events.On("shell:state", (ev) => apply(ev.data));

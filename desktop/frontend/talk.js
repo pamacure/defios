@@ -4,7 +4,8 @@
 // and the talk:state event), which it keeps current from the Node's events;
 // it holds only what is being typed or is open on screen. UI text says
 // "device" for a Node.
-import { call, h } from "./dom.js";
+import { call, h, put } from "./dom.js";
+import { callFailed, problemBox, problemLine, showProblem } from "./notice.js";
 import { openSignForm, signCard, signForm, signInit, statusChip } from "./sign.js";
 
 let ts = null; // the TalkState shown
@@ -75,13 +76,19 @@ function patchLive() {
   return true;
 }
 
+// act calls method and shows the TalkState it returns. Its Problem, on
+// that TalkState only, is a toast; a Refused is the composer's to show.
 async function act(method, ...args) {
   tui.busy = true;
   draw();
   try {
     const next = await call(method, ...args);
     talkUpdate(next);
+    showProblem(next?.Problem, { scope: "talk" });
     return next;
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "talk" });
+    return null;
   } finally {
     tui.busy = false;
     draw();
@@ -277,7 +284,7 @@ function center() {
       }, "About")),
     total > 0 && !ts.MajorityReachable && h("div", { class: "queue-banner", role: "status" },
       "Not enough devices are online for messages to be delivered. What you send waits here and goes once they are."),
-    ts.Problem && h("div", { class: "banner", role: "alert" }, ts.Problem.Message),
+    ts.Unread && problemBox(ts.Unread),
     tui.clearing && clearConfirm(conv),
     transcript(),
     composer.el);
@@ -285,8 +292,16 @@ function center() {
 
 // askClear asks what Clear would destroy, to confirm it.
 async function askClear() {
-  const v = await call("ClearCheck");
-  if (!v || v.Conversation !== ts.Open && !v.Problem) return;
+  let v;
+  try {
+    v = await call("ClearCheck");
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "talk" });
+    return;
+  }
+  // Nothing to confirm when it can't say what Clear would destroy.
+  if (v?.Problem) { showProblem(v.Problem, { scope: "talk" }); return; }
+  if (!v || v.Conversation !== ts.Open) return;
   tui.clearing = v;
   draw();
 }
@@ -295,9 +310,9 @@ async function askClear() {
 function clearConfirm(conv) {
   const v = tui.clearing;
   const cancel = h("button", { class: "btn small", type: "button", onclick: () => { tui.clearing = null; draw(); } }, v.Messages ? "Cancel" : "OK");
-  if (v.Problem || !v.Messages) {
+  if (!v.Messages) {
     return h("div", { class: "clear-confirm", role: "status" },
-      h("p", {}, v.Problem ? v.Problem.Message : "There is nothing to clear here."), h("div", { class: "row" }, cancel));
+      h("p", {}, "There is nothing to clear here."), h("div", { class: "row" }, cancel));
   }
   const n = v.Messages === 1 ? "1 message" : `${v.Messages} messages`;
   return h("div", { class: "clear-confirm", role: "alertdialog", "aria-label": "Clear" },
@@ -394,13 +409,14 @@ async function toggleTranscript(key, fetch) {
   }
   tui.expanded.set(key, {});
   draw();
-  const v = await fetch();
+  const v = await fetch().catch((err) => ({ Problem: callFailed(err) }));
   if (tui.expanded.has(key)) tui.expanded.set(key, v.Problem ? { problem: v.Problem } : { blocks: v.Blocks ?? [] });
   draw();
 }
 
 function transcriptBlocks(t) {
-  if (t.problem) return h("div", { class: "blocks" }, h("p", { class: "error" }, t.problem.Message));
+  // No Transcript to show is what this panel says, not an error to act on.
+  if (t.problem) return h("div", { class: "blocks" }, h("p", { class: "placeholder" }, t.problem.Message));
   if (!t.blocks) return h("div", { class: "blocks" }, h("p", { class: "placeholder" }, "Loading…"));
   return h("div", { class: "blocks" }, t.blocks.map(block));
 }
@@ -446,7 +462,7 @@ function liveChain(c) {
 function makeComposer() {
   const textarea = h("textarea", { class: "field", rows: 2, placeholder: "Write a message — @ to summon an agent", "aria-label": "Message" });
   const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
-  const refusal = h("p", { class: "error refusal", role: "alert" });
+  const refusal = h("div", { class: "refusal" });
   const plus = h("button", { class: "btn plus", type: "button", "aria-label": "New Sign Request", title: "New Sign Request", onclick: () => openSignForm() }, "+");
   const send = h("button", { class: "btn bright", type: "submit" }, "Send");
   // Stop cancels the chains of agents answering here; it sits by Send, not
@@ -513,7 +529,7 @@ function makeComposer() {
     draw();
   };
   const update = () => {
-    refusal.textContent = refused?.Message ?? "";
+    put(refusal, problemLine(refused));
     refusal.hidden = !refused;
     textarea.setAttribute("aria-invalid", refused ? "true" : "false");
     send.disabled = tui.busy;

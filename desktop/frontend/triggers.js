@@ -6,6 +6,7 @@
 // edit-target Group, so a redraw of the app never drops what is typed. UI
 // text says "device" for a Node.
 import { call, h, put } from "./dom.js";
+import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { secretField } from "./secretfield.js";
 
 let tv = null; // the TriggersView shown
@@ -21,8 +22,10 @@ let draft = null;
 let read = null;
 let deleting = ""; // the form whose Delete asks to confirm
 let done = ""; // what the last change did, as "Deleted." for the list
+// The field the last refusal named, outlined until edited: { where, field }.
+let invalid = null;
 const running = new Set(); // the Jobs Run now is running
-const ran = new Map(); // a Job's last Run now: { ok, text }
+const ran = new Set(); // the Jobs whose last Run now finished
 // Edit TOML: shown, its text, why the save was refused, and the table to
 // find in it once shown.
 let toml = null; // { text, problem, table }
@@ -76,7 +79,7 @@ async function load(g) {
   if (!next || next.Group !== g) return;
   if (g !== group || next.Served !== tv?.Served) {
     open = deleting = done = "";
-    draft = toml = null;
+    draft = toml = invalid = null;
     running.clear();
     ran.clear();
   }
@@ -94,15 +97,20 @@ async function act(method, args, did = "") {
   if (busy) return;
   if (read) draft = read();
   busy = true;
+  invalid = null;
+  done = "";
   draw();
   let next;
   try {
     next = await call(method, ...args);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "triggers" });
   } finally {
     busy = false;
   }
   if (next?.Group === group) {
-    tv = next;
+    refused(next);
+    tv = { ...next, Problem: null };
     if (!next.Problem) {
       open = deleting = "";
       draft = null;
@@ -110,33 +118,34 @@ async function act(method, args, did = "") {
     }
   }
   draw();
-  if (next?.Problem && next.Field) document.getElementById(`tg-${next.Field}`)?.focus();
+  if (invalid) document.getElementById(`tg-${invalid.field}`)?.focus();
+}
+
+// refused shows a view's refusal as a toast, with Edit TOML when only it
+// can make the change, and keeps the field it names to outline.
+function refused(next) {
+  const p = next.Problem;
+  if (!p) return;
+  const table = next.Table;
+  showProblem(p, { scope: "triggers", actions: p.Code === "not-in-place" ? [{ label: "Edit TOML", run: () => openTOML(table) }] : [] });
+  if (next.Field) invalid = { where: next.Where, field: next.Field };
 }
 
 function show(form) {
   open = form;
-  draft = null;
+  draft = invalid = null;
   deleting = done = "";
-  if (tv) tv.Problem = null;
   draw();
 }
 
-// problemAt is the refusal of the form at where, for field ("" for the
-// form's own), or null.
-function problemAt(where, field) {
-  if (!tv.Problem || tv.Where !== where) return null;
-  if (field === "") return tv.Field ? null : tv.Problem;
-  return tv.Field === field ? tv.Problem : null;
-}
-
+// row is a labelled form row with its hint, outlined while it is the
+// field the last refusal named (the refusal itself is a toast).
 function row(where, field, label, input, hint) {
-  const err = problemAt(where, field);
-  if (err) input.setAttribute("aria-invalid", "true");
+  if (invalid?.where === where && invalid.field === field) markInvalid(input, () => { invalid = null; });
   if (!input.id) input.id = `tg-${field}`;
   return h("div", { class: "frow" },
     h("label", { for: input.id }, label),
-    h("div", { class: "fcell" }, input,
-      err ? h("p", { class: "error", role: "alert" }, err.Message) : hint && h("p", { class: "hint" }, hint)));
+    h("div", { class: "fcell" }, input, hint && h("p", { class: "hint" }, hint)));
 }
 
 const text = (value, attrs = {}) => h("input", { class: "field left", autocomplete: "off", spellcheck: "false", value: value ?? "", ...attrs });
@@ -155,8 +164,8 @@ function draw() {
     h("div", { class: "trighead" },
       h("p", { class: "hint lead" }, `What this device does on its own in ${group}: Jobs are what it runs; Hooks run them on events in talk, Schedules at set times. They are this device's config, never shared with the Group.`),
       h("button", { class: "btn", type: "button", disabled: busy, onclick: () => openTOML("") }, "Edit TOML")),
-    tv.ListProblem && h("p", { class: "error", role: "alert" }, tv.ListProblem.Message, " ",
-      h("button", { class: "link", type: "button", onclick: () => openTOML("") }, "Fix it in Edit TOML")),
+    tv.ListProblem && problemBox(tv.ListProblem,
+      h("button", { class: "btn small", type: "button", onclick: () => openTOML("") }, "Fix it in Edit TOML")),
     done && h("p", { class: "saved", "aria-live": "polite" }, done),
     !tv.ListProblem && [jobsSection(), hooksSection(), schedulesSection()]);
 }
@@ -196,7 +205,6 @@ function jobSummary(j) {
 
 function jobRow(j) {
   const isRunning = running.has(j.Name);
-  const last = ran.get(j.Name);
   return h("div", {},
     h("div", { class: "prow" },
       h("div", { class: "who" }, h("strong", {}, j.Name), h("code", { title: jobSummary(j) }, jobSummary(j))),
@@ -208,8 +216,7 @@ function jobRow(j) {
         onclick: () => runNow(j.Name),
       }, isRunning ? "Running…" : "Run now"),
       editButton(`job:${j.Name}`)),
-    (last || problemAt(`run:${j.Name}`, "")) && h("p", { class: last?.ok ? "saved ranline" : "error ranline", role: "status" },
-      problemAt(`run:${j.Name}`, "")?.Message ?? last.text));
+    ran.has(j.Name) && h("p", { class: "saved ranline", role: "status" }, "Finished. It shows in Talk too."));
 }
 
 async function runNow(name) {
@@ -220,13 +227,19 @@ async function runNow(name) {
   let next;
   try {
     next = await call("RunJob", name);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "triggers" });
   } finally {
     running.delete(name);
   }
+  // The rest of the view is left as shown, so an open form keeps what is typed.
   if (next?.Group === group) {
-    if (next.Ran) ran.set(name, { ok: next.Ran.OK, text: next.Ran.OK ? "Finished. It shows in Talk too." : `Failed: ${next.Ran.Error}` });
-    // The rest of the view is left as shown, so an open form keeps what is typed.
-    if (next.Problem) { tv.Problem = next.Problem; tv.Where = next.Where; tv.Field = ""; }
+    showProblem(next.Problem, { scope: "triggers" });
+    if (next.Ran?.OK) ran.add(name);
+    else if (next.Ran) {
+      showProblem({ Code: "job-failed", Message: `Job ${name} ran, but failed. Its outcome shows in Talk too.`, Detail: next.Ran.Error },
+        { scope: "triggers" });
+    }
   }
   draw();
 }
@@ -313,13 +326,10 @@ function jobForm(j) {
     used.length ? `${j?.Name} is run by ${used.join(" and ")}. Take it out of them first, then it can be deleted.` : null));
 }
 
-// formActions are a form's refusal, Delete with its confirmation, Cancel
-// and Save. blocked, when set, says why Delete can't go ahead.
+// formActions are a form's Delete with its confirmation, Cancel and Save.
+// blocked, when set, says why Delete can't go ahead.
 function formActions(where, item, deleteMethod, addLabel, blocked = null) {
-  const err = problemAt(where, "");
   return [
-    err && h("div", { class: "error", role: "alert" }, err.Message,
-      err.Code === "not-in-place" && h("div", {}, h("button", { class: "btn small", type: "button", onclick: () => openTOML(tv.Table) }, "Edit TOML"))),
     deleting === where && h("div", { class: "warning", role: "alert" },
       h("p", {}, blocked ?? `Delete ${item.Name}? It is removed from this device's config.toml for ${group}.`),
       h("div", { class: "row" },
@@ -327,7 +337,7 @@ function formActions(where, item, deleteMethod, addLabel, blocked = null) {
         h("button", { class: "btn", type: "button", onclick: () => { deleting = ""; draw(); } }, "Keep"))),
     h("div", { class: "factions" },
       item && deleting !== where && h("button", { class: "btn", type: "button", disabled: busy, onclick: () => { if (read) draft = read(); deleting = where; draw(); } }, "Delete…"),
-      h("button", { class: "btn", type: "button", onclick: () => { open = deleting = ""; draft = null; tv.Problem = null; draw(); } }, "Cancel"),
+      h("button", { class: "btn", type: "button", onclick: () => { open = deleting = ""; draft = invalid = null; draw(); } }, "Cancel"),
       h("button", { class: "btn primary", type: "submit", disabled: busy }, item ? "Save" : addLabel)),
   ];
 }
@@ -466,6 +476,8 @@ async function openTOML(table) {
   let v;
   try {
     v = await call("TriggersTOML");
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "triggers" });
   } finally {
     busy = false;
   }
@@ -476,7 +488,13 @@ async function openTOML(table) {
 
 function tomlEditor() {
   const editor = area(toml.text, { rows: 26, class: "field left area mono tomlarea", "aria-label": `config.toml of ${group}` });
-  editor.addEventListener("input", () => { toml.text = editor.value; });
+  // Why the text was refused stays beside it, as it says where to fix it,
+  // until the text is edited.
+  const why = problemBox(toml.problem);
+  editor.addEventListener("input", () => {
+    toml.text = editor.value;
+    if (toml.problem) { toml.problem = null; why?.remove(); }
+  });
   const close = () => { toml = null; draw(); };
   const save = async () => {
     if (busy) return;
@@ -486,10 +504,15 @@ function tomlEditor() {
     let v;
     try {
       v = await call("SaveTriggersTOML", toml.text);
+    } catch (err) {
+      showProblem(callFailed(err), { scope: "triggers" });
     } finally {
       busy = false;
     }
-    if (v?.Group !== group) return;
+    if (v?.Group !== group) {
+      draw();
+      return;
+    }
     if (v.Problem) {
       toml.problem = v.Problem;
       draw();
@@ -521,7 +544,7 @@ function tomlEditor() {
     h("h3", {}, `config.toml of ${group}`),
     h("p", { class: "hint" }, "This device's config for the Group, as text. Saving checks it loads first: text that doesn't is refused, and nothing is written."),
     editor,
-    toml.problem && h("p", { class: "error", role: "alert" }, toml.problem.Message),
+    why,
     h("div", { class: "factions" },
       h("button", { class: "btn", type: "button", onclick: close }, "Cancel"),
       h("button", { class: "btn primary", type: "button", disabled: busy, onclick: save }, "Save")));

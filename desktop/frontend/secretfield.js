@@ -7,6 +7,7 @@
 // back here; the Vault page reveals one behind the passphrase. The Go side
 // is main.UI.Secrets and main.UI.NewSecret.
 import { call, h, put } from "./dom.js";
+import { callFailed, markInvalid, showProblem } from "./notice.js";
 
 let listed = null; // { group, names: Promise<SecretName[]> }
 
@@ -36,15 +37,22 @@ const OTHER = "\u0000other";
 function newSecret(group, fixed, done) {
   const name = h("input", { class: "field left", placeholder: "NAME_OF_SECRET", autocomplete: "off", value: fixed ?? "", "aria-label": "Secret name" });
   const value = h("input", { class: "field left", type: "password", placeholder: "Value", autocomplete: "off", "aria-label": "Secret value" });
-  const err = h("p", { class: "error", role: "alert" });
   const save = h("button", { class: "btn primary", type: "button" }, "Save Secret");
   save.addEventListener("click", async () => {
     save.disabled = true;
     try {
-      const v = await call("NewSecret", name.value.trim(), value.value);
+      let v;
+      try {
+        v = await call("NewSecret", name.value.trim(), value.value);
+      } catch (e) {
+        v = { Problem: callFailed(e) };
+      }
       if (!v || v.Problem) {
-        err.textContent = v?.Problem?.Message ?? "";
-        (v?.Field === "name" ? name : value).setAttribute("aria-invalid", "true");
+        // Used on several pages, it is a toast of none of them.
+        showProblem(v?.Problem);
+        const bad = v?.Field === "name" && !fixed ? name : value;
+        markInvalid(bad);
+        bad.focus();
         return;
       }
       listed = { group, names: Promise.resolve(v.Secrets ?? []) };
@@ -56,7 +64,6 @@ function newSecret(group, fixed, done) {
   const box = h("div", { class: "newsecret" },
     !fixed && name, value,
     h("p", { class: "hint" }, "Kept in this device's Vault for this Group. The Vault page reveals it with the passphrase."),
-    err,
     h("div", { class: "row" }, save, h("button", { class: "btn", type: "button", onclick: () => done(null) }, "Cancel")));
   setTimeout(() => (fixed ? value : name).focus());
   return box;

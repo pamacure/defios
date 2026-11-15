@@ -5,6 +5,7 @@
 // new edit-target Group, so a redraw of the app never drops what is
 // being typed. UI text says "device" for a Node.
 import { call, h, put } from "./dom.js";
+import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { secretField } from "./secretfield.js";
 
 let av = null; // the AgentsView shown
@@ -20,6 +21,8 @@ let busy = false;
 let profDraft = null;
 let provDraft = null;
 let profInputs = null; // the profile form's fields, while it shows
+// The field the last refusal named, outlined until edited: { where, field }.
+let invalid = null;
 // The Secrets chosen for an MCP Server not granted yet, by its ref.
 const pendingEnv = new Map();
 // The parts' bodies, made once: a view loaded while the page is not on
@@ -62,10 +65,17 @@ export async function agentsRefresh() {
   const next = await call("Agents", open);
   if (!next || next.Group !== g || g !== group || busy || creating || deleting || provOpen || removing) return;
   if (deviceMount.contains(document.activeElement) || groupMount.contains(document.activeElement)) return; // being typed in
-  if (JSON.stringify(next) === JSON.stringify(av)) return;
-  av = next;
+  if (JSON.stringify({ ...next, Problem: null }) === JSON.stringify(av)) return;
+  av = taken(next);
   if (!av.Open) open = "";
   draw();
+}
+
+// taken is a view read, its Problem (an open profile that could not be
+// read) shown as a toast rather than kept.
+function taken(next) {
+  showProblem(next.Problem, { scope: "agents" });
+  return { ...next, Problem: null };
 }
 
 // agentsOpen opens the profile handle, as from Talk's "Profile" link.
@@ -89,7 +99,7 @@ async function load(g) {
     provDraft = null;
   }
   group = g;
-  av = next;
+  av = taken(next);
   if (!av.Open) open = "";
   draw();
 }
@@ -99,10 +109,13 @@ async function load(g) {
 async function act(method, args, after = () => {}) {
   if (busy) return;
   busy = true;
+  invalid = null;
   draw();
   let next;
   try {
     next = await call(method, ...args);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "agents" });
   } finally {
     busy = false;
   }
@@ -110,15 +123,14 @@ async function act(method, args, after = () => {}) {
     draw();
     return;
   }
-  av = next;
+  invalid = next.Problem && next.Field ? { where: next.Where, field: next.Field } : null;
+  av = taken(next);
   if (!next.Problem) after(next);
   // A new profile added though its SYSTEM.md was not written shows as made.
   if (next.Open && next.Where === "profile" && creating) { creating = false; open = next.Open.Handle; }
   if (!av.Open && !creating) open = "";
   draw();
-  if (next.Problem && next.Field) {
-    document.getElementById(fieldID(next.Where, next.Field))?.focus();
-  }
+  if (invalid) document.getElementById(fieldID(invalid.where, invalid.field))?.focus();
 }
 
 function draw() {
@@ -129,23 +141,14 @@ function draw() {
 
 const fieldID = (where, field) => `${where.startsWith("provider") || where === "new-provider" ? "pv" : "ag"}-${field}`;
 
-// problemAt is the refusal of the form where, for field ("" for the
-// form's own), or null.
-function problemAt(where, field) {
-  if (!av.Problem || av.Where !== where) return null;
-  if (field === "") return av.Field ? null : av.Problem;
-  return av.Field === field ? av.Problem : null;
-}
-
-// row is a labelled form row with its hint, or the refusal of its field.
+// row is a labelled form row with its hint, outlined while it is the
+// field the last refusal named (the refusal itself is a toast).
 function row(where, field, label, input, hint) {
-  const err = problemAt(where, field);
-  if (err) input.setAttribute("aria-invalid", "true");
+  if (invalid?.where === where && invalid.field === field) markInvalid(input, () => { invalid = null; });
   input.id = fieldID(where, field);
   return h("div", { class: "frow" },
     h("label", { for: input.id }, label),
-    h("div", { class: "fcell" }, input,
-      err ? h("p", { class: "error", role: "alert" }, err.Message) : hint && h("p", { class: "hint" }, hint)));
+    h("div", { class: "fcell" }, input, hint && h("p", { class: "hint" }, hint)));
 }
 
 const text = (value, attrs = {}) => h("input", { class: "field left", autocomplete: "off", spellcheck: "false", value: value ?? "", ...attrs });
@@ -160,7 +163,7 @@ function drawDevice() {
       onclick: () => openProfile(p.Handle),
     }, h("strong", {}, `@${p.Handle}`), h("span", {}, [p.Provider, p.Model].filter(Boolean).join(" · ")))),
     h("button", { class: "pitem add", "aria-current": creating ? "true" : false, disabled: busy, onclick: () => {
-      creating = true; deleting = false; profDraft = null; av.Problem = null; draw();
+      creating = true; deleting = false; profDraft = null; invalid = null; draw();
     } }, "+ New agent"));
   let detail;
   if (creating) detail = profileForm(null);
@@ -168,7 +171,7 @@ function drawDevice() {
   else detail = h("p", { class: "placeholder" }, av.Profiles?.length ? "Choose an agent to edit it." : "No agents on this device yet. Add one to include it in talk.");
   put(deviceMount,
     h("p", { class: "hint lead" }, "Agents are this device's own: each runs here, and answers in the Groups and conversations that include it."),
-    av.ProfilesProblem && h("p", { class: "error", role: "alert" }, av.ProfilesProblem.Message),
+    problemBox(av.ProfilesProblem),
     av.Where === "delete" && av.Saved && h("p", { class: "saved", "aria-live": "polite" }, "Deleted."),
     h("div", { class: "pgrid" }, list, h("div", { class: "pdetail" }, detail)));
 }
@@ -176,10 +179,16 @@ function drawDevice() {
 async function openProfile(handle) {
   creating = deleting = false;
   profDraft = null;
+  invalid = null;
   pendingEnv.clear();
   open = handle;
-  const next = await call("Agents", handle);
-  if (next?.Group === group) av = next;
+  let next;
+  try {
+    next = await call("Agents", handle);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "agents" });
+  }
+  if (next?.Group === group) av = taken(next);
   draw();
 }
 
@@ -214,6 +223,7 @@ function profileForm(o) {
     },
   },
   h("h3", {}, o ? `@${o.Handle}` : "New agent"),
+  o?.SystemProblem && problemBox({ ...o.SystemProblem, Message: `Its SYSTEM.md could not be read, so it shows empty below. ${o.SystemProblem.Message}` }),
   !o && row(where, "handle", "Handle", inputs.Handle, "How talk mentions it, as @handle: lowercase letters and digits, joined by - or _."),
   row(where, "provider", "Provider", inputs.Provider, providers.length
     ? `A Provider of ${group}. In each Group it answers in, it calls the Provider by this name there.`
@@ -224,9 +234,8 @@ function profileForm(o) {
     : "How many turns one run may take. Leave empty for the default."),
   row(where, "body", "Request body", inputs.Body, "Other request options, as a JSON object. Leave empty for none."),
   row(where, "system", "SYSTEM.md", inputs.System, "Its system prompt. Each run reads it afresh, so a change applies to the next."),
-  problemAt(where, "") && h("p", { class: "error", role: "alert" }, av.Problem.Message),
   h("div", { class: "factions" }, saved,
-    !o && h("button", { class: "btn", type: "button", onclick: () => { creating = false; profDraft = null; av.Problem = null; draw(); } }, "Cancel"),
+    !o && h("button", { class: "btn", type: "button", onclick: () => { creating = false; profDraft = null; invalid = null; draw(); } }, "Cancel"),
     submit));
 }
 
@@ -253,24 +262,23 @@ function grant(method, args) {
 function grants(o) {
   const cat = av.Catalog ?? {};
   const union = (listed, granted) => [...new Set([...(listed ?? []), ...(granted ?? [])])].sort();
-  const problem = (ref) => problemAt(`grant:${ref}`, "");
   const toggle = (ref, granted, label, desc) => h("div", { class: "grant" },
     h("label", { class: "check" },
       h("input", { type: "checkbox", checked: granted, disabled: busy,
         onchange: (e) => grant(e.target.checked ? "GrantAgent" : "RevokeAgent", e.target.checked ? [o.Handle, ref, []] : [o.Handle, ref]) }),
-      h("span", {}, h("code", {}, label), desc && h("span", { class: "hint" }, desc))),
-    problem(ref) && h("p", { class: "error", role: "alert" }, problem(ref).Message));
+      h("span", {}, h("code", {}, label), desc && h("span", { class: "hint" }, desc))));
 
   const tools = union(cat.Tools, o.Tools).map((t) => toggle(t, o.Tools.includes(t), t));
   const skillDesc = Object.fromEntries((cat.Skills ?? []).map((s) => [s.Ref, s.Description]));
   const skills = union((cat.Skills ?? []).map((s) => s.Ref), o.Skills).map((ref) => toggle(ref, o.Skills.includes(ref), ref, skillDesc[ref] ?? "Its Plugin is not on this device."));
   const servers = new Map((cat.Servers ?? []).map((s) => [s.Ref, s]));
   for (const ref of Object.keys(o.MCP ?? {})) if (!servers.has(ref)) servers.set(ref, { Ref: ref, Env: o.MCP[ref], CommandLine: "" });
-  const mcp = [...servers.values()].sort((a, b) => a.Ref.localeCompare(b.Ref)).map((s) => server(o, s, problem(s.Ref)));
+  const mcp = [...servers.values()].sort((a, b) => a.Ref.localeCompare(b.Ref)).map((s) => server(o, s));
 
   return h("section", { class: "gsec", "aria-label": "Grants" },
     h("h3", {}, "Grants"),
     h("p", { class: "hint" }, "What it may use. A change applies at once, from its next run."),
+    av.CatalogProblem && problemBox({ ...av.CatalogProblem, Message: `This device's Plugins could not be read, so their Skills and MCP Servers may be missing below. ${av.CatalogProblem.Message}` }),
     h("h4", {}, "Tools"), h("div", { class: "grants" }, tools),
     h("h4", {}, "Skills"), skills.length ? h("div", { class: "grants" }, skills) : h("p", { class: "placeholder" }, "No Plugin on this device brings a Skill."),
     h("h4", {}, "MCP Servers"), mcp.length ? h("div", { class: "grants" }, mcp) : h("p", { class: "placeholder" }, "No Plugin on this device brings an MCP Server."));
@@ -278,7 +286,7 @@ function grants(o) {
 
 // server is an MCP Server's grant: on or off, and which of the variables
 // it asks for it is given, each the Secret of that name in this Group.
-function server(o, s, err) {
+function server(o, s) {
   const granted = Object.hasOwn(o.MCP ?? {}, s.Ref);
   if (!granted && !pendingEnv.has(s.Ref)) pendingEnv.set(s.Ref, new Set(s.Env));
   const given = granted ? new Set(o.MCP[s.Ref]) : pendingEnv.get(s.Ref);
@@ -300,8 +308,7 @@ function server(o, s, err) {
             if (e.target.checked) given.add(name); else given.delete(name);
             if (granted) regrant();
           } }),
-        secretField({ group, fixed: name }).el))),
-    err && h("p", { class: "error", role: "alert" }, err.Message));
+        secretField({ group, fixed: name }).el))));
 }
 
 function included(o) {
@@ -315,11 +322,9 @@ function included(o) {
 
 function deleteBox(o) {
   const places = o.IncludedIn ?? [];
-  const err = problemAt("delete", "");
   if (!deleting) {
     return h("section", { class: "gsec" },
-      h("button", { class: "btn", disabled: busy, onclick: () => { deleting = true; av.Problem = null; draw(); } }, `Delete @${o.Handle}…`),
-      err && h("p", { class: "error", role: "alert" }, err.Message));
+      h("button", { class: "btn", disabled: busy, onclick: () => { deleting = true; draw(); } }, `Delete @${o.Handle}…`));
   }
   return h("section", { class: "gsec" },
     h("div", { class: "warning", role: "alert" },
@@ -331,8 +336,7 @@ function deleteBox(o) {
       h("div", { class: "row" },
         h("button", { class: "btn danger", disabled: busy || places.length > 0,
           onclick: () => act("DeleteAgentProfile", [o.Handle], () => { open = ""; deleting = false; profDraft = null; }) }, "Delete"),
-        h("button", { class: "btn", onclick: () => { deleting = false; draw(); } }, "Cancel"))),
-    err && h("p", { class: "error", role: "alert" }, err.Message));
+        h("button", { class: "btn", onclick: () => { deleting = false; draw(); } }, "Cancel"))));
 }
 
 // ---- Group: Providers ----
@@ -342,14 +346,14 @@ function drawGroup() {
   put(groupMount,
     h("h3", {}, "Providers"),
     h("p", { class: "hint lead" }, `The LLM APIs agents call in ${group}. They are this device's own config, never shared with the Group.`),
-    av.ProvidersProblem && h("p", { class: "error", role: "alert" }, av.ProvidersProblem.Message),
+    problemBox(av.ProvidersProblem),
     av.Where === "provider:" + removing && av.Saved && h("p", { class: "saved", "aria-live": "polite" }, "Removed."),
     h("div", { class: "providers" },
       list.length === 0 && provOpen !== NEW && h("p", { class: "placeholder" }, `${group} has no Providers yet.`),
       list.map((p) => providerRow(p)),
       provOpen === NEW
         ? providerForm(null)
-        : h("button", { class: "btn", disabled: busy, onclick: () => { provOpen = NEW; provDraft = null; av.Problem = null; draw(); } }, "+ Add Provider")));
+        : h("button", { class: "btn", disabled: busy, onclick: () => { provOpen = NEW; provDraft = null; invalid = null; draw(); } }, "+ Add Provider")));
 }
 
 function providerRow(p) {
@@ -357,7 +361,7 @@ function providerRow(p) {
     h("div", { class: "who" }, h("strong", {}, p.Alias), h("code", { title: p.URL }, p.URL)),
     h("span", { class: "chip" }, p.Shape),
     h("span", { class: `chip ${p.APIKey ? "ok" : ""}` }, p.APIKey ? `Key: ${p.APIKey}` : "No API key"),
-    provOpen !== p.Alias && h("button", { class: "link", disabled: busy, onclick: () => { provOpen = p.Alias; provDraft = null; removing = ""; av.Problem = null; draw(); } }, "Edit"));
+    provOpen !== p.Alias && h("button", { class: "link", disabled: busy, onclick: () => { provOpen = p.Alias; provDraft = null; removing = ""; invalid = null; draw(); } }, "Edit"));
   return h("div", { class: "provider" }, head, provOpen === p.Alias && providerForm(p));
 }
 
@@ -402,13 +406,12 @@ function providerForm(p) {
   row(where, "api_path", "API path", apiPath, "Its suffix picks the API: /messages, /chat/completions or /responses."),
   keyRow,
   row(where, "body", "Request body", body, "Options every agent on it sends, as a JSON object. Leave empty for none."),
-  problemAt(where, "") && h("p", { class: "error", role: "alert" }, av.Problem.Message),
   h("div", { class: "factions" }, saved,
     p && (removing === p.Alias
       ? h("span", { class: "confirm" }, `Remove ${p.Alias}? Agents on it stop working in ${group}.`,
         h("button", { class: "btn danger", type: "button", disabled: busy, onclick: () => act("RemoveProvider", [p.Alias], () => { provOpen = ""; provDraft = null; }) }, "Remove"),
         h("button", { class: "btn", type: "button", onclick: () => { removing = ""; draw(); } }, "Keep"))
       : h("button", { class: "btn", type: "button", disabled: busy, onclick: () => { removing = p.Alias; draw(); } }, "Remove…")),
-    h("button", { class: "btn", type: "button", onclick: () => { provOpen = removing = ""; provDraft = null; av.Problem = null; draw(); } }, "Cancel"),
+    h("button", { class: "btn", type: "button", onclick: () => { provOpen = removing = ""; provDraft = null; invalid = null; draw(); } }, "Cancel"),
     h("button", { class: "btn primary", type: "submit", disabled: busy }, p ? "Save" : "Add Provider")));
 }

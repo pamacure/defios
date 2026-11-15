@@ -7,12 +7,14 @@
 // on its own changes, so a redraw of the app never drops what is typed.
 // UI text says "device" for a Node.
 import { call, h, put } from "./dom.js";
+import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 
 let pv = null; // the PluginsView shown
 let loading = null; // the load under way: its promise
 let busy = ""; // what runs: "fetch", "commit", "remove:<name>" or ""
 let source = ""; // the source typed
 let removing = ""; // the Plugin whose Remove asks to confirm
+let badSource = false; // the source was refused: outlined until edited
 let goTo = () => {}; // opens another page, as go in app.js
 const mount = h("div", { class: "agents plugins" });
 
@@ -44,24 +46,31 @@ export async function pluginsRefresh() {
 async function act(what, method, ...args) {
   if (busy) return;
   busy = what;
+  badSource = false;
   draw();
   let next;
   try {
     next = await call(method, ...args);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "plugins" });
   } finally {
     busy = "";
   }
   if (next) {
-    pv = next;
+    const p = next.Problem;
+    // Refused while agents grant its items: a way to each, to revoke them.
+    const actions = p?.Code === "plugin-granted"
+      ? (next.Grants ?? []).map((g) => ({ label: `Open @${g.Handle}`, run: () => goTo("agents", { profile: g.Handle }) }))
+      : [];
+    showProblem(p, { scope: "plugins", actions });
+    badSource = !!p && next.Field === "source";
+    pv = { ...next, Problem: null };
     removing = "";
     if (method === "StagePluginInstall" && next.Stage) source = "";
   }
   draw();
-  if (next?.Problem && next.Field === "source") document.getElementById("pl-source")?.focus();
+  if (badSource) document.getElementById("pl-source")?.focus();
 }
-
-// problemAt is the refusal of what is at where, or null.
-const problemAt = (where) => (pv.Problem && pv.Where === where ? pv.Problem : null);
 const shortPin = (pin) => (/^[0-9a-f]{40}$/.test(pin) ? pin.slice(0, 12) : pin);
 
 function draw() {
@@ -72,20 +81,19 @@ function draw() {
     pv.Stage ? preview(pv.Stage) : installForm(installed.length > 0),
     pv.Done && h("p", { class: "saved", "aria-live": "polite" }, pv.Done),
     pv.ListProblem
-      ? h("p", { class: "error", role: "alert" }, pv.ListProblem.Message)
+      ? problemBox(pv.ListProblem)
       : h("div", { class: "providers" }, (pv.Plugins ?? []).map(pluginCard)));
 }
 
 // installForm takes a source to fetch a Plugin from, and offers Update all.
 function installForm(anyInstalled) {
-  const err = problemAt("install");
   const input = h("input", {
     id: "pl-source", class: "field left mono", autocomplete: "off", spellcheck: "false", value: source,
     placeholder: "https://github.com/acme/audit-plugin@v1.2.0 or /path/on/this/device",
-    "aria-invalid": err ? "true" : null, disabled: !!busy,
+    disabled: !!busy,
     oninput: (e) => { source = e.target.value; },
   });
-  const allErr = problemAt("update-all");
+  if (badSource) markInvalid(input, () => { badSource = false; });
   return h("form", {
     class: "gform plinstall",
     onsubmit: (e) => { e.preventDefault(); act("fetch", "StagePluginInstall", input.value); },
@@ -95,14 +103,12 @@ function installForm(anyInstalled) {
     h("div", { class: "fcell" },
       h("div", { class: "inline" }, input,
         h("button", { class: "btn primary", type: "submit", disabled: !!busy }, busy === "fetch" ? "Fetching…" : "Fetch")),
-      err ? h("p", { class: "error", role: "alert" }, err.Message)
-        : h("p", { class: "hint" }, "A git URL, url@ref for a branch, tag or commit, or a path on this device. You see what it brings before anything is installed."))),
+      h("p", { class: "hint" }, "A git URL, url@ref for a branch, tag or commit, or a path on this device. You see what it brings before anything is installed."))),
   anyInstalled && h("div", { class: "frow" },
     h("span", {}),
     h("div", { class: "fcell" },
       h("button", { class: "btn start", type: "button", disabled: !!busy, onclick: () => act("fetch", "StagePluginUpdate", "") },
-        busy === "fetch" ? "Fetching…" : "Update all…"),
-      allErr && h("p", { class: "error", role: "alert" }, allErr.Message))));
+        busy === "fetch" ? "Fetching…" : "Update all…"))));
 }
 
 // preview shows what the staged install or update brings, to Commit or
@@ -110,7 +116,6 @@ function installForm(anyInstalled) {
 function preview(stage) {
   const plugins = stage.Plugins ?? [];
   const toCommit = plugins.filter((p) => !p.UpToDate && !p.Problem);
-  const err = problemAt("commit");
   const title = stage.Install ? `Install ${plugins[0]?.Name}?`
     : toCommit.length === 0 ? "Nothing to update" : `Update ${toCommit.map((p) => p.Name).join(", ")}?`;
   return h("section", { class: "plpreview", "aria-label": "Preview" },
@@ -120,10 +125,9 @@ function preview(stage) {
       : "Fetched again from each Plugin's source, at the ref it was installed at. Nothing changes until you update."),
     plugins.map((sp) => h("div", { class: "provider" },
       sp.Problem
-        ? h("div", { class: "prow" }, h("div", { class: "who" }, h("strong", {}, sp.Name)), h("span", { class: "chip bad" }, "Not fetched"),
-          h("p", { class: "error", role: "alert" }, sp.Problem.Message))
+        ? [h("div", { class: "prow" }, h("div", { class: "who" }, h("strong", {}, sp.Name)), h("span", { class: "chip bad" }, "Not fetched")),
+          problemBox(sp.Problem)]
         : stagedBody(sp, stage.Install))),
-    err && h("p", { class: "error", role: "alert" }, err.Message),
     h("div", { class: "factions" },
       h("button", { class: "btn", type: "button", disabled: !!busy, onclick: () => act("cancel", "CancelPlugins") }, toCommit.length ? "Cancel" : "Close"),
       toCommit.length > 0 && h("button", { class: "btn primary", type: "button", disabled: !!busy, onclick: () => act("commit", "CommitPlugins", stage.ID) },
@@ -163,7 +167,6 @@ function brings(p) {
 function pluginCard(p) {
   const kind = p.BuiltIn ? ["chip", "Built in"] : p.Missing ? ["chip warn", "Missing"] : ["chip ok", "Installed"];
   const where = `remove:${p.Name}`;
-  const err = problemAt(where) ?? problemAt(`update:${p.Name}`);
   return h("div", { class: "provider" },
     h("div", { class: "prow" },
       h("div", { class: "who" }, h("strong", {}, p.Name),
@@ -171,12 +174,9 @@ function pluginCard(p) {
       p.Version && h("span", { class: "chip" }, p.Version),
       h("span", { class: kind[0] }, kind[1]),
       !p.BuiltIn && h("button", { class: "btn small", type: "button", disabled: !!busy || !!pv.Stage, onclick: () => act("fetch", "StagePluginUpdate", p.Name) }, "Update…"),
-      !p.BuiltIn && removing !== p.Name && h("button", { class: "link", type: "button", disabled: !!busy, onclick: () => { removing = p.Name; pv.Problem = null; draw(); } }, "Remove…")),
+      !p.BuiltIn && removing !== p.Name && h("button", { class: "link", type: "button", disabled: !!busy, onclick: () => { removing = p.Name; draw(); } }, "Remove…")),
     p.Missing && h("p", { class: "notice inline" }, "Pinned on this device but not installed, as a restore leaves a Plugin it could not fetch. Update fetches it again."),
     h("div", { class: "pldetail" }, brings(p)),
-    err && h("div", { class: "error plerr", role: "alert" }, err.Message,
-      err.Code === "plugin-granted" && h("div", { class: "row" }, (pv.Grants ?? []).map((g) =>
-        h("button", { class: "link", type: "button", onclick: () => goTo("agents", { profile: g.Handle }) }, `Open @${g.Handle}`)))),
     removing === p.Name && h("div", { class: "warning", role: "alert" },
       h("p", {}, `Remove ${p.Name} from this device? Its Skills and MCP Servers can no longer be granted.`),
       h("div", { class: "row" },

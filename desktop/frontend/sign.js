@@ -4,6 +4,7 @@
 // side (main.UI.SignForm, FillSign, ProposeSign). UI text says "device" for
 // a Node.
 import { call, h } from "./dom.js";
+import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 
 // ctx is the Talk page's: { ts() the TalkState, act(method, ...args),
 // draw(), blocks(view) rendering a Transcript view }.
@@ -101,7 +102,10 @@ function actions(c, busy) {
       onsubmit: async (e) => {
         e.preventDefault();
         const next = await ctx.act("RefuseSign", c.MsgID, cui.reason.trim());
-        if (next && !next.Problem) { cui.refusing = ""; cui.reason = ""; ctx.draw(); }
+        if (next && !next.Problem) { cui.refusing = ""; cui.reason = ""; ctx.draw(); return; }
+        // The toast says why; the reason is what to change.
+        const why = document.querySelector('[data-field="refuse-reason"]');
+        if (why && next?.Problem?.Code === "invalid") { markInvalid(why); why.focus(); }
       },
     },
     reasonField(),
@@ -148,7 +152,9 @@ function runRow(r) {
           j.Chain && h("button", {
             class: "link", type: "button", "aria-expanded": open ? "true" : "false", onclick: () => toggleRun(j),
           }, open ? "Hide run" : "See its run")),
-        j.Error && h("p", { class: "error" }, j.Error),
+        // The chip says it failed; why, as the Job words it, is there to open.
+        j.State === "failed" && j.Error && h("details", { class: "why" }, h("summary", {}, "Why it failed"), h("pre", {}, j.Error)),
+        j.State !== "failed" && j.Error && h("p", { class: "hint" }, j.Error),
         open && ctx.blocks(open));
     }));
 }
@@ -162,7 +168,7 @@ async function toggleRun(j) {
   }
   cui.runs.set(key, {});
   ctx.draw();
-  const v = await call("RunTranscript", j.Conversation, j.Chain, j.Handle);
+  const v = await call("RunTranscript", j.Conversation, j.Chain, j.Handle).catch((err) => ({ Problem: callFailed(err) }));
   if (cui.runs.has(key)) cui.runs.set(key, v.Problem ? { problem: v.Problem } : { blocks: v.Blocks ?? [] });
   ctx.draw();
 }
@@ -190,7 +196,7 @@ export const formOpen = () => form.open;
 export async function openSignForm() {
   const ts = ctx.ts();
   const keys = ts.Conversations.filter((c) => c.ID !== "");
-  Object.assign(form, { open: true, step: "edit", reason: "", txs: [blankTx()], filled: null, problem: null, networks: [] });
+  Object.assign(form, { open: true, step: "edit", reason: "", txs: [blankTx()], filled: null, unread: null, networks: [] });
   form.conv = keys.some((k) => k.ID === ts.Open) ? ts.Open : keys[0]?.ID ?? "";
   ctx.draw();
   await loadNetworks();
@@ -198,9 +204,15 @@ export async function openSignForm() {
 
 async function loadNetworks() {
   if (!form.conv) return;
-  const v = await call("SignForm", form.conv);
+  let v;
+  try {
+    v = await call("SignForm", form.conv);
+  } catch (err) {
+    v = { Problem: callFailed(err) };
+  }
   form.networks = v.Networks ?? [];
-  form.problem = v.Problem ?? null;
+  // Networks that can't be read stay so while the form is open: shown in it.
+  form.unread = v.Problem ?? null;
   for (const tx of form.txs) if (!form.networks.some((n) => n.Alias === tx.network)) tx.network = form.networks[0]?.Alias ?? "";
   ctx.draw();
 }
@@ -220,12 +232,18 @@ function draft() {
   };
 }
 
+// step calls method for the form; a refusal is a toast, above the form,
+// and leaves the form as it was.
 async function step(method, ...args) {
   form.busy = true;
-  form.problem = null;
   ctx.draw();
   try {
-    return await call(method, ...args);
+    const v = await call(method, ...args);
+    showProblem(v?.Problem, { scope: "talk" });
+    return v;
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "talk" });
+    return null;
   } finally {
     form.busy = false;
     ctx.draw();
@@ -234,7 +252,7 @@ async function step(method, ...args) {
 
 async function fill() {
   const v = await step("FillSign", draft());
-  if (v.Problem) { form.problem = v.Problem; ctx.draw(); return; }
+  if (!v || v.Problem) return;
   form.filled = v;
   form.step = "review";
   ctx.draw();
@@ -242,7 +260,7 @@ async function fill() {
 
 async function propose() {
   const v = await step("ProposeSign", form.conv, form.reason.trim(), form.filled.Transactions);
-  if (v.Problem) { form.problem = v.Problem; ctx.draw(); return; }
+  if (!v || v.Problem) return;
   form.open = false;
   await ctx.act("FocusSign", ctx.ts().Group, form.conv, v.MsgID);
 }
@@ -264,7 +282,7 @@ export function signForm() {
     h("div", { class: "modal signform", role: "dialog", "aria-modal": "true", "aria-label": "New Sign Request" },
       h("header", {}, h("h2", {}, form.step === "review" ? "Review the Sign Request" : "New Sign Request"),
         h("button", { class: "btn small", type: "button", "aria-label": "Close", onclick: closeForm }, "✕")),
-      form.problem && h("div", { class: "banner", role: "alert" }, form.problem.Message),
+      problemBox(form.unread),
       body));
 }
 

@@ -6,6 +6,7 @@
 // only on its own changes or a new edit-target Group, so a redraw of the
 // app never drops what is typed. UI text says "device" for a Node.
 import { call, h, put } from "./dom.js";
+import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { secretField } from "./secretfield.js";
 
 let nv = null; // the NetworksView shown
@@ -20,6 +21,8 @@ let draft = null;
 let read = null;
 let removing = ""; // the form whose Remove asks to confirm
 let done = ""; // what the last change did, for the list
+// The field the last refusal named, outlined until edited: { where, field }.
+let invalid = null;
 let goTo = () => {}; // opens another page, as go in app.js
 const mount = h("div", { class: "agents networks" });
 
@@ -64,7 +67,7 @@ async function load(g) {
   if (!next || next.Group !== g) return;
   if (g !== group) {
     open = removing = done = "";
-    draft = null;
+    draft = invalid = null;
   }
   group = g;
   nv = next;
@@ -76,15 +79,22 @@ async function act(method, args, did) {
   if (busy) return;
   if (read) draft = read();
   busy = true;
+  invalid = null;
+  done = "";
   draw();
   let next;
   try {
     next = await call(method, ...args);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "networks" });
   } finally {
     busy = false;
   }
   if (next?.Group === group) {
-    nv = next;
+    // A config.toml that does not load shows in the page, not as a toast.
+    if (next.Problem?.Code !== "config-error") showProblem(next.Problem, { scope: "networks" });
+    invalid = next.Problem && next.Field ? { where: next.Where, field: next.Field } : null;
+    nv = { ...next, Problem: null };
     if (!next.Problem) {
       open = removing = "";
       draft = null;
@@ -92,31 +102,24 @@ async function act(method, args, did) {
     }
   }
   draw();
-  if (next?.Problem && next.Field) document.getElementById(`nw-${next.Field}`)?.focus();
+  if (invalid) document.getElementById(`nw-${invalid.field}`)?.focus();
 }
 
 function show(form) {
   open = form;
-  draft = null;
+  draft = invalid = null;
   removing = done = "";
-  if (nv) nv.Problem = null;
   draw();
 }
 
-function problemAt(where, field) {
-  if (!nv.Problem || nv.Where !== where) return null;
-  if (field === "") return nv.Field ? null : nv.Problem;
-  return nv.Field === field ? nv.Problem : null;
-}
-
+// row is a labelled form row with its hint, outlined while it is the
+// field the last refusal named (the refusal itself is a toast).
 function row(where, field, label, input, hint) {
-  const err = problemAt(where, field);
-  if (err) input.setAttribute("aria-invalid", "true");
+  if (invalid?.where === where && invalid.field === field) markInvalid(input, () => { invalid = null; });
   if (!input.id) input.id = `nw-${field}`;
   return h("div", { class: "frow" },
     h("label", { for: input.id }, label),
-    h("div", { class: "fcell" }, input,
-      err ? h("p", { class: "error", role: "alert" }, err.Message) : hint && h("p", { class: "hint" }, hint)));
+    h("div", { class: "fcell" }, input, hint && h("p", { class: "hint" }, hint)));
 }
 
 const text = (value, attrs = {}) => h("input", { class: "field left", autocomplete: "off", spellcheck: "false", value: value ?? "", ...attrs });
@@ -127,8 +130,8 @@ function draw() {
   if (!nv) return;
   read = null;
   if (nv.ConfigProblem) {
-    put(mount, h("div", { class: "error", role: "alert" }, nv.ConfigProblem.Message, " ",
-      h("button", { class: "link", type: "button", onclick: () => goTo("triggers", { toml: true }) }, "Open Edit TOML")));
+    put(mount, problemBox(nv.ConfigProblem,
+      h("button", { class: "btn small", type: "button", onclick: () => goTo("triggers", { toml: true }) }, "Open Edit TOML")));
     return;
   }
   const list = nv.Networks ?? [];
@@ -190,7 +193,6 @@ function networkForm(n) {
   const readAll = () => ({ ...d, Alias: n ? n.Alias : alias.value.trim(), Type: type.value, ...readType(), RPCURLs: urls.map((u) => u.read()) });
   read = readAll;
   type.addEventListener("change", () => { draft = { ...readAll(), Type: type.value }; draw(); });
-  const err = problemAt(where, "");
   return h("form", {
     class: n ? "gform pform" : "gform pform new",
     onsubmit: (e) => {
@@ -205,7 +207,6 @@ function networkForm(n) {
   fields,
   row(where, "rpc_urls", "RPC endpoints", h("div", { class: "stack" }, urls.map((u) => u.el), addURL),
     "Tried in order. A plain URL may not carry a key: a URL with a key in it belongs in a Secret."),
-  err && h("div", { class: "error", role: "alert" }, err.Message),
   removing === where && h("div", { class: "warning", role: "alert" },
     h("p", {}, `Remove ${n.Alias}? This device then refuses Sign Requests for ${n.Chain} in ${group}.`),
     h("div", { class: "row" },
@@ -213,6 +214,6 @@ function networkForm(n) {
       h("button", { class: "btn", type: "button", onclick: () => { removing = ""; draw(); } }, "Keep"))),
   h("div", { class: "factions" },
     n && removing !== where && h("button", { class: "btn", type: "button", disabled: busy, onclick: () => { draft = readAll(); removing = where; draw(); } }, "Remove…"),
-    h("button", { class: "btn", type: "button", onclick: () => { open = removing = ""; draft = null; nv.Problem = null; draw(); } }, "Cancel"),
+    h("button", { class: "btn", type: "button", onclick: () => { open = removing = ""; draft = invalid = null; draw(); } }, "Cancel"),
     h("button", { class: "btn primary", type: "submit", disabled: busy }, n ? "Save" : "Add Network")));
 }

@@ -7,6 +7,7 @@
 // form is drawn once per Group, so a redraw of the app never drops what is
 // being typed. UI text says "device" for a Node.
 import { call, h } from "./dom.js";
+import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 
 let gv = null; // the GroupSettingsView shown
 let rv = null; // the Roster shown: the GroupRoster view, for gv's Group
@@ -23,6 +24,7 @@ let busy = false;
 let loading = "";
 let timer = null;
 let unreadable = false; // the settings could not be read, so no form shows
+let invalid = ""; // the field the last refusal named, outlined until edited
 
 const REFRESH_MS = 5000;
 
@@ -133,20 +135,18 @@ function drawForm() {
     return;
   }
   if (unreadable) {
-    formBox.replaceChildren(h("p", { class: "error", role: "alert" }, gv.Problem.Message));
+    formBox.replaceChildren(problemBox(gv.Problem));
     return;
   }
   const inputs = {};
   // edited marks the form typed in, so a refresh keeps it as it is.
   const edited = (el) => el.addEventListener("input", () => { dirty = true; saved.textContent = ""; });
+  // A refusal is a toast; the field it names is outlined until edited.
   const row = (f, input) => {
-    const err = gv.Field === f.field && gv.Problem;
-    if (err) input.setAttribute("aria-invalid", "true");
+    if (invalid === f.field) markInvalid(input, () => { invalid = ""; });
     return h("div", { class: "frow" },
       h("label", { for: `gs-${f.field}` }, f.label),
-      h("div", { class: "fcell" },
-        input,
-        err ? h("p", { class: "error", role: "alert" }, gv.Problem.Message) : f.hint && h("p", { class: "hint" }, f.hint)));
+      h("div", { class: "fcell" }, input, f.hint && h("p", { class: "hint" }, f.hint)));
   };
   const rows = FIELDS.map((f) => {
     const input = h("input", {
@@ -170,7 +170,7 @@ function drawForm() {
       : "None is set. Paste a pre-auth key from the headscale server to keep it in this device's Vault.",
   }, key));
 
-  const saved = h("span", { class: "saved", "aria-live": "polite" }, gv.Saved && !gv.Problem ? "Saved." : "");
+  const saved = h("span", { class: "saved", "aria-live": "polite" }, gv.Saved ? "Saved." : "");
   const submit = h("button", { class: "btn primary", type: "submit", disabled: busy }, "Save");
   const form = h("form", {
     class: "gform",
@@ -180,19 +180,25 @@ function drawForm() {
       for (const [k, el] of Object.entries(inputs)) d[k] = el.value.trim();
       busy = true;
       submit.disabled = true;
+      invalid = "";
       try {
         const next = await call("SaveGroupSettings", d);
-        if (next && next.Group === formGroup) show(next, true);
+        if (next && next.Group === formGroup) {
+          showProblem(next.Problem, { scope: "settings" });
+          invalid = next.Problem ? next.Field ?? "" : "";
+          show({ ...next, Problem: null }, true);
+        }
+      } catch (err) {
+        showProblem(callFailed(err), { scope: "settings" });
       } finally {
         busy = false;
         submit.disabled = false;
       }
       // Back to the field refused, with what was typed kept.
-      if (gv.Field) formBox.querySelector(`#gs-${gv.Field}`)?.focus();
+      if (invalid) formBox.querySelector(`#gs-${invalid}`)?.focus();
     },
   },
   rows,
-  gv.Problem && !gv.Field && h("p", { class: "error", role: "alert" }, gv.Problem.Message),
   h("div", { class: "factions" }, saved, submit));
   formBox.replaceChildren(
     h("h3", {}, "Group settings"),
@@ -266,7 +272,7 @@ function deviceUsage() {
     h("h3", {}, "Device Usage"),
     h("p", { class: "hint" }, "What DeFiOS takes up on this computer."),
     gv.UsageProblem
-      ? h("p", { class: "error" }, gv.UsageProblem.Message)
+      ? problemBox(gv.UsageProblem)
       : u && h("div", { class: "stats" },
         stat(`Disk for ${gv.Group}`, bytes(u.GroupBytes)),
         stat("Disk for this device", bytes(u.NodeBytes)),
@@ -285,7 +291,7 @@ function tokenUsage() {
     h("h3", {}, "Token Usage"),
     h("p", { class: "hint" }, `Tokens this device's agents used in ${gv.Group}, from the runs it kept.`),
     gv.TokensProblem
-      ? h("p", { class: "error" }, gv.TokensProblem.Message)
+      ? problemBox(gv.TokensProblem)
       : list.length === 0
         ? h("p", { class: "placeholder" }, "No agent has run on this device in this Group yet.")
         : h("table", { class: "tokens" },

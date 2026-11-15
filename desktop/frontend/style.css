@@ -557,6 +557,45 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
   .plugins .inline { flex-direction: column; }
 }
 
+/* Problems (notice.js): a toast for what happened once, top right below
+   the header, clear of the forms' actions (bottom right) and
+   above every page; a problembox for a state that lasts, in the page. */
+.toasts { position: fixed; right: 16px; top: 68px; z-index: 50; display: flex; flex-direction: column; gap: 8px; width: min(400px, calc(100vw - 32px)); pointer-events: none; }
+/* On Talk, below its chat header and the Clear and About buttons. */
+body[data-page="talk"] .toasts { top: 116px; }
+.toast { position: relative; overflow: hidden; pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; padding: 12px 10px 14px 12px; border: 1px solid var(--line); border-left: 4px solid var(--danger); border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); animation: toast-in 160ms ease-out; }
+.toast.leaving { opacity: 0; transform: translateY(-6px); transition: opacity 160ms, transform 160ms; }
+.toast .mark { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--danger); color: #fff; font-weight: 700; font-size: 13px; }
+.toast .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.toast p { margin: 0; font-size: 13px; line-height: 1.45; }
+.toast .row { display: flex; flex-wrap: wrap; gap: 6px; }
+.toast .dismiss { flex: none; width: 24px; height: 24px; margin: -4px -2px 0 0; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.toast .dismiss:hover { background: var(--bg); color: var(--text); }
+.toast .bar { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--danger); opacity: 0.35; transform-origin: left; animation: toast-time linear forwards; }
+.toast.held .bar { animation-play-state: paused; }
+:is(.toast, .problembox) details { font-size: 12px; }
+:is(.toast, .problembox) summary { cursor: pointer; color: var(--muted); }
+:is(.toast, .problembox) pre { margin: 6px 0 0; padding: 8px; max-height: 160px; overflow: auto; border-radius: var(--radius-s); background: var(--bg); color: var(--text-soft); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } }
+@keyframes toast-time { to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+  .toast.leaving { transition: none; }
+  .toast .bar { display: none; }
+}
+.problembox { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-s); border-left: 4px solid var(--danger); background: var(--danger-bg); color: var(--text); font-size: 13px; line-height: 1.5; }
+.problembox p { margin: 0; }
+.problembox .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.plugins .provider > .problembox { margin: 0 12px 12px; }
+.problemline { color: var(--danger); font-size: 13px; }
+.problemline p { margin: 0; }
+.problemline details { margin-top: 4px; font-size: 12px; color: var(--text-soft); }
+.problemline summary { cursor: pointer; color: var(--muted); }
+.problemline pre { margin: 6px 0 0; padding: 8px; max-height: 140px; overflow: auto; border-radius: var(--radius-s); background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font-size: 12px; }
+.job .why { font-size: 12px; color: var(--text-soft); }
+.job .why summary { cursor: pointer; color: var(--muted); }
+.job .why pre { margin: 4px 0 0; padding: 6px 8px; border-radius: var(--radius-s); background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* ------------------------------------------------------------------
    The look: bricks that snap together. Quantico for titles and the
    numbers that matter; a solid lower edge instead of soft shadow, which

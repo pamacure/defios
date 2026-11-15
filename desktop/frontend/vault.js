@@ -6,6 +6,7 @@
 // on its own changes or a new edit-target Group, so a redraw of the app
 // never drops what is being typed. UI text says "device" for a Node.
 import { call, h, put } from "./dom.js";
+import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { SOURCE, forgetSecrets, sourceChip } from "./secretfield.js";
 
 let vv = null; // the VaultView shown
@@ -16,6 +17,8 @@ let setting = ""; // the Secret whose value form shows; NEW for a new one
 let revealing = ""; // the Secret whose passphrase prompt shows
 let removing = ""; // the Secret whose Remove asks to confirm
 let shown = null; // { name, value } revealed, until the next draw
+// The field the last refusal named, outlined until edited: { where, field }.
+let invalid = null;
 // The parts' bodies, made once: a view loaded while the page is not on
 // screen draws into them, ready for when it is.
 const deviceMount = h("div", { class: "vault" });
@@ -72,11 +75,19 @@ export async function vaultRefresh() {
 // or the "Back up now" banner. It resolves to the VaultView after, or null
 // when no file was chosen.
 export async function backupNow() {
-  const file = await call("ChooseBackupDestination");
-  if (!file) return null;
-  const next = await call("BackupTo", file);
+  let next;
+  try {
+    const file = await call("ChooseBackupDestination");
+    if (!file) return null;
+    next = await call("BackupTo", file);
+  } catch (err) {
+    showProblem(callFailed(err));
+    return null;
+  }
+  // From the banner it may be on any page, so it is no page's toast.
+  showProblem(next?.Problem);
   if (next && next.Group === group) {
-    vv = next;
+    vv = { ...next, Problem: null };
     draw();
   }
   return next;
@@ -108,20 +119,32 @@ async function act(method, args, after = () => {}) {
   if (busy) return;
   busy = true;
   shown = null;
+  invalid = null;
   draw();
   let next;
   try {
     next = await call(method, ...args);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "vault" });
   } finally {
     busy = false;
   }
   if (next && !next.Problem) after();
-  if (next && next.Group === group) vv = next;
+  if (next && next.Group === group) {
+    showProblem(next.Problem, { scope: "vault" });
+    invalid = next.Problem && next.Field ? { where: next.Where, field: next.Field } : null;
+    vv = { ...next, Problem: null };
+  }
   draw();
 }
 
-const problemAt = (where) => vv?.Problem && vv.Where === where ? vv.Problem : null;
-const doneAt = (where, done) => !vv?.Problem && vv?.Where === where && vv?.Done === done;
+// mark outlines input if it is the field the last refusal named.
+function mark(input, where, field) {
+  if (invalid?.where === where && invalid.field === field) markInvalid(input, () => { invalid = null; });
+  else input.removeAttribute("aria-invalid");
+  return input;
+}
+const doneAt = (where, done) => vv?.Where === where && vv?.Done === done;
 
 function draw() {
   if (!vv) return;
@@ -135,7 +158,6 @@ function when(t) {
 }
 
 function backupSection() {
-  const err = problemAt("backup");
   return h("section", { class: "vsec", "aria-label": "Backup" },
     h("h3", {}, "Backup"),
     h("p", { class: "hint" }, "A Backup holds this device's keys, Secrets and settings for every Group, sealed under its passphrase. Keep it off this computer: with it and the passphrase, this device can be restored elsewhere."),
@@ -143,8 +165,7 @@ function backupSection() {
       h("button", { class: "btn primary", type: "button", disabled: busy, onclick: () => { if (!busy) backupNow(); } }, "Back up now"),
       h("span", { class: doneAt("backup", "backup") ? "saved" : "hint", "aria-live": "polite" },
         doneAt("backup", "backup") ? `Backed up ${when(vv.LastBackup)}.`
-          : vv.LastBackup ? `Last backed up ${when(vv.LastBackup)}.` : "Not backed up from this app yet.")),
-    err && h("p", { class: "error", role: "alert" }, err.Message));
+          : vv.LastBackup ? `Last backed up ${when(vv.LastBackup)}.` : "Not backed up from this app yet.")));
 }
 
 function passphraseSection() {
@@ -153,15 +174,12 @@ function passphraseSection() {
     next: h("input", { class: "field left", id: "vp-next", type: "password", autocomplete: "new-password" }),
     again: h("input", { class: "field left", id: "vp-again", type: "password", autocomplete: "new-password" }),
   };
-  const err = problemAt("passphrase");
   const row = (name, label) => {
-    const input = passFields[name];
-    const bad = err && vv.Field === name;
-    input.setAttribute("aria-invalid", bad ? "true" : "false");
+    const input = mark(passFields[name], "passphrase", name);
     input.disabled = busy;
     return h("div", { class: "frow" },
       h("label", { for: input.id }, label),
-      h("div", { class: "fcell" }, input, bad && h("p", { class: "error", role: "alert" }, err.Message)));
+      h("div", { class: "fcell" }, input));
   };
   const done = doneAt("passphrase", "passphrase");
   const submit = h("button", { class: "btn primary", type: "submit", disabled: busy }, "Change passphrase");
@@ -176,13 +194,12 @@ function passphraseSection() {
         const { old, next, again } = passFields;
         act("ChangePassphrase", [old.value, next.value, again.value], () => {
           old.value = next.value = again.value = "";
-        }).then(() => { if (vv?.Field && passFields[vv.Field]) passFields[vv.Field].focus(); });
+        }).then(() => { if (invalid?.where === "passphrase") passFields[invalid.field]?.focus(); });
       },
     },
     row("old", "Current passphrase"),
     row("next", "New passphrase"),
     row("again", "New passphrase again"),
-    err && !vv.Field && h("p", { class: "error", role: "alert" }, err.Message),
     h("div", { class: "factions" },
       h("span", { class: "saved", "aria-live": "polite" }, done ? "Passphrase changed. This device is online again." : ""),
       submit)));
@@ -194,7 +211,7 @@ function secretsSection() {
     h("h3", {}, "Secrets"),
     h("p", { class: "hint" }, `Values the config of ${group} refers to by name, such as API keys. A Secret in the environment wins over the Vault's.`),
     vv.SecretsProblem
-      ? h("p", { class: "error", role: "alert" }, vv.SecretsProblem.Message)
+      ? problemBox(vv.SecretsProblem)
       : list.length === 0
         ? h("p", { class: "placeholder" }, "This Group has no Secrets yet.")
         : h("div", { class: "secrets" }, list.map(secretRow)),
@@ -205,7 +222,6 @@ function secretsSection() {
 
 function secretRow(s) {
   const where = `secret:${s.Name}`;
-  const err = problemAt(where);
   const open = (what) => () => {
     setting = what === "set" ? s.Name : "";
     revealing = what === "reveal" ? s.Name : "";
@@ -236,19 +252,15 @@ function secretRow(s) {
         : (s.Uses ?? []).length > 0 ? `Remove ${s.Name}? The fields that use it get no value until it is set again.` : `Remove ${s.Name} from the Vault?`,
       h("button", { class: "btn danger", type: "button", disabled: busy, onclick: () => act("RemoveVaultSecret", [s.Name], () => { removing = ""; forgetSecrets(); }) }, "Remove"),
       h("button", { class: "btn", type: "button", onclick: () => { removing = ""; draw(); } }, "Cancel")),
-    err && h("p", { class: "error", role: "alert" }, err.Message),
     doneAt(where, "set") && h("p", { class: "saved" }, "Saved."));
 }
 
 // valueForm sets a Secret's value: name's, or a new one's when null.
 function valueForm(name) {
   const where = name ? `secret:${name}` : "new-secret";
-  const err = problemAt(where);
-  const nameIn = !name && h("input", { class: "field left", placeholder: "NAME_OF_SECRET", autocomplete: "off", "aria-label": "Secret name",
-    "aria-invalid": err && vv.Field === "name" ? "true" : "false" });
-  const value = h("input", { class: "field left", type: "password", placeholder: "Value", autocomplete: "off", "aria-label": "Secret value",
-    "aria-invalid": err && vv.Field === "value" ? "true" : "false" });
-  setTimeout(() => (nameIn || value).focus());
+  const nameIn = !name && mark(h("input", { class: "field left", placeholder: "NAME_OF_SECRET", autocomplete: "off", "aria-label": "Secret name" }), where, "name");
+  const value = mark(h("input", { class: "field left", type: "password", placeholder: "Value", autocomplete: "off", "aria-label": "Secret value" }), where, "value");
+  setTimeout(() => (invalid?.where === where && invalid.field === "value" ? value : nameIn || value).focus());
   return h("form", {
     class: "newsecret",
     onsubmit: (e) => {
@@ -258,16 +270,14 @@ function valueForm(name) {
   },
   nameIn, value,
   h("p", { class: "hint" }, "Kept in this device's Vault for this Group."),
-  !name && err && h("p", { class: "error", role: "alert" }, err.Message),
   h("div", { class: "row" },
     h("button", { class: "btn primary", type: "submit", disabled: busy }, "Save Secret"),
-    h("button", { class: "btn", type: "button", onclick: () => { setting = ""; draw(); } }, "Cancel")));
+    h("button", { class: "btn", type: "button", onclick: () => { setting = ""; invalid = null; draw(); } }, "Cancel")));
 }
 
 // revealForm asks for the passphrase, every time, to show name's value.
 function revealForm(name) {
   const pass = h("input", { class: "field left", type: "password", placeholder: "Passphrase", autocomplete: "current-password", "aria-label": "Passphrase" });
-  const err = h("p", { class: "error", role: "alert" });
   const go = h("button", { class: "btn primary", type: "submit" }, "Reveal");
   setTimeout(() => pass.focus());
   return h("form", {
@@ -278,24 +288,25 @@ function revealForm(name) {
       let r;
       try {
         r = await call("RevealSecret", name, pass.value);
+      } catch (err) {
+        r = { Problem: callFailed(err) };
       } finally {
         go.disabled = false;
         pass.value = "";
       }
       if (!r || r.Problem) {
-        err.textContent = r?.Problem?.Message ?? "";
-        pass.setAttribute("aria-invalid", "true");
+        showProblem(r?.Problem, { scope: "vault" });
+        markInvalid(pass);
         pass.focus();
         return;
       }
       revealing = "";
-      vv = { ...vv, Problem: null, Where: "", Done: "" };
+      vv = { ...vv, Where: "", Done: "" };
       shown = { name, value: r.Value, source: r.Source };
       draw();
     },
   },
   pass,
   h("p", { class: "hint" }, "Enter this device's passphrase to show the value."),
-  err,
   h("div", { class: "row" }, go, h("button", { class: "btn", type: "button", onclick: () => { revealing = ""; draw(); } }, "Cancel")));
 }
