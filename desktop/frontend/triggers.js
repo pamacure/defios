@@ -19,6 +19,8 @@ let busy = false;
 // typed in it, to draw it again; read reads the form shown.
 let open = "";
 let draft = null;
+// The tab shown: "job", "hook" or "schedule". A form is open only in it.
+let tab = "job";
 let read = null;
 let deleting = ""; // the form whose Delete asks to confirm
 let done = ""; // what the last change did, as "Deleted." for the list
@@ -167,13 +169,30 @@ function draw() {
     tv.ListProblem && problemBox(tv.ListProblem,
       h("button", { class: "btn small", type: "button", onclick: () => openTOML("") }, "Fix it in Edit TOML")),
     done && h("p", { class: "saved", "aria-live": "polite" }, done),
-    !tv.ListProblem && [jobsSection(), hooksSection(), schedulesSection()]);
+    !tv.ListProblem && tabs(),
+    !tv.ListProblem && { job: jobsSection, hook: hooksSection, schedule: schedulesSection }[tab]());
+}
+
+const TABS = [["job", "Jobs", () => tv.Jobs], ["hook", "Hooks", () => tv.Hooks], ["schedule", "Schedules", () => tv.Schedules]];
+
+// tabs picks the list shown; leaving one closes the form open in it.
+function tabs() {
+  return h("div", { class: "tabs trigtabs", role: "tablist", "aria-label": "Show" },
+    TABS.map(([k, label, items]) => h("button", {
+      type: "button", role: "tab", "aria-selected": k === tab ? "true" : "false",
+      onclick: () => {
+        if (k === tab) return;
+        tab = k;
+        open = deleting = done = "";
+        draft = invalid = null;
+        draw();
+      },
+    }, `${label} (${(items() ?? []).length})`)));
 }
 
 // section is one list of Triggers or Jobs, its rows and its Add form.
 function section(title, hint, kind, items, rowOf, formOf, addLabel) {
-  return h("section", { class: "tsec", "aria-label": title },
-    h("h3", {}, title),
+  return h("section", { class: "tsec", role: "tabpanel", "aria-label": title },
     h("p", { class: "hint" }, hint),
     h("div", { class: "providers" },
       items.length === 0 && open !== `new-${kind}` && h("p", { class: "placeholder" }, `No ${title} yet.`),
@@ -348,7 +367,7 @@ function jobsPicker(chosen, redraw) {
   const picks = chosen.length ? [...chosen] : [""];
   const selects = picks.map((value, i) => {
     const sel = h("select", { class: "field left", "aria-label": `Job ${i + 1}` },
-      h("option", { value: "", selected: !value }, names.length ? "Choose a Job" : "No Jobs yet: add one above"),
+      h("option", { value: "", selected: !value }, names.length ? "Choose a Job" : "No Jobs yet: add one under Jobs"),
       names.map((n) => h("option", { value: n, selected: n === value }, n)),
       value && !names.includes(value) && h("option", { value, selected: true }, `${value} (not defined)`));
     const remove = picks.length > 1 && h("button", { class: "link", type: "button", "aria-label": `Remove Job ${i + 1}`, onclick: () => { const v = picked(); v.splice(i, 1); redraw(v); } }, "Remove");

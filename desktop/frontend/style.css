@@ -411,7 +411,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .agents .saved { display: block; margin-bottom: 10px; }
 .agents .factions .saved { display: inline; margin: 0; }
 .pgrid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
-.plist { display: flex; flex-direction: column; gap: 4px; }
+.plist { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 16px; }
 .pitem { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius-s); background: transparent; cursor: pointer; text-align: left; min-width: 0; }
 .pitem strong { color: var(--text); font-weight: 600; }
 .pitem span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
@@ -427,13 +427,30 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .grants { display: flex; flex-direction: column; gap: 2px; }
 .grant { padding: 6px 0; }
 .grant .check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-.grant .check > span { display: flex; flex-direction: column; gap: 2px; }
+.grant .check > span { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
 .grant input[type="checkbox"], .env input[type="checkbox"] { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
 .grant .error { margin: 4px 0 0 26px; }
 .grant.server { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 6px; }
 .envs { margin: 8px 0 0 26px; display: flex; flex-direction: column; gap: 6px; }
 .env { display: flex; align-items: flex-start; gap: 10px; }
-.places { margin: 0; padding-left: 18px; color: var(--text); }
+.phead { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.phead .ptitle { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.agents .phead h3 { margin: 0; font-size: 16px; }
+.phead .places { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.phead .places .hint { margin: 0; }
+.phead > .warning { flex-basis: 100%; }
+.gform > .phead { margin-bottom: 4px; }
+.fgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; }
+.fgrid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 640px) { .fgrid, .fgrid.four { grid-template-columns: minmax(0, 1fr); } }
+.ffield { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ffield > label { color: var(--text); font-weight: 500; }
+.ffield .hint { margin: 0; }
+.pdetail .gform > .factions { max-width: none; }
+.grants.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 2px 16px; }
+.grants.cols.wide { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.grants.cols.servers { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; align-items: start; }
+.grants.servers .grant.server { margin-bottom: 0; }
 .warning .row { display: flex; gap: 10px; }
 .providers { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .provider { width: 100%; border: 1px solid var(--line); border-radius: var(--radius); }
@@ -451,7 +468,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .newsecret .btn { height: 32px; }
 @media (max-width: 860px) {
   .pgrid { grid-template-columns: minmax(0, 1fr); }
-  .plist { flex-direction: row; flex-wrap: wrap; }
+  .plist { flex-direction: row; flex-wrap: wrap; position: static; }
   .pitem.add { border-top: 0; margin-top: 0; }
 }
 .agents .factions { max-width: 776px; }
@@ -498,7 +515,8 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .trighead { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 4px; }
 .trighead .hint { flex: 1; max-width: 640px; }
 .trighead .btn { flex: none; }
-.tsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.trigtabs { margin-top: 16px; max-width: 520px; }
+.tsec { margin-top: 16px; }
 .tsec h3, .tomledit h3, .triggers .pform.new h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
 .tsec > .hint { margin: 0 0 12px; max-width: 640px; }
 .triggers .stack { display: flex; flex-direction: column; gap: 8px; min-width: 0; }

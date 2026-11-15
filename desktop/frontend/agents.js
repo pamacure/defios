@@ -151,6 +151,16 @@ function row(where, field, label, input, hint) {
     h("div", { class: "fcell" }, input, hint && h("p", { class: "hint" }, hint)));
 }
 
+// cell is row with its label above the field, for fields laid out side
+// by side.
+function cell(where, field, label, input, hint) {
+  if (invalid?.where === where && invalid.field === field) markInvalid(input, () => { invalid = null; });
+  input.id = fieldID(where, field);
+  return h("div", { class: "ffield" },
+    h("label", { for: input.id }, label),
+    input, hint && h("p", { class: "hint" }, hint));
+}
+
 const text = (value, attrs = {}) => h("input", { class: "field left", autocomplete: "off", spellcheck: "false", value: value ?? "", ...attrs });
 const area = (value, attrs = {}) => h("textarea", { class: "field left area", spellcheck: "false", ...attrs }, value ?? "");
 
@@ -167,7 +177,7 @@ function drawDevice() {
     } }, "+ New agent"));
   let detail;
   if (creating) detail = profileForm(null);
-  else if (av.Open) detail = h("div", {}, profileForm(av.Open), grants(av.Open), included(av.Open), deleteBox(av.Open));
+  else if (av.Open) detail = h("div", {}, profileHead(av.Open), profileForm(av.Open), grants(av.Open));
   else detail = h("p", { class: "placeholder" }, av.Profiles?.length ? "Choose an agent to edit it." : "No agents on this device yet. Add one to include it in talk.");
   put(deviceMount,
     h("p", { class: "hint lead" }, "Agents are this device's own: each runs here, and answers in the Groups and conversations that include it."),
@@ -203,7 +213,7 @@ function profileForm(o) {
     Model: text(d.Model, { placeholder: "claude-opus-5-5" }),
     MaxTurns: text(d.MaxTurns, { inputmode: "numeric", placeholder: "Default" }),
     Body: area(d.Body, { rows: 4, placeholder: '{"max_tokens": 4096}' }),
-    System: area(d.System, { rows: 10, class: "field left area mono", placeholder: o ? "" : "A placeholder prompt is written if this is left empty." }),
+    System: area(d.System, { rows: 12, class: "field left area mono", placeholder: o ? "" : "A placeholder prompt is written if this is left empty." }),
   };
   profInputs = o ? inputs : null;
   const saved = h("span", { class: "saved", "aria-live": "polite" }, av.Where === where && av.Saved ? "Saved." : "");
@@ -222,18 +232,19 @@ function profileForm(o) {
       act("SaveAgentProfile", [draft], () => { open = draft.Handle; creating = false; profDraft = null; });
     },
   },
-  h("h3", {}, o ? `@${o.Handle}` : "New agent"),
+  !o && h("div", { class: "phead" }, h("div", { class: "ptitle" }, h("h3", {}, "New agent"))),
   o?.SystemProblem && problemBox({ ...o.SystemProblem, Message: `Its SYSTEM.md could not be read, so it shows empty below. ${o.SystemProblem.Message}` }),
-  !o && row(where, "handle", "Handle", inputs.Handle, "How talk mentions it, as @handle: lowercase letters and digits, joined by - or _."),
-  row(where, "provider", "Provider", inputs.Provider, providers.length
-    ? `A Provider of ${group}. In each Group it answers in, it calls the Provider by this name there.`
-    : `${group} has no Providers yet: add one under Group below.`),
-  row(where, "model", "Model ID", inputs.Model, "The model its Provider runs, sent as the body's model."),
-  row(where, "max_turns", "Max turns", inputs.MaxTurns, o?.MaxTurns
-    ? "How many turns one run may take. Once set, it can be changed but not cleared."
-    : "How many turns one run may take. Leave empty for the default."),
-  row(where, "body", "Request body", inputs.Body, "Other request options, as a JSON object. Leave empty for none."),
-  row(where, "system", "SYSTEM.md", inputs.System, "Its system prompt. Each run reads it afresh, so a change applies to the next."),
+  h("div", { class: o ? "fgrid" : "fgrid four" },
+    !o && cell(where, "handle", "Handle", inputs.Handle, "How talk mentions it, as @handle: lowercase letters and digits, joined by - or _."),
+    cell(where, "provider", "Provider", inputs.Provider, providers.length
+      ? `A Provider of ${group}, called by this name in each Group it answers in.`
+      : `${group} has no Providers yet: add one under Group below.`),
+    cell(where, "model", "Model ID", inputs.Model, "The model its Provider runs, sent as the body's model."),
+    cell(where, "max_turns", "Max turns", inputs.MaxTurns, o?.MaxTurns
+      ? "How many turns one run may take. Once set, it can be changed but not cleared."
+      : "How many turns one run may take. Leave empty for the default.")),
+  cell(where, "system", "SYSTEM.md", inputs.System, "Its system prompt. Each run reads it afresh, so a change applies to the next."),
+  cell(where, "body", "Request body", inputs.Body, "Other request options, as a JSON object. Leave empty for none."),
   h("div", { class: "factions" }, saved,
     !o && h("button", { class: "btn", type: "button", onclick: () => { creating = false; profDraft = null; invalid = null; draw(); } }, "Cancel"),
     submit));
@@ -279,9 +290,9 @@ function grants(o) {
     h("h3", {}, "Grants"),
     h("p", { class: "hint" }, "What it may use. A change applies at once, from its next run."),
     av.CatalogProblem && problemBox({ ...av.CatalogProblem, Message: `This device's Plugins could not be read, so their Skills and MCP Servers may be missing below. ${av.CatalogProblem.Message}` }),
-    h("h4", {}, "Tools"), h("div", { class: "grants" }, tools),
-    h("h4", {}, "Skills"), skills.length ? h("div", { class: "grants" }, skills) : h("p", { class: "placeholder" }, "No Plugin on this device brings a Skill."),
-    h("h4", {}, "MCP Servers"), mcp.length ? h("div", { class: "grants" }, mcp) : h("p", { class: "placeholder" }, "No Plugin on this device brings an MCP Server."));
+    h("h4", {}, "Tools"), h("div", { class: "grants cols" }, tools),
+    h("h4", {}, "Skills"), skills.length ? h("div", { class: "grants cols wide" }, skills) : h("p", { class: "placeholder" }, "No Plugin on this device brings a Skill."),
+    h("h4", {}, "MCP Servers"), mcp.length ? h("div", { class: "grants cols servers" }, mcp) : h("p", { class: "placeholder" }, "No Plugin on this device brings an MCP Server."));
 }
 
 // server is an MCP Server's grant: on or off, and which of the variables
@@ -311,32 +322,26 @@ function server(o, s) {
         secretField({ group, fixed: name }).el))));
 }
 
-function included(o) {
+// profileHead is an open profile's title: where it is included, and its
+// Delete, which asks to confirm below it.
+function profileHead(o) {
   const places = o.IncludedIn ?? [];
-  return h("section", { class: "gsec", "aria-label": "Included in" },
-    h("h3", {}, "Included in"),
-    places.length
-      ? h("ul", { class: "places" }, places.map((p) => h("li", {}, h("strong", {}, p.Group), ` — ${p.Where}`)))
-      : h("p", { class: "placeholder" }, "Nowhere yet. Include it in a conversation from Talk."));
-}
-
-function deleteBox(o) {
-  const places = o.IncludedIn ?? [];
-  if (!deleting) {
-    return h("section", { class: "gsec" },
-      h("button", { class: "btn", disabled: busy, onclick: () => { deleting = true; draw(); } }, `Delete @${o.Handle}…`));
-  }
-  return h("section", { class: "gsec" },
-    h("div", { class: "warning", role: "alert" },
+  return h("div", { class: "phead" },
+    h("div", { class: "ptitle" },
+      h("h3", {}, `@${o.Handle}`),
+      h("div", { class: "places", "aria-label": "Included in" },
+        places.length
+          ? [h("span", { class: "hint" }, "Included in"), places.map((p) => h("span", { class: "chip ok" }, `${p.Group} · ${p.Where}`))]
+          : h("span", { class: "hint" }, "Included nowhere yet. Include it in a conversation from Talk."))),
+    !deleting && h("button", { class: "btn", type: "button", disabled: busy, onclick: () => { deleting = true; draw(); } }, "Delete…"),
+    deleting && h("div", { class: "warning", role: "alert" },
       places.length
-        ? [h("p", {}, `@${o.Handle} is included in:`),
-          h("ul", {}, places.map((p) => h("li", {}, `${p.Group} — ${p.Where}`))),
-          h("p", {}, "Exclude it there first, on Talk. Then it can be deleted.")]
+        ? h("p", {}, `@${o.Handle} is included in ${places.map((p) => `${p.Group} — ${p.Where}`).join(", ")}. Exclude it there first, on Talk. Then it can be deleted.`)
         : h("p", {}, `Delete @${o.Handle}? Its config and SYSTEM.md are removed from this device.`),
       h("div", { class: "row" },
-        h("button", { class: "btn danger", disabled: busy || places.length > 0,
+        h("button", { class: "btn danger", type: "button", disabled: busy || places.length > 0,
           onclick: () => act("DeleteAgentProfile", [o.Handle], () => { open = ""; deleting = false; profDraft = null; }) }, "Delete"),
-        h("button", { class: "btn", onclick: () => { deleting = false; draw(); } }, "Cancel"))));
+        h("button", { class: "btn", type: "button", onclick: () => { deleting = false; draw(); } }, "Cancel"))));
 }
 
 // ---- Group: Providers ----
