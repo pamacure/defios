@@ -573,11 +573,11 @@ func fieldOf(err error) string {
 func providerProblem(err error) *Problem {
 	switch fieldOf(err) {
 	case node.FieldAlias:
-		return &Problem{"invalid", "A Provider's alias is 1–64 lowercase letters, digits, - and _, starting with a letter or digit."}
+		return &Problem{Code: "invalid", Message: "A Provider's alias is 1–64 lowercase letters, digits, - and _, starting with a letter or digit."}
 	case node.FieldBaseURL:
-		return &Problem{"invalid", "Enter an http:// or https:// URL with a host, and no user name, query or fragment."}
+		return &Problem{Code: "invalid", Message: "Enter an http:// or https:// URL with a host, and no user name, query or fragment."}
 	case node.FieldAPIPath:
-		return &Problem{"invalid", "Enter an absolute path ending in " + strings.Join(agent.ShapeSuffixes(), ", ") + ", with no query or fragment."}
+		return &Problem{Code: "invalid", Message: "Enter an absolute path ending in " + strings.Join(agent.ShapeSuffixes(), ", ") + ", with no query or fragment."}
 	}
 	return problemOf(err)
 }
@@ -588,20 +588,20 @@ func agentsProblem(err error) *Problem {
 	var included *node.ProfileIncludedError
 	switch {
 	case errors.As(err, &included):
-		return &Problem{"profile-included", fmt.Sprintf("@%s can't be deleted while it is included in %s. Exclude it there first, on Talk.", included.Handle, placesText(included.In))}
+		return &Problem{Code: "profile-included", Message: fmt.Sprintf("@%s can't be deleted while it is included in %s. Exclude it there first, on Talk.", included.Handle, placesText(included.In))}
 	case errors.Is(err, node.ErrProfileExists):
-		return &Problem{"profile-exists", "This device already has an agent by that Handle."}
+		return &Problem{Code: "profile-exists", Message: "This device already has an agent by that Handle."}
 	case errors.Is(err, config.ErrGrantRefused):
 		// The detail is shown as the library words it, not read.
-		return &Problem{"grant-refused", sentence(err.Error())}
+		return &Problem{Code: "grant-refused", Message: sentence(err.Error())}
 	case errors.Is(err, config.ErrNotWritten):
-		return &Problem{"not-written", "That would leave a config this device can't read, so nothing was written (" + err.Error() + ")."}
+		return withDetail("not-written", "That would leave a config this device can't read, so nothing was written.", err)
 	case errors.Is(err, provider.ErrExists):
-		return &Problem{"provider-exists", "This Group already has a Provider by that alias."}
+		return &Problem{Code: "provider-exists", Message: "This Group already has a Provider by that alias."}
 	case errors.Is(err, provider.ErrUnknown):
-		return &Problem{"unknown-provider", "This Group has no Provider by that alias."}
+		return &Problem{Code: "unknown-provider", Message: "This Group has no Provider by that alias."}
 	case errors.Is(err, provider.ErrInvalid):
-		return &Problem{"invalid-provider", "That Provider is not valid (" + err.Error() + ")."}
+		return withDetail("invalid-provider", "That Provider can't be saved: one of its settings is not valid.", err)
 	}
 	return nil
 }

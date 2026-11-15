@@ -154,6 +154,8 @@ func TestTriggerRefusalsWriteNothing(t *testing.T) {
 	}
 	if tv := alice.SaveTriggersTOML("not = [toml"); tv.Problem == nil || tv.Saved {
 		t.Fatalf("not TOML: %+v", tv)
+	} else if tv.Problem.Code != "not-loaded" || tv.Problem.Detail == "" || strings.Contains(tv.Problem.Message, "toml:") {
+		t.Fatalf("not TOML: the parser's words are the Detail only: %+v", tv.Problem)
 	}
 	if after := alice.TriggersTOML().Text; after != before {
 		t.Fatalf("a refusal wrote:\n%s", after)

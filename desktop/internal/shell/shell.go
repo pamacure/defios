@@ -731,7 +731,9 @@ func (s *Shell) SetTheme(name string) State {
 	defer s.op.Unlock()
 	t, ok := themes[name]
 	if !ok {
-		s.set(func(st *State) { st.Problem = &Problem{"bad-theme", "Choose System, Light or Dark."} })
+		s.set(func(st *State) {
+			st.Problem = &Problem{Code: "bad-theme", Message: "Choose System, Light or Dark."}
+		})
 		return s.State()
 	}
 	s.savePrefs(func(p *prefs.Prefs) { p.Theme = t })

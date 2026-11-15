@@ -3,7 +3,6 @@ package shell
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -219,15 +218,14 @@ func networkProblem(group string, err error) *Problem {
 	var broken *node.ConfigError
 	switch {
 	case errors.As(err, &broken):
-		return &Problem{"config-error", fmt.Sprintf("This device's config.toml for %s does not load (%s), so no Network can be listed or changed. Fix it with Edit TOML on the Triggers page.",
-			group, broken.Err)}
+		return configProblem(group, broken.Err)
+
 	case errors.Is(err, network.ErrExists):
-		return &Problem{"network-exists", "This device already has a Network by that alias in this Group."}
+		return &Problem{Code: "network-exists", Message: "This device already has a Network by that alias in this Group."}
 	case errors.Is(err, network.ErrInvalid):
-		// The detail is shown as the library words it, not read.
-		return &Problem{"invalid-network", "That Network can't be saved (" + err.Error() + ")."}
+		return withDetail("invalid-network", "That Network can't be saved: one of its settings is not valid.", err)
 	case errors.Is(err, config.ErrNotWritten):
-		return &Problem{"not-written", "That change would leave config.toml unreadable, so nothing was written (" + err.Error() + ")."}
+		return withDetail("not-written", "That change would leave config.toml unreadable, so nothing was written.", err)
 	}
 	return problemOf(err)
 }

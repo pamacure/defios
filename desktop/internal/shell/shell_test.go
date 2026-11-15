@@ -1,6 +1,8 @@
 package shell_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"defios.com/desktop/internal/prefs"
@@ -175,6 +177,19 @@ func TestStartAtLoginRegistersWithTheOS(t *testing.T) {
 	}
 	if st := s.SetStartAtLogin(false); st.Prefs.StartAtLogin || r.autostart.enabled() {
 		t.Fatalf("off: %+v", st)
+	}
+}
+
+func TestAnOSErrorIsWordedForAPersonWithItsTextAsTheDetail(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := r.start(false)
+	r.autostart.err = errors.New("exec: \"systemctl\": executable file not found in $PATH")
+	st := s.SetStartAtLogin(true)
+	if st.Problem == nil || st.Problem.Code != "autostart" || st.Prefs.StartAtLogin {
+		t.Fatalf("refused: %+v", st)
+	}
+	if strings.Contains(st.Problem.Message, "systemctl") || !strings.Contains(st.Problem.Detail, "systemctl") {
+		t.Fatalf("the OS's words are the Detail only: %+v", st.Problem)
 	}
 }
 

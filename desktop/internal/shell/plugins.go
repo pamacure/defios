@@ -157,7 +157,7 @@ func (s *Shell) StagePluginInstall(source string) PluginsView {
 	}
 	source = strings.TrimSpace(source)
 	if source == "" {
-		v.Problem, v.Field = &Problem{"invalid", "Give a git URL, url@ref or a path on this device."}, FieldSource
+		v.Problem, v.Field = &Problem{Code: "invalid", Message: "Give a git URL, url@ref or a path on this device."}, FieldSource
 	} else if st, err := n.StagePluginInstall(s.ctx, source); err != nil {
 		v.Problem = stageProblem(err)
 		if errors.As(err, new(*node.InvalidError)) {
@@ -224,7 +224,7 @@ func (s *Shell) CommitPlugins(id uint64) PluginsView {
 	}
 	stages, sv, ok := s.plugins.take(id)
 	if !ok {
-		v.Problem = &Problem{"stage-gone", "That preview is no longer current, so nothing was installed. Start again."}
+		v.Problem = &Problem{Code: "stage-gone", Message: "That preview is no longer current, so nothing was installed. Start again."}
 		s.fillPlugins(n, &v)
 		return v
 	}
@@ -317,7 +317,7 @@ func stageProblem(err error) *Problem {
 	if p := problemOf(err); p.Code != "error" {
 		return p
 	}
-	return &Problem{"not-fetched", "No Plugin could be fetched and read from there (" + err.Error() + ")."}
+	return withDetail("not-fetched", "No Plugin could be fetched and read from there. Check the URL or path, and that this device can reach it.", err)
 }
 
 // pluginsProblem maps the Plugins page's errors; nil for another.
@@ -333,14 +333,15 @@ func pluginsProblem(err error) *Problem {
 		if len(by) == 1 {
 			verb = "grants"
 		}
-		return &Problem{"plugin-granted", fmt.Sprintf("%s can't be removed while %s %s items of it. Revoke them on the Agents page first.",
+		return &Problem{Code: "plugin-granted", Message: fmt.Sprintf("%s can't be removed while %s %s items of it. Revoke them on the Agents page first.",
 			granted.Plugin, strings.Join(by, " and "), verb)}
+
 	case errors.Is(err, plugin.ErrBuiltIn):
-		return &Problem{"built-in", "That is a built-in Plugin: it comes with DeFiOS, so it can't be installed over, updated or removed."}
+		return &Problem{Code: "built-in", Message: "That is a built-in Plugin: it comes with DeFiOS, so it can't be installed over, updated or removed."}
 	case errors.Is(err, plugin.ErrInstalled):
-		return &Problem{"installed", "A Plugin by that name is installed already. Update it instead, or remove it first."}
+		return &Problem{Code: "installed", Message: "A Plugin by that name is installed already. Update it instead, or remove it first."}
 	case errors.Is(err, plugin.ErrNotInstalled):
-		return &Problem{"not-installed", "No Plugin by that name is installed on this device."}
+		return &Problem{Code: "not-installed", Message: "No Plugin by that name is installed on this device."}
 	}
 	return nil
 }

@@ -148,7 +148,7 @@ func (t *talk) send(text string) TalkState {
 }
 
 func notIncluded(handle string) *Problem {
-	return &Problem{"not-included", fmt.Sprintf(`@%s isn't an agent in this conversation. Include it on the right first, or write \@%s to mention it without summoning it.`, handle, handle)}
+	return &Problem{Code: "not-included", Message: fmt.Sprintf(`@%s isn't an agent in this conversation. Include it on the right first, or write \@%s to mention it without summoning it.`, handle, handle)}
 }
 
 func (t *talk) dropQueued(msgID string) TalkState {
@@ -170,7 +170,7 @@ func (t *talk) transcript(msgID string) TranscriptView {
 	blocks, ok := t.said[msgID]
 	t.mu.Unlock()
 	if !ok {
-		return TranscriptView{Problem: &Problem{"no-transcript", "This device has no transcript of that message."}}
+		return TranscriptView{Problem: &Problem{Code: "no-transcript", Message: "This device has no transcript of that message."}}
 	}
 	return TranscriptView{Blocks: blocks}
 }

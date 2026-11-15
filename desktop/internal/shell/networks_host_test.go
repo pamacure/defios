@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"defios.com/desktop/internal/shell"
@@ -93,6 +94,10 @@ func TestNetworkRefusalsAndAConfigThatDoesNotLoad(t *testing.T) {
 		if v.Problem == nil || v.Problem.Code != c.code || v.Field != c.field || v.Saved || v.Where != "new-network" {
 			t.Errorf("%s: %+v field %q where %q", name, v.Problem, v.Field, v.Where)
 		}
+		// What the library says is the Detail, never in the Message.
+		if c.code == "invalid-network" && (v.Problem.Detail == "" || strings.Contains(v.Problem.Message, "network:")) {
+			t.Errorf("%s: library text not apart: %+v", name, v.Problem)
+		}
 	}
 	if v := alice.Networks(); len(v.Networks) != 1 {
 		t.Fatalf("a refusal wrote: %+v", v.Networks)
@@ -109,6 +114,8 @@ func TestNetworkRefusalsAndAConfigThatDoesNotLoad(t *testing.T) {
 	}
 	if v := alice.Networks(); v.ConfigProblem == nil || v.ConfigProblem.Code != "config-error" || v.Problem != nil {
 		t.Fatalf("list a broken config: %+v", v)
+	} else if p := v.ConfigProblem; !strings.Contains(p.Detail, "dogecoin") || strings.Contains(p.Message, "dogecoin") {
+		t.Fatalf("why it does not load is the Detail only: %+v", p)
 	}
 	v := alice.SaveNetwork(shell.NetworkDraft{New: true, Alias: "op", Type: "ethereum", ChainID: "10"})
 	if v.Problem == nil || v.Problem.Code != "config-error" || v.Saved {

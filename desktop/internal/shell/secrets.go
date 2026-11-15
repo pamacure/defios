@@ -60,9 +60,9 @@ func (s *Shell) NewSecret(name, value string) SecretsView {
 func (s *Shell) setSecret(group, name, value string) (field string, p *Problem) {
 	switch {
 	case secret.ValidateName(name) != nil:
-		return "name", &Problem{"invalid", "A Secret's name is capital letters, digits and _, starting with a letter, such as ANTHROPIC_API_KEY."}
+		return "name", &Problem{Code: "invalid", Message: "A Secret's name is capital letters, digits and _, starting with a letter, such as ANTHROPIC_API_KEY."}
 	case value == "":
-		return "value", &Problem{"invalid", "Enter the Secret's value."}
+		return "value", &Problem{Code: "invalid", Message: "Enter the Secret's value."}
 	}
 	if err := s.node().SetSecret(s.ctx, group, name, value, s.held()); err != nil {
 		return "value", problemOf(err)

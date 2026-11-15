@@ -139,7 +139,7 @@ func (s *Shell) SaveGroupSettings(d SettingsDraft) GroupSettingsView {
 	if d.Prune != "" {
 		age, err := config.ParseAge(d.Prune)
 		if err != nil {
-			return fail(node.FieldPrune, &Problem{"invalid", sentence(err.Error())})
+			return fail(node.FieldPrune, &Problem{Code: "invalid", Message: sentence(err.Error())})
 		}
 		prune = age
 	}
@@ -178,7 +178,7 @@ func (s *Shell) SaveGroupSettings(d SettingsDraft) GroupSettingsView {
 		}
 		if err != nil {
 			v.Field = node.FieldTailnetAuthKey
-			v.Problem = &Problem{"auth-key-not-saved", "The other settings were saved, but the tailnet auth key was not: " + problemOf(err).Message}
+			v.Problem = &Problem{Code: "auth-key-not-saved", Message: "The other settings were saved, but the tailnet auth key was not: " + problemOf(err).Message}
 		}
 	}
 	s.fillUsage(n, &v)
@@ -224,7 +224,7 @@ func (s *Shell) fillUsage(n Node, v *GroupSettingsView) {
 
 func rosterProblem(err error) *Problem {
 	if errors.Is(err, group.ErrNoGroup) {
-		return &Problem{"unformed", "This Group isn't formed yet, so it has no devices besides this one."}
+		return &Problem{Code: "unformed", Message: "This Group isn't formed yet, so it has no devices besides this one."}
 	}
 	return problemOf(err)
 }

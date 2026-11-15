@@ -124,13 +124,13 @@ func (s *Shell) ChangePassphrase(old, next, again string) VaultView {
 	}
 	switch {
 	case old == "":
-		return refuse("old", &Problem{"empty-passphrase", "Enter the passphrase this device has now."})
+		return refuse("old", &Problem{Code: "empty-passphrase", Message: "Enter the passphrase this device has now."})
 	case next == "":
-		return refuse("next", &Problem{"empty-passphrase", "Enter a new passphrase."})
+		return refuse("next", &Problem{Code: "empty-passphrase", Message: "Enter a new passphrase."})
 	case next == old:
-		return refuse("next", &Problem{"same-passphrase", "The new passphrase is the one this device has now."})
+		return refuse("next", &Problem{Code: "same-passphrase", Message: "The new passphrase is the one this device has now."})
 	case again != next:
-		return refuse("again", &Problem{"mismatch", "The two new passphrases differ."})
+		return refuse("again", &Problem{Code: "mismatch", Message: "The two new passphrases differ."})
 	}
 	if err := n.CheckPassphrase(old); err != nil {
 		return refuse("old", problemOf(err))

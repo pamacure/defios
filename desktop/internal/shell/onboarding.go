@@ -130,7 +130,7 @@ func (s *Shell) AddGroup(alias, headscaleURL, authKey, passphrase string) State 
 		pass = passphrase
 	}
 	if authKey == "" {
-		s.fail(&Problem{"no-auth-key", "Enter the tailnet auth key from your headscale server."})
+		s.fail(&Problem{Code: "no-auth-key", Message: "Enter the tailnet auth key from your headscale server."})
 		return s.State()
 	}
 	if _, err := n.NewGroup(node.GroupSpec{Alias: alias, HeadscaleURL: headscaleURL}); err != nil {
@@ -140,7 +140,7 @@ func (s *Shell) AddGroup(alias, headscaleURL, authKey, passphrase string) State 
 	held := func() (string, bool, error) { return pass, true, nil }
 	if err := n.SetSecret(s.ctx, alias, node.TailnetAuthKeySecret, authKey, held); err != nil {
 		// The Group is made, but cannot join its tailnet: say so.
-		p := &Problem{"auth-key-not-saved", fmt.Sprintf("%s was added to your Groups, but its tailnet auth key was not saved: %s", alias, problemOf(err).Message)}
+		p := &Problem{Code: "auth-key-not-saved", Message: fmt.Sprintf("%s was added to your Groups, but its tailnet auth key was not saved: %s", alias, problemOf(err).Message)}
 		if from == "" {
 			s.forget() // the lock screen asks for it again
 			s.route(p)
@@ -381,7 +381,7 @@ func (s *Shell) Decline(reason string) State {
 	}
 	var p *Problem
 	if len(res.Undelivered) > 0 {
-		p = &Problem{"undelivered", fmt.Sprintf("Declined, but %s did not hear of it yet.", f.Proposal.names(res.Undelivered))}
+		p = &Problem{Code: "undelivered", Message: fmt.Sprintf("Declined, but %s did not hear of it yet.", f.Proposal.names(res.Undelivered))}
 	}
 	s.changeForming(f.Group, p, func(f *Forming) { f.Undelivered = nil })
 	s.apply(n.Status())

@@ -260,7 +260,11 @@ func (s *Shell) SaveTriggersTOML(text string) TOMLView {
 	if !ok {
 		return t
 	}
-	if err := s.node().SetGroupConfigTOML(s.ctx, t.Group, text); err != nil {
+	var inv *node.InvalidError
+	if err := s.node().SetGroupConfigTOML(s.ctx, t.Group, text); errors.As(err, &inv) {
+		// Where it fails to load, as the parser words it, is what to fix.
+		t.Problem = withDetail("not-loaded", "This text does not load as config.toml, so nothing was written.", inv.Err)
+	} else if err != nil {
 		t.Problem = problemOf(err)
 	} else {
 		t.Saved = true
@@ -314,17 +318,17 @@ func (s *Shell) fillTriggers(n Node, v *TriggersView) {
 	}
 	jobs, err := n.Jobs(s.ctx, v.Group)
 	if err != nil {
-		v.ListProblem = problemOf(err)
+		v.ListProblem = listProblem(v.Group, err)
 		return
 	}
 	hooks, err := n.Hooks(s.ctx, v.Group)
 	if err != nil {
-		v.ListProblem = problemOf(err)
+		v.ListProblem = listProblem(v.Group, err)
 		return
 	}
 	scheds, err := n.Schedules(s.ctx, v.Group)
 	if err != nil {
-		v.ListProblem = problemOf(err)
+		v.ListProblem = listProblem(v.Group, err)
 		return
 	}
 	usedBy := map[string][]string{}
@@ -446,6 +450,15 @@ func orEmpty[T any](list []T) []T {
 	return list
 }
 
+// listProblem is why group's Triggers could not be listed: a config.toml
+// that does not load, unless the error is one problemOf maps.
+func listProblem(group string, err error) *Problem {
+	if p := problemOf(err); p.Code != "error" {
+		return p
+	}
+	return configProblem(group, err)
+}
+
 // triggerField is the field a Trigger form's refusal names, "" for none.
 func triggerField(err error) string {
 	if errors.Is(err, node.ErrAlreadyDefined) {
@@ -464,16 +477,17 @@ func triggersProblem(err error) *Problem {
 		if len(by) == 1 {
 			verb = "runs"
 		}
-		return &Problem{"job-in-use", fmt.Sprintf("Job %s can't be deleted while %s %s it. Take it out of them first.",
+		return &Problem{Code: "job-in-use", Message: fmt.Sprintf("Job %s can't be deleted while %s %s it. Take it out of them first.",
 			inUse.Job, strings.Join(by, " and "), verb)}
+
 	case errors.Is(err, config.ErrNotInPlace):
-		return &Problem{"not-in-place", "config.toml writes this in a form the form can't change, such as an inline table. Change it with Edit TOML instead."}
+		return &Problem{Code: "not-in-place", Message: "config.toml writes this in a form the form can't change, such as an inline table. Change it with Edit TOML instead."}
 	case errors.Is(err, node.ErrAlreadyDefined):
-		return &Problem{"already-defined", "This Group already has one by that name."}
+		return &Problem{Code: "already-defined", Message: "This Group already has one by that name."}
 	case errors.Is(err, node.ErrNotDefined):
-		return &Problem{"not-defined", "This Group no longer has one by that name; it may have been changed in Edit TOML."}
+		return &Problem{Code: "not-defined", Message: "This Group no longer has one by that name; it may have been changed in Edit TOML."}
 	case errors.Is(err, node.ErrNoJob):
-		return &Problem{"no-job", "The Group as served has no such Job yet."}
+		return &Problem{Code: "no-job", Message: "The Group as served has no such Job yet."}
 	}
 	return nil
 }

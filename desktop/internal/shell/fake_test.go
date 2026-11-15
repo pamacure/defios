@@ -425,9 +425,19 @@ func (k *memKeychain) has(account string) bool {
 type fakeAutostart struct {
 	mu sync.Mutex
 	on bool
+	// err is what Enable fails with, nil for none.
+	err error
 }
 
-func (a *fakeAutostart) Enable() error  { a.mu.Lock(); a.on = true; a.mu.Unlock(); return nil }
+func (a *fakeAutostart) Enable() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.err != nil {
+		return a.err
+	}
+	a.on = true
+	return nil
+}
 func (a *fakeAutostart) Disable() error { a.mu.Lock(); a.on = false; a.mu.Unlock(); return nil }
 func (a *fakeAutostart) enabled() bool  { a.mu.Lock(); defer a.mu.Unlock(); return a.on }
 
