@@ -19,7 +19,9 @@
   --bar: #6C8E88;
   --soft: #ADDFD7;
   --on-bright: #151A1F;
-  --radius: 8px;
+  --radius: 4px;
+  --radius-s: 3px;
+  --radius-l: 6px;
   --rail: 64px;
   color-scheme: light;
   font-family: system-ui, -apple-system, "Segoe UI", "Ubuntu", "Cantarell", sans-serif;
@@ -124,11 +126,11 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .dot.on { background: var(--accent); }
 .dot.partial { background: #FDCA40; }
 .dropdown { position: absolute; top: 44px; left: 0; min-width: 280px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(21, 26, 31, 0.14); padding: 6px; z-index: 10; }
-.dropdown .item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; text-align: left; }
+.dropdown .item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; background: transparent; border-radius: var(--radius-s); cursor: pointer; text-align: left; }
 .dropdown .item:hover { background: var(--bg); }
 .dropdown .item .state { margin-left: auto; color: var(--muted); font-size: 12px; }
 .dropdown .note { color: var(--muted); font-size: 12px; padding: 8px 10px; border-top: 1px solid var(--line); margin-top: 4px; line-height: 1.4; }
-.dropdown .add { color: var(--accent-strong); font-weight: 600; border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; margin-top: 4px; }
+.dropdown .add { color: var(--accent-strong); font-weight: 600; border-top: 1px solid var(--line); border-radius: 0 0 var(--radius-s) var(--radius-s); margin-top: 4px; }
 
 .page { overflow: auto; padding: 24px 28px; }
 .page h1 { margin: 0 0 20px; font-size: 20px; font-weight: 600; }
@@ -136,8 +138,8 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .part > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .part > header h2 { margin: 0; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-soft); }
 .part .body { padding: 16px; color: var(--text-soft); line-height: 1.5; }
-.part select { height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
-.notice { margin: 12px 16px 0; padding: 8px 12px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-text); font-size: 13px; }
+.part select { height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); }
+.notice { margin: 12px 16px 0; padding: 8px 12px; border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn-text); font-size: 13px; }
 .banner { margin-bottom: 18px; padding: 10px 14px; border-radius: var(--radius); background: var(--danger-bg); color: var(--danger); }
 .placeholder { color: var(--muted); font-style: italic; }
 
@@ -148,7 +150,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .toggle .text strong { color: var(--text); font-weight: 600; }
 .toggle .warn { color: var(--warn-text); font-size: 13px; }
 .toggle.sub { padding-left: 28px; }
-.toggle select.theme { margin-left: auto; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.toggle select.theme { margin-left: auto; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface); }
 .toggle input:disabled + .text { opacity: 0.6; }
 
 /* Settings: the Group part's form, devices and the two usages. */
@@ -197,7 +199,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .card .later { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .or { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; margin: 6px 0; }
 .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
-.warning { padding: 10px 12px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-text); font-size: 13px; line-height: 1.5; display: flex; flex-direction: column; gap: 6px; }
+.warning { padding: 10px 12px; border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn-text); font-size: 13px; line-height: 1.5; display: flex; flex-direction: column; gap: 6px; }
 .warning ul { margin: 0; padding-left: 18px; }
 .warning p { margin: 0; }
 .warning .btn { margin-top: 2px; }
@@ -207,7 +209,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .lines { margin: 0; padding: 0; list-style: none; font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
 
 .tabs { display: flex; gap: 4px; padding: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
-.tabs button { flex: 1; height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); cursor: pointer; }
+.tabs button { flex: 1; height: 32px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--text-soft); cursor: pointer; }
 .tabs button[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(21, 26, 31, 0.12); }
 .devices { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); }
 .devrow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
@@ -218,7 +220,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .devrow .who { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .devrow .who code { background: none; border: 0; padding: 0; color: var(--muted); font-size: 12px; }
 .devrow .who code.full { overflow-wrap: anywhere; user-select: all; }
-.chip { flex: none; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+.chip { flex: none; font-size: 12px; padding: 2px 8px; border-radius: var(--radius-s); background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
 .chip.ok { background: var(--accent-wash); color: var(--accent-strong); border-color: transparent; }
 .chip.bad { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
 .searching { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
@@ -246,7 +248,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .conv[aria-current="true"] { background: var(--accent-wash); }
 .conv .name { font-weight: 600; overflow-wrap: anywhere; }
 .conv .sub { color: var(--muted); font-size: 12px; }
-.conv .badge { position: absolute; right: 10px; top: 10px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; }
+.conv .badge { position: absolute; right: 10px; top: 10px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-s); background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; }
 .conv.provisional { cursor: default; border: 1px dashed var(--line); margin-top: 4px; gap: 6px; }
 .conv.provisional:hover { background: transparent; }
 .conv .chip { flex: 0 1 auto; }
@@ -263,7 +265,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .chat-head h2 { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .chat-head .spacer { flex: 1; }
 .online-menu { position: relative; }
-.online { display: flex; align-items: center; gap: 8px; height: 30px; white-space: nowrap; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; font-size: 12px; }
+.online { display: flex; align-items: center; gap: 8px; height: 30px; white-space: nowrap; padding: 0 10px; border-radius: var(--radius-s); border: 1px solid var(--line); background: var(--bg); cursor: pointer; font-size: 12px; }
 .online.ok { color: var(--accent-strong); }
 .online.bad { color: var(--danger); border-color: var(--danger); }
 .online:disabled { cursor: default; color: var(--muted); }
@@ -281,9 +283,9 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .msg .who { display: flex; gap: 6px; align-items: baseline; }
 .msg .who strong { color: var(--text-soft); font-weight: 600; }
 .msg .handle { color: var(--accent-strong); font-weight: 600; }
-.msg .text { padding: 8px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
-.msg.right .text { background: var(--accent-wash); border-color: transparent; border-bottom-right-radius: 4px; }
-.msg.left .text { border-bottom-left-radius: 4px; }
+.msg .text { padding: 8px 12px; border-radius: var(--radius-l); background: var(--surface); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
+.msg.right .text { background: var(--accent-wash); border-color: transparent; border-bottom-right-radius: 0; }
+.msg.left .text { border-bottom-left-radius: 0; }
 .msg.sending .text { opacity: 0.6; }
 .msg.unreadable .text { color: var(--muted); font-style: italic; background: transparent; border-style: dashed; }
 .msg .actions { display: flex; gap: 12px; }
@@ -298,13 +300,13 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .blk { font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .blk .kind { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
 .blk.thinking { color: var(--text-soft); font-style: italic; }
-.blk.tool pre { margin: 0; padding: 6px 8px; background: var(--bg); border-radius: 6px; font-size: 12px; overflow: auto; white-space: pre-wrap; }
+.blk.tool pre { margin: 0; padding: 6px 8px; background: var(--bg); border-radius: var(--radius-s); font-size: 12px; overflow: auto; white-space: pre-wrap; }
 .blk.tool.bad pre { color: var(--danger); }
 .live { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .live-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .live-head .btn { margin-left: auto; }
 .msg.streaming { max-width: 100%; }
-.msg.streaming .blk:not(.thinking):not(.tool) { padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); }
+.msg.streaming .blk:not(.thinking):not(.tool) { padding: 8px 12px; border-radius: var(--radius-l); border: 1px solid var(--line); }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
@@ -318,7 +320,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .composer .stop { color: var(--danger); border-color: var(--danger); }
 .composer .stop[hidden] { display: none; }
 .suggest { position: absolute; bottom: calc(100% - 6px); left: 62px; margin: 0; padding: 4px; list-style: none; min-width: 180px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(21, 26, 31, 0.14); z-index: 10; }
-.suggest li { padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.suggest li { padding: 6px 10px; border-radius: var(--radius-s); cursor: pointer; }
 .suggest li[aria-selected="true"] { background: var(--accent-wash); color: var(--accent-strong); }
 
 .about { background: var(--surface); border-left: 1px solid var(--line); overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 18px; min-height: 0; }
@@ -353,14 +355,14 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 /* Sign Requests: the card in the transcript, the right column's list, and
    the "+" form. */
 .msg.signmsg { width: min(560px, 92%); }
-.signcard { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 12px; font-size: 13px; transition: box-shadow .3s; }
+.signcard { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-l); font-size: 13px; }
 .msg.right .signcard { border-left-color: var(--line); border-right: 3px solid var(--accent); }
 .signmsg.flash .signcard { box-shadow: 0 0 0 3px var(--accent-bright); }
 .signcard header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .signcard .reason, .signform .reason { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .signcard .label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
 .signcard .txs { display: flex; flex-direction: column; gap: 8px; }
-.signcard .tx ul { margin: 0; padding: 6px 10px; list-style: none; background: var(--bg); border-radius: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.signcard .tx ul { margin: 0; padding: 6px 10px; list-style: none; background: var(--bg); border-radius: var(--radius-s); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .signcard .stances { display: flex; flex-direction: column; gap: 4px; }
 .signcard .stance { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .signcard .stance .who strong { color: var(--text-soft); font-weight: 600; }
@@ -370,7 +372,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .signcard .row > .btn { flex: none; min-width: 96px; }
 .signcard .refuse { display: flex; flex-direction: column; gap: 8px; }
 .signcard .refuse textarea, .signform textarea { height: auto; padding: 8px 10px; text-align: left; resize: vertical; font: inherit; }
-.warn-text { margin: 0; padding: 6px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-text); font-size: 12px; }
+.warn-text { margin: 0; padding: 6px 10px; border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn-text); font-size: 12px; }
 .signcard .queued { color: var(--warn-text); }
 .signcard .receipts, .signcard .runs { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
 .signcard .receipt { display: flex; flex-direction: column; gap: 2px; }
@@ -384,7 +386,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .signrow .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .modal-back { position: fixed; inset: 0; z-index: 20; background: rgba(21, 26, 31, 0.4); display: flex; align-items: center; justify-content: center; padding: 16px; }
-.modal { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--surface); border-radius: 12px; box-shadow: 0 16px 48px rgba(21, 26, 31, 0.25); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.modal { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--surface); border-radius: var(--radius-l); box-shadow: 0 16px 48px rgba(21, 26, 31, 0.25); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .modal header { display: flex; align-items: center; justify-content: space-between; }
 .modal h2 { margin: 0; font-size: 17px; }
 .modal .banner { margin: 0; }
@@ -410,13 +412,13 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .agents .factions .saved { display: inline; margin: 0; }
 .pgrid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
 .plist { display: flex; flex-direction: column; gap: 4px; }
-.pitem { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; min-width: 0; }
+.pitem { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius-s); background: transparent; cursor: pointer; text-align: left; min-width: 0; }
 .pitem strong { color: var(--text); font-weight: 600; }
 .pitem span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .pitem:hover:not(:disabled) { background: var(--bg); }
 .pitem[aria-current="true"] { background: var(--accent-wash); border-color: transparent; }
 .pitem[aria-current="true"] strong { color: var(--accent-strong); }
-.pitem.add { color: var(--accent-strong); font-weight: 600; margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; }
+.pitem.add { color: var(--accent-strong); font-weight: 600; margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0 0 var(--radius-s) var(--radius-s); }
 .pdetail { min-width: 0; }
 .pdetail .gsec:last-child { padding-bottom: 0; }
 .field.area { height: auto; padding: 8px 12px; resize: vertical; line-height: 1.45; font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 13px; }
@@ -459,7 +461,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .backupbanner .text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; }
 .backupbanner .text strong { font-size: 14px; }
 .talkpage .backupbanner { margin: 12px 16px 0; }
-.backupbanner .dismiss { flex: none; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
+.backupbanner .dismiss { flex: none; width: 28px; height: 28px; border: 0; border-radius: var(--radius-s); background: transparent; color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
 .backupbanner .dismiss:hover { background: rgba(0, 0, 0, 0.08); }
 .vault h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text); }
 .vault .notice.inline, .triggers .notice.inline { margin: 0 0 12px; }
@@ -537,7 +539,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .plitems code.cmd { font-size: 12px; }
 .pldetail details { margin-top: 8px; font-size: 13px; }
 .pldetail summary { cursor: pointer; color: var(--text); }
-.diff { margin: 6px 0 0; padding: 8px 10px; max-height: 280px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; line-height: 1.45; white-space: pre; }
+.diff { margin: 6px 0 0; padding: 8px 10px; max-height: 280px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-s); font-size: 12px; line-height: 1.45; white-space: pre; }
 .plugins .notice.inline, .plerr { margin: 0 12px 10px; }
 .plerr .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
 .plugins .provider > .warning { margin: 0 12px 12px; }
@@ -554,3 +556,188 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 @media (max-width: 860px) {
   .plugins .inline { flex-direction: column; }
 }
+
+/* ------------------------------------------------------------------
+   The look: bricks that snap together. Quantico for titles and the
+   numbers that matter; a solid lower edge instead of soft shadow, which
+   a press pushes down onto; and the bright green kept for what is live.
+   Little moves: the app redraws by making its elements anew, so motion.js
+   keeps the few animations there are in place across a redraw.
+   ------------------------------------------------------------------ */
+@font-face { font-family: "Quantico"; font-weight: 400; font-display: block; src: url("/fonts/Quantico-Regular.woff2") format("woff2"); }
+@font-face { font-family: "Quantico"; font-weight: 700; font-display: block; src: url("/fonts/Quantico-Bold.woff2") format("woff2"); }
+
+:root {
+  --display: "Quantico", system-ui, sans-serif;
+  --depth: 3px;
+  --edge: #A3B5C6;
+  --accent-edge: #1A7A51;
+  --bright-edge: #26A26D;
+  --soft-edge: #7FBDB3;
+  --danger-edge: #A81C26;
+  --live: #26A26D;
+  --glow: rgba(63, 249, 170, 0.55);
+  --stud: rgba(109, 126, 141, 0.26);
+  --float: 0 14px 28px rgba(21, 26, 31, 0.14);
+  --snap: cubic-bezier(.3, 1.45, .5, 1);
+  --out: cubic-bezier(.2, .8, .2, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --edge: #0B0E11;
+    --accent-edge: #1E8A5C;
+    --bright-edge: #1FA06B;
+    --soft-edge: #163832;
+    --danger-edge: #8E1720;
+    --live: #3FF9AA;
+    --glow: rgba(63, 249, 170, 0.4);
+    --stud: rgba(142, 164, 183, 0.16);
+    --float: 0 14px 28px rgba(0, 0, 0, 0.4);
+  }
+}
+:root[data-theme="dark"] {
+  --edge: #0B0E11;
+  --accent-edge: #1E8A5C;
+  --bright-edge: #1FA06B;
+  --soft-edge: #163832;
+  --danger-edge: #8E1720;
+  --live: #3FF9AA;
+  --glow: rgba(63, 249, 170, 0.4);
+  --stud: rgba(142, 164, 183, 0.16);
+  --float: 0 14px 28px rgba(0, 0, 0, 0.4);
+}
+
+/* Quantico: titles, section labels, and counts. */
+.page h1, .center h1, .card h1, .modal h2, .chat-head h2 { font-family: var(--display); font-weight: 700; letter-spacing: .01em; }
+.page h1 { font-size: 24px; }
+.card h1, .center h1 { font-size: 22px; }
+.chat-head h2 { font-size: 17px; }
+.modal h2 { font-size: 18px; }
+.part > header h2, .about h3, .agents h4, .card .eyebrow, .signcard .label, .blk .kind, .groupmenu .label {
+  font-family: var(--display); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+}
+.groupmenu .label { font-size: 11px; }
+.gsettings h3, .vault h3, .agents h3, .tsec h3, .tomledit h3, .triggers .pform.new h3, .networks .pform.new h3, .plpreview h3 {
+  font-family: var(--display); font-weight: 700; font-size: 14px; letter-spacing: .02em;
+}
+.signcard header strong { font-family: var(--display); font-weight: 700; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; }
+.stat strong, .conv .badge, .quorum .count { font-family: var(--display); font-weight: 700; }
+.stat strong { font-size: 18px; }
+
+/* Brick depth: a button stands on its edge and a press pushes it down,
+   at once: every redraw makes the buttons anew, and a transition on them
+   plays again for each. */
+.btn, .groupmenu > button {
+  --btn-edge: var(--edge);
+  position: relative; box-shadow: 0 var(--depth) 0 var(--btn-edge);
+}
+.btn.small { --depth: 2px; }
+.btn:active:not(:disabled), .groupmenu > button:active { transform: translateY(calc(var(--depth) - 1px)); box-shadow: 0 1px 0 var(--btn-edge); }
+.btn.primary { --btn-edge: var(--accent-edge); }
+.btn.primary:hover { background: var(--accent); border-color: var(--accent); filter: brightness(1.06); }
+.btn.bright { --btn-edge: var(--bright-edge); }
+.btn.bright:hover:not(:disabled) { filter: brightness(1.04); }
+.btn.soft { --btn-edge: var(--soft-edge); }
+.btn.danger { --btn-edge: var(--danger-edge); }
+.composer .stop { --btn-edge: var(--danger-edge); }
+
+/* What holds content stands on the same edge; what floats also lifts. */
+.part, .card, .signcard, .stat, .provider, .devices, .tabs { box-shadow: 0 var(--depth) 0 var(--edge); }
+.stat, .provider, .devices, .tabs { --depth: 2px; }
+.dropdown, .popover, .suggest, .toast { box-shadow: 0 var(--depth) 0 var(--edge), var(--float); }
+.modal { border: 1px solid var(--line); box-shadow: 0 var(--depth) 0 var(--edge), 0 24px 48px rgba(0, 0, 0, 0.28); }
+.tabs button[aria-selected="true"] { box-shadow: 0 2px 0 var(--edge); }
+.chip { font-weight: 500; }
+
+.rail { position: relative; }
+.rail button > span:first-child { display: grid; }
+.rail button:active > span:first-child { transform: scale(.9); }
+.rail .marker { position: absolute; left: 0; top: 0; width: 3px; height: 26px; border-radius: 0 2px 2px 0; background: var(--live); box-shadow: 0 0 10px var(--glow); opacity: 0; pointer-events: none; }
+
+/* The bright green is for what is live: focus, devices online, an agent
+   answering, progress. */
+:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
+.field:focus, .part select:focus, .toggle select.theme:focus { outline: 0; border-color: var(--live); box-shadow: 0 0 0 3px var(--glow); }
+.field[aria-invalid="true"]:focus { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-bg); }
+.dot.on { background: var(--live); animation: ring 2.4s ease-out infinite; }
+.pulse { background: var(--live); animation: ring 1.2s ease-out infinite; }
+@keyframes ring { 0% { box-shadow: 0 0 0 0 var(--glow); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+.online.ok { border-color: var(--live); }
+
+/* Progress is a row of bricks the light runs along. */
+.progress {
+  height: 8px; border: 0; border-radius: 0; background: var(--line);
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 12px, transparent 12px 15px);
+  mask: repeating-linear-gradient(90deg, #000 0 12px, transparent 12px 15px);
+}
+.progress::after { background: var(--live); border-radius: 0; animation-timing-function: steps(12); }
+
+.live { position: relative; border-color: var(--live); box-shadow: 0 var(--depth) 0 var(--edge), 0 0 22px -8px var(--glow); }
+.live::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent-bright), transparent) no-repeat; background-size: 40% 100%;
+  animation: scan 1.4s linear infinite;
+}
+@keyframes scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+.signmsg.flash .signcard { box-shadow: 0 var(--depth) 0 var(--edge), 0 0 0 3px var(--accent-bright), 0 0 28px var(--glow); }
+
+/* The stud grid, behind the screens that stand alone. */
+main.center:not(.page), main.onboard { position: relative; isolation: isolate; }
+main.center:not(.page)::before, main.onboard::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(ellipse 3.5px 2.4px at center, var(--stud) 0 99%, transparent 100%);
+  background-size: 26px 22px;
+  -webkit-mask-image: radial-gradient(ellipse at center, transparent 0 24%, #000 80%);
+  mask-image: radial-gradient(ellipse at center, transparent 0 24%, #000 80%);
+}
+
+/* A Sign Request's meter: a brick per device needed. */
+.quorum { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.quorum .label { margin: 0; }
+.quorum .count { color: var(--text); font-size: 13px; letter-spacing: .04em; }
+.quorum .segs { display: flex; flex-wrap: wrap; gap: 3px; padding-top: 4px; }
+.seg { position: relative; width: 24px; height: 12px; border: 1px solid var(--line); border-radius: 2px; background: var(--bg); box-shadow: 0 2px 0 var(--edge); }
+.seg::before { content: ""; position: absolute; left: 50%; top: -4px; width: 10px; height: 3px; margin-left: -5px; border: 1px solid; border-color: inherit; border-bottom: 0; border-radius: 2px 2px 0 0; background: inherit; }
+.seg.on { background: var(--accent); border-color: var(--accent-edge); box-shadow: 0 2px 0 var(--accent-edge); }
+.quorum.met .seg.on { background: var(--accent-bright); border-color: var(--bright-edge); box-shadow: 0 2px 0 var(--bright-edge), 0 0 12px var(--glow); }
+.quorum.dead .seg.on { background: var(--muted); border-color: var(--muted); box-shadow: 0 2px 0 var(--edge); }
+.signcard { position: relative; overflow: hidden; }
+
+/* What moves once. Only what holds no text does: text that eases into
+   place, or fades in, shifts by a fraction of a pixel on the way and reads
+   as a shake, so pages, menus, forms and messages show at once. motion.js
+   starts each of these when its element first came. */
+@keyframes drop { from { opacity: 0; transform: translateY(-34px); } }
+@keyframes snap-in { from { opacity: 0; transform: translateY(-10px) scale(1.5); } }
+@keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes lock { 30% { box-shadow: 0 var(--depth) 0 var(--bright-edge), 0 0 0 2px var(--accent-bright), 0 0 32px var(--glow); } }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The logo drops onto the screens that stand alone. */
+  main.center.enter:not(.page) > .logo { animation: drop 420ms var(--snap) both; }
+  /* A stance accepted: its brick snaps on; the last one needed sweeps the card. */
+  .seg.snap { animation: snap-in 360ms var(--snap) both; }
+  .signcard.sweep { animation: lock 1000ms var(--out) both; }
+  .signcard.sweep::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(100deg, transparent 30%, var(--glow) 50%, transparent 70%);
+    animation: sweep 900ms var(--out) both;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.on, .pulse, .live::before { animation: none; }
+}
+/* The mark keeps its box before it loads, so the rail's marker is placed right. */
+.rail .mark { display: block; height: 34px; object-fit: contain; }
+.center .device strong { font-family: var(--display); font-weight: 700; font-size: 16px; letter-spacing: .04em; }
+.rail > * { flex: none; }
+/* The rail's label shows at once, on whole pixels: fading, it shifted as it settled. */
+.rail button .tip { top: 11px; height: 22px; line-height: 14px; transition: none; }
+/* Disabled dims the label alone, not the whole control. Every button is
+   disabled for the moment an action takes, and fading each one whole for
+   that moment showed as a jitter across the page. */
+.btn:disabled, .link:disabled { opacity: 1; color: var(--muted); }
+.btn.primary:disabled, .btn.danger:disabled { color: rgba(255, 255, 255, 0.55); }
+.btn.bright:disabled { color: rgba(21, 26, 31, 0.45); }
+.toggle input:disabled + .text { opacity: 1; }
+.toggle input:disabled + .text, .toggle input:disabled + .text strong { color: var(--muted); }

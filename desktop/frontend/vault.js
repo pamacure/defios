@@ -229,7 +229,7 @@ function secretRow(s) {
     setting === s.Name && valueForm(s.Name),
     revealing === s.Name && revealForm(s.Name),
     revealed && h("div", { class: "revealed" },
-      h("code", { class: "value" }, shown.value || "(empty)"),
+      h("code", { class: "value", "data-decode": !!shown.value }, shown.value || "(empty)"),
       shown.source === "env" && h("span", { class: "hint" }, "From this device's environment.")),
     removing === s.Name && h("div", { class: "confirm" },
       s.Source === "env" ? `Remove the Vault's value of ${s.Name}, if it has one? The environment's stays in use.`

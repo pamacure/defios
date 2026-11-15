@@ -56,7 +56,7 @@ export function signCard(it, busy) {
         h("span", { class: "label" }, `${c.Transactions.length > 1 ? `${i + 1}. ` : ""}${tx.Chain}`),
         h("ul", {}, tx.Lines.map((l) => h("li", {}, l)))))),
       h("div", { class: "stances" },
-        h("span", { class: "label" }, c.Needed ? `${accepted} of ${c.Needed} needed have accepted` : "Devices"),
+        c.Needed ? quorum(c, accepted) : h("span", { class: "label" }, "Devices"),
         c.Stances.map(stanceRow)),
       c.Status === "open" && c.Deadline && h("p", { class: "hint" }, `Lapses at ${hhmm(c.Deadline)} unless enough devices accept.`),
       c.Queued && h("p", { class: "hint queued" }, "This device's stance waits here and is sent once enough devices are online."),
@@ -70,6 +70,19 @@ export function signCard(it, busy) {
         h("span", { class: "label" }, "This device's Hooks"),
         c.Runs.map(runRow))));
 }
+
+// quorum is the card's meter: one segment per device needed, filled as
+// they accept. motion.js animates the ones just filled, by its data.
+function quorum(c, accepted) {
+  const filled = Math.min(accepted, c.Needed);
+  const state = filled >= c.Needed ? "met" : DEAD.has(c.Status) ? "dead" : "";
+  return h("div", { class: `quorum ${state}`, "data-key": c.MsgID, "data-n": filled, "data-needed": c.Needed },
+    h("span", { class: "segs", "aria-hidden": "true" },
+      Array.from({ length: c.Needed }, (_, i) => h("span", { class: i < filled ? "seg on" : "seg" }))),
+    h("span", { class: "label" }, h("strong", { class: "count" }, `${accepted} of ${c.Needed}`), " needed have accepted"));
+}
+
+const DEAD = new Set(["refused", "aborted", "expired"]);
 
 function stanceRow(s) {
   const label = { accepted: "Accepted", refused: "Refused", unaddressed: "No answer yet" }[s.Stance] ?? s.Stance;

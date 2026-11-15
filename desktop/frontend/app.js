@@ -4,6 +4,7 @@
 import { Events } from "/wails/runtime.js";
 import { agentsDevicePart, agentsGroupPart, agentsLoad, agentsOpen, agentsReady, agentsRefresh } from "./agents.js";
 import { call, h, icon } from "./dom.js";
+import "./motion.js";
 import { networksGroupPart, networksLoad, networksReady, networksRefresh } from "./networks.js";
 import { pluginsDevicePart, pluginsLoad, pluginsReady, pluginsRefresh } from "./plugins.js";
 import { settingsLoad, settingsPart, settingsReady, settingsRefresh } from "./settings.js";
@@ -540,7 +541,8 @@ function rail() {
     onclick: () => go(sec.id),
   }, icon(sec.id), h("span", { class: "tip" }, sec.label));
   return h("nav", { class: "rail", "aria-label": "Sections" },
-    mark(), SECTIONS.map(item), h("div", { class: "spacer" }), item(SETTINGS));
+    mark(), SECTIONS.map(item), h("div", { class: "spacer" }), item(SETTINGS),
+    h("span", { class: "marker", "aria-hidden": "true" }));
 }
 
 function onlineDot(s) {
