@@ -19,7 +19,7 @@ const (
 	KindOutcome = transcript.KindOutcome
 )
 
-// TranscriptLine is one line of a chain's Transcript.
+// TranscriptLine is one line of an Agent's Transcript.
 type TranscriptLine = transcript.Line
 
 // runOutcome is the closing line of a run that posted said (its MsgID empty

@@ -9,8 +9,8 @@ import (
 )
 
 // TokenUsage is a Group's Token Usage on this Node: the tokens its agents
-// consumed calling their Providers, from the Transcripts of the Chains
-// this Node ran. It is not Node Usage (Usage), and never part of it.
+// consumed calling their Providers, from their Transcripts on this
+// Node, live and closed. It is not Node Usage (Usage), and never part of it.
 type TokenUsage struct {
 	// Handles are the Handles that made a model call, by Handle.
 	Handles []HandleTokens

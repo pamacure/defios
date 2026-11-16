@@ -110,6 +110,9 @@ a stop ends there.*
   Pruning does not touch them, and nothing yet deletes them.
   *Amended by [ADR 0024](0024-a-recap-is-a-local-file.md): Transcripts move
   to `group/<alias>/conversations/<conversation>/transcripts/<chain>.jsonl`.*
+  *Amended by [ADR 0036](0036-an-agent-replays-its-own-transcript-not-the-talk.md):
+  a Transcript is one Agent's, not one chain's; each Agent's live one is
+  `transcripts/<handle>/live.jsonl`, every line marked with its chain.*
 - **Stream.** The stream is for whoever follows the whole output. It carries
   every block as it is generated, `agent.delta {kind, text}` with `kind`
   `thinking`, `text` or `tool` (a `say` streams as a `tool` like any other),

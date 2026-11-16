@@ -40,8 +40,8 @@ type SignRequestDetail struct {
 
 // HookRun is one firing of a Hook of this Node's on a Sign Request: the
 // Hook, the event it fired on, and its Jobs. An agent Job names its Handle
-// and, once it starts, the Conversation and chain whose Transcript is its
-// run.
+// and, once it starts, the Conversation and chain its run is marked with
+// in that agent's Transcript.
 type HookRun = serve.HookRun
 
 // JobRun is one Job of a HookRun, and its State.

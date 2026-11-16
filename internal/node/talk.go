@@ -137,8 +137,9 @@ type ChainEvent = serve.ChainEvent
 // ChainStream is one Conversation's chain events as they happen.
 type ChainStream = serve.ChainStream
 
-// Transcript is what this Node's chain did in a Conversation: its lines as
-// stored, and the runs of its agents folded from them.
+// Transcript is what this Node's chain did in a Conversation, rebuilt from
+// its agents' Transcripts (ADR 0036): the lines of its runs as stored, by
+// step, and the runs folded from them.
 type Transcript struct {
 	Chain string // the hex msg_id that started it
 	Lines []transcript.Line
@@ -412,8 +413,8 @@ func (h *Host) Follow(ctx context.Context, groupAlias, conv string) (*ChainStrea
 	return s, nil
 }
 
-// Transcript is the Transcript of this Node's chain in conv started by the
-// message whose msg_id starts with chain.
+// Transcript is the runs of this Node's chain in conv whose id, the msg_id
+// of the message that started it, starts with chain.
 func (h *Host) Transcript(_ context.Context, groupAlias, conv, chain string) (Transcript, error) {
 	p, err := serve.ChainPrefix(chain)
 	if err != nil {
@@ -429,19 +430,16 @@ func (h *Host) Transcript(_ context.Context, groupAlias, conv, chain string) (Tr
 	if err := h.knownGroup(groupAlias); err != nil {
 		return Transcript{}, err
 	}
-	chains, err := transcript.List(h.p, groupAlias, id)
+	ts, err := transcript.ReadConversation(h.p, groupAlias, id)
 	if err != nil {
 		return Transcript{}, err
 	}
-	full, err := serve.MatchChain(p, chains)
+	full, err := serve.MatchChain(p, transcript.Chains(ts))
 	if err != nil {
 		return Transcript{}, err
 	}
-	t, err := transcript.Read(h.p, groupAlias, id, full)
-	if err != nil {
-		return Transcript{}, err
-	}
-	return Transcript{Chain: full, Lines: t.Lines, Runs: t.Runs()}, nil
+	lines := transcript.ChainLines(ts, full)
+	return Transcript{Chain: full, Lines: lines, Runs: transcript.Runs(lines)}, nil
 }
 
 // Handles are the agents' Handles included in conv, which a message there

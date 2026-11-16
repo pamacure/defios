@@ -193,7 +193,7 @@ The provider's own name for one of the models a Provider serves (e.g. `claude-op
 _Avoid_: Model, model alias
 
 **Token Usage**:
-The input and output tokens a Node's agents consumed calling their Providers, counted per Handle within a Group from the Transcripts of the Chains that Node ran. Unrelated to Node Usage: it measures what Providers bill for, not what the machine holds.
+The input and output tokens a Node's agents consumed calling their Providers, counted per Handle within a Group from that Node's Transcripts, live and closed. Unrelated to Node Usage: it measures what Providers bill for, not what the machine holds.
 _Avoid_: usage (alone), agent usage, cost, quota
 
 **Sign Request**:

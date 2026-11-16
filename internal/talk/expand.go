@@ -19,19 +19,15 @@ type Expanded struct {
 }
 
 // Expand is msgs, from conv's talk (nil for Group-level talk), each with
-// the blocks of the run of this Node's chains that said it.
+// the blocks of the run of this Node's agents that said it.
 func (r Reader) Expand(conv []byte, msgs Messages) ([]Expanded, error) {
-	chains, err := transcript.List(r.Paths, r.Alias, conv)
+	ts, err := transcript.ReadConversation(r.Paths, r.Alias, conv)
 	if err != nil {
 		return nil, err
 	}
 	said := map[string][]json.RawMessage{}
-	for _, chain := range chains {
-		t, err := transcript.Read(r.Paths, r.Alias, conv, chain)
-		if err != nil {
-			return nil, err
-		}
-		for _, run := range t.Runs() {
+	for _, t := range ts {
+		for _, run := range transcript.Runs(t.Lines) {
 			if run.Outcome == transcript.OutcomeSaid {
 				said[run.MsgID] = run.Output()
 			}

@@ -483,7 +483,7 @@ func (s *server) runChain(c *chain) {
 	close(c.done)
 }
 
-// step performs st of c: runs its agent, writing the run to tr, or
+// step performs st of c: runs its agent, writing the run through tr, or
 // publishes its skip.
 func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) plan.Outcome {
 	switch st.Action {
@@ -521,8 +521,9 @@ var errSkipped = errors.New("skipped")
 // runAgent runs st's agent on the talk so far, as step st of c: writes
 // what it says, committed or queued, or reports it silent, and returns how
 // it ended, with what was included where it answered. Everything the run
-// generates, and how it ended, goes to c's Transcript tr (ADR 0018); a run
-// cut off by the serve stopping records no outcome.
+// generates, and how it ended, goes through tr to that agent's live
+// Transcript, marked with c (ADR 0036); a run cut off by the serve stopping
+// records no outcome.
 func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) (res agent.Result, inc config.Included, err error) {
 	handle, depth := st.Handle, st.Depth
 	ob, store, ok := s.writer()

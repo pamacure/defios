@@ -1,7 +1,9 @@
-// Package transcript is a chain's Transcript (ADR 0018): everything its
-// agents generated, one JSON line at a time, kept on the Node that ran it
-// under the Conversation's transcripts/ and never replicated. serve
-// appends it as the chain runs; anything may read it, serve up or down.
+// Package transcript is an Agent's Transcript (ADR 0036): everything it
+// generated in its runs in one Conversation, one JSON line at a time, each
+// marked with the chain it ran in, kept on the Node that ran it under the
+// Conversation's transcripts/ and never replicated. serve appends it as a
+// chain runs; anything may read it, serve up or down. A chain is rebuilt
+// from the runs marked with it.
 package transcript
 
 import (
@@ -36,10 +38,12 @@ const (
 	KindOutcome = "outcome"           // outcome, and msg_id and seq or error with it
 )
 
-// Line is one line of a chain's Transcript. Every line names the run it
-// belongs to: its step in the chain's depth-first order (from 1), its
+// Line is one line of a Transcript. Every line names the run it belongs
+// to: its chain, the hex msg_id of the message that started it or a Job's
+// random id, its step in that chain's depth-first order (from 1), its
 // Handle and depth. Kind says which of the rest it holds.
 type Line struct {
+	Chain  string `json:"chain"`
 	Step   int    `json:"step"`
 	Handle string `json:"handle"`
 	Depth  uint32 `json:"depth"`
@@ -77,119 +81,174 @@ func Outcome(msgID string, seq uint64, err error, cancelled, stopped bool) (l Li
 	return l, true
 }
 
-// path is the Transcript of chain in conv (nil for Group-level talk).
-func path(p nodedir.Paths, alias string, conv []byte, chain string) string {
-	return p.TranscriptFile(alias, nodedir.ConversationName(conv), chain)
-}
-
-// Writer appends a chain's Transcript, opened on its first line. One chain
-// runs at a time per Conversation, so it is the file's one writer. A write
-// that fails is logged once and the chain goes on: the Transcript is this
-// Node's record, not what the chain is for.
+// Writer appends the runs of one chain to their agents' live Transcripts,
+// each opened on its first line. One chain runs at a time per
+// Conversation, so it is the one writer of each. A write that fails is
+// logged once and the chain goes on: a Transcript is this Node's record,
+// not what the chain is for.
 type Writer struct {
-	path   string
+	p      nodedir.Paths
+	alias  string
+	conv   string
+	chain  string
 	logf   func(string, ...any)
-	f      *os.File
+	files  map[string]*os.File // by Handle
 	failed bool
 }
 
-// NewWriter is a Writer of the Transcript of chain, a hex msg_id, in conv
-// (nil for Group-level talk), that logs a failed write to logf.
+// NewWriter is a Writer of the runs of chain, a hex msg_id or a Job's id,
+// in conv (nil for Group-level talk), that logs a failed write to logf.
 func NewWriter(p nodedir.Paths, alias string, conv []byte, chain string, logf func(string, ...any)) *Writer {
-	return &Writer{path: path(p, alias, conv, chain), logf: logf}
+	return &Writer{p: p, alias: alias, conv: nodedir.ConversationName(conv), chain: chain, logf: logf, files: map[string]*os.File{}}
 }
 
-// Write appends l, unless a write has failed before.
+// Write appends l, marked with the chain, to the live Transcript of
+// l.Handle, unless a write has failed before.
 func (w *Writer) Write(l Line) {
 	if w.failed {
 		return
 	}
+	l.Chain = w.chain
 	if err := w.append(l); err != nil {
 		w.failed = true
-		w.logf("serve: transcript %s: %v; the rest of this chain is not recorded", w.path, err)
+		w.logf("serve: transcript of @%s, chain %s: %v; the rest of this chain is not recorded", l.Handle, w.chain, err)
 	}
 }
 
 func (w *Writer) append(l Line) error {
-	if w.f == nil {
-		if err := os.MkdirAll(filepath.Dir(w.path), 0o700); err != nil {
+	f := w.files[l.Handle]
+	if f == nil {
+		path := w.p.LiveTranscriptFile(w.alias, w.conv, l.Handle)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		f, err := os.OpenFile(w.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-		if err != nil {
+		var err error
+		if f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600); err != nil {
 			return err
 		}
-		w.f = f
+		w.files[l.Handle] = f
 	}
 	line, err := json.Marshal(l)
 	if err != nil {
 		return fmt.Errorf("encoding a line: %w", err)
 	}
-	_, err = w.f.Write(append(line, '\n'))
+	_, err = f.Write(append(line, '\n'))
 	return err
 }
 
-// Close closes the file, if a line opened it.
+// Close closes the files its lines opened.
 func (w *Writer) Close() {
-	if w.f != nil {
-		w.f.Close()
+	for _, f := range w.files {
+		f.Close()
 	}
 }
 
-// Transcript is a chain's Transcript as read.
+// Transcript is one Agent's Transcript in one Conversation as read: its
+// live one, or one closed and kept beside it.
 type Transcript struct {
+	Handle string
 	// Lines are its lines as stored, in order.
 	Lines []Line
 }
 
-// Read is the Transcript of chain in conv (nil for Group-level talk);
-// empty if it has none. A line it cannot read, such as one cut off by a
-// stop, is passed over.
-func Read(p nodedir.Paths, alias string, conv []byte, chain string) (Transcript, error) {
-	return readFile(path(p, alias, conv, chain))
+// ReadConversation is every Transcript in conv (nil for Group-level
+// talk): by Handle, an Agent's closed ones in name order, then its live
+// one; nil if there is none. A line it cannot read, such as one cut off
+// by a stop, is passed over.
+func ReadConversation(p nodedir.Paths, alias string, conv []byte) ([]Transcript, error) {
+	return readDir(p.TranscriptsDir(alias, nodedir.ConversationName(conv)))
 }
 
-func readFile(file string) (Transcript, error) {
-	var t Transcript
-	data, err := os.ReadFile(file)
-	if errors.Is(err, os.ErrNotExist) {
-		return t, nil
-	}
-	if err != nil {
-		return t, err
-	}
-	for line := range bytes.SplitSeq(data, []byte("\n")) {
-		var l Line
-		if json.Unmarshal(line, &l) != nil || l.Step < 1 {
-			continue
-		}
-		t.Lines = append(t.Lines, l)
-	}
-	return t, nil
-}
-
-// List is the chains, hex msg_ids, with a Transcript in conv (nil for
-// Group-level talk), in name order; nil if there is none.
-func List(p nodedir.Paths, alias string, conv []byte) ([]string, error) {
-	entries, err := os.ReadDir(p.TranscriptsDir(alias, nodedir.ConversationName(conv)))
+// readDir is the Transcripts under dir, a Conversation's transcripts/:
+// one directory per Handle.
+func readDir(dir string) ([]Transcript, error) {
+	agents, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var chains []string
-	for _, e := range entries {
-		if id, ok := nodedir.TranscriptChain(e.Name()); ok && e.Type().IsRegular() {
-			chains = append(chains, id)
+	var out []Transcript
+	for _, a := range agents {
+		if !a.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(dir, a.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var names []string
+		for _, f := range files {
+			if f.Type().IsRegular() && nodedir.IsTranscriptFile(f.Name()) && f.Name() != nodedir.LiveTranscript {
+				names = append(names, f.Name())
+			}
+		}
+		for _, name := range append(names, nodedir.LiveTranscript) {
+			lines, err := readFile(filepath.Join(dir, a.Name(), name))
+			if err != nil {
+				return nil, err
+			}
+			if lines != nil {
+				out = append(out, Transcript{Handle: a.Name(), Lines: lines})
+			}
 		}
 	}
-	return chains, nil
+	return out, nil
+}
+
+// readFile is the lines of file; nil if it is not there or holds none.
+func readFile(file string) ([]Line, error) {
+	data, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var lines []Line
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
+		var l Line
+		if json.Unmarshal(line, &l) != nil || l.Step < 1 || l.Chain == "" {
+			continue
+		}
+		lines = append(lines, l)
+	}
+	return lines, nil
+}
+
+// Chains are the chains with a run in ts, in order; nil if there is none.
+func Chains(ts []Transcript) []string {
+	var chains []string
+	for _, t := range ts {
+		for _, l := range t.Lines {
+			chains = append(chains, l.Chain)
+		}
+	}
+	slices.Sort(chains)
+	return slices.Compact(chains)
+}
+
+// ChainLines are the lines of chain's runs in ts, a Conversation's
+// Transcripts, across agents: by step, each run's in order; nil if it has
+// none.
+func ChainLines(ts []Transcript, chain string) []Line {
+	var lines []Line
+	for _, t := range ts {
+		for _, l := range t.Lines {
+			if l.Chain == chain {
+				lines = append(lines, l)
+			}
+		}
+	}
+	slices.SortStableFunc(lines, func(a, b Line) int { return cmp.Compare(a.Step, b.Step) })
+	return lines
 }
 
 // Run is one run of one step of a chain, as its lines show it. Outcome is
 // "" for a run cut off by a stop.
 type Run struct {
+	Chain  string
 	Step   int
 	Handle string
 	Depth  uint32
@@ -220,16 +279,23 @@ type Acted struct {
 // accepted talk_write, has none.
 func (r Run) Output() []json.RawMessage { return r.Blocks }
 
-// Runs are t's runs, one per step, by step.
-func (t Transcript) Runs() []Run {
+// Runs are the runs of lines, one per step of each chain, in the order
+// each starts: an Agent's in the order it ran them, a chain's
+// (ChainLines) by step.
+func Runs(lines []Line) []Run {
+	type key struct {
+		chain string
+		step  int
+	}
 	var runs []Run
-	at := map[int]int{}
-	for _, l := range t.Lines {
-		i, ok := at[l.Step]
+	at := map[key]int{}
+	for _, l := range lines {
+		k := key{l.Chain, l.Step}
+		i, ok := at[k]
 		if !ok {
 			i = len(runs)
-			at[l.Step] = i
-			runs = append(runs, Run{Step: l.Step, Handle: l.Handle, Depth: l.Depth})
+			at[k] = i
+			runs = append(runs, Run{Chain: l.Chain, Step: l.Step, Handle: l.Handle, Depth: l.Depth})
 		}
 		r := &runs[i]
 		switch l.Kind {
@@ -245,9 +311,6 @@ func (t Transcript) Runs() []Run {
 			r.Outcome, r.MsgID, r.Seq, r.Error = l.Outcome, l.MsgID, l.Seq, l.Error
 		}
 	}
-	slices.SortStableFunc(runs, func(a, b Run) int {
-		return cmp.Compare(a.Step, b.Step)
-	})
 	return runs
 }
 
@@ -272,7 +335,7 @@ func Tokens(usage json.RawMessage) (input, output int64) {
 }
 
 // ReadAll is every Transcript of alias's Conversations, Group-level talk
-// included, as Read reads each.
+// included, as ReadConversation reads each.
 func ReadAll(p nodedir.Paths, alias string) ([]Transcript, error) {
 	convs, err := os.ReadDir(p.ConversationsDir(alias))
 	if errors.Is(err, os.ErrNotExist) {
@@ -286,24 +349,11 @@ func ReadAll(p nodedir.Paths, alias string) ([]Transcript, error) {
 		if !c.IsDir() {
 			continue
 		}
-		dir := p.TranscriptsDir(alias, c.Name())
-		entries, err := os.ReadDir(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		ts, err := readDir(p.TranscriptsDir(alias, c.Name()))
 		if err != nil {
 			return nil, err
 		}
-		for _, e := range entries {
-			if _, ok := nodedir.TranscriptChain(e.Name()); !ok || !e.Type().IsRegular() {
-				continue
-			}
-			t, err := readFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, t)
-		}
+		out = append(out, ts...)
 	}
 	return out, nil
 }

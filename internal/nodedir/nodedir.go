@@ -204,25 +204,28 @@ func (p Paths) RecapFile(alias, conversation string) string {
 }
 
 // TranscriptsDir is a Conversation's transcripts/: what this Node's agents
-// generated, never replicated and outside the Vault (ADR 0018). A replica
-// wipe, a restore and Pruning leave it alone.
+// generated, one directory per Handle, never replicated and outside the
+// Vault (ADR 0036). A replica wipe, a restore and Pruning leave it alone.
 func (p Paths) TranscriptsDir(alias, conversation string) string {
 	return filepath.Join(p.ConversationDir(alias, conversation), "transcripts")
 }
 
-// TranscriptFile is the Transcript of a chain in a Conversation, named by
-// chain, the hex msg_id of the message that started it (ADR 0025).
-func (p Paths) TranscriptFile(alias, conversation, chain string) string {
-	return filepath.Join(p.TranscriptsDir(alias, conversation), chain+transcriptExt)
+// LiveTranscriptFile is the live Transcript of the Agent handle in a
+// Conversation: the one its runs there append to. Its closed Transcripts
+// are kept beside it, under other names (IsTranscriptFile).
+func (p Paths) LiveTranscriptFile(alias, conversation, handle string) string {
+	return filepath.Join(p.TranscriptsDir(alias, conversation), handle, LiveTranscript)
 }
+
+// LiveTranscript is the file name of an Agent's live Transcript.
+const LiveTranscript = "live" + transcriptExt
 
 const transcriptExt = ".jsonl"
 
-// TranscriptChain is the chain whose Transcript is the file name in a
-// TranscriptsDir; ok is false if name is not one.
-func TranscriptChain(name string) (chain string, ok bool) {
-	chain, ok = strings.CutSuffix(name, transcriptExt)
-	return chain, ok && chain != ""
+// IsTranscriptFile reports whether name, a file in an Agent's directory of
+// a TranscriptsDir, is a Transcript: its live one or a closed one.
+func IsTranscriptFile(name string) bool {
+	return strings.HasSuffix(name, transcriptExt) && name != transcriptExt
 }
 
 // ConversationWorkspace is config/group/<alias>/<name>/, name being the

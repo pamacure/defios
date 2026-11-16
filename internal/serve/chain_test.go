@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -884,12 +885,15 @@ func maxDepth2(t *testing.T, a *node) {
 	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
 }
 
-// A chain's Transcript is in its Conversation's data directory: the hex
-// Conversation ID for a Key's, "group" for Group-level talk (ADR 0024).
-// Nothing is written to the Group's old transcripts/.
-func TestTranscriptsAreInTheConversationDir(t *testing.T) {
+// An Agent's Transcript is in its Conversation's data directory, the hex
+// Conversation ID for a Key's, "group" for Group-level talk (ADR 0024): one
+// live Transcript per Agent there, which its runs in every chain land in,
+// each marked with its chain (ADR 0036). Two agents in one chain write two
+// Transcripts. Nothing is written per chain, or to the Group's old
+// transcripts/.
+func TestTranscriptsAreOnePerAgentInTheConversationDir(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe")
-	answerAs(provider, map[string]string{"auditor": "checked"})
+	answerAs(provider, map[string]string{"auditor": "checked", "scribe": "noted"})
 	waitWorkspace(t, a, mintKey(t, a, b, gid))
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	ctx := context.Background()
@@ -901,19 +905,38 @@ func TestTranscriptsAreInTheConversationDir(t *testing.T) {
 		{id[:], fmt.Sprintf("%x", id[:])},
 		{nil, "group"},
 	} {
-		s, err := a.client().ConversationStream(ctx, c.conv)
-		if err != nil {
-			t.Fatal(err)
+		var chains []string
+		for _, text := range []string{"@auditor", "@auditor and @scribe"} {
+			s, err := a.client().ConversationStream(ctx, c.conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, err := a.client().ConversationSend(ctx, text, c.conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			untilEnd(t, s, v.MsgID)
+			s.Close()
+			chains = append(chains, v.MsgID)
 		}
-		v, err := a.client().ConversationSend(ctx, "@auditor", c.conv)
-		if err != nil {
-			t.Fatal(err)
+		dir := filepath.Join(gdir, "conversations", c.dir, "transcripts")
+		for handle, want := range map[string][]string{"auditor": chains, "scribe": chains[1:]} {
+			var got []string
+			for _, line := range strings.Split(strings.TrimSpace(readFile(t, filepath.Join(dir, handle, "live.jsonl"))), "\n") {
+				var l struct{ Chain, Handle, Kind string }
+				if err := json.Unmarshal([]byte(line), &l); err != nil || l.Handle != handle {
+					t.Fatalf("@%s's Transcript holds %q: %v", handle, line, err)
+				}
+				if l.Kind == serve.KindOutcome {
+					got = append(got, l.Chain)
+				}
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("%s: @%s ended runs in chains %v, want %v", c.dir, handle, got, want)
+			}
 		}
-		untilEnd(t, s, v.MsgID)
-		s.Close()
-		path := filepath.Join(gdir, "conversations", c.dir, "transcripts", v.MsgID+".jsonl")
-		if !strings.Contains(readFile(t, path), `"kind":"outcome"`) {
-			t.Errorf("%s has no outcome", path)
+		if entries, err := os.ReadDir(dir); err != nil || len(entries) != 2 {
+			t.Errorf("%s holds %v, %v; want one directory per agent", dir, entries, err)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(gdir, "transcripts")); !os.IsNotExist(err) {

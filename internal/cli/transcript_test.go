@@ -33,6 +33,8 @@ var transcriptLines = []transcript.Line{
 	{Step: 4, Handle: "quant", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
 }
 
+// writeTranscript writes transcriptLines as the runs of chain in conv, to
+// their agents' Transcripts.
 func writeTranscript(t *testing.T, dir string, conv []byte, chain string) {
 	t.Helper()
 	p := nodedir.Resolve(nodedir.Lookup{Dir: dir})
@@ -43,10 +45,10 @@ func writeTranscript(t *testing.T, dir string, conv []byte, chain string) {
 	}
 }
 
-// conversation transcript shows a chain's Transcript, found by a prefix of
-// its msg_id, with no serve: each run's step, Handle and depth, then its
-// thinking, tool calls and text, what its sign Tools did, then how it
-// ended.
+// conversation transcript shows a chain's runs, across its agents'
+// Transcripts, found by a prefix of its msg_id, with no serve: each run's
+// step, Handle and depth, then its thinking, tool calls and text, what its
+// sign Tools did, then how it ended.
 func TestConversationTranscriptShowsEachRun(t *testing.T) {
 	dir := t.TempDir()
 	groupWithTalk(t, dir)
@@ -77,8 +79,8 @@ step 4: @quant, depth 1
 	}
 }
 
-// --json prints the Transcript's lines as stored; --key reads that
-// Conversation's.
+// --json prints the lines of the chain's runs as stored, across its
+// agents' Transcripts, by step; --key reads that Conversation's.
 func TestConversationTranscriptJSONPrintsTheLines(t *testing.T) {
 	dir := t.TempDir()
 	ecdsaPK, _ := groupWithKeys(t, dir)
@@ -89,9 +91,17 @@ func TestConversationTranscriptJSONPrintsTheLines(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
-	stored := readFile(t, nodedir.Resolve(nodedir.Lookup{Dir: dir}).TranscriptFile(group.ImplicitAlias, hex.EncodeToString(id[:]), transcribedChain))
-	if r.stdout != stored {
-		t.Fatalf("stdout:\n%s\nstored:\n%s", r.stdout, stored)
+	var stored strings.Builder
+	for _, l := range transcriptLines {
+		l.Chain = transcribedChain
+		b, err := json.Marshal(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored.Write(append(b, '\n'))
+	}
+	if r.stdout != stored.String() {
+		t.Fatalf("stdout:\n%s\nstored:\n%s", r.stdout, stored.String())
 	}
 	if r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab"); r.code != 1 {
 		t.Fatalf("Group-level talk has no such chain: exit %d", r.code)

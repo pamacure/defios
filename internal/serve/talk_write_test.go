@@ -1,31 +1,65 @@
 package serve_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"defios.com/internal/group"
+	"defios.com/internal/nodedir"
 	"defios.com/internal/serve"
 )
 
-// transcript is the Transcript lines of the Group-level chain on n named by
-// its hex msg_id.
+// transcript is the lines of the runs of the Group-level chain on n named
+// by its hex msg_id.
 func transcript(t *testing.T, n *node, chain string) []map[string]any {
 	t.Helper()
-	path := n.paths.TranscriptFile(group.ImplicitAlias, "group", chain)
+	return convTranscript(t, n, nil, chain)
+}
+
+// transcriptsRaw is every Transcript of n's agents in conv, as stored, one
+// after the other; it fails if there is none.
+func transcriptsRaw(t *testing.T, n *node, conv []byte) string {
+	t.Helper()
+	dir := n.paths.TranscriptsDir(group.ImplicitAlias, nodedir.ConversationName(conv))
+	files, err := filepath.Glob(filepath.Join(dir, "*", "*.jsonl"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no Transcript under %s: %v", dir, err)
+	}
+	var raw strings.Builder
+	for _, f := range files {
+		raw.WriteString(readFile(t, f))
+	}
+	return raw.String()
+}
+
+// convTranscript is the lines of the runs of the chain on n in conv named
+// by its hex msg_id, rebuilt from its agents' Transcripts: by step.
+func convTranscript(t *testing.T, n *node, conv []byte, chain string) []map[string]any {
+	t.Helper()
 	var out []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(readFile(t, path)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(transcriptsRaw(t, n, conv)), "\n") {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
-			t.Fatalf("%s: %v in %q", path, err, line)
+			t.Fatalf("%v in %q", err, line)
 		}
-		out = append(out, m)
+		if m["chain"] == chain {
+			out = append(out, m)
+		}
 	}
+	if len(out) == 0 {
+		t.Fatalf("chain %s has no Transcript line", chain)
+	}
+	slices.SortStableFunc(out, func(a, b map[string]any) int {
+		return cmp.Compare(a["step"].(float64), b["step"].(float64))
+	})
 	return out
 }
 
@@ -220,9 +254,9 @@ func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
 	}
 }
 
-// Each chain's Transcript holds one line per request, output block, usage,
-// tool result and outcome, each tagged with its step, Handle and depth, and
-// never the key.
+// An agent's Transcript holds one line per request, output block, usage,
+// tool result and outcome of each run, each tagged with its chain, step,
+// Handle and depth, and never the key.
 func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
@@ -264,7 +298,7 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	if req["model"] != "claude-test" || len(req["messages"].([]any)) != 3 {
 		t.Fatalf("second request = %v", req)
 	}
-	if raw := readFile(t, a.paths.TranscriptFile(group.ImplicitAlias, "group", v.MsgID)); strings.Contains(raw, "sk-"+a.name) {
+	if raw := transcriptsRaw(t, a, nil); strings.Contains(raw, "sk-"+a.name) {
 		t.Fatal("the Transcript holds the API key")
 	}
 }

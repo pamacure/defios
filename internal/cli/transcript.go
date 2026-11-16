@@ -11,9 +11,9 @@ import (
 	"defios.com/internal/transcript"
 )
 
-// runConversationTranscript prints the Transcript of the chain whose
-// msg_id starts with prefix, matched as conversation cancel matches it,
-// among the chains with a Transcript in the Conversation keyQuery names.
+// runConversationTranscript prints the runs of the chain whose msg_id
+// starts with prefix, matched as conversation cancel matches it, among the
+// chains with a run in the Transcripts of the Conversation keyQuery names.
 // It reads the files, so it needs no serve.
 func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 	p, err := chainPrefix(prefix)

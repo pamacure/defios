@@ -125,12 +125,14 @@ func responsesWhole(w http.ResponseWriter, text, said string) {
 }
 
 // runLines is a run's Transcript lines as compared across replies: the
-// request bodies, which differ by stream, and the msg_id and seq left out.
+// request bodies, which differ by stream, and the chain, msg_id and seq
+// left out.
 func runLines(t *testing.T, a *node, chain string) string {
 	t.Helper()
 	var out []string
 	for _, l := range transcript(t, a, chain) {
 		delete(l, "handle")
+		delete(l, "chain")
 		delete(l, "msg_id")
 		delete(l, "seq")
 		if l["kind"] == serve.KindRequest {

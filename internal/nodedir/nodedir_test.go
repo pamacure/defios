@@ -104,9 +104,9 @@ func TestFilePaths(t *testing.T) {
 }
 
 // Each Conversation has one data directory, named by its hex Conversation
-// ID or "group" for Group-level talk, and its Transcripts live in it
-// (ADR 0024).
-func TestTranscriptsLiveInTheConversationDir(t *testing.T) {
+// ID or "group" for Group-level talk, and its Transcripts are kept in it
+// (ADR 0024), each Agent's live one under its Handle (ADR 0036).
+func TestTranscriptsAreKeptInTheConversationDir(t *testing.T) {
 	p := nodedir.Resolve(nodedir.Lookup{Dir: "/tmp/n1", Getenv: envOf(nil), Home: "/h"})
 	if got := p.ConversationDir("home", "ab12"); got != "/tmp/n1/group/home/conversations/ab12" {
 		t.Fatalf("conversation dir %q", got)
@@ -114,8 +114,8 @@ func TestTranscriptsLiveInTheConversationDir(t *testing.T) {
 	if got := p.TranscriptsDir("home", "group"); got != "/tmp/n1/group/home/conversations/group/transcripts" {
 		t.Fatalf("transcripts dir %q", got)
 	}
-	if got := p.TranscriptFile("home", "ab12", "cd34"); got != "/tmp/n1/group/home/conversations/ab12/transcripts/cd34.jsonl" {
-		t.Fatalf("transcript file %q", got)
+	if got := p.LiveTranscriptFile("home", "ab12", "auditor"); got != "/tmp/n1/group/home/conversations/ab12/transcripts/auditor/live.jsonl" {
+		t.Fatalf("live transcript file %q", got)
 	}
 }
 

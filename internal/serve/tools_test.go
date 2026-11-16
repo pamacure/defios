@@ -12,7 +12,6 @@ import (
 
 	"defios.com/internal/group"
 	"defios.com/internal/key"
-	"defios.com/internal/nodedir"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -233,22 +232,6 @@ func summonIn(t *testing.T, n *node, conv []byte, text string) (chain, events st
 		t.Fatal(err)
 	}
 	return v.MsgID, summary(untilEnd(t, s, v.MsgID))
-}
-
-// convTranscript is the Transcript lines of the chain on n in conv named
-// by its hex msg_id.
-func convTranscript(t *testing.T, n *node, conv []byte, chain string) []map[string]any {
-	t.Helper()
-	path := n.paths.TranscriptFile(group.ImplicitAlias, nodedir.ConversationName(conv), chain)
-	var out []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(readFile(t, path)), "\n") {
-		var m map[string]any
-		if err := json.Unmarshal([]byte(line), &m); err != nil {
-			t.Fatalf("%s: %v in %q", path, err, line)
-		}
-		out = append(out, m)
-	}
-	return out
 }
 
 // actedWords is the Transcript's acted lines as "<tool> <msg_id>" words.

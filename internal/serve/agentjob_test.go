@@ -139,9 +139,9 @@ jobs = ["stranger", "never"]
 			t.Errorf("last user turn lacks %q: %q", want, last)
 		}
 	}
-	tr := filepath.Join(a.paths.GroupDir(group.ImplicitAlias), "conversations", "group", "transcripts", events[0].Chain+".jsonl")
-	if !strings.Contains(readFile(t, tr), `"kind":"outcome"`) {
-		t.Errorf("%s has no outcome", tr)
+	// The Job's run is in @auditor's Transcript, marked with the Job's chain.
+	if got := lineWords(transcript(t, a, events[0].Chain)); !strings.HasSuffix(got, "1/auditor/1:outcome=said") {
+		t.Errorf("the Job's chain = %s", got)
 	}
 	waitFile(t, after)
 	for _, ff := range freeforms(t, b.groupLevelRows(t, gid, 1)) {

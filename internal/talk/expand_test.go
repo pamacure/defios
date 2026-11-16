@@ -19,7 +19,8 @@ func (f *fixture) agentSays(by cosl.Author, handle, text string) string {
 	return hex.EncodeToString(s.MsgID[:])
 }
 
-// transcribe writes lines as the Transcript of chain in Group-level talk.
+// transcribe writes lines, as the runs of chain in Group-level talk, to
+// their agents' Transcripts.
 func (f *fixture) transcribe(chain string, lines ...transcript.Line) {
 	w := transcript.NewWriter(f.paths, "home", nil, chain, f.t.Logf)
 	defer w.Close()
@@ -48,15 +49,17 @@ func blockTexts(es []talk.Expanded) [][]string {
 	return out
 }
 
-// An agent's message this Node's chain said comes with the blocks of the
-// run that said it, a failed run's left out; a person's, another Node's
-// agent's, and one whose Transcript is gone come with none.
+// An agent's message this Node's agent said comes with the blocks of the
+// run that said it, whichever chain of its Transcript that run was in, a
+// failed run's left out; a person's, another Node's agent's, and one whose
+// Transcript is gone come with none.
 func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {
 	f := newFixture(t)
 	f.say(f.alice, "check this")
 	fixed := f.agentSays(f.alice, "auditor", "fixed")
 	f.agentSays(f.bob, "critic", "from bob's Node")
 	f.agentSays(f.alice, "scribe", "transcript gone")
+	again := f.agentSays(f.alice, "auditor", "fixed again")
 	run := func(step int, handle, kind string) transcript.Line {
 		return transcript.Line{Step: step, Handle: handle, Depth: 1, Kind: kind}
 	}
@@ -68,12 +71,16 @@ func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {
 		l(run(2, "quant", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("failed try") }),
 		l(run(2, "quant", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.Error = transcript.OutcomeError, "boom" }),
 	)
+	f.transcribe("cdcd",
+		l(run(1, "auditor", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("second look") }),
+		l(run(1, "auditor", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeSaid, again, 5 }),
+	)
 
 	got, err := f.reader().Expand(nil, f.read(nil).Chat())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"check this"}, {"fixed", "looking", "found it"}, {"from bob's Node"}, {"transcript gone"}}
+	want := [][]string{{"check this"}, {"fixed", "looking", "found it"}, {"from bob's Node"}, {"transcript gone"}, {"fixed again", "second look"}}
 	if g := blockTexts(got); !reflect.DeepEqual(g, want) {
 		t.Errorf("expanded = %q, want %q", g, want)
 	}

@@ -19,7 +19,8 @@ func paths(t *testing.T) nodedir.Paths {
 	return nodedir.Resolve(nodedir.Lookup{Dir: t.TempDir()})
 }
 
-// write appends lines to the Transcript of chain in conv, as serve does.
+// write appends lines, as the runs of chain in conv, to their agents'
+// Transcripts, as serve does.
 func write(t *testing.T, p nodedir.Paths, conv []byte, chain string, lines ...transcript.Line) {
 	t.Helper()
 	w := transcript.NewWriter(p, group.ImplicitAlias, conv, chain, t.Logf)
@@ -39,101 +40,159 @@ var lines = []transcript.Line{
 	{Step: 3, Handle: "critic", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
 }
 
-// Written lines read back as written, in order, one JSON line each in the
-// chain's file in its Conversation's transcripts/.
-func TestWrittenLinesReadBack(t *testing.T) {
+// chained is ls as a chain's Writer stores them: each marked with chain.
+func chained(chain string, ls ...transcript.Line) []transcript.Line {
+	out := make([]transcript.Line, len(ls))
+	for i, l := range ls {
+		l.Chain = chain
+		out[i] = l
+	}
+	return out
+}
+
+// read is the Transcripts of conv, each agent's.
+func read(t *testing.T, p nodedir.Paths, conv []byte) []transcript.Transcript {
+	t.Helper()
+	ts, err := transcript.ReadConversation(p, group.ImplicitAlias, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts
+}
+
+// Two agents in one chain write two Transcripts: each agent's lines go to
+// its own live Transcript in the Conversation's transcripts/, one JSON line
+// each, marked with the chain.
+func TestEachAgentOfAChainWritesItsOwnTranscript(t *testing.T) {
 	p := paths(t)
 	write(t, p, nil, chainID, lines...)
-	tr, err := transcript.Read(p, group.ImplicitAlias, nil, chainID)
+	want := chained(chainID, lines...)
+	got := read(t, p, nil)
+	if !reflect.DeepEqual(got, []transcript.Transcript{
+		{Handle: "auditor", Lines: want[:4]},
+		{Handle: "critic", Lines: want[5:]},
+		{Handle: "scribe", Lines: want[4:5]},
+	}) {
+		t.Fatalf("transcripts = %+v", got)
+	}
+	b, err := os.ReadFile(p.LiveTranscriptFile(group.ImplicitAlias, "group", "auditor"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(tr.Lines, lines) {
-		t.Fatalf("lines = %+v", tr.Lines)
-	}
-	b, err := os.ReadFile(p.TranscriptFile(group.ImplicitAlias, "group", chainID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Count(string(b), "\n"); got != len(lines) {
+	if got := strings.Count(string(b), "\n"); got != 4 {
 		t.Fatalf("%d lines on disk:\n%s", got, b)
 	}
-	if want := `{"step":1,"handle":"auditor","depth":1,"kind":"request","request":{"model":"m"}}` + "\n"; !strings.HasPrefix(string(b), want) {
+	if want := `{"chain":"abab","step":1,"handle":"auditor","depth":1,"kind":"request","request":{"model":"m"}}` + "\n"; !strings.HasPrefix(string(b), want) {
 		t.Fatalf("on disk:\n%s", b)
 	}
 }
 
-// A Transcript's runs come by step, each with its requests, blocks, usage
-// and outcome; a run a stop cut off has none, and the line the stop cut in
-// half is passed over.
-func TestRunsByStep(t *testing.T) {
+// An Agent's runs across several chains of one Conversation land in its
+// one live Transcript, in the order they ran, each marked with its chain.
+func TestRunsAcrossChainsLandInOneLiveTranscript(t *testing.T) {
 	p := paths(t)
-	cut := transcript.Line{Step: 4, Handle: "quant", Depth: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{}`)}
+	write(t, p, nil, "cd34", lines[:4]...)
+	write(t, p, nil, "ef56", lines[:4]...)
+	ts := read(t, p, nil)
+	if len(ts) != 1 || ts[0].Handle != "auditor" {
+		t.Fatalf("transcripts = %+v", ts)
+	}
+	want := append(chained("cd34", lines[:4]...), chained("ef56", lines[:4]...)...)
+	if !reflect.DeepEqual(ts[0].Lines, want) {
+		t.Fatalf("lines = %+v", ts[0].Lines)
+	}
+	runs := transcript.Runs(ts[0].Lines)
+	if len(runs) != 2 || runs[0].Chain != "cd34" || runs[1].Chain != "ef56" || runs[1].Step != 1 || len(runs[1].Blocks) != 1 {
+		t.Fatalf("runs = %+v", runs)
+	}
+}
+
+// A chain is rebuilt from the runs marked with it, across agents, by
+// step, each run with its requests, blocks, usage and outcome; a run a
+// stop cut off has none, and the line the stop cut in half is passed over.
+func TestAChainIsRebuiltFromItsRunsByStep(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "9999", lines...)
+	// @auditor runs again as step 4, cut off.
+	cut := transcript.Line{Step: 4, Handle: "auditor", Depth: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{}`)}
 	write(t, p, nil, chainID, append(lines, cut)...)
-	f, err := os.OpenFile(p.TranscriptFile(group.ImplicitAlias, "group", chainID), os.O_WRONLY|os.O_APPEND, 0)
+	f, err := os.OpenFile(p.LiveTranscriptFile(group.ImplicitAlias, "group", "auditor"), os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString(`{"step":4,"handle":"quant","depth":2,"kind":"blo`)
+	f.WriteString(`{"chain":"abab","step":4,"handle":"auditor","depth":2,"kind":"blo`)
 	f.Close()
 
-	tr, err := transcript.Read(p, group.ImplicitAlias, nil, chainID)
-	if err != nil {
-		t.Fatal(err)
+	got := transcript.ChainLines(read(t, p, nil), chainID)
+	if want := chained(chainID, append(lines, cut)...); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lines = %+v", got)
 	}
 	want := []transcript.Run{
-		{Step: 1, Handle: "auditor", Depth: 1,
+		{Chain: chainID, Step: 1, Handle: "auditor", Depth: 1,
 			Requests: []json.RawMessage{json.RawMessage(`{"model":"m"}`)},
 			Blocks:   []json.RawMessage{json.RawMessage(`{"type":"text","text":"ok @scribe"}`)},
 			Usage:    []json.RawMessage{json.RawMessage(`{"input_tokens":3}`)},
 			Outcome:  transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
-		{Step: 2, Handle: "scribe", Depth: 2, Outcome: transcript.OutcomeSilent},
-		{Step: 3, Handle: "critic", Depth: 1, Outcome: transcript.OutcomeError, Error: "boom"},
-		{Step: 4, Handle: "quant", Depth: 2, Requests: []json.RawMessage{json.RawMessage(`{}`)}},
+		{Chain: chainID, Step: 2, Handle: "scribe", Depth: 2, Outcome: transcript.OutcomeSilent},
+		{Chain: chainID, Step: 3, Handle: "critic", Depth: 1, Outcome: transcript.OutcomeError, Error: "boom"},
+		{Chain: chainID, Step: 4, Handle: "auditor", Depth: 2, Requests: []json.RawMessage{json.RawMessage(`{}`)}},
 	}
-	if !reflect.DeepEqual(tr.Runs(), want) {
-		t.Fatalf("runs = %+v", tr.Runs())
-	}
-	if len(tr.Lines) != len(lines)+1 {
-		t.Fatalf("%d lines, want %d", len(tr.Lines), len(lines)+1)
+	if runs := transcript.Runs(got); !reflect.DeepEqual(runs, want) {
+		t.Fatalf("runs = %+v", runs)
 	}
 }
 
-// List is the chains of a Conversation with a Transcript, and only
-// those: not another Conversation's, nor a file that is not one.
-func TestListFindsExactlyTheTranscripts(t *testing.T) {
+// Chains are the chains with a run in a Conversation's Transcripts, and
+// only those: not another Conversation's, nor a file that is not a
+// Transcript, nor an old per-chain file.
+func TestChainsAreThoseOfTheConversationsTranscripts(t *testing.T) {
 	p := paths(t)
 	conv := []byte{0xab, 0x12}
-	if got, err := transcript.List(p, group.ImplicitAlias, nil); err != nil || got != nil {
-		t.Fatalf("none yet: %v, %v", got, err)
+	if got := read(t, p, nil); got != nil || transcript.Chains(got) != nil {
+		t.Fatalf("none yet: %v", got)
 	}
-	write(t, p, nil, "cd34", lines...)
 	write(t, p, nil, "ef56", lines...)
+	write(t, p, nil, "cd34", lines...)
 	write(t, p, conv, "9876", lines...)
 	dir := p.TranscriptsDir(group.ImplicitAlias, "group")
-	os.WriteFile(dir+"/notes.txt", []byte("x"), 0o600)
-	os.Mkdir(dir+"/sub.jsonl", 0o700)
+	old := `{"step":1,"handle":"auditor","depth":1,"kind":"outcome","outcome":"silent"}` + "\n"
+	os.WriteFile(dir+"/0123.jsonl", []byte(old), 0o600)
+	os.WriteFile(dir+"/auditor/notes.txt", []byte(old), 0o600)
+	os.Mkdir(dir+"/auditor/sub.jsonl", 0o700)
 
-	got, err := transcript.List(p, group.ImplicitAlias, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, []string{"cd34", "ef56"}) {
+	if got := transcript.Chains(read(t, p, nil)); !reflect.DeepEqual(got, []string{"cd34", "ef56"}) {
 		t.Fatalf("Group-level: %v", got)
 	}
-	if got, err := transcript.List(p, group.ImplicitAlias, conv); err != nil || !reflect.DeepEqual(got, []string{"9876"}) {
-		t.Fatalf("ab12: %v, %v", got, err)
+	if got := transcript.Chains(read(t, p, conv)); !reflect.DeepEqual(got, []string{"9876"}) {
+		t.Fatalf("ab12: %v", got)
 	}
 }
 
-// A chain with no Transcript reads as empty.
-func TestNoTranscriptReadsEmpty(t *testing.T) {
-	tr, err := transcript.Read(paths(t), group.ImplicitAlias, nil, chainID)
-	if err != nil {
+// A closed Transcript, kept beside the live one, is still read: before
+// it, as the older.
+func TestClosedTranscriptsAreReadBesideTheLiveOne(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "cd34", lines[:4]...)
+	live := p.LiveTranscriptFile(group.ImplicitAlias, "group", "auditor")
+	if err := os.Rename(live, strings.TrimSuffix(live, "live.jsonl")+"0001.jsonl"); err != nil {
 		t.Fatal(err)
 	}
-	if tr.Lines != nil || tr.Runs() != nil {
-		t.Fatalf("read %+v", tr)
+	write(t, p, nil, "ef56", lines[:4]...)
+	ts := read(t, p, nil)
+	if len(ts) != 2 || ts[0].Lines[0].Chain != "cd34" || ts[1].Lines[0].Chain != "ef56" {
+		t.Fatalf("transcripts = %+v", ts)
+	}
+	all, err := transcript.ReadAll(p, group.ImplicitAlias)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("ReadAll = %+v, %v", all, err)
+	}
+}
+
+// A chain with no run reads as empty.
+func TestNoTranscriptReadsEmpty(t *testing.T) {
+	ls := transcript.ChainLines(read(t, paths(t), nil), chainID)
+	if ls != nil || transcript.Runs(ls) != nil {
+		t.Fatalf("read %+v", ls)
 	}
 }
 

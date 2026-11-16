@@ -72,7 +72,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	root.AddCommand(cancel)
 	transcriptCmd := &cobra.Command{
 		Use:   "transcript <msg-id>",
-		Short: "Print the Transcript of the chain that the person's message with this msg id (or a unique prefix of it) started: each step's agent at work, then how it ended; --json prints its lines as stored. Needs no serve. --key scopes it to that Key",
+		Short: "Print the runs of the chain that the person's message with this msg id (or a unique prefix of it) started, from its agents' Transcripts: each step's agent at work, then how it ended; --json prints their lines as stored. Needs no serve. --key scopes it to that Key",
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(_ *cobra.Command, args []string) error { return runConversationTranscript(g, keyQuery, args[0]) },
 	}
@@ -91,7 +91,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
 	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it, as its agents read them")
 	log.Flags().BoolVar(&opts.chat, "chat", false, "the talk as chat: \"<display name>: <text>\" with its newlines, every message this Node holds from the first, a blank line between")
-	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each agent message this Node's chain said preceded by its Transcript blocks: thinking, text, tool calls and their results")
+	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each message this Node's agents said preceded by the Transcript blocks of the run that said it: thinking, text, tool calls and their results")
 	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	var baseSeq uint64

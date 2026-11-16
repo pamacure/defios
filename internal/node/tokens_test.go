@@ -121,7 +121,8 @@ func tokensUntil(t *testing.T, h *node.Host, want node.TokenUsage) {
 }
 
 // Token Usage sums, per Handle, the input and output tokens of every
-// model call in the Transcripts of the Chains this Node ran. Input counts
+// model call in its agents' Transcripts, whichever Chain each run was in.
+// Input counts
 // the tokens written to and read from the cache too.
 func TestAChainsTokensAddToItsHandlesTokenUsage(t *testing.T) {
 	api := messagesAPI(t)

@@ -42,7 +42,7 @@ type JobRun struct {
 	Kind string `json:"kind"` // agent, exec or webhook
 	// Handle is an agent Job's agent. Conversation and Chain are where it
 	// answers, hex ("" for Group-level talk), and the chain it runs as,
-	// once it started: a Transcript names the run by it.
+	// once it started: the agent's Transcript marks the run with it.
 	Handle       string `json:"handle,omitempty"`
 	Conversation string `json:"conversation,omitempty"`
 	Chain        string `json:"chain,omitempty"`
