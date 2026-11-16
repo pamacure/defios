@@ -3,6 +3,7 @@ package cli_test
 import (
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,5 +126,85 @@ func TestConversationTranscriptRefusesAnUnknownPrefix(t *testing.T) {
 		if r.code != 1 || !strings.Contains(r.stderr, says) {
 			t.Errorf("%q: exit %d, stderr %q", prefix, r.code, r.stderr)
 		}
+	}
+}
+
+// liveTranscripts are the Handles with a live Transcript in conv.
+func liveTranscripts(t *testing.T, dir string, conv []byte) []string {
+	t.Helper()
+	live, err := transcript.Live(nodedir.Resolve(nodedir.Lookup{Dir: dir}), group.ImplicitAlias, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return live
+}
+
+// conversation clear --agent closes that Agent's live Transcript here and
+// no other's, with no serve; the closed one stays on disk and readable.
+func TestConversationClearClosesOneAgentsTranscript(t *testing.T) {
+	dir := t.TempDir()
+	groupWithTalk(t, dir)
+	writeTranscript(t, dir, nil, transcribedChain)
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "clear", "--agent", "@auditor")
+	if r.code != 0 || r.stdout != "cleared @auditor's Transcript\n" {
+		t.Fatalf("exit %d: %q %s", r.code, r.stdout, r.stderr)
+	}
+	if got := liveTranscripts(t, dir, nil); !slices.Equal(got, []string{"critic", "quant", "scribe"}) {
+		t.Fatalf("live = %v", got)
+	}
+	if r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab"); r.code != 0 || !strings.Contains(r.stdout, "@auditor said msg_id cdcdcdcd") {
+		t.Fatalf("the closed Transcript is not readable: exit %d: %s%s", r.code, r.stdout, r.stderr)
+	}
+	// With none live, there is nothing to clear, which is no error.
+	r = run(t, nil, "", "--dir", dir, "conversation", "clear", "--agent", "auditor")
+	if r.code != 0 || r.stdout != "@auditor has no live Transcript here\n" {
+		t.Fatalf("again: exit %d: %q %s", r.code, r.stdout, r.stderr)
+	}
+}
+
+// --all closes every Agent's live Transcript in the Conversation --key
+// names, and no other Conversation's; --json lists the Handles cleared.
+func TestConversationClearAllClosesEveryAgentsTranscriptThere(t *testing.T) {
+	dir := t.TempDir()
+	ecdsaPK, _ := groupWithKeys(t, dir)
+	id := key.ConversationID("ecdsa", ecdsaPK)
+	writeTranscript(t, dir, id[:], transcribedChain)
+	writeTranscript(t, dir, nil, transcribedChain)
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "clear", "--all", "--key", "ecdsa:"+hex.EncodeToString(ecdsaPK), "--json")
+	var line struct{ Cleared []string }
+	if err := json.Unmarshal([]byte(r.stdout), &line); r.code != 0 || err != nil || !slices.Equal(line.Cleared, []string{"auditor", "critic", "quant", "scribe"}) {
+		t.Fatalf("exit %d: %q %s (%v)", r.code, r.stdout, r.stderr, err)
+	}
+	if got := liveTranscripts(t, dir, id[:]); got != nil {
+		t.Fatalf("live in the Key's Conversation = %v", got)
+	}
+	if got := liveTranscripts(t, dir, nil); len(got) != 4 {
+		t.Fatalf("live in Group-level talk = %v", got)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "clear", "--all")
+	if r.code != 0 || r.stdout != "cleared the Transcripts of @auditor, @critic, @quant, @scribe\n" {
+		t.Fatalf("Group-level talk: exit %d: %q %s", r.code, r.stdout, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "conversation", "clear", "--all")
+	if r.code != 0 || r.stdout != "no agent has a live Transcript here\n" {
+		t.Fatalf("again: exit %d: %q %s", r.code, r.stdout, r.stderr)
+	}
+}
+
+// Clear needs exactly one of --agent and --all, and a valid Handle.
+func TestConversationClearRefusesBadUsage(t *testing.T) {
+	dir := t.TempDir()
+	groupWithTalk(t, dir)
+	writeTranscript(t, dir, nil, transcribedChain)
+	for _, args := range [][]string{{}, {"--agent", "auditor", "--all"}, {"--agent", "../auditor"}, {"--agent", ""}} {
+		r := run(t, nil, "", append([]string{"--dir", dir, "conversation", "clear"}, args...)...)
+		if r.code != 1 {
+			t.Errorf("%v: exit %d: %s", args, r.code, r.stderr)
+		}
+	}
+	if got := liveTranscripts(t, dir, nil); len(got) != 4 {
+		t.Fatalf("live = %v", got)
 	}
 }

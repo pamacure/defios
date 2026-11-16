@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"defios.com/internal/agent"
 	"defios.com/internal/nodedir"
@@ -82,10 +83,11 @@ func Outcome(msgID string, seq uint64, err error, cancelled, stopped bool) (l Li
 }
 
 // Writer appends the runs of one chain to their agents' live Transcripts,
-// each opened on its first line. One chain runs at a time per
-// Conversation, so it is the one writer of each. A write that fails is
-// logged once and the chain goes on: a Transcript is this Node's record,
-// not what the chain is for.
+// each opened on its run's first line and held until the run's outcome, so
+// a run finishes in the Transcript it started in though a Clear closes it
+// meanwhile. One chain runs at a time per Conversation, so it is the one
+// writer of each. A write that fails is logged once and the chain goes on:
+// a Transcript is this Node's record, not what the chain is for.
 type Writer struct {
 	p      nodedir.Paths
 	alias  string
@@ -133,6 +135,12 @@ func (w *Writer) append(l Line) error {
 		return fmt.Errorf("encoding a line: %w", err)
 	}
 	_, err = f.Write(append(line, '\n'))
+	if l.Kind == KindOutcome {
+		// The run is over: the Agent's next one opens whichever
+		// Transcript is live by then.
+		delete(w.files, l.Handle)
+		err = errors.Join(err, f.Close())
+	}
 	return err
 }
 
@@ -140,6 +148,86 @@ func (w *Writer) append(l Line) error {
 func (w *Writer) Close() {
 	for _, f := range w.files {
 		f.Close()
+	}
+}
+
+// Live are the Handles of the Agents with a live Transcript in conv (nil
+// for Group-level talk), in order; nil if there is none.
+func Live(p nodedir.Paths, alias string, conv []byte) ([]string, error) {
+	name := nodedir.ConversationName(conv)
+	agents, err := os.ReadDir(p.TranscriptsDir(alias, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var live []string
+	for _, a := range agents {
+		if !a.IsDir() {
+			continue
+		}
+		fi, err := os.Lstat(p.LiveTranscriptFile(alias, name, a.Name()))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode().IsRegular() {
+			live = append(live, a.Name())
+		}
+	}
+	return live, nil
+}
+
+// Clear closes the live Transcript of the Agent handle in conv (nil for
+// Group-level talk), or with handle "" of every Agent there, and returns
+// the Handles it closed one of, in order: nil if none had one. A closed
+// Transcript is kept beside where the live one was, under the time it was
+// closed, and that Agent's next run there starts a new live one; a run
+// still going finishes in the one closed (ADR 0036). handle must be a
+// valid Handle: it names a directory.
+func Clear(p nodedir.Paths, alias string, conv []byte, handle string) ([]string, error) {
+	live, err := Live(p, alias, conv)
+	if err != nil {
+		return nil, err
+	}
+	var cleared []string
+	for _, h := range live {
+		if handle != "" && h != handle {
+			continue
+		}
+		closed, err := closeLive(p.LiveTranscriptFile(alias, nodedir.ConversationName(conv), h))
+		if err != nil {
+			return cleared, fmt.Errorf("closing the Transcript of @%s: %w", h, err)
+		}
+		if closed {
+			cleared = append(cleared, h)
+		}
+	}
+	return cleared, nil
+}
+
+// closedLayout names a closed Transcript by when it was closed, UTC, so
+// an Agent's sort oldest first.
+const closedLayout = "20060102T150405.000000000Z"
+
+// closeLive renames the live Transcript at live to a closed one's name,
+// one no Transcript beside it has; false if it is no longer there.
+func closeLive(live string) (bool, error) {
+	for at := time.Now().UTC(); ; at = at.Add(time.Nanosecond) {
+		closed := filepath.Join(filepath.Dir(live), at.Format(closedLayout)+filepath.Ext(live))
+		if _, err := os.Lstat(closed); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		err := os.Rename(live, closed)
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return err == nil, err
 	}
 }
 

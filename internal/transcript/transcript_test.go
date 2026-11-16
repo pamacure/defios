@@ -211,3 +211,83 @@ func TestOutputHasEachToolCallsResult(t *testing.T) {
 		t.Fatalf("output = %s", got)
 	}
 }
+
+// Clear closes an Agent's live Transcript in a Conversation: it is kept
+// and still read, others' are untouched, and the Agent's next run starts a
+// new live one.
+func TestClearClosesAnAgentsLiveTranscriptAndKeepsIt(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "cd34", lines...)
+	cleared, err := transcript.Clear(p, group.ImplicitAlias, nil, "auditor")
+	if err != nil || !reflect.DeepEqual(cleared, []string{"auditor"}) {
+		t.Fatalf("Clear = %v, %v", cleared, err)
+	}
+	if live, err := transcript.Live(p, group.ImplicitAlias, nil); err != nil || !reflect.DeepEqual(live, []string{"critic", "scribe"}) {
+		t.Fatalf("live after the clear = %v, %v", live, err)
+	}
+	if got := read(t, p, nil); len(got) != 3 || !reflect.DeepEqual(got[0], transcript.Transcript{Handle: "auditor", Lines: chained("cd34", lines[:4]...)}) {
+		t.Fatalf("the closed Transcript is not read: %+v", got)
+	}
+	write(t, p, nil, "ef56", lines[:4]...)
+	got := read(t, p, nil)
+	if len(got) != 4 || got[0].Lines[0].Chain != "cd34" || got[1].Lines[0].Chain != "ef56" || len(got[1].Lines) != 4 {
+		t.Fatalf("after the next run: %+v", got)
+	}
+	// Clearing it again closes the new one beside the first.
+	if cleared, err := transcript.Clear(p, group.ImplicitAlias, nil, "auditor"); err != nil || len(cleared) != 1 {
+		t.Fatalf("second Clear = %v, %v", cleared, err)
+	}
+	if got := read(t, p, nil); len(got) != 4 || got[0].Lines[0].Chain != "cd34" || got[1].Lines[0].Chain != "ef56" {
+		t.Fatalf("after the second clear: %+v", got)
+	}
+}
+
+// Clear with no Handle closes every Agent's live Transcript there, and no
+// other Conversation's; with nothing live it closes nothing.
+func TestClearOfEveryAgentLeavesOtherConversationsAlone(t *testing.T) {
+	p := paths(t)
+	conv := []byte{0xab, 0x12}
+	write(t, p, nil, "cd34", lines...)
+	write(t, p, conv, "ef56", lines[:4]...)
+	cleared, err := transcript.Clear(p, group.ImplicitAlias, nil, "")
+	if err != nil || !reflect.DeepEqual(cleared, []string{"auditor", "critic", "scribe"}) {
+		t.Fatalf("Clear = %v, %v", cleared, err)
+	}
+	if live, err := transcript.Live(p, group.ImplicitAlias, nil); err != nil || live != nil {
+		t.Fatalf("live after the clear = %v, %v", live, err)
+	}
+	if live, err := transcript.Live(p, group.ImplicitAlias, conv); err != nil || !reflect.DeepEqual(live, []string{"auditor"}) {
+		t.Fatalf("the other Conversation's live = %v, %v", live, err)
+	}
+	if len(read(t, p, nil)) != 3 {
+		t.Fatal("the closed Transcripts are not read")
+	}
+	for _, handle := range []string{"", "auditor", "nobody"} {
+		if cleared, err := transcript.Clear(p, group.ImplicitAlias, nil, handle); err != nil || cleared != nil {
+			t.Fatalf("Clear(%q) with nothing live = %v, %v", handle, cleared, err)
+		}
+	}
+}
+
+// A run in progress when its Agent is cleared finishes into the old
+// Transcript; that Agent's next run, even in the same chain, starts a new
+// one.
+func TestARunInProgressFinishesIntoTheClearedTranscript(t *testing.T) {
+	p := paths(t)
+	w := transcript.NewWriter(p, group.ImplicitAlias, nil, "cd34", t.Logf)
+	defer w.Close()
+	w.Write(lines[0])
+	if cleared, err := transcript.Clear(p, group.ImplicitAlias, nil, "auditor"); err != nil || len(cleared) != 1 {
+		t.Fatalf("Clear = %v, %v", cleared, err)
+	}
+	for _, l := range lines[1:4] {
+		w.Write(l)
+	}
+	again := lines[3]
+	again.Step = 4
+	w.Write(again)
+	got := read(t, p, nil)
+	if len(got) != 2 || !reflect.DeepEqual(got[0].Lines, chained("cd34", lines[:4]...)) || !reflect.DeepEqual(got[1].Lines, chained("cd34", again)) {
+		t.Fatalf("transcripts = %+v", got)
+	}
+}

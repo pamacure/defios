@@ -38,7 +38,9 @@ type fakeTalk struct {
 	accepted  []string // Session IDs
 	aborted   []string
 	sign      *fakeSign
-	pruned    uint64 // the highest seq a Prune reached
+	// liveTranscripts are the Handles with a live Transcript, by
+	// Conversation ID.
+	liveTranscripts map[string][]string
 }
 
 func (n *fakeNode) tk() *fakeTalk {
@@ -47,6 +49,7 @@ func (n *fakeNode) tk() *fakeTalk {
 			committed: map[string][]node.Message{}, queued: map[string][]node.Message{},
 			blocks: map[string][]json.RawMessage{}, included: map[string][]string{},
 			providers: map[string][]node.Provider{}, networks: map[string][]node.Network{},
+			liveTranscripts: map[string][]string{},
 		}
 	}
 	return n.talk
@@ -359,39 +362,37 @@ func (n *fakeNode) Networks(_ context.Context, group, conv string) ([]node.Netwo
 	return slices.Clone(t.networks[node.GroupTalk]), nil
 }
 
-func (n *fakeNode) PruneCheck(_ context.Context, group, conv string, through uint64) (node.Pruning, error) {
-	return n.prune(conv, through, false), nil
-}
-
-func (n *fakeNode) Prune(_ context.Context, group, conv string, through uint64) (node.Pruning, error) {
-	return n.prune(conv, through, true), nil
-}
-
-// prune is the fake's Pruning: no Recap and no prune policy.
-func (n *fakeNode) prune(conv string, through uint64, destroy bool) node.Pruning {
+// live gives handles a live Transcript in conv.
+func (n *fakeNode) live(conv string, handles ...string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	t := n.tk()
-	var out node.Pruning
-	for i, m := range t.committed[conv] {
-		if m.Seq <= through && !m.Pruned {
-			out.Messages++
-			if destroy {
-				t.committed[conv][i] = node.Message{Seq: m.Seq, Term: m.Term, MsgID: m.MsgID, CreatedAt: m.CreatedAt,
-					NodeID: m.NodeID, DisplayName: m.DisplayName, Pruned: true}
-				t.pruned = max(t.pruned, through)
-			}
-		}
-	}
-	if out.Messages > 0 {
-		out.Unaccounted, out.NoPolicy = true, true
-	}
-	return out
+	t.liveTranscripts[conv] = append(t.liveTranscripts[conv], handles...)
 }
 
-// prunedThrough is the highest seq a Prune reached.
-func (n *fakeNode) prunedThrough() uint64 {
+// liveIn are the Handles with a live Transcript in conv.
+func (n *fakeNode) liveIn(conv string) []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.tk().pruned
+	return slices.Clone(n.tk().liveTranscripts[conv])
+}
+
+func (n *fakeNode) LiveTranscripts(_ context.Context, group, conv string) ([]string, error) {
+	return n.liveIn(conv), nil
+}
+
+func (n *fakeNode) ClearTranscripts(_ context.Context, group, conv, handle string) ([]string, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	t := n.tk()
+	var cleared, left []string
+	for _, h := range t.liveTranscripts[conv] {
+		if handle == "" || h == handle {
+			cleared = append(cleared, h)
+		} else {
+			left = append(left, h)
+		}
+	}
+	t.liveTranscripts[conv] = left
+	return cleared, nil
 }

@@ -36,8 +36,8 @@ type TalkNode interface {
 	Providers(ctx context.Context, group, conv string) ([]node.Provider, error)
 	Networks(ctx context.Context, group, conv string) ([]node.Network, error)
 	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)
-	PruneCheck(ctx context.Context, group, conv string, through uint64) (node.Pruning, error)
-	Prune(ctx context.Context, group, conv string, through uint64) (node.Pruning, error)
+	LiveTranscripts(ctx context.Context, group, conv string) ([]string, error)
+	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 
 	// Sign Requests.
 	SignRequests(ctx context.Context, group string) ([]node.SignRequest, error)

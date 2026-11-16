@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"defios.com/internal/agent"
 	"defios.com/internal/serve"
@@ -46,6 +47,54 @@ func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 		return emitJSONL(g, t.Lines)
 	}
 	printRuns(g, t.Runs)
+	return nil
+}
+
+// clearLine is `conversation clear`'s result: the Handles of the agents
+// whose live Transcript it closed.
+type clearLine struct {
+	Cleared []string `json:"cleared"`
+}
+
+// runConversationClear clears the agent handle, or unless byAgent (--agent
+// was passed) every agent, in the Conversation keyQuery names: it closes
+// their live Transcripts, which are files of this Node's, so it needs no
+// serve (ADR 0036).
+func runConversationClear(g *globals, keyQuery, handle string, byAgent bool) error {
+	handle = strings.TrimPrefix(handle, "@")
+	if byAgent && handle == "" {
+		return exitUsagef("--agent: name the agent's Handle")
+	}
+	h, err := openNode(g)
+	if err != nil {
+		return err
+	}
+	alias, err := g.resolveAlias()
+	if err != nil {
+		return err
+	}
+	conv, err := queriedConversation(g, h, keyQuery)
+	if err != nil {
+		return err
+	}
+	cleared, err := h.ClearTranscripts(context.Background(), alias, conv, handle)
+	if err != nil {
+		return talkError(err)
+	}
+	if g.json {
+		return g.emitJSON(clearLine{Cleared: append([]string{}, cleared...)})
+	}
+	out := g.app.Stdout
+	switch {
+	case len(cleared) == 0 && byAgent:
+		fmt.Fprintf(out, "@%s has no live Transcript here\n", handle)
+	case len(cleared) == 0:
+		fmt.Fprintln(out, "no agent has a live Transcript here")
+	case len(cleared) == 1:
+		fmt.Fprintf(out, "cleared @%s's Transcript\n", cleared[0])
+	default:
+		fmt.Fprintf(out, "cleared the Transcripts of @%s\n", strings.Join(cleared, ", @"))
+	}
 	return nil
 }
 

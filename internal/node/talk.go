@@ -442,6 +442,41 @@ func (h *Host) Transcript(_ context.Context, groupAlias, conv, chain string) (Tr
 	return Transcript{Chain: full, Lines: lines, Runs: transcript.Runs(lines)}, nil
 }
 
+// LiveTranscripts are the Handles of this Node's Agents with a live
+// Transcript in conv, in order: those a Clear there would clear.
+func (h *Host) LiveTranscripts(_ context.Context, groupAlias, conv string) ([]string, error) {
+	id, err := conversationID(conv)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.knownGroup(groupAlias); err != nil {
+		return nil, err
+	}
+	return transcript.Live(h.p, groupAlias, id)
+}
+
+// ClearTranscripts clears the Agent handle in conv, or with handle ""
+// every Agent there: it closes each one's live Transcript, kept and not
+// deleted, and that Agent's next run there starts a new one (ADR 0036). A
+// run still going finishes in the one closed. It returns the Handles it
+// cleared, in order: none if no live Transcript was there. Nothing on the
+// COSL changes, and it needs the Group neither served nor unlocked.
+func (h *Host) ClearTranscripts(_ context.Context, groupAlias, conv, handle string) ([]string, error) {
+	id, err := conversationID(conv)
+	if err != nil {
+		return nil, err
+	}
+	if handle != "" {
+		if err := config.ValidateHandle(handle); err != nil {
+			return nil, &InvalidError{Err: err}
+		}
+	}
+	if err := h.knownGroup(groupAlias); err != nil {
+		return nil, err
+	}
+	return transcript.Clear(h.p, groupAlias, id, handle)
+}
+
 // Handles are the agents' Handles included in conv, which a message there
 // may mention, in config order.
 func (h *Host) Handles(_ context.Context, groupAlias, conv string) ([]string, error) {

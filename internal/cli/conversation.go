@@ -79,6 +79,22 @@ func conversationCommand(g *globals) *cobra.Command {
 	transcriptCmd.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	bindGroupFlag(g, transcriptCmd)
 	root.AddCommand(transcriptCmd)
+	var clearAgent string
+	clear := &cobra.Command{
+		Use:   "clear --agent <handle> | --all",
+		Short: "Clear an agent here, or every agent: close its live Transcript, kept and not deleted, so its next run starts a new one. Nothing on the COSL changes. Needs no serve. --key scopes it to that Key",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runConversationClear(g, keyQuery, clearAgent, cmd.Flags().Changed("agent"))
+		},
+	}
+	clear.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
+	clear.Flags().StringVar(&clearAgent, "agent", "", "@handle: clear that agent's Transcript")
+	clear.Flags().Bool("all", false, "clear the Transcript of every agent here")
+	clear.MarkFlagsOneRequired("agent", "all")
+	clear.MarkFlagsMutuallyExclusive("agent", "all")
+	bindGroupFlag(g, clear)
+	root.AddCommand(clear)
 	var opts logOptions
 	log := &cobra.Command{
 		Use:   "log",

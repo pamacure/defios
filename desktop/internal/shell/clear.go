@@ -6,32 +6,30 @@ import (
 	"defios.com/internal/node"
 )
 
-// Talk's Clear: pruning the open Conversation's talk on this device
-// (ADR 0024), through the last message the person saw.
+// Talk's Clear: clearing this device's agents in the open Conversation,
+// one or all of them (ADR 0036). It closes their live Transcripts, which
+// are kept, and leaves the talk as it is.
 
 // errNotOpen: Clear named a Conversation that is no longer the one open.
 var errNotOpen = errors.New("shell: that conversation is no longer open")
 
-// ClearView is what Clear would destroy in the open Conversation: the
-// talk through seq Through, Messages payloads of this device's. With
-// Unaccounted, this device's agents lose talk no RECAP.md accounts for;
-// with NoPolicy, a later restore from another device brings it back.
+// ClearView is whom Clear can clear in the open Conversation: Agents are
+// the Handles of this device's agents with a live Transcript there, none
+// if there is nothing to clear.
 type ClearView struct {
 	Conversation string
-	Through      uint64
-	Messages     int
-	Unaccounted  bool
-	NoPolicy     bool
+	Agents       []string
 	Problem      *Problem
 }
 
-// ClearCheck is what clearing the open Conversation would destroy now.
+// ClearCheck is whom clearing the open Conversation could clear now.
 func (s *Shell) ClearCheck() ClearView { return s.talk.clearCheck() }
 
-// ClearConversation prunes conv through seq through on this device, as a
-// ClearCheck of it said; conv must still be the one open.
-func (s *Shell) ClearConversation(conv string, through uint64) TalkState {
-	return s.talk.clear(conv, through)
+// ClearAgents clears the agent handle in conv, or with handle "" every
+// agent there, as a ClearCheck of it offered; conv must still be the one
+// open.
+func (s *Shell) ClearAgents(conv, handle string) TalkState {
+	return s.talk.clear(conv, handle)
 }
 
 func (t *talk) clearCheck() ClearView {
@@ -39,28 +37,22 @@ func (t *talk) clearCheck() ClearView {
 	if !ok {
 		return ClearView{Problem: problemOf(node.ErrNotServed)}
 	}
-	t.mu.Lock()
-	var through uint64
-	for _, m := range t.msgs {
-		through = max(through, m.Seq) // 0 while queued
-	}
-	t.mu.Unlock()
-	v := ClearView{Conversation: a.conv, Through: through}
-	p, err := a.n.PruneCheck(t.ctx, a.group, a.conv, through)
+	v := ClearView{Conversation: a.conv, Agents: []string{}}
+	live, err := a.n.LiveTranscripts(t.ctx, a.group, a.conv)
 	if err != nil {
 		v.Problem = problemOf(err)
 		return v
 	}
-	v.Messages, v.Unaccounted, v.NoPolicy = p.Messages, p.Unaccounted, p.NoPolicy
+	v.Agents = append(v.Agents, live...)
 	return v
 }
 
-func (t *talk) clear(conv string, through uint64) TalkState {
+func (t *talk) clear(conv, handle string) TalkState {
 	return t.act(func(a at) error {
 		if a.conv != conv {
 			return errNotOpen
 		}
-		_, err := a.n.Prune(t.ctx, a.group, conv, through)
+		_, err := a.n.ClearTranscripts(t.ctx, a.group, conv, handle)
 		return err
-	}, t.loadMessages)
+	})
 }

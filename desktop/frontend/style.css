@@ -533,7 +533,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .clear-confirm p { margin: 0; line-height: 1.4; color: var(--text-soft); }
 .clear-confirm p strong { color: var(--text); }
 .clear-confirm .warn { color: var(--warn-text); }
-.clear-confirm .row { display: flex; gap: 8px; justify-content: flex-end; }
+.clear-confirm .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 
 /* The Devices list while the Group's devices are pinged over the tailnet. */
 .pinging { display: flex; align-items: center; gap: 12px; }

@@ -21,6 +21,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/serve"
+	transcripts "defios.com/internal/transcript"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -1226,5 +1227,44 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if n := len(provider.seen()); n != 2 {
 		t.Fatalf("provider called %d times, want 2", n)
+	}
+}
+
+// Clearing an Agent while its run is in progress closes its live
+// Transcript, and the run completes into that one; its next run starts a
+// new live Transcript (ADR 0036).
+func TestARunClearedMidwayCompletesIntoTheOldTranscript(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor")
+	started, release := holdProvider(provider)
+	s := watch(t, a)
+	ctx := context.Background()
+	first, err := a.client().ConversationSend(ctx, "@auditor one", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if cleared, err := transcripts.Clear(a.paths, group.ImplicitAlias, nil, "auditor"); err != nil || len(cleared) != 1 {
+		t.Fatalf("Clear mid-run = %v, %v", cleared, err)
+	}
+	close(release)
+	untilEnd(t, s, first.MsgID)
+	second, err := a.client().ConversationSend(ctx, "@auditor two", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, second.MsgID)
+
+	ts, err := transcripts.ReadConversation(a.paths, group.ImplicitAlias, nil)
+	if err != nil || len(ts) != 2 {
+		t.Fatalf("Transcripts = %+v, %v; want the closed one and a new live one", ts, err)
+	}
+	for i, chain := range []string{first.MsgID, second.MsgID} {
+		runs := transcripts.Runs(ts[i].Lines)
+		if len(runs) != 1 || runs[0].Chain != chain || runs[0].Outcome != serve.OutcomeSaid {
+			t.Errorf("Transcript %d holds %+v, want the whole run of chain %s", i, runs, chain)
+		}
+	}
+	if live, err := transcripts.Live(a.paths, group.ImplicitAlias, nil); err != nil || len(live) != 1 {
+		t.Fatalf("live = %v, %v", live, err)
 	}
 }

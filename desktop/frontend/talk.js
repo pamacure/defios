@@ -34,7 +34,7 @@ const tui = {
   // app makes it anew.
   scroll: { top: 0, pinned: true },
   focused: "", // the Sign Request whose card was last brought into view
-  clearing: null, // the shell.ClearView Clear asks to confirm
+  clearing: null, // the shell.ClearView Clear chooses from; with done, what it then cleared
 };
 
 // talkPage is the page, drawn into a new element; go opens another page.
@@ -291,7 +291,7 @@ function center() {
     composer.el);
 }
 
-// askClear asks what Clear would destroy, to confirm it.
+// askClear asks which agents Clear can clear here, to choose among them.
 async function askClear() {
   let v;
   try {
@@ -300,34 +300,36 @@ async function askClear() {
     showProblem(callFailed(err), { scope: "talk" });
     return;
   }
-  // Nothing to confirm when it can't say what Clear would destroy.
+  // Nothing to choose when it can't say whom Clear would clear.
   if (v?.Problem) { showProblem(v.Problem, { scope: "talk" }); return; }
   if (!v || v.Conversation !== ts.Open) return;
   tui.clearing = v;
   draw();
 }
 
-// clearConfirm says what Clear destroys on this device, and what follows.
+// clearConfirm asks which agent to clear, or all of them here, and says
+// what clearing one does; once done, it says who was cleared.
 function clearConfirm(conv) {
   const v = tui.clearing;
-  const cancel = h("button", { class: "btn small", type: "button", onclick: () => { tui.clearing = null; draw(); } }, v.Messages ? "Cancel" : "OK");
-  if (!v.Messages) {
+  const close = (label) => h("button", { class: "btn small", type: "button", onclick: () => { tui.clearing = null; draw(); } }, label);
+  if (v.done || !v.Agents.length) {
     return h("div", { class: "clear-confirm", role: "status" },
-      h("p", {}, "There is nothing to clear here."), h("div", { class: "row" }, cancel));
+      h("p", {}, v.done ?? "No agent has anything to clear here."), h("div", { class: "row" }, close("OK")));
   }
-  const n = v.Messages === 1 ? "1 message" : `${v.Messages} messages`;
+  // clear clears handle, or every agent here when it is "".
+  const clear = (handle, label, done) => h("button", { class: "btn small", type: "button", disabled: tui.busy, onclick: async () => {
+    const next = await act("ClearAgents", v.Conversation, handle);
+    // Say so only where it was asked: another conversation may be open by now.
+    tui.clearing = next && !next.Problem && ts.Open === v.Conversation ? { ...v, done } : null;
+    draw();
+  } }, label);
   return h("div", { class: "clear-confirm", role: "alertdialog", "aria-label": "Clear" },
-    h("p", {}, h("strong", {}, `Clear ${n} from ${convName(conv)} on this device?`),
-      " They are deleted here for good. The other devices keep their copies."),
-    v.Unaccounted && h("p", { class: "warn" }, "This device's agents have no recap of this talk, so they forget it too."),
-    v.NoPolicy && h("p", { class: "warn" }, "This Group deletes no talk on its own, so it can come back if this device restores talk from another device. Set \u201cDelete old talk after\u201d in Settings to keep it cleared."),
+    h("p", {}, h("strong", {}, `Clear which agent in ${convName(conv)}?`),
+      " A cleared agent starts afresh at its next run here: it no longer remembers its earlier work in this conversation. That work is kept on this device, and the messages stay."),
     h("div", { class: "row" },
-      h("button", { class: "btn small danger", type: "button", disabled: tui.busy, onclick: async () => {
-        const at = tui.clearing;
-        tui.clearing = null;
-        await act("ClearConversation", at.Conversation, at.Through);
-      } }, "Clear"),
-      cancel));
+      v.Agents.map((a) => clear(a, `@${a}`, `Cleared @${a}.`)),
+      v.Agents.length > 1 && clear("", "All agents here", "Cleared all agents here."),
+      close("Cancel")));
 }
 
 function roster() {
