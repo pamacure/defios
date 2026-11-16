@@ -65,7 +65,9 @@ type TalkState struct {
 	Conversations []Conversation
 	Keygens       []Keygen
 
-	// The header: the Roster and its reachability.
+	// The header: the Roster and its reachability. Online counts the
+	// reachable Roster Nodes; MajorityReachable is whether writes can
+	// commit, as node.Status has it, which needs more than devices online.
 	Roster            []RosterNode
 	Online            int
 	MajorityReachable bool

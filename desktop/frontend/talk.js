@@ -263,7 +263,8 @@ function openConv() {
 function center() {
   const conv = openConv();
   const total = ts.Roster.length;
-  const dot = !total ? "" : ts.Online === total ? "on" : ts.MajorityReachable ? "partial" : "off";
+  // The dot and colour say whether messages can be delivered; the text counts devices.
+  const dot = !total ? "" : !ts.MajorityReachable ? "off" : ts.Online === total ? "on" : "partial";
   const online = h("div", { class: "online-menu" },
     h("button", {
       class: `online ${ts.MajorityReachable ? "ok" : "bad"}`, type: "button", "aria-haspopup": "dialog",
@@ -283,7 +284,7 @@ function center() {
         onclick: () => { tui.about = !tui.about; draw(); },
       }, "About")),
     total > 0 && !ts.MajorityReachable && h("div", { class: "queue-banner", role: "status" },
-      "Not enough devices are online for messages to be delivered. What you send waits here and goes once they are."),
+      "Not connected, so messages can't be delivered yet. What you send waits here and goes once connected."),
     ts.Unread && problemBox(ts.Unread),
     tui.clearing && clearConfirm(conv),
     transcript(),

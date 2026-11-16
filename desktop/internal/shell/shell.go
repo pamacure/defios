@@ -137,7 +137,7 @@ type State struct {
 	TailnetUp         bool
 	Online            int // Roster Nodes reachable, this one included
 	RosterSize        int
-	MajorityReachable bool
+	MajorityReachable bool // writes can commit, as node.Status has it
 	// Connecting: the Group was just served and not every Roster device
 	// is reachable yet, so the app waits on them before it shows the
 	// Group, until Deps.ConnectWindow passes or ContinueNow.

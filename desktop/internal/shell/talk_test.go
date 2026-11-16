@@ -500,3 +500,22 @@ func assertNoNullLists(t *testing.T, ts shell.TalkState) {
 	}
 	walk("TalkState", v)
 }
+
+// Every device can be reachable while writes still can't commit, as when
+// no leader settles; the header counts devices but isn't committable.
+func TestEveryDeviceOnlineButNoCommitIsNotCommittable(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := served(t, r)
+	r.node.mu.Lock()
+	r.node.publish(node.Status{Group: "alpha", Serving: true, TailnetUp: true, MajorityReachable: false,
+		Roster: []node.RosterNode{{NodeID: r.node.NodeID(), DisplayName: "laptop", Reachable: true}, {NodeID: "b0b", DisplayName: "bob", Reachable: true}}})
+	r.node.mu.Unlock()
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Roster) == 2 })
+	if ts.MajorityReachable || ts.Online != 2 {
+		t.Fatalf("talk: online %d, majority %v", ts.Online, ts.MajorityReachable)
+	}
+	st := eventually(t, s, func(st shell.State) bool { return st.RosterSize == 2 })
+	if st.MajorityReachable || st.Online != 2 {
+		t.Fatalf("app: online %d, majority %v", st.Online, st.MajorityReachable)
+	}
+}

@@ -257,8 +257,9 @@ type Status struct {
 	// Roster is the served Group's Roster with each Node's reachability
 	// from here; empty before the Group has one.
 	Roster []RosterNode
-	// MajorityReachable: more than half the Roster is reachable, so
-	// writes can commit.
+	// MajorityReachable: writes can commit. More than half the Roster is
+	// reachable, and a Raft leader is known or has been missing for less
+	// than Options.LeaderGrace, as during a normal election.
 	MajorityReachable bool
 	// Keys are the served Group's minted Keys, each with whether t of its
 	// Nodes are reachable, so it can sign.
@@ -380,6 +381,10 @@ type Options struct {
 	// a Group's devices show as online as soon as the tailnet reaches
 	// them. Zero is 15 seconds and 1 second.
 	ConnectWindow, ConnectInterval time.Duration
+	// LeaderGrace is how long a serving Node may be without a Raft leader
+	// before Status.MajorityReachable turns false, so a normal election
+	// does not show as disconnected. Zero is 10 seconds.
+	LeaderGrace time.Duration
 }
 
 // Sessions is how a Node runs Sessions.
@@ -412,10 +417,11 @@ var _ Node = (*Host)(nil)
 
 // serving is one Unlock's serve and what it holds.
 type serving struct {
-	group  string
-	run    *serve.Running
-	cancel context.CancelFunc
-	done   chan struct{} // closed once the serve stopped and released all
+	group      string
+	run        *serve.Running
+	cancel     context.CancelFunc
+	done       chan struct{} // closed once the serve stopped and released all
+	leaderless leaderClock   // only watch's goroutine touches it
 }
 
 // Open reads the Node in p. It serves nothing until Unlock.
@@ -448,6 +454,9 @@ func Open(p nodedir.Paths, o Options) (*Host, error) {
 		o.ConnectInterval = time.Second
 	}
 	o.ConnectInterval = min(o.ConnectInterval, o.StatusInterval)
+	if o.LeaderGrace <= 0 {
+		o.LeaderGrace = 10 * time.Second
+	}
 	return &Host{p: p, o: o, pub: pub, subs: map[*subscriber]struct{}{}}, nil
 }
 
@@ -691,6 +700,7 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 func (h *Host) watch(sv *serving, ctx context.Context, unlockVault func()) {
 	defer close(sv.done)
 	connectUntil := time.Now().Add(h.o.ConnectWindow)
+	sv.leaderless = leaderClock{since: time.Now()} // no leader is known as serving starts
 	for stopped := false; !stopped; {
 		select {
 		case <-sv.run.Done():
@@ -730,6 +740,7 @@ func (h *Host) refresh(sv *serving, ctx context.Context) (allReachable bool) {
 	if ns.HasLeader {
 		st.Leader = ns.Leader.String()
 	}
+	leaderless := sv.leaderless.observe(ns.HasLeader, time.Now())
 	reachable, reach := 0, map[identity.ID]bool{}
 	for _, r := range ns.Roster {
 		st.Roster = append(st.Roster, RosterNode{NodeID: r.NodeID.String(), DisplayName: r.DisplayName, Reachable: r.Reachable})
@@ -738,7 +749,7 @@ func (h *Host) refresh(sv *serving, ctx context.Context) (allReachable bool) {
 			reach[r.NodeID] = true
 		}
 	}
-	st.MajorityReachable = len(ns.Roster) > 0 && reachable > len(ns.Roster)/2
+	st.MajorityReachable = writesCanCommit(reachable, len(ns.Roster), ns.HasLeader, leaderless, h.o.LeaderGrace)
 	for _, k := range ns.Keys {
 		kr := KeyReach{Key: k.Key, T: k.T}
 		for _, n := range k.Nodes {
@@ -755,6 +766,31 @@ func (h *Host) refresh(sv *serving, ctx context.Context) (allReachable bool) {
 		h.setStatus(st)
 	}
 	return len(st.Roster) > 0 && reachable == len(st.Roster)
+}
+
+// leaderClock times how long a serve has been without a Raft leader.
+type leaderClock struct {
+	since time.Time // when the leader went missing; zero while one is known
+}
+
+// observe records whether a leader is known at now and returns how long
+// none has been: zero with one, else since the last one was lost.
+func (c *leaderClock) observe(leader bool, now time.Time) time.Duration {
+	if leader {
+		c.since = time.Time{}
+		return 0
+	}
+	if c.since.IsZero() {
+		c.since = now
+	}
+	return now.Sub(c.since)
+}
+
+// writesCanCommit: of a Roster of roster Nodes, more than half are reachable,
+// and a leader is known or has been missing for less than grace, as it is
+// during a normal election.
+func writesCanCommit(reachable, roster int, leader bool, leaderless, grace time.Duration) bool {
+	return roster > 0 && reachable > roster/2 && (leader || leaderless < grace)
 }
 
 // Lock implements Node.

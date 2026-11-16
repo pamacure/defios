@@ -572,8 +572,8 @@ function rail() {
 
 function onlineDot(s) {
   if (!s.RosterSize) return s.TailnetUp ? "on" : "";
-  if (s.Online === s.RosterSize) return "on";
-  return s.MajorityReachable ? "partial" : "";
+  if (!s.MajorityReachable) return "";
+  return s.Online === s.RosterSize ? "on" : "partial";
 }
 
 function header(s) {
