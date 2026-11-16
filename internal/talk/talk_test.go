@@ -349,3 +349,90 @@ func TestAMalformedRecapFailsOnlyTheLeanView(t *testing.T) {
 		t.Errorf("lean: %v, want an error naming %s", err, path)
 	}
 }
+
+// page is one page of v's talk, its lines joined by " | ", then "<" and the
+// before_seq that pages back when there is earlier talk.
+func page(v talk.View, last int, before uint64) string {
+	p := v.Messages.Page(last, before, func(m talk.Message) string { return m.Sender })
+	out := strings.Join(p.Lines, " | ")
+	if p.Earlier > 0 {
+		out += fmt.Sprint(" <", p.Earlier)
+	}
+	return out
+}
+
+// A page is the last lines of the talk, oldest first, each under its seq,
+// a person by display name and an agent by display name and Handle, kept
+// to one line; before pages back from a seq, and a page that does not
+// reach the start says where the one before it ends.
+func TestAPageIsTheLatestLinesAndPagesBack(t *testing.T) {
+	f := newFixture(t)
+	f.say(f.alice, "a")
+	f.commit(f.sign(f.bob, nil, &coslv1.AppFreeform{Text: "b\nb", ContentType: "text/plain", Handle: "auditor", Depth: 1}))
+	f.say(f.alice, "c")
+	f.say(f.bob, "d")
+	v := f.read(nil)
+	if got := page(v, 2, 0); got != "[3] alice: c | [4] bob: d <3" {
+		t.Errorf("latest 2 = %s", got)
+	}
+	if got := page(v, 2, 3); got != `[1] alice: a | [2] bob/@auditor: b\nb` {
+		t.Errorf("before 3 = %s", got)
+	}
+	if got := page(v, 50, 0); got != `[1] alice: a | [2] bob/@auditor: b\nb | [3] alice: c | [4] bob: d` {
+		t.Errorf("all = %s", got)
+	}
+	if got := page(v, 50, 1); got != "" {
+		t.Errorf("before the first = %s", got)
+	}
+}
+
+// A message with no seq yet is [queued], after all that is committed: it
+// is on the latest page whatever last is, and on no page before a seq.
+func TestAPageShowsQueuedMessages(t *testing.T) {
+	f := newFixture(t)
+	f.say(f.alice, "a")
+	f.say(f.bob, "b")
+	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("later"))}}
+	v := f.read(nil)
+	if got := page(v, 2, 0); got != "[1] alice: a | [2] bob: b | [queued] alice: later" {
+		t.Errorf("latest 2 = %s", got)
+	}
+	if got := page(v, 1, 0); got != "[2] bob: b | [queued] alice: later <2" {
+		t.Errorf("latest 1 = %s", got)
+	}
+	if got := page(v, 50, 3); got != "[1] alice: a | [2] bob: b" {
+		t.Errorf("before 3 = %s", got)
+	}
+}
+
+// A stretch this Node has pruned is one gap line, however long, cut at
+// before; an unreadable message is on no page, and no gap line covers it.
+func TestAPageShowsAPrunedStretchAsOneGapLine(t *testing.T) {
+	f := newFixture(t)
+	for _, s := range []string{"a", "b", "c"} {
+		f.say(f.alice, s)
+	}
+	f.commit(f.sign(f.bob, nil, &wrapperspb.BytesValue{Value: []byte{0xff}}))
+	f.say(f.alice, "e")
+	if _, err := f.store.Prune(nil, 3); err != nil {
+		t.Fatal(err)
+	}
+	v := f.read(nil)
+	pruned := func(m talk.Message) talk.Message { m.Pruned = true; return m }
+	split := talk.Messages{pruned(v.Messages[0]), v.Messages[3], pruned(v.Messages[4])}
+	if got := strings.Join(split.Page(50, 0, nil).Lines, " | "); got != "[1 pruned on this Node] | [5 pruned on this Node]" {
+		t.Errorf("around an unreadable message = %s", got)
+	}
+	if got := page(v, 50, 0); got != "[1–3 pruned on this Node] | [5] alice: e" {
+		t.Errorf("all = %s", got)
+	}
+	if got := page(v, 1, 0); got != "[5] alice: e <4" {
+		t.Errorf("latest 1 = %s", got)
+	}
+	if got := page(v, 50, 3); got != "[1–2 pruned on this Node]" {
+		t.Errorf("before 3 = %s", got)
+	}
+	if got := page(v, 50, 2); got != "[1 pruned on this Node]" {
+		t.Errorf("before 2 = %s", got)
+	}
+}

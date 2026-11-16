@@ -275,8 +275,8 @@ Group's, and exclude --key refuses it.`,
 		Short: "Grant an Agent Profile a built-in Tool, a Plugin's Skill or MCP Server, and print what it is granted of that kind",
 		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029), a
 <plugin>/<skill> to its skills, the Skills it may read with skill_load, or a <plugin>/<server> to its mcp,
-the MCP Servers whose tools it may call (ADR 0030). An unset tools is talk_write alone, so granting into it writes
-talk_write with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `; the sign Tools are offered
+the MCP Servers whose tools it may call (ADR 0030). An unset tools is talk_write and talk_read, so granting into
+it writes both with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `; the sign Tools are offered
 only in a Key's Conversation, never in Group-level talk. A Skill or MCP Server must be of a Plugin installed
 or built in, and a name that is both is refused as ambiguous.
 

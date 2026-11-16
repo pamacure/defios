@@ -62,7 +62,7 @@ type Profile struct {
 	// which is agent.DefaultMaxTurns.
 	MaxTurns int `toml:"max_turns,omitzero"`
 	// Tools is the whole list of built-in Tools it may call (ADR 0029): nil
-	// is unset, talk_write alone; empty grants none.
+	// is unset, talk_write and talk_read; empty grants none.
 	Tools []string `toml:"tools,omitempty"`
 	// Skills are the Skills it may load, each <plugin>/<skill> (ADR 0030).
 	// That each is installed is checked at summon, so a profile naming a
@@ -87,6 +87,7 @@ type MCPGrant struct {
 // The built-in Tools a profile's tools may grant (ADR 0029).
 const (
 	ToolTalkWrite   = agent.TalkWriteName
+	ToolTalkRead    = "talk_read"
 	ToolSignList    = "sign_list"
 	ToolSignInspect = "sign_inspect"
 	ToolSignPropose = "sign_propose"
@@ -100,12 +101,13 @@ const (
 const ToolSkillLoad = "skill_load"
 
 // Tools is every built-in Tool, in the order a run offers them.
-var Tools = []string{ToolTalkWrite, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill}
+var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill}
 
-// Granted is the Tools p grants: its tools, or unset, talk_write alone.
+// Granted is the Tools p grants: its tools, or unset, talk_write and
+// talk_read (ADR 0036).
 func (p Profile) Granted() []string {
 	if p.Tools == nil {
-		return []string{ToolTalkWrite}
+		return []string{ToolTalkWrite, ToolTalkRead}
 	}
 	return p.Tools
 }

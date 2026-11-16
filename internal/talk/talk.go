@@ -5,7 +5,7 @@
 // replica does not hold yet, each decoded once, under this Node's Recap;
 // and its chat expanded with the Transcripts of this Node's chains.
 // serve and every frontend read the talk through it; it returns plain
-// values, and formats nothing but the lean line agents read.
+// values, and formats nothing but the lines agents read.
 package talk
 
 import (
@@ -232,4 +232,80 @@ func Speaker(displayName, handle string) string {
 // LeanLine is one lean line, `<speaker>: <text>` with newlines escaped.
 func LeanLine(displayName, handle, text string) string {
 	return Speaker(displayName, handle) + ": " + cosl.EscapeNewlines(text)
+}
+
+// DefaultPage is how many committed lines a Page holds when none is asked
+// for, and MaxPage the most it ever holds.
+const (
+	DefaultPage = 50
+	MaxPage     = 200
+)
+
+// Page is one page of talk as an agent reads it with talk_read (ADR 0036).
+type Page struct {
+	// Lines are the page, oldest first: `[<seq>] <speaker>: <text>` for a
+	// message, one gap line for a stretch this Node has pruned, then
+	// `[queued]` for each message with no seq yet.
+	Lines []string
+	// Earlier is the before that gives the page before this one, 0 when
+	// this page reaches the start of the talk.
+	Earlier uint64
+}
+
+// Page is the last committed lines of ms, at most last of them
+// (DefaultPage when last is not positive, and never over MaxPage), then
+// every queued message, so that each is on the latest page; or with
+// before, the last of the talk before that seq, which no queued message
+// is. name names a message's sender. An unreadable message is on no page,
+// and ends a pruned stretch.
+func (ms Messages) Page(last int, before uint64, name func(Message) string) Page {
+	if last <= 0 {
+		last = DefaultPage
+	}
+	last = min(last, MaxPage)
+	// line is one committed line of a page: a message, or a pruned stretch.
+	type line struct {
+		text     string
+		from, to uint64 // its seqs
+		gap      bool
+	}
+	var lines []line
+	var queued []string
+	inGap := false // whether the message before was pruned
+	for _, m := range ms {
+		seq := m.Row.Seq
+		if before > 0 && (m.Row.Queued() || seq >= before) {
+			continue
+		}
+		wasGap := inGap
+		inGap = m.Pruned
+		switch {
+		case m.Pruned && wasGap:
+			lines[len(lines)-1].to = seq
+		case m.Pruned:
+			lines = append(lines, line{from: seq, to: seq, gap: true})
+		case m.Unreadable:
+		case m.Row.Queued():
+			queued = append(queued, "[queued] "+LeanLine(name(m), m.Handle, m.Text))
+		default:
+			lines = append(lines, line{text: fmt.Sprintf("[%d] %s", seq, LeanLine(name(m), m.Handle, m.Text)), from: seq, to: seq})
+		}
+	}
+	var p Page
+	if cut := len(lines) - last; cut > 0 {
+		p.Earlier = lines[cut-1].to + 1
+		lines = lines[cut:]
+	}
+	for _, l := range lines {
+		switch {
+		case !l.gap:
+			p.Lines = append(p.Lines, l.text)
+		case l.from == l.to:
+			p.Lines = append(p.Lines, fmt.Sprintf("[%d pruned on this Node]", l.from))
+		default:
+			p.Lines = append(p.Lines, fmt.Sprintf("[%d–%d pruned on this Node]", l.from, l.to))
+		}
+	}
+	p.Lines = append(p.Lines, queued...)
+	return p
 }

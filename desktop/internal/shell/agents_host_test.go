@@ -166,7 +166,7 @@ func TestGrantsProvidersAndRefusedEditsOnTheAgentsPage(t *testing.T) {
 	}
 	agentsOK(t, "add provider", alice.SaveProvider(shell.ProviderDraft{New: true, Alias: "anthropic", Preset: "anthropic"}))
 	v := agentsOK(t, "add profile", alice.SaveAgentProfile(shell.ProfileDraft{New: true, Handle: "auditor", Provider: "anthropic"}))
-	if o := v.Open; o.Brief == "" || o.Body != "" || o.MaxTurns != "" || !slices.Equal(o.Tools, []string{"talk_write"}) {
+	if o := v.Open; o.Brief == "" || o.Body != "" || o.MaxTurns != "" || !slices.Equal(o.Tools, []string{"talk_write", "talk_read"}) {
 		t.Fatalf("a new profile: %+v", o)
 	}
 	if !slices.Contains(v.Catalog.Tools, "sign_list") || !slices.ContainsFunc(v.Catalog.Servers, func(s shell.CatalogServer) bool {

@@ -630,7 +630,7 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	if err != nil {
 		return agent.Request{}, inc, err
 	}
-	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns, Tools: s.agentTools(handle, depth, p.Tools, conv, did)}
+	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns, Tools: s.agentTools(ob, store, handle, depth, p.Tools, conv, did)}
 	if len(skills) > 0 {
 		req.Tools = append(req.Tools, skillLoadTool(skills))
 	}

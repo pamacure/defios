@@ -41,4 +41,12 @@ for f in "$CONFIG"/agents/*/config.toml; do
 done
 ```
 
+A profile with no `tools` line is also granted `talk_read`, which reads the
+talk on demand. A profile that lists its Tools is granted only what it
+lists, so it does not get `talk_read` until it is granted:
+
+```bash
+defios agent grant <handle> talk_read
+```
+
 Check the result with `defios agent show <handle>` for each profile.

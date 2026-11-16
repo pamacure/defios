@@ -122,7 +122,7 @@ func TestAnAgentCallsAGrantedMCPServersTool(t *testing.T) {
 	if len(calls) != 4 {
 		t.Fatalf("%d calls, want 4", len(calls))
 	}
-	want := "talk_write tools__fx__crash tools__fx__cwd tools__fx__echo tools__fx__env tools__fx__fail tools__fx__pid tools__fx__sleep"
+	want := "talk_write talk_read tools__fx__crash tools__fx__cwd tools__fx__echo tools__fx__env tools__fx__fail tools__fx__pid tools__fx__sleep"
 	if calls[0].Tools != want {
 		t.Errorf("tools offered %q, want %q", calls[0].Tools, want)
 	}

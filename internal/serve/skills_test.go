@@ -72,7 +72,7 @@ func TestAnAgentLoadsAGrantedSkillAndItsFiles(t *testing.T) {
 	if len(calls) != 6 {
 		t.Fatalf("%d calls, want 6", len(calls))
 	}
-	if calls[0].Tools != "talk_write skill_load" {
+	if calls[0].Tools != "talk_write talk_read skill_load" {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
 	listing := "- audits/erc20: Audit an ERC-20 transfer.\n- defios/review-sign-request: How to review a Sign Request before accepting or refusing it.\n"

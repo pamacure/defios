@@ -34,7 +34,7 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 	}
 	want := node.AgentProfile{
 		Handle: "auditor", Provider: "claude", Model: "claude-opus-5-5", MaxTurns: 4,
-		Tools: []string{"talk_write"}, Skills: []string{}, MCP: map[string]node.MCPGrant{},
+		Tools: []string{"talk_write", "talk_read"}, Skills: []string{}, MCP: map[string]node.MCPGrant{},
 		Body: map[string]any{"model": "claude-opus-5-5", "max_tokens": int64(1024)},
 		Dir:  p.AgentProfileDir("auditor"), IncludedIn: []node.Place{},
 	}
@@ -96,7 +96,7 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 }
 
 // Grant and Revoke change what an Agent Profile may call, a Tool granted
-// into an unset list joining talk_write; a grant refused changes nothing.
+// into an unset list joining talk_write and talk_read; a grant refused changes nothing.
 func TestGrantAndRevokeChangeAnAgentProfilesTools(t *testing.T) {
 	h, err := node.Open(nodeDir(t), node.Options{})
 	if err != nil {
@@ -107,13 +107,13 @@ func TestGrantAndRevokeChangeAnAgentProfilesTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	kind, a, err := h.Grant(ctx, "auditor", "sign_list", nil)
-	if err != nil || kind != node.GrantTool || !reflect.DeepEqual(a.Tools, []string{"talk_write", "sign_list"}) {
+	if err != nil || kind != node.GrantTool || !reflect.DeepEqual(a.Tools, []string{"talk_write", "talk_read", "sign_list"}) {
 		t.Fatalf("grant sign_list: %v %#v %v", kind, a.Tools, err)
 	}
 	if _, _, err := h.Grant(ctx, "auditor", "sign_everything", nil); !errors.Is(err, config.ErrGrantRefused) {
 		t.Fatalf("grant of no Tool: %v; want ErrGrantRefused", err)
 	}
-	if _, a, err = h.Revoke(ctx, "auditor", "talk_write"); err != nil || !reflect.DeepEqual(a.Tools, []string{"sign_list"}) {
+	if _, a, err = h.Revoke(ctx, "auditor", "talk_write"); err != nil || !reflect.DeepEqual(a.Tools, []string{"talk_read", "sign_list"}) {
 		t.Fatalf("revoke talk_write: %#v %v", a.Tools, err)
 	}
 	if _, _, err := h.Grant(ctx, "ghost", "talk_write", nil); !errors.Is(err, node.ErrUnknownProfile) {

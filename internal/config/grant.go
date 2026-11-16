@@ -38,8 +38,8 @@ func refused(format string, a ...any) error { return refusal{fmt.Sprintf(format,
 // the Secrets an MCP Server's process gets, each one it asks for, and are
 // for nothing else. Granting a server again sets its Secrets to secrets.
 // It returns what item is and whether p changed: granting what p has
-// changes nothing. An unset tools is talk_write alone, so a Tool granted into it
-// joins talk_write. A name that is both a Skill and an MCP Server is ambiguous.
+// changes nothing. An unset tools is talk_write and talk_read, so a Tool
+// granted into it joins them. A name that is both a Skill and an MCP Server is ambiguous.
 func (p Profile) Grant(pluginsDir, item string, secrets []string) (Profile, GrantKind, bool, error) {
 	if !strings.Contains(item, "/") {
 		if secrets != nil {

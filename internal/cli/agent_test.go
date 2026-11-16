@@ -263,7 +263,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
 	dir := p.AgentProfileDir("auditor")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "show", "auditor")
-	want := "handle auditor\nprovider claude\nmax_turns 4\ntools talk_write\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
+	want := "handle auditor\nprovider claude\nmax_turns 4\ntools talk_write, talk_read\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
 		`body {"model":"claude-opus-5-5","stream":true}` + "\nincluded_in default\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("show: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
@@ -273,7 +273,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
 		t.Fatalf("show --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
-	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"talk_write"}, "skills": []any{}, "mcp": map[string]any{},
+	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"talk_write", "talk_read"}, "skills": []any{}, "mcp": map[string]any{},
 		"included_in": []any{"default/ecdsa-ab1111111111"}}
 	if !reflect.DeepEqual(got, wantJSON) {
 		t.Fatalf("show --json = %v\nwant %v", got, wantJSON)
@@ -285,7 +285,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 
 // agent grant and revoke edit a profile's tools, the whole list of Tools it
 // may call (ADR 0029), and print it: granting into an unset list first
-// writes talk_write with it, revoking every Tool leaves an empty list, and a Tool
+// writes talk_write and talk_read with it, revoking every Tool leaves an empty list, and a Tool
 // granted again or revoked when not granted changes nothing. An unknown Tool
 // or Handle is refused, naming the Tools there are; show prints the list.
 func TestAgentGrantRevokeEditTheTools(t *testing.T) {
@@ -298,11 +298,12 @@ func TestAgentGrantRevokeEditTheTools(t *testing.T) {
 		stdout string
 		tools  []string
 	}{
-		{[]string{"grant", "auditor", "sign_list"}, "talk_write\nsign_list\n", []string{"talk_write", "sign_list"}},
-		{[]string{"grant", "auditor", "sign_list"}, "talk_write\nsign_list\n", []string{"talk_write", "sign_list"}},
-		{[]string{"grant", "auditor", "sign_inspect", "--json"}, "[\n  \"talk_write\",\n  \"sign_list\",\n  \"sign_inspect\"\n]\n", []string{"talk_write", "sign_list", "sign_inspect"}},
-		{[]string{"revoke", "auditor", "talk_write"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
-		{[]string{"revoke", "auditor", "talk_write"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
+		{[]string{"grant", "auditor", "sign_list"}, "talk_write\ntalk_read\nsign_list\n", []string{"talk_write", "talk_read", "sign_list"}},
+		{[]string{"grant", "auditor", "sign_list"}, "talk_write\ntalk_read\nsign_list\n", []string{"talk_write", "talk_read", "sign_list"}},
+		{[]string{"grant", "auditor", "sign_inspect", "--json"}, "[\n  \"talk_write\",\n  \"talk_read\",\n  \"sign_list\",\n  \"sign_inspect\"\n]\n", []string{"talk_write", "talk_read", "sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "talk_write"}, "talk_read\nsign_list\nsign_inspect\n", []string{"talk_read", "sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "talk_write"}, "talk_read\nsign_list\nsign_inspect\n", []string{"talk_read", "sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "talk_read"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
 		{[]string{"revoke", "auditor", "sign_list"}, "sign_inspect\n", []string{"sign_inspect"}},
 		{[]string{"revoke", "auditor", "sign_inspect", "--json"}, "[]\n", []string{}},
 	} {

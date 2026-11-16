@@ -62,18 +62,19 @@ func runSteps(t *testing.T, dir string, p config.Profile, steps []step) config.P
 	return p
 }
 
-// A Tool granted into an unset tools joins talk_write; granting what is granted
+// A Tool granted into an unset tools joins talk_write and talk_read; granting what is granted
 // or revoking what is not changes nothing, and revoking every Tool leaves
 // tools empty, not unset (ADR 0029).
 func TestGrantAndRevokeATool(t *testing.T) {
 	dir := pluginsDir(t)
 	base := config.Profile{Provider: "claude"}
 	runSteps(t, dir, base, []step{
-		{item: "sign_list", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"talk_write", "sign_list"}}},
-		{item: "sign_list", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"talk_write", "sign_list"}}},
-		{revoke: true, item: "talk_write", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"sign_list"}}},
-		{revoke: true, item: "talk_write", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"sign_list"}}},
-		{revoke: true, item: "sign_list", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{}}},
+		{item: "sign_list", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"talk_write", "talk_read", "sign_list"}}},
+		{item: "sign_list", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"talk_write", "talk_read", "sign_list"}}},
+		{revoke: true, item: "talk_write", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"talk_read", "sign_list"}}},
+		{revoke: true, item: "talk_write", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"talk_read", "sign_list"}}},
+		{revoke: true, item: "sign_list", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"talk_read"}}},
+		{revoke: true, item: "talk_read", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{}}},
 	})
 }
 
