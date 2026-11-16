@@ -21,7 +21,7 @@ let shown = null; // { name, value } revealed, until the next draw
 let invalid = null;
 // The parts' bodies, made once: a view loaded while the page is not on
 // screen draws into them, ready for when it is.
-const deviceMount = h("div", { class: "vault" });
+const deviceMount = h("div", { class: "vault vsplit" });
 const groupMount = h("div", { class: "vault" });
 let pending = null; // the load under way: its promise
 // The passphrase form's fields, kept across draws so nothing typed is lost.

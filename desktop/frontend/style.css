@@ -491,6 +491,15 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .vault .notice.inline, .triggers .notice.inline { margin: 0 0 12px; }
 .vsec + .vsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
 .vsec > .hint { margin: -4px 0 12px; max-width: 640px; }
+/* This Device's part: Backup and Passphrase side by side, half each. */
+.vsplit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+.vsplit > .vsec + .vsec { margin-top: 0; padding-top: 0; border-top: 0; padding-left: 28px; border-left: 1px solid var(--line); }
+.vsplit .frow { grid-template-columns: minmax(0, 1fr); }
+.vsplit .frow > label { padding-top: 0; }
+@media (max-width: 860px) {
+  .vsplit { grid-template-columns: minmax(0, 1fr); }
+  .vsplit > .vsec + .vsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); padding-left: 0; border-left: 0; }
+}
 .vrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .secrets { display: flex; flex-direction: column; margin-bottom: 12px; }
 .secret { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
