@@ -64,7 +64,17 @@ An environment variable of the same name, when set, takes precedence.`,
 	removePass.bind(removeCmd)
 	bindGroupFlag(g, removeCmd)
 
-	root.AddCommand(setCmd, showCmd, removeCmd)
+	var listPass passphraseSource
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List the Group's Secrets by name and source, never their values",
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runSecretList(cmd.Context(), g, listPass) },
+	}
+	listPass.bind(listCmd)
+	bindGroupFlag(g, listCmd)
+
+	root.AddCommand(setCmd, showCmd, listCmd, removeCmd)
 	return root
 }
 
@@ -167,6 +177,51 @@ func runSecretShow(ctx context.Context, g *globals, pass passphraseSource, name 
 	fmt.Fprintf(out, "name %s\nsource %s\n", g.out().primary(v.Name), v.Source)
 	if v.Value != "" {
 		fmt.Fprintf(out, "value %s\n", v.Value)
+	}
+	return nil
+}
+
+// secretListed is one row of `secret list`: a Secret the Vault holds or a
+// config field references, with the fields that reference it. No value.
+type secretListed struct {
+	Name   string   `json:"name"`
+	Source string   `json:"source"` // env | vault | none
+	Uses   []string `json:"uses"`
+}
+
+// runSecretList lists the Group's Secrets: every name its Vault holds and
+// every one its config fields reference, each with where it resolves from.
+func runSecretList(ctx context.Context, g *globals, pass passphraseSource) error {
+	h, alias, err := openGroup(g)
+	if err != nil {
+		return err
+	}
+	list, err := h.Secrets(ctx, alias, pass.asked(g))
+	if err != nil {
+		return vaultError(g, err)
+	}
+	views := make([]secretListed, len(list))
+	for i, sc := range list {
+		uses := make([]string, len(sc.Uses))
+		for j, u := range sc.Uses {
+			uses[j] = u.Field
+		}
+		views[i] = secretListed{Name: sc.Name, Source: sc.Source, Uses: uses}
+	}
+	if g.json {
+		return g.emitJSON(views)
+	}
+	p := g.out()
+	for _, v := range views {
+		source := v.Source
+		if source == secret.SourceNone {
+			source = p.caution(source)
+		}
+		fmt.Fprintf(g.app.Stdout, "%s  %s", p.primary(v.Name), source)
+		if len(v.Uses) > 0 {
+			fmt.Fprintf(g.app.Stdout, "  %s", p.dim("("+strings.Join(v.Uses, ", ")+")"))
+		}
+		fmt.Fprintln(g.app.Stdout)
 	}
 	return nil
 }

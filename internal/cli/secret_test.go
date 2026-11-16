@@ -189,3 +189,46 @@ func TestInitAndGroupNewWriteNoSecret(t *testing.T) {
 		t.Fatalf("conversation/ directory: %v", err)
 	}
 }
+
+// list names every Secret, the Vault's and the environment's, with its
+// source and never its value.
+func TestSecretListNamesWithoutValues(t *testing.T) {
+	dir := secretNode(t)
+	const value = "s3cret-value-never-listed"
+	for _, name := range []string{"ETH_RPC", "ANTHROPIC_API_KEY"} {
+		if r := run(t, withPass, value, "--dir", dir, "secret", "set", name); r.code != 0 {
+			t.Fatalf("set %s exit %d: %s", name, r.code, r.stderr)
+		}
+	}
+	env := map[string]string{"DEFIOS_PASSPHRASE": withPass["DEFIOS_PASSPHRASE"], "ETH_RPC": "from-env"}
+
+	r := run(t, env, "", "--dir", dir, "secret", "list")
+	if r.code != 0 {
+		t.Fatalf("list exit %d: %s", r.code, r.stderr)
+	}
+	if strings.Contains(r.stdout, value) || strings.Contains(r.stdout, "from-env") {
+		t.Fatalf("list printed a value:\n%s", r.stdout)
+	}
+	if !strings.Contains(r.stdout, "ANTHROPIC_API_KEY  vault") || !strings.Contains(r.stdout, "ETH_RPC  env") {
+		t.Fatalf("list:\n%s", r.stdout)
+	}
+
+	r = run(t, env, "", "--dir", dir, "--json", "secret", "list")
+	if r.code != 0 {
+		t.Fatalf("list --json exit %d: %s", r.code, r.stderr)
+	}
+	var got []struct{ Name, Source, Value string }
+	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil {
+		t.Fatalf("%v\n%s", err, r.stdout)
+	}
+	sources := map[string]string{}
+	for _, s := range got {
+		if s.Value != "" {
+			t.Fatalf("list --json carried a value: %+v", got)
+		}
+		sources[s.Name] = s.Source
+	}
+	if sources["ANTHROPIC_API_KEY"] != "vault" || sources["ETH_RPC"] != "env" {
+		t.Fatalf("list --json = %+v", got)
+	}
+}
