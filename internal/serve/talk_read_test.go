@@ -11,7 +11,8 @@ import (
 // talk_read is granted with talk_write unless a profile says otherwise
 // (ADR 0036). An agent calling it reads the latest talk, each line under
 // its seq; last bounds the page, which then says how to page back, and
-// before_seq pages back; an input of any other shape is a tool error.
+// before_seq pages back; an input of any other shape is a tool error. Its
+// description names the agent's own lines as the talk shows them.
 func TestAnAgentReadsTheTalkWithTalkRead(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
 	ctx := context.Background()
@@ -53,6 +54,9 @@ func TestAnAgentReadsTheTalkWithTalkRead(t *testing.T) {
 	calls := provider.seen()
 	if len(calls) != 6 || calls[0].Tools != "talk_write talk_read" {
 		t.Fatalf("calls = %+v", calls)
+	}
+	if got, want := calls[0].Descriptions["talk_read"], `Lines starting "[<seq>] alice/@auditor:" are your own talk_write messages`; !strings.Contains(got, want) {
+		t.Errorf("description %q lacks %q", got, want)
 	}
 	summon := fmt.Sprintf(`[%d] alice: @auditor read the talk`, v.Seq)
 	second := fmt.Sprintf(`[%d] alice: second\\nline`, seqs[1])

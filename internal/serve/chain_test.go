@@ -35,6 +35,8 @@ type providerCall struct {
 	Turns         string // every message, "[role] content" a line each
 	Messages      int    // how many messages the call carried
 	Tools         string // the names of the tools offered, space-separated
+	// Descriptions is each offered tool's description, by name.
+	Descriptions map[string]string
 }
 
 // fakeProvider is an Anthropic Messages endpoint. reply answers each call,
@@ -65,14 +67,16 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 				Content json.RawMessage `json:"content"`
 			} `json:"messages"`
 			Tools []struct {
-				Name string `json:"name"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
 			} `json:"tools"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		call := providerCall{Key: r.Header.Get("x-api-key"), Path: r.URL.Path, Messages: len(body.Messages)}
+		call := providerCall{Key: r.Header.Get("x-api-key"), Path: r.URL.Path, Messages: len(body.Messages), Descriptions: map[string]string{}}
 		var tools []string
 		for _, tool := range body.Tools {
 			tools = append(tools, tool.Name)
+			call.Descriptions[tool.Name] = tool.Description
 		}
 		call.Tools = strings.Join(tools, " ")
 		cached := false
