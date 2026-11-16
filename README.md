@@ -27,6 +27,8 @@ CGO_ENABLED=0 go build -o ~/.local/bin/defios ./cmd/defios
 
 Build the binary on each machine, or build once and copy it over. Make sure `~/.local/bin` is on `PATH`.
 
+Upgrading a Node set up with an earlier build? See [MIGRATION.md](MIGRATION.md).
+
 The desktop app, which hosts the Node in place of `defios serve`, is in [`desktop/`](desktop/README.md).
 
 ## Quick start

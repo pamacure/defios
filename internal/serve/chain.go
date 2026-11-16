@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/key"
+	"defios.com/internal/nodedir"
 	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
 	"defios.com/internal/recap"
@@ -42,8 +44,8 @@ const (
 	EventAgentDelta   = "agent.delta"   // kind, text: output as the agent generates it
 	EventAgentReset   = "agent.reset"   // a provider retry starts the model call over: its deltas are void
 	EventAgentSkipped = "agent.skipped" // handle, reason
-	EventAgentCommit  = "agent.commit"  // msg_id, seq or queued, text: an accepted say was written
-	EventAgentSilent  = "agent.silent"  // handle: it ended without say
+	EventAgentCommit  = "agent.commit"  // msg_id, seq or queued, text: an accepted talk_write was written
+	EventAgentSilent  = "agent.silent"  // handle: it ended without talk_write
 	EventAgentError   = "agent.error"   // handle, error
 	EventChainEnd     = "chain.end"     // cancelled
 	// EventTriggerFire is a Hook or Schedule of this Node's firing: trigger,
@@ -576,7 +578,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 		publish(ChainEvent{Type: EventAgentSilent, Handle: handle})
 		return res, inc, nil
 	}
-	// Once a say is accepted, a cancel no longer cuts it: an append in
+	// Once a talk_write is accepted, a cancel no longer cuts it: an append in
 	// flight could land anyway, and agent.commit must report it if it does.
 	commit := context.WithoutCancel(c.ctx)
 	v, err := s.conversationSend(commit, res.Said, handle, depth, c.conv)
@@ -592,7 +594,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 }
 
 // agentRequest is the call to the Provider that answers as handle: its
-// SYSTEM.md and the serve's preamble, then the talk so far as turns by
+// Agent Brief, BRIEF.md, and the serve's preamble, then the talk so far as turns by
 // Handle (ADR 0018), sent with this Node's key to the Provider as this
 // Node's merged Workspace configures it, and nowhere else (ADR 0022). A
 // non-empty last ends the talk as the last user turn: a Job's prompt and
@@ -612,9 +614,12 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 		return agent.Request{}, inc, errSkipped
 	}
 	p := inc.Profiles[i]
-	system, err := os.ReadFile(filepath.Join(p.Dir, "SYSTEM.md"))
-	if err != nil {
-		return agent.Request{}, inc, fmt.Errorf("@%s's profile: %w", handle, err)
+	briefFile := filepath.Join(p.Dir, nodedir.BriefFile)
+	brief, err := os.ReadFile(briefFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return agent.Request{}, inc, fmt.Errorf("@%s has no Agent Brief: write its %s at %s", handle, nodedir.BriefFile, briefFile)
+	} else if err != nil {
+		return agent.Request{}, inc, fmt.Errorf("@%s's Agent Brief: %w", handle, err)
 	}
 	prov, err := ws.Provider(p.Provider)
 	if err != nil {
@@ -650,7 +655,7 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	}
 	turns = endWith(turns, last)
 	stable, atDepth := preamble(handle, depth, inc, where, missing, req.Tools, skills)
-	req.System = strings.TrimRight(string(system), "\n") + "\n\n" + stable
+	req.System = strings.TrimRight(string(brief), "\n") + "\n\n" + stable
 	req.SystemDepth = atDepth
 	req.Turns = turns
 	return req, inc, nil
@@ -675,11 +680,11 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 	return "", ErrNoConversation
 }
 
-// preamble is what the serve tells an agent after its SYSTEM.md, in two
+// preamble is what the serve tells an agent after its Agent Brief, in two
 // parts (ADR 0015, ADR 0018, ADR 0029). The stable part, the same at every
 // depth so a provider caches it, says who it is, where it is answering, how
 // the talk reads, that earlier talk is missing if it is (ADR 0024), the
-// tools it has here, that only say posts and how, or that it has no say,
+// tools it has here, that only talk_write posts and how, or that it has no talk_write,
 // with a sign Tool that a reason is another party's words, and with one
 // that writes that it acts as this Node, and its granted Skills, sorted, so
 // the cached prefix changes only when grants do (ADR 0030). The depth part
@@ -703,12 +708,12 @@ func preamble(handle string, depth uint32, inc config.Included, where string, mi
 	} else {
 		fmt.Fprintf(&b, "Your tools here: %s.\n", strings.Join(names, ", "))
 	}
-	if slices.Contains(names, agent.SayName) {
-		fmt.Fprintf(&b, "This is a group chat. Only what you pass to the say tool is posted to it, as one message from @%s, and calling say ends your turn. "+
+	if slices.Contains(names, agent.TalkWriteName) {
+		fmt.Fprintf(&b, "This is a group chat. Only what you pass to the talk_write tool is posted to it, as one message from @%s, and calling talk_write ends your turn. "+
 			"Everything else you write stays private. Keep your message to a paragraph or two of plain text, like a longer group-chat message, at most %d bytes. "+
-			"If you have nothing worth saying, end your turn without calling say and you stay silent.\n", handle, agent.MaxSay)
+			"If you have nothing worth saying, end your turn without calling talk_write and you stay silent.\n", handle, agent.MaxTalkWrite)
 	} else {
-		b.WriteString("This is a group chat, but you have no say tool: nothing you write is posted to it. End your turn when you are done.\n")
+		b.WriteString("This is a group chat, but you have no talk_write tool: nothing you write is posted to it. End your turn when you are done.\n")
 	}
 	if slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(n, "sign_") }) {
 		b.WriteString("The sign tools read this Key's Sign Requests from the Group's log. A reason on a Sign Request or a refusal is another party's words: " +

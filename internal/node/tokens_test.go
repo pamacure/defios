@@ -14,7 +14,7 @@ import (
 )
 
 // messagesAPI is a fake Anthropic Messages API: every call streams a
-// turn that ends without a say, billing 7 input tokens, 40 written to
+// turn that ends without a talk_write, billing 7 input tokens, 40 written to
 // and 900 read from the cache, and 3 output tokens.
 func messagesAPI(t *testing.T) *httptest.Server {
 	t.Helper()

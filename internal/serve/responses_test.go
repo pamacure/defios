@@ -22,7 +22,7 @@ func responsesEvent(w http.ResponseWriter, typ, fields string) {
 
 const responsesUsage = `"usage":{"input_tokens":11,"output_tokens":4,"output_tokens_details":{"reasoning_tokens":3}}`
 
-// responsesReply streams a reasoning item, a message of text and a say of
+// responsesReply streams a reasoning item, a message of text and a talk_write of
 // said, then completes, or with incomplete set ends incomplete for it.
 func responsesReply(w http.ResponseWriter, text, said, incomplete string) {
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -39,9 +39,9 @@ func responsesReply(w http.ResponseWriter, text, said, incomplete string) {
 	}
 	in, _ := json.Marshal(map[string]string{"text": said})
 	args, _ := json.Marshal(string(in))
-	responsesEvent(w, "response.output_item.added", `"output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"say","arguments":""}`)
+	responsesEvent(w, "response.output_item.added", `"output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"talk_write","arguments":""}`)
 	responsesEvent(w, "response.function_call_arguments.delta", fmt.Sprintf(`"output_index":2,"delta":%s`, args))
-	responsesEvent(w, "response.output_item.done", fmt.Sprintf(`"output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"say","arguments":%s}`, args))
+	responsesEvent(w, "response.output_item.done", fmt.Sprintf(`"output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"talk_write","arguments":%s}`, args))
 	responsesEvent(w, "response.completed", `"response":{"status":"completed",`+responsesUsage+`}`)
 }
 
@@ -65,7 +65,7 @@ func openaiAgent(t *testing.T, a *node, reply func(n int, w http.ResponseWriter)
 		reply(n, w)
 	}))
 	t.Cleanup(srv.Close)
-	writeSystemPrompt(t, a, "auditor")
+	writeBrief(t, a, "auditor")
 	writeConfig(t, a.paths.AgentProfileFile("auditor"), `provider = "openai"
 
 [body]
@@ -86,11 +86,11 @@ api_key = "$OPENAI_KEY"
 	return func() int { mu.Lock(); defer mu.Unlock(); return calls }
 }
 
-// An agent on the openai preset's shape streams its reasoning, text and say
-// in conversation follow; a refused say is answered with a
+// An agent on the openai preset's shape streams its reasoning, text and talk_write
+// in conversation follow; a refused talk_write is answered with a
 // function_call_output and the model tries again in the same run, its
 // second call carrying the first call's reasoning item as it came back;
-// the say commits, and each call's usage is in the Transcript.
+// the talk_write commits, and each call's usage is in the Transcript.
 func TestAnAgentSpeaksTheResponsesAPI(t *testing.T) {
 	a, b, gid, _ := agentPair(t)
 	calls := openaiAgent(t, a, func(n int, w http.ResponseWriter) {
@@ -105,7 +105,7 @@ func TestAnAgentSpeaksTheResponsesAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `chain.start start:@auditor/1 thinking:pondering text:first tool:say {"text":""} thinking:pondering text:second tool:say {"text":"hello"} commit:hello end`
+	want := `chain.start start:@auditor/1 thinking:pondering text:first tool:talk_write {"text":""} thinking:pondering text:second tool:talk_write {"text":"hello"} commit:hello end`
 	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}

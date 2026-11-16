@@ -8,7 +8,7 @@ import (
 	"defios.com/internal/transcript"
 )
 
-// A run's closing line. Once its say has committed it is `said` with its
+// A run's closing line. Once its talk_write has committed it is `said` with its
 // msg_id and seq whatever fails after, even a stop; a run cut off by a
 // stop before that has none (ADR 0018).
 func TestOutcome(t *testing.T) {

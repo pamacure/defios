@@ -13,8 +13,8 @@ import (
 func ptr[T any](v T) *T { return &v }
 
 // An Agent Profile is the whole Node's: added with its Provider, model,
-// body and max turns and a placeholder SYSTEM.md, edited field by field,
-// its SYSTEM.md read and written, and deleted, with no Group served.
+// body and max turns and a placeholder BRIEF.md, edited field by field,
+// its BRIEF.md read and written, and deleted, with no Group served.
 func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 	p := nodeDir(t)
 	h, err := node.Open(p, node.Options{})
@@ -34,7 +34,7 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 	}
 	want := node.AgentProfile{
 		Handle: "auditor", Provider: "claude", Model: "claude-opus-5-5", MaxTurns: 4,
-		Tools: []string{"say"}, Skills: []string{}, MCP: map[string]node.MCPGrant{},
+		Tools: []string{"talk_write"}, Skills: []string{}, MCP: map[string]node.MCPGrant{},
 		Body: map[string]any{"model": "claude-opus-5-5", "max_tokens": int64(1024)},
 		Dir:  p.AgentProfileDir("auditor"), IncludedIn: []node.Place{},
 	}
@@ -44,14 +44,14 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 	if read, err := h.AgentProfile(ctx, "auditor"); err != nil || !reflect.DeepEqual(read, want) {
 		t.Fatalf("read back %#v, %v", read, err)
 	}
-	if sys, err := h.AgentSystem(ctx, "auditor"); err != nil || sys == "" {
-		t.Fatalf("scaffolded SYSTEM.md %q, %v", sys, err)
+	if brief, err := h.AgentBrief(ctx, "auditor"); err != nil || brief == "" {
+		t.Fatalf("scaffolded BRIEF.md %q, %v", brief, err)
 	}
-	if err := h.SetAgentSystem(ctx, "auditor", "You audit."); err != nil {
+	if err := h.SetAgentBrief(ctx, "auditor", "You audit."); err != nil {
 		t.Fatal(err)
 	}
-	if sys, err := h.AgentSystem(ctx, "auditor"); err != nil || sys != "You audit." {
-		t.Fatalf("SYSTEM.md %q, %v", sys, err)
+	if brief, err := h.AgentBrief(ctx, "auditor"); err != nil || brief != "You audit." {
+		t.Fatalf("BRIEF.md %q, %v", brief, err)
 	}
 
 	if _, err := h.AddAgentProfile(ctx, "auditor", node.ProfileEdit{Provider: ptr("claude")}); !errors.Is(err, node.ErrProfileExists) {
@@ -96,7 +96,7 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 }
 
 // Grant and Revoke change what an Agent Profile may call, a Tool granted
-// into an unset list joining say; a grant refused changes nothing.
+// into an unset list joining talk_write; a grant refused changes nothing.
 func TestGrantAndRevokeChangeAnAgentProfilesTools(t *testing.T) {
 	h, err := node.Open(nodeDir(t), node.Options{})
 	if err != nil {
@@ -107,16 +107,16 @@ func TestGrantAndRevokeChangeAnAgentProfilesTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	kind, a, err := h.Grant(ctx, "auditor", "sign_list", nil)
-	if err != nil || kind != node.GrantTool || !reflect.DeepEqual(a.Tools, []string{"say", "sign_list"}) {
+	if err != nil || kind != node.GrantTool || !reflect.DeepEqual(a.Tools, []string{"talk_write", "sign_list"}) {
 		t.Fatalf("grant sign_list: %v %#v %v", kind, a.Tools, err)
 	}
 	if _, _, err := h.Grant(ctx, "auditor", "sign_everything", nil); !errors.Is(err, config.ErrGrantRefused) {
 		t.Fatalf("grant of no Tool: %v; want ErrGrantRefused", err)
 	}
-	if _, a, err = h.Revoke(ctx, "auditor", "say"); err != nil || !reflect.DeepEqual(a.Tools, []string{"sign_list"}) {
-		t.Fatalf("revoke say: %#v %v", a.Tools, err)
+	if _, a, err = h.Revoke(ctx, "auditor", "talk_write"); err != nil || !reflect.DeepEqual(a.Tools, []string{"sign_list"}) {
+		t.Fatalf("revoke talk_write: %#v %v", a.Tools, err)
 	}
-	if _, _, err := h.Grant(ctx, "ghost", "say", nil); !errors.Is(err, node.ErrUnknownProfile) {
+	if _, _, err := h.Grant(ctx, "ghost", "talk_write", nil); !errors.Is(err, node.ErrUnknownProfile) {
 		t.Fatalf("grant to a ghost: %v; want ErrUnknownProfile", err)
 	}
 }

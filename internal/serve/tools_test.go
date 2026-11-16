@@ -62,7 +62,7 @@ func lastTurn(c providerCall) string {
 // unknown, as are sign_accept and sign_refuse. The preamble lists the
 // Tools and says a reason is another party's words (ADR 0029).
 func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
-	a, provider, conv, mine, theirs := signToolsPair(t, `["say", "sign_list", "sign_inspect", "sign_accept", "sign_refuse"]`)
+	a, provider, conv, mine, theirs := signToolsPair(t, `["talk_write", "sign_list", "sign_inspect", "sign_accept", "sign_refuse"]`)
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w)
 		switch n {
@@ -77,7 +77,7 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 		case 5:
 			endCall(w, "sign_refuse", `{"msg_id":"`+theirs+`","reason":"no"}`)
 		default:
-			endSay(w, "one open request")
+			endTalkWrite(w, "one open request")
 		}
 	})
 	ctx := context.Background()
@@ -97,7 +97,7 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 	if len(calls) != 6 {
 		t.Fatalf("%d calls, want 6", len(calls))
 	}
-	if calls[0].Tools != "say sign_list sign_inspect sign_accept sign_refuse" {
+	if calls[0].Tools != "talk_write sign_list sign_inspect sign_accept sign_refuse" {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
 	for _, want := range []string{"sign_list", "sign_inspect", "another party's words"} {
@@ -127,7 +127,7 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 // named in the preamble; a call of one is a tool error.
 func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
-	grantTools(t, a, "auditor", `["say", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse", "chain_fill"]`)
+	grantTools(t, a, "auditor", `["talk_write", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse", "chain_fill"]`)
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w)
 		switch n {
@@ -136,7 +136,7 @@ func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 		case 2:
 			endCall(w, "sign_propose", `{"reason":"pay","transactions":`+payEthTool+`}`)
 		default:
-			endSay(w, "nothing to sign here")
+			endTalkWrite(w, "nothing to sign here")
 		}
 	})
 	s := watch(t, a)
@@ -148,7 +148,7 @@ func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if calls[0].Tools != "say" || strings.Contains(calls[0].Stable, "sign_") || strings.Contains(calls[0].Stable, "chain_fill") {
+	if calls[0].Tools != "talk_write" || strings.Contains(calls[0].Stable, "sign_") || strings.Contains(calls[0].Stable, "chain_fill") {
 		t.Errorf("tools offered %q; preamble %s", calls[0].Tools, calls[0].Stable)
 	}
 	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"sign_list\"`) {
@@ -159,7 +159,7 @@ func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 	}
 }
 
-// A profile whose tools lack say never posts: it is offered no say, a say
+// A profile whose tools lack talk_write never posts: it is offered no talk_write, a talk_write
 // it calls is refused, and the run ends silent with nothing committed.
 func TestAProfileWithoutSayNeverCommitsTalk(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
@@ -181,11 +181,11 @@ func TestAProfileWithoutSayNeverCommitsTalk(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if len(calls) != 2 || calls[0].Tools != "" || !strings.Contains(calls[0].Stable, "no say") {
+	if len(calls) != 2 || calls[0].Tools != "" || !strings.Contains(calls[0].Stable, "no talk_write") {
 		t.Fatalf("calls = %+v", calls)
 	}
-	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"say\"`) {
-		t.Errorf("say answered %s", got)
+	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"talk_write\"`) {
+		t.Errorf("talk_write answered %s", got)
 	}
 }
 
@@ -210,7 +210,7 @@ func signingAgents(t *testing.T) (a, b *node, provider *fakeProvider, conv []byt
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	for n, h := range map[*node]string{a: "auditor", b: "reviewer"} {
 		agentNode(t, n, provider.URL, h)
-		grantTools(t, n, h, `["say", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse"]`)
+		grantTools(t, n, h, `["talk_write", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse"]`)
 		path := n.paths.GroupConfigFile(group.ImplicitAlias)
 		writeConfig(t, path, readFile(t, path)+"\n[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n")
 		waitMinted(t, n, gid, id[:])
@@ -268,7 +268,7 @@ const payEthTool = `[{"network":"eth","ethereum":{"to":"AAAAAAAAAAAAAAAAAAAAAAAA
 // Handle, and its proposal is its Node's accept. Another Node's agent
 // refuses it with a reason; that Node's stance is then final, so its
 // agent's accept is the tool error already-refused, and the run goes on to
-// say. Each successful sign Tool is an acted line in the Transcript.
+// talk_write. Each successful sign Tool is an acted line in the Transcript.
 func TestAgentsProposeAndRefuseASignRequest(t *testing.T) {
 	a, b, provider, conv := signingAgents(t)
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
@@ -277,14 +277,14 @@ func TestAgentsProposeAndRefuseASignRequest(t *testing.T) {
 			endCall(w, "sign_propose", `{"reason":"pay invoice 7","transactions":`+payEthTool+`}`)
 			return
 		}
-		endSay(w, "proposed")
+		endTalkWrite(w, "proposed")
 	})
 	chain, got := summonIn(t, a, conv, "@auditor pay invoice 7")
 	if !strings.HasSuffix(got, "commit:proposed end") {
 		t.Fatalf("alice's events = %s", got)
 	}
 	calls := provider.seenWith("sk-alice")
-	if calls[0].Tools != "say sign_list sign_inspect sign_propose sign_accept sign_refuse" {
+	if calls[0].Tools != "talk_write sign_list sign_inspect sign_propose sign_accept sign_refuse" {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
 	if !strings.Contains(calls[0].Stable, "acts as this Node") {
@@ -317,7 +317,7 @@ func TestAgentsProposeAndRefuseASignRequest(t *testing.T) {
 		case 2:
 			endCall(w, "sign_accept", `{"msg_id":"`+msgID+`"}`)
 		default:
-			endSay(w, "refused")
+			endTalkWrite(w, "refused")
 		}
 	})
 	chain, got = summonIn(t, b, conv, "@reviewer check it")
@@ -344,7 +344,7 @@ func TestAgentsProposeAndRefuseASignRequest(t *testing.T) {
 }
 
 // With no leader, an agent's proposal waits in its Node's Outbox: the
-// model is told it is queued, with its msg_id, and the run goes on to say.
+// model is told it is queued, with its msg_id, and the run goes on to post with talk_write.
 func TestAQueuedProposalIsQueuedToTheModel(t *testing.T) {
 	a, b, provider, conv := signingAgents(t)
 	b.stop()
@@ -355,7 +355,7 @@ func TestAQueuedProposalIsQueuedToTheModel(t *testing.T) {
 			endCall(w, "sign_propose", `{"reason":"pay invoice 8","transactions":`+payEthTool+`}`)
 			return
 		}
-		endSay(w, "proposed, queued")
+		endTalkWrite(w, "proposed, queued")
 	})
 	chain, got := summonIn(t, a, conv, "@auditor pay invoice 8")
 	if !strings.HasSuffix(got, "commit:proposed, queued end") {
@@ -388,7 +388,7 @@ func TestAnAgentAcceptsASignRequest(t *testing.T) {
 			endCall(w, "sign_accept", `{"msg_id":"`+v.MsgID[:8]+`"}`)
 			return
 		}
-		endSay(w, "accepted")
+		endTalkWrite(w, "accepted")
 	})
 	chain, got := summonIn(t, b, conv, "@reviewer accept it")
 	if !strings.HasSuffix(got, "commit:accepted end") {

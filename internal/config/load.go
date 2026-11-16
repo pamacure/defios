@@ -85,7 +85,7 @@ func (e Effective) Networks() ([]network.Network, error) {
 
 // Included is what may answer here: the profiles [agent] profiles lists, in
 // its order, each read from its config.toml, and the depth a chain of them
-// may reach. Whether a profile's SYSTEM.md exists is for whoever summons it
+// may reach. Whether a profile's BRIEF.md exists is for whoever summons it
 // to find out. A listed Handle with no profile config.toml is an error
 // saying which file to fix.
 func (e Effective) Included() (Included, error) {

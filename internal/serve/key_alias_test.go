@@ -20,7 +20,7 @@ func generatorConfigFile(n *node, groupAlias string) string {
 // sign fill and sign propose read the alias from the config.toml of the
 // Group serve is serving, afresh each time, so an edit needs no restart.
 func TestSignResolvesAKeyAliasOfTheServedGroupWithNoRestart(t *testing.T) {
-	a, _, conv := fillPair(t, `["say"]`)
+	a, _, conv := fillPair(t, `["talk_write"]`)
 	ctx := context.Background()
 	var txs []signreq.TxSpec
 	if err := json.Unmarshal([]byte(partialEth), &txs); err != nil {

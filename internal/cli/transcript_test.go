@@ -23,7 +23,7 @@ var transcriptLines = []transcript.Line{
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"tool_use","id":"t0","name":"shout","input":{}}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"tool_result","tool_use_id":"t0","content":"no such tool","is_error":true}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
-	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"tool_use","id":"t1","name":"say","input":{"text":"ok @scribe"}}`)},
+	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"tool_use","id":"t1","name":"talk_write","input":{"text":"ok @scribe"}}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindUsage, Usage: json.RawMessage(`{"input_tokens":3}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"text","text":"done"}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSaid, MsgID: "cdcdcdcdcdcd", Seq: 7},
@@ -61,7 +61,7 @@ func TestConversationTranscriptShowsEachRun(t *testing.T) {
 @auditor (thinking): check it
 @auditor (tool): shout {}
 @auditor (tool result): no such tool
-@auditor (tool): say {"text":"ok @scribe"}
+@auditor (tool): talk_write {"text":"ok @scribe"}
 @auditor (text): done
 @auditor said msg_id cdcdcdcd
 step 2: @scribe, depth 2

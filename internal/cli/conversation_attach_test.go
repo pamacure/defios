@@ -142,7 +142,7 @@ var replyEvents = []serve.ChainEvent{
 	{Type: serve.EventAgentReset, Chain: chainA},
 	{Type: serve.EventAgentDelta, Chain: chainA, Kind: "text", Text: "let me"},
 	{Type: serve.EventAgentDelta, Chain: chainA, Kind: "text", Text: " check"},
-	{Type: serve.EventAgentDelta, Chain: chainA, Kind: "tool", Text: "say "},
+	{Type: serve.EventAgentDelta, Chain: chainA, Kind: "tool", Text: "talk_write "},
 	{Type: serve.EventAgentDelta, Chain: chainA, Kind: "tool", Text: `{"text":"all good"}`},
 	{Type: serve.EventAgentCommit, Chain: chainA, Seq: 10, Text: "all good"},
 	{Type: serve.EventAgentSkipped, Chain: chainA, Handle: "scribe", Reason: "@scribe is no longer in [agent] profiles here"},
@@ -337,7 +337,7 @@ func TestConversationFollowPrintsChainsUntilCtrlC(t *testing.T) {
 @auditor (text): draft
 [retrying; the model call starts over]
 @auditor (text): let me check
-@auditor (tool): say {"text":"all good"}
+@auditor (tool): talk_write {"text":"all good"}
 @auditor: all good
 @scribe skipped: @scribe is no longer in [agent] profiles here
 [agents answering msg_id 0c0c0c0c]

@@ -129,7 +129,7 @@ async function act(method, args, after = () => {}) {
   invalid = next.Problem && next.Field ? { where: next.Where, field: next.Field } : null;
   av = taken(next);
   if (!next.Problem) after(next);
-  // A new profile added though its SYSTEM.md was not written shows as made.
+  // A new profile added though its BRIEF.md was not written shows as made.
   if (next.Open && next.Where === "profile" && creating) { creating = false; open = next.Open.Handle; }
   if (!av.Open && !creating) open = "";
   draw();
@@ -208,15 +208,15 @@ async function openProfile(handle) {
 function profileForm(o) {
   const where = o ? "profile" : "new-profile";
   const d = profDraft?.New === !o ? profDraft : o
-    ? { Handle: o.Handle, Provider: o.Provider, Model: o.Model, MaxTurns: o.MaxTurns, Body: o.Body, System: o.System }
-    : { Handle: "", Provider: "", Model: "", MaxTurns: "", Body: "", System: "" };
+    ? { Handle: o.Handle, Provider: o.Provider, Model: o.Model, MaxTurns: o.MaxTurns, Body: o.Body, Brief: o.Brief }
+    : { Handle: "", Provider: "", Model: "", MaxTurns: "", Body: "", Brief: "" };
   const inputs = {
     Handle: text(d.Handle, { placeholder: "auditor" }),
     Provider: providerSelect(d.Provider, !o),
     Model: text(d.Model, { placeholder: "claude-opus-5-5" }),
     MaxTurns: text(d.MaxTurns, { inputmode: "numeric", placeholder: "Default" }),
     Body: area(d.Body, { rows: 4, placeholder: '{"max_tokens": 4096}' }),
-    System: area(d.System, { rows: 12, class: "field left area mono", placeholder: o ? "" : "A placeholder prompt is written if this is left empty." }),
+    Brief: area(d.Brief, { rows: 12, class: "field left area mono", placeholder: o ? "" : "A placeholder Agent Brief is written if this is left empty." }),
   };
   profInputs = o ? inputs : null;
   const saved = h("span", { class: "saved", "aria-live": "polite" }, av.Where === where && av.Saved ? "Saved." : "");
@@ -230,13 +230,13 @@ function profileForm(o) {
       const draft = { New: !o, Handle: o ? o.Handle : inputs.Handle.value.trim() };
       for (const k of ["Provider", "Model", "MaxTurns"]) draft[k] = inputs[k].value.trim();
       draft.Body = inputs.Body.value;
-      draft.System = inputs.System.value;
+      draft.Brief = inputs.Brief.value;
       profDraft = draft;
       act("SaveAgentProfile", [draft], () => { open = draft.Handle; creating = false; profDraft = null; });
     },
   },
   !o && h("div", { class: "phead" }, h("div", { class: "ptitle" }, h("h3", {}, "New agent"))),
-  o?.SystemProblem && problemBox({ ...o.SystemProblem, Message: `Its SYSTEM.md could not be read, so it shows empty below. ${o.SystemProblem.Message}` }),
+  o?.BriefProblem && problemBox({ ...o.BriefProblem, Message: `Its Agent Brief, BRIEF.md, could not be read, so it shows empty below. ${o.BriefProblem.Message}` }),
   h("div", { class: o ? "fgrid" : "fgrid four" },
     !o && cell(where, "handle", "Handle", inputs.Handle, "How talk mentions it, as @handle: lowercase letters and digits, joined by - or _."),
     cell(where, "provider", "Provider", inputs.Provider, providers.length
@@ -246,7 +246,7 @@ function profileForm(o) {
     cell(where, "max_turns", "Max turns", inputs.MaxTurns, o?.MaxTurns
       ? "How many turns one run may take. Once set, it can be changed but not cleared."
       : "How many turns one run may take. Leave empty for the default.")),
-  cell(where, "system", "SYSTEM.md", inputs.System, "Its system prompt. Each run reads it afresh, so a change applies to the next."),
+  cell(where, "brief", "Agent Brief", inputs.Brief, "Its Agent Brief, BRIEF.md: what this agent is and how it works. Each run reads it afresh, so a change applies to the next."),
   cell(where, "body", "Request body", inputs.Body, "Other request options, as a JSON object. Leave empty for none."),
   h("div", { class: "factions" }, saved,
     !o && h("button", { class: "btn", type: "button", onclick: () => { creating = false; profDraft = null; invalid = null; draw(); } }, "Cancel"),
@@ -266,7 +266,7 @@ function providerSelect(value, isNew) {
 function grant(method, args) {
   if (profInputs) {
     const d = { New: false, Handle: open };
-    for (const [k, el] of Object.entries(profInputs)) d[k] = k === "Body" || k === "System" ? el.value : el.value.trim();
+    for (const [k, el] of Object.entries(profInputs)) d[k] = k === "Body" || k === "Brief" ? el.value : el.value.trim();
     profDraft = d;
   }
   act(method, args);
@@ -351,7 +351,7 @@ function profileHead(o) {
     deleting && h("div", { class: "warning", role: "alert" },
       places.length
         ? h("p", {}, `@${o.Handle} is included in ${places.map((p) => `${p.Group} — ${p.Where}`).join(", ")}. Exclude it there first, on Talk. Then it can be deleted.`)
-        : h("p", {}, `Delete @${o.Handle}? Its config and SYSTEM.md are removed from this device.`),
+        : h("p", {}, `Delete @${o.Handle}? Its config and BRIEF.md are removed from this device.`),
       h("div", { class: "row" },
         h("button", { class: "btn danger", type: "button", disabled: busy || places.length > 0,
           onclick: () => act("DeleteAgentProfile", [o.Handle], () => { open = ""; deleting = false; profDraft = null; }) }, "Delete"),

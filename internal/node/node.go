@@ -126,8 +126,8 @@ type Node interface {
 	AddAgentProfile(ctx context.Context, handle string, e ProfileEdit) (AgentProfile, error)
 	EditAgentProfile(ctx context.Context, handle string, e ProfileEdit) (AgentProfile, error)
 	DeleteAgentProfile(ctx context.Context, handle string) error
-	AgentSystem(ctx context.Context, handle string) (string, error)
-	SetAgentSystem(ctx context.Context, handle, prompt string) error
+	AgentBrief(ctx context.Context, handle string) (string, error)
+	SetAgentBrief(ctx context.Context, handle, brief string) error
 	Grant(ctx context.Context, handle, item string, secrets []string) (GrantKind, AgentProfile, error)
 	Revoke(ctx context.Context, handle, item string) (GrantKind, AgentProfile, error)
 

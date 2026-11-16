@@ -415,8 +415,8 @@ func TestAProfileFileRefusesMalformedProfiles(t *testing.T) {
 		"time in an array":      "provider = \"claude\"\n[body]\nat = [07:32:00]",
 		"nan in body":           "provider = \"claude\"\n[body]\ntemperature = nan",
 		"empty key in body":     "provider = \"claude\"\n[body]\n\"\" = 1",
-		"unknown tool":          "provider = \"claude\"\ntools = [\"say\", \"sign_everything\"]",
-		"tool listed twice":     "provider = \"claude\"\ntools = [\"say\", \"say\"]",
+		"unknown tool":          "provider = \"claude\"\ntools = [\"talk_write\", \"sign_everything\"]",
+		"tool listed twice":     "provider = \"claude\"\ntools = [\"talk_write\", \"talk_write\"]",
 		"mcp not plugin/server": "provider = \"claude\"\n[mcp.scanner]",
 		"mcp bad secret name":   "provider = \"claude\"\n[mcp.\"audit/scanner\"]\nsecrets = [\"lower\"]",
 		"mcp secret twice":      "provider = \"claude\"\n[mcp.\"audit/scanner\"]\nsecrets = [\"KEY\", \"KEY\"]",
@@ -437,7 +437,7 @@ func TestAProfileFileRefusesMalformedProfiles(t *testing.T) {
 }
 
 // A profile's tools is the whole list of built-in Tools it grants: unset is
-// say alone, an empty list none, and either reads back as written (ADR
+// talk_write alone, an empty list none, and either reads back as written (ADR
 // 0029). An unknown Tool is refused naming the ones there are.
 func TestAProfileGrantsTools(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -445,9 +445,9 @@ func TestAProfileGrantsTools(t *testing.T) {
 		tools   []string
 		granted string
 	}{
-		"unset": {"provider = \"claude\"\n", nil, "[say]"},
+		"unset": {"provider = \"claude\"\n", nil, "[talk_write]"},
 		"none":  {"provider = \"claude\"\ntools = []\n", []string{}, "[]"},
-		"some":  {"provider = \"claude\"\ntools = [\"sign_list\", \"say\"]\n", []string{"sign_list", "say"}, "[sign_list say]"},
+		"some":  {"provider = \"claude\"\ntools = [\"sign_list\", \"talk_write\"]\n", []string{"sign_list", "talk_write"}, "[sign_list talk_write]"},
 	} {
 		got, err := config.ReadProfile(write(t, tc.body))
 		if err != nil || !reflect.DeepEqual(got.Tools, tc.tools) || fmt.Sprint(got.Granted()) != tc.granted {
@@ -562,7 +562,7 @@ func TestConfigRefusesAMalformedAgentTable(t *testing.T) {
 // A profile's body is its request's other fields, as TOML nests them,
 // converted to JSON values: tables are objects, an array of tables an array
 // of objects, integers and floats numbers. max_turns and tools resolve
-// with it; unset, they are 8 and say alone, and an unset body is empty.
+// with it; unset, they are 8 and talk_write alone, and an unset body is empty.
 func TestIncludedResolvesTheProfileBody(t *testing.T) {
 	p := withProfiles(t, node(t, "[agent]\nprofiles = [\"auditor\", \"scribe\"]\n", ""), map[string]string{
 		"auditor": `
@@ -598,7 +598,7 @@ name = "a"
 		t.Fatal(err)
 	}
 	const want = `{"max_tokens":4096,"metadata":{"tags":[{"name":"a"}]},"model":"claude-opus-5-5","stop_sequences":["END"],"stream":true,"temperature":1,"thinking":{"type":"adaptive"}}`
-	if string(raw) != want || auditor.Provider != "claude" || auditor.MaxTurns != 3 || fmt.Sprint(auditor.Tools) != "[say]" {
+	if string(raw) != want || auditor.Provider != "claude" || auditor.MaxTurns != 3 || fmt.Sprint(auditor.Tools) != "[talk_write]" {
 		t.Fatalf("auditor = %+v\nbody %s\nwant %s", auditor, raw, want)
 	}
 	if scribe.Provider != "local" || scribe.MaxTurns != 8 || len(scribe.Body) != 0 || scribe.Tools == nil || len(scribe.Tools) != 0 {
@@ -779,7 +779,7 @@ max_depth = 3
 
 	p, got, err := included(group, "")
 	want := config.Included{
-		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: filepath.Join(p.Config, "agents", "auditor"), Provider: "claude", MaxTurns: 8, Tools: []string{"say"}}},
+		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: filepath.Join(p.Config, "agents", "auditor"), Provider: "claude", MaxTurns: 8, Tools: []string{"talk_write"}}},
 		MaxDepth: 3,
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -789,9 +789,9 @@ max_depth = 3
 	p, got, err = included(group, "[agent]\nprofiles = [\"quant\", \"trader\", \"scout\"]\n")
 	want = config.Included{
 		Profiles: []config.ResolvedProfile{
-			{Handle: "quant", Dir: filepath.Join(p.Config, "agents", "quant"), Provider: "gpt", MaxTurns: 8, Tools: []string{"say"}},
-			{Handle: "trader", Dir: filepath.Join(p.Config, "agents", "trader"), Provider: "gpt", MaxTurns: 8, Tools: []string{"say"}},
-			{Handle: "scout", Dir: filepath.Join(p.Config, "agents", "scout"), Provider: "claude", MaxTurns: 8, Tools: []string{"say"}},
+			{Handle: "quant", Dir: filepath.Join(p.Config, "agents", "quant"), Provider: "gpt", MaxTurns: 8, Tools: []string{"talk_write"}},
+			{Handle: "trader", Dir: filepath.Join(p.Config, "agents", "trader"), Provider: "gpt", MaxTurns: 8, Tools: []string{"talk_write"}},
+			{Handle: "scout", Dir: filepath.Join(p.Config, "agents", "scout"), Provider: "claude", MaxTurns: 8, Tools: []string{"talk_write"}},
 		},
 		MaxDepth: 3,
 	}

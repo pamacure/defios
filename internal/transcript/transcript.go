@@ -22,7 +22,7 @@ import (
 // none.
 const (
 	OutcomeSaid      = "said"      // msg_id, and seq once it has a row: the message
-	OutcomeSilent    = "silent"    // ended its turn without say
+	OutcomeSilent    = "silent"    // ended its turn without talk_write
 	OutcomeError     = "error"     // error: why
 	OutcomeCancelled = "cancelled" // a cancel stopped it
 )
@@ -57,7 +57,7 @@ type Line struct {
 
 // Outcome is the closing line of a run that said msgID, hex, at seq
 // (msgID "" if nothing), and ended with err; a run that commits nothing
-// and ends without an error is silent. Once a say has committed it is
+// and ends without an error is silent. Once a talk_write has committed it is
 // `said`, whatever failed after. A run cut off by the serve stopping
 // before that has none: ok is false.
 func Outcome(msgID string, seq uint64, err error, cancelled, stopped bool) (l Line, ok bool) {
@@ -217,7 +217,7 @@ type Acted struct {
 // Output is what r generated, in order: each model call's blocks,
 // thinking, text and tool calls, followed by the results the run answered
 // its tool calls with, agent.ToolResults. A call it did not answer, as an
-// accepted say, has none.
+// accepted talk_write, has none.
 func (r Run) Output() []json.RawMessage { return r.Blocks }
 
 // Runs are t's runs, one per step, by step.

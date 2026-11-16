@@ -112,7 +112,7 @@ func TestAnAgentCallsAGrantedMCPServersTool(t *testing.T) {
 		case 3:
 			endCall(w, "tools__fx__fail", `{}`)
 		default:
-			endSay(w, "done")
+			endTalkWrite(w, "done")
 		}
 	})
 	if got := chainOf(t, a, "@auditor go"); !strings.HasSuffix(got, "commit:done end") {
@@ -122,7 +122,7 @@ func TestAnAgentCallsAGrantedMCPServersTool(t *testing.T) {
 	if len(calls) != 4 {
 		t.Fatalf("%d calls, want 4", len(calls))
 	}
-	want := "say tools__fx__crash tools__fx__cwd tools__fx__echo tools__fx__env tools__fx__fail tools__fx__pid tools__fx__sleep"
+	want := "talk_write tools__fx__crash tools__fx__cwd tools__fx__echo tools__fx__env tools__fx__fail tools__fx__pid tools__fx__sleep"
 	if calls[0].Tools != want {
 		t.Errorf("tools offered %q, want %q", calls[0].Tools, want)
 	}
@@ -153,7 +153,7 @@ func TestAnMCPServerSeesOnlyPathHomeAndItsGrantedSecrets(t *testing.T) {
 			endCall(w, "tools__fx__env", `{}`)
 			return
 		}
-		endSay(w, "done")
+		endTalkWrite(w, "done")
 	})
 	if got := chainOf(t, a, "@auditor go"); !strings.HasSuffix(got, "commit:done end") {
 		t.Fatalf("events = %s", got)
@@ -244,7 +244,7 @@ func TestAnMCPServerStartsLazilyIsSharedAndStopsWithTheServe(t *testing.T) {
 			endCall(w, "tools__fx__pid", `{}`)
 			return
 		}
-		endSay(w, "done")
+		endTalkWrite(w, "done")
 	})
 	if got := chainOf(t, a, "@plain hi"); !strings.HasSuffix(got, "commit:done end") {
 		t.Fatalf("events = %s", got)
@@ -283,7 +283,7 @@ func TestDifferentSecretGrantsRunAProcessEach(t *testing.T) {
 	dir := installTools(t, a, "[]", `["TOKEN"]`)
 	grantMCP(t, a, "first", "[mcp.\"tools/fx\"]\n")
 	grantMCP(t, a, "second", "[mcp.\"tools/fx\"]\nsecrets = [\"TOKEN\"]\n")
-	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) { streamParts(w); endSay(w, "done") })
+	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) { streamParts(w); endTalkWrite(w, "done") })
 	chainOf(t, a, "@first hi")
 	chainOf(t, a, "@second hi")
 	chainOf(t, a, "@first again")
@@ -308,7 +308,7 @@ func TestACrashedMCPServerRestartsOnNextUse(t *testing.T) {
 		case 3:
 			endCall(w, "tools__fx__pid", `{}`)
 		default:
-			endSay(w, "done")
+			endTalkWrite(w, "done")
 		}
 	})
 	if got := chainOf(t, a, "@auditor go"); !strings.HasSuffix(got, "commit:done end") {
@@ -384,7 +384,7 @@ func TestAnMCPCallTimesOut(t *testing.T) {
 			endCall(w, "tools__fx__sleep", `{}`)
 			return
 		}
-		endSay(w, "done")
+		endTalkWrite(w, "done")
 	})
 	chainOf(t, a, "@auditor go")
 	calls := provider.seen()

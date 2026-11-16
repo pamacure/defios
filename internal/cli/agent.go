@@ -18,6 +18,7 @@ import (
 	"defios.com/internal/config"
 	"defios.com/internal/key"
 	"defios.com/internal/node"
+	"defios.com/internal/nodedir"
 )
 
 // agentFlags are the fields add and edit take.
@@ -104,7 +105,7 @@ func agentCommand(g *globals) *cobra.Command {
 		Use:   "agent",
 		Short: "Configure the Agent Profiles this Node can summon into a Group's talk",
 		Long: `An Agent Profile is this Node's own, never shared with the Group: a directory agents/<handle>/ under the
-config root holding its system prompt, SYSTEM.md, and its config.toml naming the Provider it runs on,
+config root holding its Agent Brief, BRIEF.md, and its config.toml naming the Provider it runs on,
 its request body and max_turns (ADR 0029). It is the whole Node's, named by its Handle alone, and
 answers only where a Group's or Conversation's [agent] profiles includes its Handle, on that Group's
 Provider of its alias. These commands need no serve.`,
@@ -113,8 +114,8 @@ Provider of its alias. These commands need no serve.`,
 	var add agentFlags
 	addCmd := &cobra.Command{
 		Use:   "add <handle>",
-		Short: "Add an Agent Profile: write agents/<handle>/config.toml and scaffold its SYSTEM.md",
-		Long: `Add an Agent Profile running on a Provider alias. Its SYSTEM.md is written with a placeholder prompt unless
+		Short: "Add an Agent Profile: write agents/<handle>/config.toml and scaffold its BRIEF.md",
+		Long: `Add an Agent Profile running on a Provider alias. Its Agent Brief, BRIEF.md, is written with a placeholder unless
 one is already there. It is not included anywhere until you include its Handle, and each Group that
 includes it must define its Provider.`,
 		Args: cobra.ExactArgs(1),
@@ -142,7 +143,7 @@ includes it must define its Provider.`,
 				return g.emitJSON(agentViewOf(a))
 			}
 			fmt.Fprintf(g.app.Stdout, "added %s\n%s\ninclude it with: defios agent include %s\n",
-				filepath.Join(a.Dir, "config.toml"), filepath.Join(a.Dir, "SYSTEM.md"), handle)
+				filepath.Join(a.Dir, "config.toml"), filepath.Join(a.Dir, nodedir.BriefFile), handle)
 			return nil
 		},
 	}
@@ -205,7 +206,7 @@ the new body when both are given. A Handle cannot be renamed: add another and de
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete <handle>",
-		Short: "Delete an Agent Profile's directory, its config.toml and SYSTEM.md",
+		Short: "Delete an Agent Profile's directory, its config.toml and BRIEF.md",
 		Long: `Delete agents/<handle>/ under the config root. The profile is the whole Node's, so delete refuses, changing
 nothing, while any Group or Conversation on this Node includes its Handle: exclude it there first.`,
 		Args: cobra.ExactArgs(1),
@@ -274,8 +275,8 @@ Group's, and exclude --key refuses it.`,
 		Short: "Grant an Agent Profile a built-in Tool, a Plugin's Skill or MCP Server, and print what it is granted of that kind",
 		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029), a
 <plugin>/<skill> to its skills, the Skills it may read with skill_load, or a <plugin>/<server> to its mcp,
-the MCP Servers whose tools it may call (ADR 0030). An unset tools is say alone, so granting into it writes
-say with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `; the sign Tools are offered
+the MCP Servers whose tools it may call (ADR 0030). An unset tools is talk_write alone, so granting into it writes
+talk_write with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `; the sign Tools are offered
 only in a Key's Conversation, never in Group-level talk. A Skill or MCP Server must be of a Plugin installed
 or built in, and a name that is both is refused as ambiguous.
 
@@ -291,7 +292,7 @@ its server asks for, set under its own name. Granting a server again sets its Se
 		Use:   "revoke <handle> <tool | plugin/skill | plugin/server>",
 		Short: "Revoke a built-in Tool, a Skill or an MCP Server from an Agent Profile, and print what it is granted of that kind",
 		Long: `Take a Tool out of an Agent Profile's tools, a <plugin>/<skill> out of its skills, or a <plugin>/<server>
-out of its mcp. Revoking say leaves an agent that cannot post to the talk; revoking every Tool leaves an
+out of its mcp. Revoking talk_write leaves an agent that cannot post to the talk; revoking every Tool leaves an
 empty list, an agent that can only end its turn. A Skill or MCP Server it grants can be revoked though its
 Plugin is no longer installed.`,
 		Args: cobra.ExactArgs(2),

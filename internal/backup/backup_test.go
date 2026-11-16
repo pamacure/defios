@@ -54,7 +54,7 @@ func sealed(t *testing.T, pass string, version int, entries ...string) string {
 func TestOpenTakesWhatABackupHolds(t *testing.T) {
 	path := sealed(t, "pw", backup.FormatVersion,
 		"data/identity", "data/vault/shared", "data/vault/shares-home", "data/group/home/roster.json",
-		"config/current-group", "config/agents/scout/SYSTEM.md", "config/group/home/config.toml")
+		"config/current-group", "config/agents/scout/BRIEF.md", "config/group/home/config.toml")
 	a, err := backup.Open(path, "pw")
 	if err != nil {
 		t.Fatal(err)

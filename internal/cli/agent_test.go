@@ -38,12 +38,12 @@ func profile(t *testing.T, dir, handle string) config.Profile {
 
 // agent add writes agents/<handle>/config.toml with the Provider, body and
 // max_turns it is given, --model over --body, and scaffolds the profile's
-// SYSTEM.md beside it (ADR 0026, ADR 0029), never overwriting one already
+// BRIEF.md beside it (ADR 0026, ADR 0029), never overwriting one already
 // there. It touches no Group's config.toml, so includes the agent nowhere,
 // and says how to.
 func TestAgentAddWritesTheProfile(t *testing.T) {
 	dir := agentGroup(t)
-	system := filepath.Join(dir, "agents", "scribe", "SYSTEM.md")
+	system := filepath.Join(dir, "agents", "scribe", "BRIEF.md")
 	if err := os.MkdirAll(filepath.Dir(system), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +57,9 @@ func TestAgentAddWritesTheProfile(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("add: exit %d: %s", r.code, r.stderr)
 	}
-	auditor := filepath.Join(dir, "agents", "auditor", "SYSTEM.md")
+	auditor := filepath.Join(dir, "agents", "auditor", "BRIEF.md")
 	if !strings.Contains(r.stdout, auditor) || !strings.Contains(r.stdout, "include it with: defios agent include auditor") {
-		t.Fatalf("add printed %q; want the SYSTEM.md path and the include hint", r.stdout)
+		t.Fatalf("add printed %q; want the BRIEF.md path and the include hint", r.stdout)
 	}
 	if r := run(t, nil, "", "--dir", dir, "agent", "add", "scribe", "--provider", "claude"); r.code != 0 {
 		t.Fatalf("add scribe: exit %d: %s", r.code, r.stderr)
@@ -79,10 +79,10 @@ func TestAgentAddWritesTheProfile(t *testing.T) {
 		t.Fatalf("add changed the Group's config.toml:\n%s", got)
 	}
 	if got := readFile(t, auditor); got != "# @auditor\n\nYou are @auditor, an agent in a DeFiOS Group's talk.\nDescribe your purpose here.\n" {
-		t.Fatalf("scaffolded SYSTEM.md = %q", got)
+		t.Fatalf("scaffolded BRIEF.md = %q", got)
 	}
 	if got := readFile(t, system); got != "You keep notes." {
-		t.Fatalf("add overwrote an existing SYSTEM.md: %q", got)
+		t.Fatalf("add overwrote an existing BRIEF.md: %q", got)
 	}
 }
 
@@ -235,7 +235,7 @@ func writeFile(t *testing.T, path, body string) {
 // over it. A directory with no config.toml is not a profile.
 func TestAgentListMarksTheIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
-	writeFile(t, filepath.Join(p.AgentProfileDir("draft"), "SYSTEM.md"), "unfinished")
+	writeFile(t, filepath.Join(p.AgentProfileDir("draft"), "BRIEF.md"), "unfinished")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "list")
 	want := "auditor  claude  claude-opus-5-5  [included]\nscribe  claude  -\n"
 	if r.code != 0 || r.stdout != want {
@@ -263,7 +263,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
 	dir := p.AgentProfileDir("auditor")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "show", "auditor")
-	want := "handle auditor\nprovider claude\nmax_turns 4\ntools say\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
+	want := "handle auditor\nprovider claude\nmax_turns 4\ntools talk_write\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
 		`body {"model":"claude-opus-5-5","stream":true}` + "\nincluded_in default\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("show: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
@@ -273,7 +273,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
 		t.Fatalf("show --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
-	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"say"}, "skills": []any{}, "mcp": map[string]any{},
+	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"talk_write"}, "skills": []any{}, "mcp": map[string]any{},
 		"included_in": []any{"default/ecdsa-ab1111111111"}}
 	if !reflect.DeepEqual(got, wantJSON) {
 		t.Fatalf("show --json = %v\nwant %v", got, wantJSON)
@@ -285,7 +285,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 
 // agent grant and revoke edit a profile's tools, the whole list of Tools it
 // may call (ADR 0029), and print it: granting into an unset list first
-// writes say with it, revoking every Tool leaves an empty list, and a Tool
+// writes talk_write with it, revoking every Tool leaves an empty list, and a Tool
 // granted again or revoked when not granted changes nothing. An unknown Tool
 // or Handle is refused, naming the Tools there are; show prints the list.
 func TestAgentGrantRevokeEditTheTools(t *testing.T) {
@@ -298,11 +298,11 @@ func TestAgentGrantRevokeEditTheTools(t *testing.T) {
 		stdout string
 		tools  []string
 	}{
-		{[]string{"grant", "auditor", "sign_list"}, "say\nsign_list\n", []string{"say", "sign_list"}},
-		{[]string{"grant", "auditor", "sign_list"}, "say\nsign_list\n", []string{"say", "sign_list"}},
-		{[]string{"grant", "auditor", "sign_inspect", "--json"}, "[\n  \"say\",\n  \"sign_list\",\n  \"sign_inspect\"\n]\n", []string{"say", "sign_list", "sign_inspect"}},
-		{[]string{"revoke", "auditor", "say"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
-		{[]string{"revoke", "auditor", "say"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
+		{[]string{"grant", "auditor", "sign_list"}, "talk_write\nsign_list\n", []string{"talk_write", "sign_list"}},
+		{[]string{"grant", "auditor", "sign_list"}, "talk_write\nsign_list\n", []string{"talk_write", "sign_list"}},
+		{[]string{"grant", "auditor", "sign_inspect", "--json"}, "[\n  \"talk_write\",\n  \"sign_list\",\n  \"sign_inspect\"\n]\n", []string{"talk_write", "sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "talk_write"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
+		{[]string{"revoke", "auditor", "talk_write"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
 		{[]string{"revoke", "auditor", "sign_list"}, "sign_inspect\n", []string{"sign_inspect"}},
 		{[]string{"revoke", "auditor", "sign_inspect", "--json"}, "[]\n", []string{}},
 	} {
@@ -321,7 +321,7 @@ func TestAgentGrantRevokeEditTheTools(t *testing.T) {
 	for _, args := range [][]string{
 		{"grant", "auditor", "sign_everything"},
 		{"revoke", "auditor", "sign_everything"},
-		{"grant", "ghost", "say"},
+		{"grant", "ghost", "talk_write"},
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "agent"}, args...)...)
 		if r.code != 1 || !strings.Contains(r.stderr, args[1]) && !strings.Contains(r.stderr, args[2]) {
@@ -336,7 +336,7 @@ func TestAgentGrantRevokeEditTheTools(t *testing.T) {
 	}
 }
 
-// agent delete deletes a profile's directory, its config.toml and SYSTEM.md
+// agent delete deletes a profile's directory, its config.toml and BRIEF.md
 // with it. The profile is the whole Node's (ADR 0029), so delete refuses,
 // changing nothing, while any Group or Conversation on the Node includes
 // the Handle, naming each: exclude it there first.

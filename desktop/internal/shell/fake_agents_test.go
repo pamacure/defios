@@ -22,10 +22,10 @@ func (n *fakeNode) EditAgentProfile(context.Context, string, node.ProfileEdit) (
 	return node.AgentProfile{}, errNotFaked
 }
 func (n *fakeNode) DeleteAgentProfile(context.Context, string) error { return errNotFaked }
-func (n *fakeNode) AgentSystem(context.Context, string) (string, error) {
+func (n *fakeNode) AgentBrief(context.Context, string) (string, error) {
 	return "", node.ErrUnknownProfile
 }
-func (n *fakeNode) SetAgentSystem(context.Context, string, string) error { return errNotFaked }
+func (n *fakeNode) SetAgentBrief(context.Context, string, string) error { return errNotFaked }
 func (n *fakeNode) Grant(context.Context, string, string, []string) (node.GrantKind, node.AgentProfile, error) {
 	return 0, node.AgentProfile{}, errNotFaked
 }

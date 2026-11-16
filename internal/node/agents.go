@@ -77,7 +77,7 @@ type AgentProfile struct {
 	Skills   []string            // <plugin>/<skill>
 	MCP      map[string]MCPGrant // by <plugin>/<server>
 	Body     map[string]any      // nil if unset
-	Dir      string              // its directory, config.toml and SYSTEM.md
+	Dir      string              // its directory, config.toml and BRIEF.md
 	// IncludedIn is every place on this Node that includes its Handle,
 	// sorted by Group then Workspace.
 	IncludedIn []Place
@@ -179,7 +179,7 @@ func (h *Host) AgentProfile(ctx context.Context, handle string) (AgentProfile, e
 }
 
 // AddAgentProfile adds an Agent Profile running on e.Provider, which is
-// required, and scaffolds its SYSTEM.md with a placeholder prompt unless
+// required, and scaffolds its Agent Brief, BRIEF.md, with a placeholder unless
 // one is there. It is included nowhere until IncludeAgent.
 func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit) (AgentProfile, error) {
 	if err := validHandle(handle); err != nil {
@@ -201,7 +201,7 @@ func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit
 	if err := writeProfile(path, p); err != nil {
 		return AgentProfile{}, err
 	}
-	if err := h.scaffoldSystem(handle); err != nil {
+	if err := h.scaffoldBrief(handle); err != nil {
 		return AgentProfile{}, err
 	}
 	return h.AgentProfile(ctx, handle)
@@ -250,26 +250,25 @@ func (h *Host) DeleteAgentProfile(ctx context.Context, handle string) error {
 	return os.RemoveAll(dir)
 }
 
-// AgentSystem is handle's system prompt, its SYSTEM.md; "" if it has
-// none.
-func (h *Host) AgentSystem(ctx context.Context, handle string) (string, error) {
+// AgentBrief is handle's Agent Brief, its BRIEF.md; "" if it has none.
+func (h *Host) AgentBrief(ctx context.Context, handle string) (string, error) {
 	if _, err := h.readProfile(handle); err != nil {
 		return "", err
 	}
-	raw, err := os.ReadFile(h.systemFile(handle))
+	raw, err := os.ReadFile(h.p.AgentBriefFile(handle))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	return string(raw), err
 }
 
-// SetAgentSystem writes prompt as handle's SYSTEM.md. A summon reads it
-// each time, so it takes effect at the next.
-func (h *Host) SetAgentSystem(ctx context.Context, handle, prompt string) error {
+// SetAgentBrief writes brief as handle's BRIEF.md. A summon reads it each
+// time, so it takes effect at the next.
+func (h *Host) SetAgentBrief(ctx context.Context, handle, brief string) error {
 	if _, err := h.readProfile(handle); err != nil {
 		return err
 	}
-	return writePrivate(h.systemFile(handle), []byte(prompt))
+	return writePrivate(h.p.AgentBriefFile(handle), []byte(brief))
 }
 
 // Grant grants handle a built-in Tool, or a Skill or MCP Server of a
@@ -482,14 +481,10 @@ func writeProfile(path string, p config.Profile) error {
 	return err
 }
 
-func (h *Host) systemFile(handle string) string {
-	return filepath.Join(h.p.AgentProfileDir(handle), "SYSTEM.md")
-}
-
-// scaffoldSystem writes handle's SYSTEM.md with a placeholder prompt unless
-// one is there.
-func (h *Host) scaffoldSystem(handle string) error {
-	f, err := os.OpenFile(h.systemFile(handle), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+// scaffoldBrief writes handle's BRIEF.md with a placeholder unless one is
+// there.
+func (h *Host) scaffoldBrief(handle string) error {
+	f, err := os.OpenFile(h.p.AgentBriefFile(handle), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil
 	} else if err != nil {

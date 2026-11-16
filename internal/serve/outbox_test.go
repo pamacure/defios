@@ -150,7 +150,7 @@ func TestAChainRunsWithNoLeader(t *testing.T) {
 		t.Fatalf("send = %+v, want queued", v)
 	}
 	events := untilEnd(t, s, v.MsgID)
-	want := `chain.start start:@auditor/1 tool:say {"text":"ask @scribe"} commit:ask @scribe start:@scribe/2 tool:say {"text":"done"} commit:done end`
+	want := `chain.start start:@auditor/1 tool:talk_write {"text":"ask @scribe"} commit:ask @scribe start:@scribe/2 tool:talk_write {"text":"done"} commit:done end`
 	if got := summary(events); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}

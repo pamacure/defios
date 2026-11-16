@@ -62,7 +62,7 @@ const partialEth = `[{"network":"eth","ethereum":{"to":"AAAAAAAAAAAAAAAAAAAAAAAA
 // sign fill completes a transaction from the Key's Network, which sign
 // propose then takes; Bitcoin is refused with its own kind.
 func TestSignFillCompletesForSignPropose(t *testing.T) {
-	a, _, _ := fillPair(t, `["say"]`)
+	a, _, _ := fillPair(t, `["talk_write"]`)
 	ctx := context.Background()
 	ref := "ecdsa:" + hex.EncodeToString(generator)
 	var txs []signreq.TxSpec
@@ -95,7 +95,7 @@ func TestSignFillCompletesForSignPropose(t *testing.T) {
 // what it returned. chain_fill is offered only in a Key's Conversation
 // and, writing nothing, is not an acted line.
 func TestAnAgentFillsThenProposes(t *testing.T) {
-	a, provider, conv := fillPair(t, `["say", "sign_propose", "chain_fill"]`)
+	a, provider, conv := fillPair(t, `["talk_write", "sign_propose", "chain_fill"]`)
 	var filled string
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w)
@@ -105,7 +105,7 @@ func TestAnAgentFillsThenProposes(t *testing.T) {
 		case 2:
 			endCall(w, "sign_propose", `{"reason":"pay invoice 7","transactions":`+filled+`}`)
 		default:
-			endSay(w, "proposed")
+			endTalkWrite(w, "proposed")
 		}
 	})
 	// The model would copy the transactions from chain_fill's result; the
@@ -116,7 +116,7 @@ func TestAnAgentFillsThenProposes(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if calls[0].Tools != "say sign_propose chain_fill" {
+	if calls[0].Tools != "talk_write sign_propose chain_fill" {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
 	answered := lastTurn(calls[1])

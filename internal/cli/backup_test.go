@@ -38,7 +38,7 @@ func backupNode(t *testing.T, dir string) (gid group.ID, pub []byte) {
 	gdir := filepath.Join(dir, "group", "default")
 	conv := filepath.Join(gdir, "conversations", "group")
 	for path, body := range map[string]string{
-		filepath.Join(dir, "agents", "scout", "SYSTEM.md"):         "You scout.",
+		filepath.Join(dir, "agents", "scout", "BRIEF.md"):          "You scout.",
 		filepath.Join(dir, "agents", "scout", "config.toml"):       "provider = \"claude\"\n",
 		filepath.Join(gdir, "secp256k1-0202020202", "config.toml"): "",
 		filepath.Join(gdir, "cosl.sqlite"):                         "replica",
@@ -83,7 +83,7 @@ func TestBackupHoldsTheNodeAndNothingPeersGiveBack(t *testing.T) {
 	}
 	got := slices.Sorted(maps.Keys(a.Files))
 	want := []string{
-		"config/agents/scout/SYSTEM.md",
+		"config/agents/scout/BRIEF.md",
 		"config/agents/scout/config.toml",
 		"config/current-group",
 		"config/display-name",
@@ -224,7 +224,7 @@ func TestBackupTakesSeparateConfigAndDataTrees(t *testing.T) {
 		}
 	}
 	// An Agent Profile kept in a dotfiles repo and symlinked in is taken.
-	prompt := filepath.Join(root, "dotfiles", "SYSTEM.md")
+	prompt := filepath.Join(root, "dotfiles", "BRIEF.md")
 	profile := filepath.Join(root, "config", "agents", "scout")
 	for _, d := range []string{filepath.Dir(prompt), profile} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -234,7 +234,7 @@ func TestBackupTakesSeparateConfigAndDataTrees(t *testing.T) {
 	if err := os.WriteFile(prompt, []byte("You scout."), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(prompt, filepath.Join(profile, "SYSTEM.md")); err != nil {
+	if err := os.Symlink(prompt, filepath.Join(profile, "BRIEF.md")); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(root, "node.backup")
@@ -247,7 +247,7 @@ func TestBackupTakesSeparateConfigAndDataTrees(t *testing.T) {
 	}
 	got := slices.Sorted(maps.Keys(a.Files))
 	want := []string{
-		"config/agents/scout/SYSTEM.md",
+		"config/agents/scout/BRIEF.md",
 		"config/current-group",
 		"config/display-name",
 		"config/group/default/config.toml",

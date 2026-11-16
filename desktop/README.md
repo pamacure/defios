@@ -77,7 +77,7 @@ needs checking by hand:
   Node Usage ("Device Usage"). Choose a Group that is not online: no device shows online.
 - Agents: add a Provider from a preset with its API key through "New
   Secret…", then add an agent on it. Include it on Talk, mention it, and it
-  answers; change its SYSTEM.md and the next answer follows it. Grant an
+  answers; change its Brief and the next answer follows it. Grant an
   MCP Server with one of its Secrets, then revoke it: `defios agent show`
   agrees each time. Delete warns where the agent is included. A max turns
   of 0, or an API path such as `/v1/foo`, is refused beside its field and

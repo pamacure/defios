@@ -62,17 +62,17 @@ func runSteps(t *testing.T, dir string, p config.Profile, steps []step) config.P
 	return p
 }
 
-// A Tool granted into an unset tools joins say; granting what is granted
+// A Tool granted into an unset tools joins talk_write; granting what is granted
 // or revoking what is not changes nothing, and revoking every Tool leaves
 // tools empty, not unset (ADR 0029).
 func TestGrantAndRevokeATool(t *testing.T) {
 	dir := pluginsDir(t)
 	base := config.Profile{Provider: "claude"}
 	runSteps(t, dir, base, []step{
-		{item: "sign_list", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"say", "sign_list"}}},
-		{item: "sign_list", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"say", "sign_list"}}},
-		{revoke: true, item: "say", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"sign_list"}}},
-		{revoke: true, item: "say", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"sign_list"}}},
+		{item: "sign_list", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"talk_write", "sign_list"}}},
+		{item: "sign_list", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"talk_write", "sign_list"}}},
+		{revoke: true, item: "talk_write", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{"sign_list"}}},
+		{revoke: true, item: "talk_write", kind: config.GrantTool, want: config.Profile{Provider: "claude", Tools: []string{"sign_list"}}},
 		{revoke: true, item: "sign_list", kind: config.GrantTool, changed: true, want: config.Profile{Provider: "claude", Tools: []string{}}},
 	})
 }
@@ -122,7 +122,7 @@ func TestGrantRefusals(t *testing.T) {
 	}{
 		{"sign_everything", nil, "sign_everything"},
 		{"skill_load", nil, "skill_load"},
-		{"say", []string{"ETHERSCAN_KEY"}, "only for an MCP Server"},
+		{"talk_write", []string{"ETHERSCAN_KEY"}, "only for an MCP Server"},
 		{"audit/review", []string{"ETHERSCAN_KEY"}, "only for an MCP Server"},
 		{"audit/scanner", []string{"OTHER_KEY"}, "does not ask for $OTHER_KEY"},
 		{"audit/scanner", []string{"lower"}, "lower"},

@@ -65,16 +65,16 @@ func anthropicToolBlock(index int, id, name, input string) []string {
 	}
 }
 
-func sayInput(text string) string {
+func talkWriteInput(text string) string {
 	raw, _ := json.Marshal(map[string]string{"text": text})
 	return string(raw)
 }
 
-// anthropicSays streams thought as text, then a say of text.
+// anthropicSays streams thought as text, then a talk_write of text.
 func anthropicSays(thought, text string) []string {
 	out := []string{anthropicStart()}
 	out = append(out, anthropicTextBlock(0, thought)...)
-	out = append(out, anthropicToolBlock(1, "toolu_1", "say", sayInput(text))...)
+	out = append(out, anthropicToolBlock(1, "toolu_1", "talk_write", talkWriteInput(text))...)
 	return append(out, anthropicEnd("tool_use")...)
 }
 
@@ -94,13 +94,13 @@ func openaiChunk(delta string, finish string) string {
 
 const openaiUsage = `data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}`
 
-// openaiSays streams thought as content, then a say of text.
+// openaiSays streams thought as content, then a talk_write of text.
 func openaiSays(thought, text string) []string {
-	in := sayInput(text)
+	in := talkWriteInput(text)
 	half := len(in) / 2
 	return []string{
 		openaiChunk(`{"role":"assistant","content":`+jsonString(thought)+`}`, ""),
-		openaiChunk(`{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"say","arguments":`+jsonString(in[:half])+`}}]}`, ""),
+		openaiChunk(`{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"talk_write","arguments":`+jsonString(in[:half])+`}}]}`, ""),
 		openaiChunk(`{"tool_calls":[{"index":0,"function":{"arguments":`+jsonString(in[half:])+`}}]}`, ""),
 		openaiChunk(`{}`, "tool_calls"),
 		openaiUsage,
@@ -168,11 +168,11 @@ func responsesReasoning(index int, encrypted string, parts ...string) []string {
 	return append(out, responsesEvent("response.output_item.done", fmt.Sprintf(`"output_index":%d,"item":{"id":"rs_%d","type":"reasoning","summary":[{"type":"summary_text","text":%s}],"encrypted_content":%q}`, index, index, summary, encrypted)))
 }
 
-// responsesSays streams thought as a message, then a say of text.
+// responsesSays streams thought as a message, then a talk_write of text.
 func responsesSays(thought, text string) []string {
 	out := []string{responsesEvent("response.created", `"response":{"id":"resp_1","status":"in_progress"}`)}
 	out = append(out, responsesMessage(0, thought)...)
-	out = append(out, responsesCall(1, "call_1", "say", sayInput(text))...)
+	out = append(out, responsesCall(1, "call_1", "talk_write", talkWriteInput(text))...)
 	return append(out, responsesEnd())
 }
 
@@ -194,19 +194,19 @@ var jsonSays = map[agent.Shape]func(thought, text, said string) []string{
 		return asJSON(`{"id":"m","type":"message","role":"assistant","content":[` +
 			`{"type":"thinking","thinking":` + jsonString(thought) + `,"signature":"sig"},` +
 			`{"type":"text","text":` + jsonString(text) + `},` +
-			`{"type":"tool_use","id":"toolu_1","name":"say","input":` + sayInput(said) + `}],` +
+			`{"type":"tool_use","id":"toolu_1","name":"talk_write","input":` + talkWriteInput(said) + `}],` +
 			`"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`)
 	},
 	agent.ChatCompletions: func(thought, text, said string) []string {
 		return asJSON(`{"id":"c","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":` + jsonString(text) + `,` +
-			`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"say","arguments":` + jsonString(sayInput(said)) + `}}]},` +
+			`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"talk_write","arguments":` + jsonString(talkWriteInput(said)) + `}}]},` +
 			`"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
 	},
 	agent.Responses: func(thought, text, said string) []string {
 		return asJSON(`{"id":"resp_1","object":"response","status":"completed","output":[` +
 			`{"id":"rs_0","type":"reasoning","summary":[{"type":"summary_text","text":` + jsonString(thought) + `}],"encrypted_content":"gAAAA-enc"},` +
 			`{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":` + jsonString(text) + `,"annotations":[]}]},` +
-			`{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_1","name":"say","arguments":` + jsonString(sayInput(said)) + `}],` +
+			`{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_1","name":"talk_write","arguments":` + jsonString(talkWriteInput(said)) + `}],` +
 			responsesUsage + `}`)
 	},
 }
@@ -216,7 +216,7 @@ var says = map[agent.Shape]func(thought, text string) []string{
 	agent.Messages: anthropicSays, agent.ChatCompletions: openaiSays, agent.Responses: responsesSays,
 }
 
-// texts is each shape's fake for a turn that ends without a say.
+// texts is each shape's fake for a turn that ends without a talk_write.
 var texts = map[agent.Shape]func(parts ...string) []string{
 	agent.Messages: anthropicText, agent.ChatCompletions: openaiText, agent.Responses: responsesText,
 }
@@ -326,9 +326,9 @@ func (s *script) body(n int) map[string]any {
 	return s.bodies[n-1]
 }
 
-// run runs a Request offering say alone against s.
+// run runs a Request offering talk_write alone against s.
 func run(s *script, shape agent.Shape, ev agent.Events) (agent.Result, error) {
-	return runWith(s, shape, ev, agent.Say)
+	return runWith(s, shape, ev, agent.TalkWrite)
 }
 
 // runWith runs a Request offering tools against s.
@@ -389,8 +389,8 @@ const wantTalk = "[map[content:alice: @auditor hi role:user] map[content:hello r
 const wantAnthropicTalk = "[map[content:alice: @auditor hi role:user] map[content:hello role:assistant] " +
 	"map[content:[map[cache_control:map[type:ephemeral] text:alice: and? type:text]] role:user]]"
 
-// A Messages run streams its text, sends the turns in order, offers say
-// as its only tool, and a say commits exactly its text: the text outside it
+// A Messages run streams its text, sends the turns in order, offers talk_write
+// as its only tool, and a talk_write commits exactly its text: the text outside it
 // is never the result. DeFiOS writes no model, stream or max-token field:
 // those are the profile's body (ADR 0019).
 func TestAnthropicSayIsTheResult(t *testing.T) {
@@ -403,7 +403,7 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 	if res.Silent || res.Said != "all good" {
 		t.Fatalf("result = %+v", res)
 	}
-	if rec.String() != `text:let me think tool:say {"text":"all good"}` {
+	if rec.String() != `text:let me think tool:talk_write {"text":"all good"}` {
 		t.Fatalf("events %s", &rec)
 	}
 	h := s.headers[0]
@@ -415,19 +415,19 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 		t.Fatalf("body = %v, want model, system, messages and tools only", body)
 	}
 	tools, _ := body["tools"].([]any)
-	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "say" {
+	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "talk_write" {
 		t.Fatalf("tools = %v", body["tools"])
 	}
 	if msgs := messages(body); fmt.Sprint(msgs) != wantAnthropicTalk {
 		t.Fatalf("messages = %v", msgs)
 	}
 	if s.calls() != 1 {
-		t.Fatalf("%d calls after the say, want 1", s.calls())
+		t.Fatalf("%d calls after the talk_write, want 1", s.calls())
 	}
 }
 
 // Every block streams with its kind as it is generated: thinking, text,
-// and each tool call (a say like any other) as its name and its input.
+// and each tool call (a talk_write like any other) as its name and its input.
 // Consecutive tool calls start on a new line; redacted thinking streams
 // nothing.
 func TestAnthropicStreamsEveryBlockWithItsKind(t *testing.T) {
@@ -441,21 +441,21 @@ func TestAnthropicStreamsEveryBlockWithItsKind(t *testing.T) {
 		anthropicEvent("content_block_stop", `{"type":"content_block_stop","index":1}`),
 	}
 	reply = append(reply, anthropicTextBlock(2, "so")...)
-	reply = append(reply, anthropicToolBlock(3, "toolu_1", "say", "{}")...)
-	reply = append(reply, anthropicToolBlock(4, "toolu_2", "say", sayInput("done"))...)
+	reply = append(reply, anthropicToolBlock(3, "toolu_1", "talk_write", "{}")...)
+	reply = append(reply, anthropicToolBlock(4, "toolu_2", "talk_write", talkWriteInput("done"))...)
 	reply = append(reply, anthropicEnd("tool_use")...)
 	s := newScript(t, reply)
 	var rec recorder
 	if res, err := run(s, agent.Messages, rec.events()); err != nil || res.Said != "done" {
 		t.Fatalf("result %+v err %v", res, err)
 	}
-	if want := `thinking:hmm, ok text:so tool:say {}` + "\n" + `say {"text":"done"}`; rec.String() != want {
+	if want := `thinking:hmm, ok text:so tool:talk_write {}` + "\n" + `talk_write {"text":"done"}`; rec.String() != want {
 		t.Fatalf("events %s\nwant   %s", &rec, want)
 	}
 }
 
 // A Chat Completions run does the same: the system prompt as the first
-// message before the turns, the key as a bearer token, say as a function
+// message before the turns, the key as a bearer token, talk_write as a function
 // tool, and nothing else but the profile's body.
 func TestOpenAISayIsTheResult(t *testing.T) {
 	s := newScript(t, openaiSays("hmm", "all good"))
@@ -464,7 +464,7 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:say {"text":"all good"}` {
+	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:talk_write {"text":"all good"}` {
 		t.Fatalf("result = %+v, events %s", res, &rec)
 	}
 	if s.headers[0].Get("Authorization") != "Bearer sk-secret" {
@@ -475,7 +475,7 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 		t.Fatalf("body = %v, want model, messages and tools only", body)
 	}
 	tools, _ := body["tools"].([]any)
-	if len(tools) != 1 || tools[0].(map[string]any)["function"].(map[string]any)["name"] != "say" {
+	if len(tools) != 1 || tools[0].(map[string]any)["function"].(map[string]any)["name"] != "talk_write" {
 		t.Fatalf("tools = %v", body["tools"])
 	}
 	msgs := messages(body)
@@ -485,8 +485,8 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 }
 
 // A Responses run sends the system prompt and the turns as input items,
-// the key as a bearer token, say as a flat function tool, and nothing else
-// but the profile's body; text and the say stream as they come.
+// the key as a bearer token, talk_write as a flat function tool, and nothing else
+// but the profile's body; text and the talk_write stream as they come.
 func TestResponsesSayIsTheResult(t *testing.T) {
 	s := newScript(t, responsesSays("hmm", "all good"))
 	var rec recorder
@@ -494,7 +494,7 @@ func TestResponsesSayIsTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:say {"text":"all good"}` {
+	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:talk_write {"text":"all good"}` {
 		t.Fatalf("result = %+v, events %s", res, &rec)
 	}
 	if s.headers[0].Get("Authorization") != "Bearer sk-secret" || s.headers[0].Get("x-api-key") != "" {
@@ -509,7 +509,7 @@ func TestResponsesSayIsTheResult(t *testing.T) {
 		t.Fatalf("tools = %v", body["tools"])
 	}
 	tool := tools[0].(map[string]any)
-	if tool["type"] != "function" || tool["name"] != "say" || tool["description"] == nil || tool["parameters"] == nil || tool["function"] != nil {
+	if tool["type"] != "function" || tool["name"] != "talk_write" || tool["description"] == nil || tool["parameters"] == nil || tool["function"] != nil {
 		t.Fatalf("tool = %v, want a flat function tool", tool)
 	}
 	in := messages(body)
@@ -520,11 +520,11 @@ func TestResponsesSayIsTheResult(t *testing.T) {
 
 // Reasoning streams as thinking and is kept on the run's blocks; the next
 // call of the run replays every output item as it came back, the reasoning
-// with its encrypted content, followed by the answer to the refused say as
+// with its encrypted content, followed by the answer to the refused talk_write as
 // a function_call_output.
 func TestResponsesReplaysItsOutputItems(t *testing.T) {
 	first := append([]string{}, responsesReasoning(0, "gAAAA-secret-thoughts", "weighing ", "it")...)
-	first = append(first, responsesCall(1, "call_9", "say", sayInput(""))...)
+	first = append(first, responsesCall(1, "call_9", "talk_write", talkWriteInput(""))...)
 	first = append(first, responsesEnd())
 	s := newScript(t, first, responsesSays("again", "done"))
 	var rec recorder
@@ -532,7 +532,7 @@ func TestResponsesReplaysItsOutputItems(t *testing.T) {
 	if err != nil || res.Said != "done" {
 		t.Fatalf("result %+v err %v", res, err)
 	}
-	if want := `thinking:weighing it tool:say {"text":""} text:again tool:say {"text":"done"}`; rec.String() != want {
+	if want := `thinking:weighing it tool:talk_write {"text":""} text:again tool:talk_write {"text":"done"}`; rec.String() != want {
 		t.Fatalf("events %s\nwant   %s", &rec, want)
 	}
 	in := messages(s.body(2))
@@ -547,7 +547,7 @@ func TestResponsesReplaysItsOutputItems(t *testing.T) {
 		fmt.Sprint(reasoning["summary"]) != "[map[text:weighing it type:summary_text]]" {
 		t.Fatalf("reasoning replayed as %v", reasoning)
 	}
-	if call["type"] != "function_call" || call["call_id"] != "call_9" || call["name"] != "say" || call["arguments"] != sayInput("") {
+	if call["type"] != "function_call" || call["call_id"] != "call_9" || call["name"] != "talk_write" || call["arguments"] != talkWriteInput("") {
 		t.Fatalf("function call replayed as %v", call)
 	}
 	if output["type"] != "function_call_output" || output["call_id"] != "call_9" || !strings.Contains(fmt.Sprint(output["output"]), "empty") {
@@ -601,8 +601,8 @@ func TestAFailedResponseIsAnError(t *testing.T) {
 	}
 }
 
-// A say over 4096 bytes, or an empty one, is refused with a tool error
-// saying why; the next call carries everything so far, and a shorter say
+// A talk_write over 4096 bytes, or an empty one, is refused with a tool error
+// saying why; the next call carries everything so far, and a shorter talk_write
 // is the result. Every shape.
 func TestARefusedSayIsRewritten(t *testing.T) {
 	long := strings.Repeat("a", 4097)
@@ -631,9 +631,9 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 	}
 }
 
-// A Tool other than say is offered in the shape's own form after say, called
+// A Tool other than talk_write is offered in the shape's own form after talk_write, called
 // with its input, and its result fed back to the model as a result, not an
-// error, and recorded as a block; the run goes on until a say. Every shape.
+// error, and recorded as a block; the run goes on until a talk_write. Every shape.
 func TestAToolResultIsFedBackAndTheRunGoesOn(t *testing.T) {
 	for p, says := range says {
 		var got []string
@@ -645,14 +645,14 @@ func TestAToolResultIsFedBackAndTheRunGoesOn(t *testing.T) {
 			}}
 		s := newScript(t, callsTool[p]("lookup", `{"q":"x"}`), says("so", "it is 42"))
 		var rec recorder
-		res, err := runWith(s, p, rec.events(), agent.Say, lookup)
+		res, err := runWith(s, p, rec.events(), agent.TalkWrite, lookup)
 		if err != nil || res.Said != "it is 42" || s.calls() != 2 {
 			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
 		}
 		if fmt.Sprint(got) != `[{"q":"x"}]` {
 			t.Errorf("%s: lookup called with %v", p, got)
 		}
-		if names := toolNames(s.body(1)); names != "say lookup" {
+		if names := toolNames(s.body(1)); names != "talk_write lookup" {
 			t.Errorf("%s: tools offered %q", p, names)
 		}
 		second, _ := json.Marshal(messages(s.body(2)))
@@ -675,12 +675,12 @@ func TestAnUnofferedOrFailingToolIsAToolError(t *testing.T) {
 			}}
 		s := newScript(t, callsTool[p]("sign_list", `{}`), callsTool[p]("broken", `{}`), says("ok", "done"))
 		var rec recorder
-		res, err := runWith(s, p, rec.events(), agent.Say, broken)
+		res, err := runWith(s, p, rec.events(), agent.TalkWrite, broken)
 		if err != nil || res.Said != "done" || s.calls() != 3 {
 			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
 		}
 		second, _ := json.Marshal(messages(s.body(2)))
-		if !strings.Contains(string(second), `no tool named \"sign_list\"`) || !strings.Contains(string(second), "say, broken") {
+		if !strings.Contains(string(second), `no tool named \"sign_list\"`) || !strings.Contains(string(second), "talk_write, broken") {
 			t.Errorf("%s: second call lacks the refusal: %s", p, second)
 		}
 		third, _ := json.Marshal(messages(s.body(3)))
@@ -695,7 +695,7 @@ func TestAnUnofferedOrFailingToolIsAToolError(t *testing.T) {
 }
 
 // A run offered no Tools sends no tools field at all, and ends silent when
-// the model ends its turn; a say it calls is refused like any Tool not
+// the model ends its turn; a talk_write it calls is refused like any Tool not
 // offered, so nothing is said. Every shape.
 func TestARunWithNoToolsOffersNone(t *testing.T) {
 	for p, says := range says {
@@ -708,7 +708,7 @@ func TestARunWithNoToolsOffersNone(t *testing.T) {
 			t.Errorf("%s: tools = %v, want none sent", p, tools)
 		}
 		second, _ := json.Marshal(messages(s.body(2)))
-		if !strings.Contains(string(second), `no tool named \"say\"`) {
+		if !strings.Contains(string(second), `no tool named \"talk_write\"`) {
 			t.Errorf("%s: second call lacks the refusal: %s", p, second)
 		}
 	}
@@ -771,7 +771,7 @@ func TestASecondCallExtendsTheFirst(t *testing.T) {
 	}
 }
 
-// Ending the turn without say is silence. Every shape.
+// Ending the turn without talk_write is silence. Every shape.
 func TestEndingWithoutSayIsSilent(t *testing.T) {
 	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("nothing to add"), agent.ChatCompletions: openaiText("nothing to add"), agent.Responses: responsesText("nothing to add")} {
 		s := newScript(t, reply)
@@ -797,7 +797,7 @@ func TestMaxTokensIsAnError(t *testing.T) {
 	}
 }
 
-// A run that reaches 8 calls without an accepted say is an error.
+// A run that reaches 8 calls without an accepted talk_write is an error.
 func TestEightCallsWithoutSayIsAnError(t *testing.T) {
 	s := newScript(t, anthropicSays("again", ""))
 	_, err := run(s, agent.Messages, agent.Events{})
@@ -830,7 +830,7 @@ func TestTheProfileBodyMergesOverTheRequest(t *testing.T) {
 			t.Errorf("%s: thinking = %s", p, got)
 		}
 		if got := fmt.Sprint(body["tools"]); got != "[theirs]" {
-			t.Errorf("%s: tools = %s, want the body's in place of say", p, got)
+			t.Errorf("%s: tools = %s, want the body's in place of talk_write", p, got)
 		}
 		if len(messages(body)) == 0 {
 			t.Errorf("%s: the conversation is gone: %v", p, body)
@@ -864,10 +864,10 @@ func TestANonStreamedReplyIsRead(t *testing.T) {
 		if err != nil || res.Silent || res.Said != "all good" || s.calls() != 2 {
 			t.Fatalf("%s: result %+v, err %v after %d calls", p, res, err, s.calls())
 		}
-		want := `thinking:hmm text:let me see tool:say {"text":""} thinking:ok text:now tool:say {"text":"all good"}`
+		want := `thinking:hmm text:let me see tool:talk_write {"text":""} thinking:ok text:now tool:talk_write {"text":"all good"}`
 		blocks := "block block block"
 		if p == agent.ChatCompletions {
-			want = `text:let me see tool:say {"text":""} text:now tool:say {"text":"all good"}`
+			want = `text:let me see tool:talk_write {"text":""} text:now tool:talk_write {"text":"all good"}`
 			blocks = "block block"
 		}
 		if rec.String() != want {
@@ -988,7 +988,7 @@ func TestShapeOfAPIPath(t *testing.T) {
 func TestMaxTurnsBoundsTheRun(t *testing.T) {
 	s := newScript(t, anthropicSays("again", ""))
 	_, err := agent.Client{}.Run(context.Background(), agent.Request{
-		Shape: agent.Messages, URL: s.URL, Turns: talk, MaxTurns: 3, Tools: []agent.Tool{agent.Say},
+		Shape: agent.Messages, URL: s.URL, Turns: talk, MaxTurns: 3, Tools: []agent.Tool{agent.TalkWrite},
 	}, agent.Events{})
 	if err == nil || !strings.Contains(err.Error(), "3 model calls") || s.calls() != 3 {
 		t.Fatalf("err %v after %d calls", err, s.calls())
@@ -1026,7 +1026,7 @@ func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {
 	if fmt.Sprint(sent) != fmt.Sprint(s.body(2)) {
 		t.Fatalf("recorded request %v, sent %v", sent, s.body(2))
 	}
-	if !strings.Contains(string(rec.records[2].Data), `"say"`) || !strings.Contains(string(rec.records[3].Data), "output_tokens") ||
+	if !strings.Contains(string(rec.records[2].Data), `"talk_write"`) || !strings.Contains(string(rec.records[3].Data), "output_tokens") ||
 		!strings.Contains(string(rec.records[4].Data), `"is_error":true`) {
 		t.Fatalf("records = %s, %s, %s", rec.records[2].Data, rec.records[3].Data, rec.records[4].Data)
 	}
@@ -1050,7 +1050,7 @@ func TestNoKeySendsNoCredential(t *testing.T) {
 	}
 }
 
-// failing serves fail(n) for the nth call while it returns true, then a say
+// failing serves fail(n) for the nth call while it returns true, then a talk_write
 // of "fine".
 func failing(t *testing.T, fail func(n int, w http.ResponseWriter) bool) (*httptest.Server, *int) {
 	t.Helper()
@@ -1068,7 +1068,7 @@ func failing(t *testing.T, fail func(n int, w http.ResponseWriter) bool) (*httpt
 
 func generate(srv *httptest.Server, ev agent.Events) (agent.Result, error) {
 	c := agent.Client{Backoff: time.Millisecond}
-	return c.Run(context.Background(), agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}, Tools: []agent.Tool{agent.Say}}, ev)
+	return c.Run(context.Background(), agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}, Tools: []agent.Tool{agent.TalkWrite}}, ev)
 }
 
 // Rate limits, overload, 5xx and dropped connections are retried; a retry
@@ -1091,7 +1091,7 @@ func TestRetryableFailuresRetry(t *testing.T) {
 		})
 		var rec recorder
 		res, err := generate(srv, rec.events())
-		if err != nil || res.Said != "fine" || *calls != 4 || rec.String() != `text:ok tool:say {"text":"fine"}` {
+		if err != nil || res.Said != "fine" || *calls != 4 || rec.String() != `text:ok tool:talk_write {"text":"fine"}` {
 			t.Errorf("%s: result %+v err %v after %d calls, events %s", name, res, err, *calls, &rec)
 		}
 	}
@@ -1109,7 +1109,7 @@ func TestRetryableFailuresRetry(t *testing.T) {
 	if err != nil || res.Said != "fine" || *calls != 3 {
 		t.Fatalf("dropped: result %+v err %v after %d calls", res, err, *calls)
 	}
-	if rec.String() != `text:partial reset text:partial reset text:ok tool:say {"text":"fine"}` {
+	if rec.String() != `text:partial reset text:partial reset text:ok tool:talk_write {"text":"fine"}` {
 		t.Fatalf("dropped: events %s", &rec)
 	}
 }

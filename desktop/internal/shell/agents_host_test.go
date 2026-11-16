@@ -18,15 +18,15 @@ import (
 	"defios.com/internal/secret"
 )
 
-// sayingAPI is an Anthropic Messages API whose agent says "checked" once
+// postingAPI is an Anthropic Messages API whose agent says "checked" once
 // a chain reaches it, then ends its turn. It keeps the system prompt of
 // every call.
-type sayingAPI struct {
+type postingAPI struct {
 	mu      sync.Mutex
 	systems []string
 }
 
-func (a *sayingAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (a *postingAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	var req struct {
 		System   any               `json:"system"`
@@ -44,12 +44,12 @@ func (a *sayingAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	io.WriteString(w, `{"id":"m","type":"message","role":"assistant","content":[`+
-		`{"type":"tool_use","id":"toolu_1","name":"say","input":{"text":"checked"}}],`+
+		`{"type":"tool_use","id":"toolu_1","name":"talk_write","input":{"text":"checked"}}],`+
 		`"stop_reason":"tool_use","usage":{"input_tokens":7,"output_tokens":3}}`)
 }
 
 // lastSystem is the system prompt of the last call.
-func (a *sayingAPI) lastSystem() string {
+func (a *postingAPI) lastSystem() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(a.systems) == 0 {
@@ -79,12 +79,12 @@ func agentsOK(t *testing.T, what string, v shell.AgentsView) shell.AgentsView {
 }
 
 // A Provider and an Agent Profile made in the app answer in Talk, and a
-// changed SYSTEM.md is the next chain's system prompt.
-func TestAProfileMadeInTheAppAnswersInTalkWithItsSystemPrompt(t *testing.T) {
+// changed BRIEF.md is the next chain's system prompt.
+func TestAProfileMadeInTheAppAnswersInTalkWithItsBrief(t *testing.T) {
 	if testing.Short() {
 		t.Skip("forms a Group and runs an agent")
 	}
-	api := &sayingAPI{}
+	api := &postingAPI{}
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	alice, _ := formed(t)
@@ -102,10 +102,10 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsSystemPrompt(t *testing.T) {
 	talkWithin(t, alice, 20*time.Second, ready)
 	v = agentsOK(t, "add profile", alice.SaveAgentProfile(shell.ProfileDraft{
 		New: true, Handle: "auditor", Provider: "claude", Model: "claude-test",
-		Body: `{"max_tokens": 1024}`, MaxTurns: "4", System: "You audit, v1.",
+		Body: `{"max_tokens": 1024}`, MaxTurns: "4", Brief: "You audit, v1.",
 	}))
 	if o := v.Open; o == nil || o.Handle != "auditor" || o.Model != "claude-test" || o.MaxTurns != "4" ||
-		o.System != "You audit, v1." || o.Body != "{\n  \"max_tokens\": 1024\n}" {
+		o.Brief != "You audit, v1." || o.Body != "{\n  \"max_tokens\": 1024\n}" {
 		t.Fatalf("open: %+v", v.Open)
 	}
 	// Talk, already open, lists it to include.
@@ -125,9 +125,9 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsSystemPrompt(t *testing.T) {
 	}
 
 	d := draftOf(*alice.Agents("auditor").Open)
-	d.System = "You audit, v2."
-	if v := agentsOK(t, "edit SYSTEM.md", alice.SaveAgentProfile(d)); v.Open.System != "You audit, v2." {
-		t.Fatalf("system after save: %q", v.Open.System)
+	d.Brief = "You audit, v2."
+	if v := agentsOK(t, "edit the Brief", alice.SaveAgentProfile(d)); v.Open.Brief != "You audit, v2." {
+		t.Fatalf("Brief after save: %q", v.Open.Brief)
 	}
 	alice.SendMessage("@auditor again")
 	talkWithin(t, alice, 20*time.Second, saidBy("auditor", 2))
@@ -145,7 +145,7 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsSystemPrompt(t *testing.T) {
 }
 
 func draftOf(o shell.ProfileView) shell.ProfileDraft {
-	return shell.ProfileDraft{Handle: o.Handle, Provider: o.Provider, Model: o.Model, Body: o.Body, MaxTurns: o.MaxTurns, System: o.System}
+	return shell.ProfileDraft{Handle: o.Handle, Provider: o.Provider, Model: o.Model, Body: o.Body, MaxTurns: o.MaxTurns, Brief: o.Brief}
 }
 
 // Grants round-trip as the CLI's agent verbs see them; Providers edit a
@@ -166,7 +166,7 @@ func TestGrantsProvidersAndRefusedEditsOnTheAgentsPage(t *testing.T) {
 	}
 	agentsOK(t, "add provider", alice.SaveProvider(shell.ProviderDraft{New: true, Alias: "anthropic", Preset: "anthropic"}))
 	v := agentsOK(t, "add profile", alice.SaveAgentProfile(shell.ProfileDraft{New: true, Handle: "auditor", Provider: "anthropic"}))
-	if o := v.Open; o.System == "" || o.Body != "" || o.MaxTurns != "" || !slices.Equal(o.Tools, []string{"say"}) {
+	if o := v.Open; o.Brief == "" || o.Body != "" || o.MaxTurns != "" || !slices.Equal(o.Tools, []string{"talk_write"}) {
 		t.Fatalf("a new profile: %+v", o)
 	}
 	if !slices.Contains(v.Catalog.Tools, "sign_list") || !slices.ContainsFunc(v.Catalog.Servers, func(s shell.CatalogServer) bool {
@@ -213,7 +213,7 @@ func TestGrantsProvidersAndRefusedEditsOnTheAgentsPage(t *testing.T) {
 		{"provider", func(d *shell.ProfileDraft) { d.Provider = "" }, node.FieldProvider},
 	} {
 		d := draftOf(before)
-		d.System, d.Model = "changed", "changed"
+		d.Brief, d.Model = "changed", "changed"
 		c.edit(&d)
 		v := alice.SaveAgentProfile(d)
 		if v.Saved || v.Problem == nil || v.Field != c.field || v.Where != "profile" {
@@ -264,5 +264,5 @@ func TestGrantsProvidersAndRefusedEditsOnTheAgentsPage(t *testing.T) {
 }
 
 func equalProfiles(a, b shell.ProfileView) bool {
-	return a.Provider == b.Provider && a.Model == b.Model && a.Body == b.Body && a.MaxTurns == b.MaxTurns && a.System == b.System
+	return a.Provider == b.Provider && a.Model == b.Model && a.Body == b.Body && a.MaxTurns == b.MaxTurns && a.Brief == b.Brief
 }

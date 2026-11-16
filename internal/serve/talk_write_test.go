@@ -43,8 +43,8 @@ func lineWords(lines []map[string]any) string {
 	return strings.Join(out, " ")
 }
 
-// A say over 4096 bytes is refused and the model tries again; its shorter
-// say commits, and the second call carries the first and its refusal.
+// A talk_write over 4096 bytes is refused and the model tries again; its shorter
+// talk_write commits, and the second call carries the first and its refusal.
 func TestARefusedSayIsRewritten(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor")
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
@@ -59,7 +59,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:say {"text":"`+strings.Repeat("x", 4097)+`"}`+"\n"+`say {"text":"shorter"} commit:shorter end` {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:talk_write {"text":"`+strings.Repeat("x", 4097)+`"}`+"\n"+`talk_write {"text":"shorter"} commit:shorter end` {
 		t.Fatalf("events = %s", got)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "shorter" {
@@ -70,7 +70,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 	}
 }
 
-// An agent that ends its turn without say is silent: nothing commits, its
+// An agent that ends its turn without talk_write is silent: nothing commits, its
 // mentions summon nobody, and the next agent runs.
 func TestASilentAgentCommitsNothingAndTheChainGoesOn(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe", "quant")
@@ -88,7 +88,7 @@ func TestASilentAgentCommitsNothingAndTheChainGoesOn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `chain.start start:@auditor/1 text:nothing for @quant silent:@auditor start:@scribe/1 tool:say {"text":"noted"} commit:noted end`
+	want := `chain.start start:@auditor/1 text:nothing for @quant silent:@auditor start:@scribe/1 tool:talk_write {"text":"noted"} commit:noted end`
 	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
@@ -104,7 +104,7 @@ func TestASilentAgentCommitsNothingAndTheChainGoesOn(t *testing.T) {
 	}
 }
 
-// A call that stops at max_tokens, or 8 calls without an accepted say, is
+// A call that stops at max_tokens, or 8 calls without an accepted talk_write, is
 // an error: agent.error, nothing commits, and the Transcript says why.
 func TestRunBoundsAreErrors(t *testing.T) {
 	a, _, gid, provider := agentPair(t, "auditor")
@@ -149,7 +149,7 @@ func TestRunBoundsAreErrors(t *testing.T) {
 }
 
 // A profile's body reaches each request as nested JSON, and its max_turns
-// bounds the run: reached without a say, it is agent.error and nothing
+// bounds the run: reached without a talk_write, it is agent.error and nothing
 // commits.
 func TestProfileOptionsShapeTheRun(t *testing.T) {
 	a, _, gid, provider := agentPair(t, "auditor")
@@ -255,7 +255,7 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 		}
 	}
 	if res, _ := lines[4]["block"].(map[string]any); res["type"] != "tool_result" || res["is_error"] != true || !strings.Contains(fmt.Sprint(res["content"]), "empty") {
-		t.Fatalf("the refused say's answer = %v", lines[4])
+		t.Fatalf("the refused talk_write's answer = %v", lines[4])
 	}
 	if said := lines[9]; commit.Text != "ok" || said["seq"] != float64(commit.Seq) || said["msg_id"] != commit.MsgID || commit.MsgID == "" {
 		t.Fatalf("said seq %v, agent.commit %+v", said, commit)
@@ -276,7 +276,7 @@ func TestTheTranscriptRecordsCacheUsage(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		event(w, "message_start", `{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_creation_input_tokens":40,"cache_read_input_tokens":900,"output_tokens":1}}}`)
 		event(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-		endSay(w, "ok")
+		endTalkWrite(w, "ok")
 	})
 	s := watch(t, a)
 	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)

@@ -127,7 +127,7 @@ func TestConversationLogChatTranscripts(t *testing.T) {
 		"  @auditor (thinking): check it\n" +
 		"  @auditor (tool): shout {}\n" +
 		"  @auditor (tool result): no such tool\n" +
-		"  @auditor (tool): say {\"text\":\"ok @scribe\"}\n" +
+		"  @auditor (tool): talk_write {\"text\":\"ok @scribe\"}\n" +
 		"  @auditor (text): done\n" +
 		"alice/@auditor: looks fine\n"
 	if r.code != 0 || r.stdout != want {

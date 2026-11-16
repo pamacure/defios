@@ -27,8 +27,8 @@ type AgentsNode interface {
 	AddAgentProfile(ctx context.Context, handle string, e node.ProfileEdit) (node.AgentProfile, error)
 	EditAgentProfile(ctx context.Context, handle string, e node.ProfileEdit) (node.AgentProfile, error)
 	DeleteAgentProfile(ctx context.Context, handle string) error
-	AgentSystem(ctx context.Context, handle string) (string, error)
-	SetAgentSystem(ctx context.Context, handle, prompt string) error
+	AgentBrief(ctx context.Context, handle string) (string, error)
+	SetAgentBrief(ctx context.Context, handle, brief string) error
 	Grant(ctx context.Context, handle, item string, secrets []string) (node.GrantKind, node.AgentProfile, error)
 	Revoke(ctx context.Context, handle, item string) (node.GrantKind, node.AgentProfile, error)
 	Plugins(ctx context.Context) ([]node.Plugin, error)
@@ -87,9 +87,9 @@ type ProfileView struct {
 	// Body is the request body besides the model, as indented JSON; "" for
 	// none. MaxTurns is "" when unset.
 	Body, MaxTurns string
-	// System is its SYSTEM.md; SystemProblem why it could not be read.
-	System        string
-	SystemProblem *Problem
+	// Brief is its Agent Brief, BRIEF.md; BriefProblem why it could not be read.
+	Brief         string
+	BriefProblem  *Problem
 	Tools, Skills []string
 	// MCP is each MCP Server granted with the Secrets it gets.
 	MCP        map[string][]string
@@ -137,7 +137,7 @@ type CatalogServer struct {
 type ProfileDraft struct {
 	New                     bool
 	Handle, Provider, Model string
-	Body, MaxTurns, System  string
+	Body, MaxTurns, Brief   string
 }
 
 // ProviderDraft is a Provider's form as filled in. New adds one by Alias,
@@ -162,7 +162,7 @@ func (s *Shell) Agents(open string) AgentsView {
 }
 
 // SaveAgentProfile adds or edits the Agent Profile d is, and writes its
-// SYSTEM.md. A refusal writes nothing.
+// Agent Brief, BRIEF.md. A refusal writes nothing.
 func (s *Shell) SaveAgentProfile(d ProfileDraft) AgentsView {
 	s.op.Lock()
 	defer s.op.Unlock()
@@ -182,7 +182,7 @@ func (s *Shell) SaveAgentProfile(d ProfileDraft) AgentsView {
 		if d.New {
 			open = ""
 			if _, made := n.AgentProfile(s.ctx, d.Handle); made == nil {
-				// Added, with its SYSTEM.md not written: show it as it is.
+				// Added, with its BRIEF.md not written: show it as it is.
 				open, v.Where = d.Handle, "profile"
 			}
 		}
@@ -220,10 +220,10 @@ func (s *Shell) saveProfile(n Node, d ProfileDraft) error {
 		if _, err := n.AddAgentProfile(s.ctx, d.Handle, e); err != nil {
 			return err
 		}
-		if d.System == "" {
+		if d.Brief == "" {
 			return nil // the placeholder it was given
 		}
-		return n.SetAgentSystem(s.ctx, d.Handle, d.System)
+		return n.SetAgentBrief(s.ctx, d.Handle, d.Brief)
 	}
 	cur, err := n.AgentProfile(s.ctx, d.Handle)
 	if err != nil {
@@ -243,11 +243,11 @@ func (s *Shell) saveProfile(n Node, d ProfileDraft) error {
 			return err
 		}
 	}
-	sys, err := n.AgentSystem(s.ctx, d.Handle)
-	if err != nil || sys == d.System {
+	brief, err := n.AgentBrief(s.ctx, d.Handle)
+	if err != nil || brief == d.Brief {
 		return err
 	}
-	return n.SetAgentSystem(s.ctx, d.Handle, d.System)
+	return n.SetAgentBrief(s.ctx, d.Handle, d.Brief)
 }
 
 // DeleteAgentProfile deletes handle's Agent Profile; refused, with where
@@ -426,8 +426,8 @@ func (s *Shell) fillAgents(n Node, v *AgentsView, open string) {
 			}
 		} else {
 			v.Open = profileView(p)
-			if v.Open.System, err = n.AgentSystem(s.ctx, open); err != nil {
-				v.Open.SystemProblem = problemOf(err)
+			if v.Open.Brief, err = n.AgentBrief(s.ctx, open); err != nil {
+				v.Open.BriefProblem = problemOf(err)
 			}
 		}
 	}

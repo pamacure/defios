@@ -51,7 +51,7 @@ type Config struct {
 }
 
 // Profile is one Agent Profile's config.toml: the Provider alias it runs on
-// and its request body (ADR 0018, ADR 0019). It lives beside SYSTEM.md in
+// and its request body (ADR 0018, ADR 0019). It lives beside BRIEF.md in
 // the profile directory, agents/<handle> under the config directory, one per
 // Handle on the Node (ADR 0026, ADR 0029); a Workspace's [agent] profiles
 // includes it by Handle.
@@ -62,7 +62,7 @@ type Profile struct {
 	// which is agent.DefaultMaxTurns.
 	MaxTurns int `toml:"max_turns,omitzero"`
 	// Tools is the whole list of built-in Tools it may call (ADR 0029): nil
-	// is unset, say alone; empty grants none.
+	// is unset, talk_write alone; empty grants none.
 	Tools []string `toml:"tools,omitempty"`
 	// Skills are the Skills it may load, each <plugin>/<skill> (ADR 0030).
 	// That each is installed is checked at summon, so a profile naming a
@@ -86,7 +86,7 @@ type MCPGrant struct {
 
 // The built-in Tools a profile's tools may grant (ADR 0029).
 const (
-	ToolSay         = agent.SayName
+	ToolTalkWrite   = agent.TalkWriteName
 	ToolSignList    = "sign_list"
 	ToolSignInspect = "sign_inspect"
 	ToolSignPropose = "sign_propose"
@@ -100,12 +100,12 @@ const (
 const ToolSkillLoad = "skill_load"
 
 // Tools is every built-in Tool, in the order a run offers them.
-var Tools = []string{ToolSay, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill}
+var Tools = []string{ToolTalkWrite, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill}
 
-// Granted is the Tools p grants: its tools, or unset, say alone.
+// Granted is the Tools p grants: its tools, or unset, talk_write alone.
 func (p Profile) Granted() []string {
 	if p.Tools == nil {
-		return []string{ToolSay}
+		return []string{ToolTalkWrite}
 	}
 	return p.Tools
 }

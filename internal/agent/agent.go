@@ -3,7 +3,7 @@
 // one-message.md, docs/adr/0019-providers-replace-models-on-the-cosl.md,
 // docs/adr/0029-an-agent-profile-holds-the-whole-agent.md). A run is a loop
 // of model calls in one API Shape, streamed or not, offering the Tools it is
-// given: an accepted say is the run's result and ends it; any other Tool's
+// given: an accepted talk_write is the run's result and ends it; any other Tool's
 // result goes back to the model and the run goes on; a turn that ends
 // without a tool call is silence. Each call is retried when a provider says
 // it is worth it.
@@ -30,21 +30,21 @@ import (
 // silent.
 const DefaultMaxTurns = 8
 
-// MaxSay is the most bytes a say may carry; a longer one is refused.
-const MaxSay = 4096
+// MaxTalkWrite is the most bytes a talk_write may carry; a longer one is refused.
+const MaxTalkWrite = 4096
 
-// SayName is say's name: the Tool whose accepted call ends a run.
-const SayName = "say"
+// TalkWriteName is talk_write's name: the Tool whose accepted call ends a run.
+const TalkWriteName = "talk_write"
 
-// sayDescription tells the model what say does.
-const sayDescription = "Post your message to the group chat. Only what you pass here is posted; " +
+// talkWriteDescription tells the model what talk_write does.
+const talkWriteDescription = "Post your message to the group chat. Only what you pass here is posted; " +
 	"everything else you write stays private. Calling it ends your turn. " +
 	"Keep it to a paragraph or two of plain text, at most 4096 bytes. " +
 	"End your turn without calling it to stay silent."
 
-// saySchema is say's input: one string.
+// talkWriteSchema is talk_write's input: one string.
 // It admits no other property, as a strict function tool requires.
-var saySchema = json.RawMessage(`{"type":"object","properties":{"text":{"type":"string","description":"The message to post."}},"required":["text"],"additionalProperties":false}`)
+var talkWriteSchema = json.RawMessage(`{"type":"object","properties":{"text":{"type":"string","description":"The message to post."}},"required":["text"],"additionalProperties":false}`)
 
 // Tool is one tool a run offers the model (ADR 0029).
 type Tool struct {
@@ -52,13 +52,13 @@ type Tool struct {
 	Description string
 	Schema      json.RawMessage // its input, a JSON schema of an object
 	// Call answers a call of it with its input: a result for the model, or
-	// an error the model is told as a tool error. Say has none: the run
-	// itself checks a say, and an accepted one ends the run.
+	// an error the model is told as a tool error. TalkWrite has none: the run
+	// itself checks a talk_write, and an accepted one ends the run.
 	Call func(ctx context.Context, input json.RawMessage) (string, error)
 }
 
-// Say is the say Tool: post one message to the talk, and end the run.
-var Say = Tool{Name: SayName, Description: sayDescription, Schema: saySchema}
+// TalkWrite is the talk_write Tool: post one message to the talk, and end the run.
+var TalkWrite = Tool{Name: TalkWriteName, Description: talkWriteDescription, Schema: talkWriteSchema}
 
 // Request is one run to make.
 type Request struct {
@@ -106,7 +106,7 @@ const (
 	Assistant = "assistant"
 )
 
-// Result is how a run ended: with Said, what its accepted say carried, or
+// Result is how a run ended: with Said, what its accepted talk_write carried, or
 // Silent when the model ended its turn without one.
 type Result struct {
 	Said   string
@@ -132,7 +132,7 @@ const (
 const (
 	KindThinking = "thinking"
 	KindText     = "text"
-	KindTool     = "tool" // a tool call, say like any other, as its name and input
+	KindTool     = "tool" // a tool call, talk_write like any other, as its name and input
 )
 
 // Events receive a run as it goes. Any may be nil.
@@ -231,14 +231,14 @@ type call struct {
 	usage      map[string]any // as the provider reported it
 }
 
-// Run makes req's run: model calls until a say is accepted, the model ends
+// Run makes req's run: model calls until a talk_write is accepted, the model ends
 // its turn without a tool call, or something fails. The tool calls of a
 // call are answered in order, each answer recorded as a block; an accepted
-// say ends the run there. Each call carries everything the run has
+// talk_write ends the run there. Each call carries everything the run has
 // generated so far. A call is retried on a
 // rate limit, overload, 5xx response or dropped connection, up to Retries
 // times. A call that stops at its token bound, or a run that reaches its
-// turn bound without a say, is an error.
+// turn bound without a talk_write, is an error.
 func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error) {
 	conv, err := newConversation(req)
 	if err != nil {
@@ -286,11 +286,11 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 		}
 		conv.add(out.blocks, results)
 	}
-	return Result{}, fmt.Errorf("agent: %d model calls without an accepted say", req.maxTurns())
+	return Result{}, fmt.Errorf("agent: %d model calls without an accepted talk_write", req.maxTurns())
 }
 
 // answer answers the tool call b among tools: with said set, an accepted
-// say of text; otherwise the result for the model, an error when b names
+// talk_write of text; otherwise the result for the model, an error when b names
 // no tool offered, its input is refused, or the Tool fails.
 func answer(ctx context.Context, tools []Tool, b Block) (text string, said bool, res ToolResult) {
 	res = ToolResult{Type: "tool_result", ToolUseID: b.ID}
@@ -298,8 +298,8 @@ func answer(ctx context.Context, tools []Tool, b Block) (text string, said bool,
 	switch {
 	case i < 0:
 		res.Content, res.IsError = noSuchTool(tools, b.Name), true
-	case b.Name == SayName:
-		text, refusal := checkSay(b)
+	case b.Name == TalkWriteName:
+		text, refusal := checkTalkWrite(b)
 		if refusal == "" {
 			return text, true, res
 		}
@@ -329,19 +329,19 @@ func noSuchTool(tools []Tool, name string) string {
 	return fmt.Sprintf("There is no tool named %q; your tools are %s.", name, strings.Join(names, ", "))
 }
 
-// checkSay is the text of an acceptable say, or why b is refused.
-func checkSay(b Block) (text, refusal string) {
+// checkTalkWrite is the text of an acceptable talk_write, or why b is refused.
+func checkTalkWrite(b Block) (text, refusal string) {
 	var in struct {
 		Text *string `json:"text"`
 	}
 	if err := json.Unmarshal(b.Input, &in); err != nil || in.Text == nil {
-		return "", `say refused: its input must be {"text": "<your message>"}.`
+		return "", `talk_write refused: its input must be {"text": "<your message>"}.`
 	}
 	switch n := len(*in.Text); {
 	case strings.TrimSpace(*in.Text) == "":
-		return "", "say refused: the text is empty. Call say with your message, or end your turn without say to stay silent."
-	case n > MaxSay:
-		return "", fmt.Sprintf("say refused: the text is %d bytes, over the limit of %d. Say it in fewer words and call say again.", n, MaxSay)
+		return "", "talk_write refused: the text is empty. Call talk_write with your message, or end your turn without talk_write to stay silent."
+	case n > MaxTalkWrite:
+		return "", fmt.Sprintf("talk_write refused: the text is %d bytes, over the limit of %d. Say it in fewer words and call talk_write again.", n, MaxTalkWrite)
 	}
 	return *in.Text, ""
 }

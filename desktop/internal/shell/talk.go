@@ -824,7 +824,7 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 		// What it wrote was its own, but it went without a trace.
 		t.system[conv] = append(t.system[conv], Item{
 			Kind: KindSystem, At: time.Now(), Handle: ev.Handle, Chain: ev.Chain, Transcript: true,
-			Text: fmt.Sprintf("@%s ended its turn without posting: it never called say.", ev.Handle),
+			Text: fmt.Sprintf("@%s ended its turn without posting: it never called talk_write.", ev.Handle),
 		})
 	case serve.EventAgentError:
 		done()

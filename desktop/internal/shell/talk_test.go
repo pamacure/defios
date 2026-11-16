@@ -195,7 +195,7 @@ func TestAnAgentsChainStreamsLiveCancelsAndLeavesATranscript(t *testing.T) {
 	}
 }
 
-// An agent that ends its turn without say leaves a line saying so, with
+// An agent that ends its turn without talk_write leaves a line saying so, with
 // what it wrote in its Transcript, not nothing.
 func TestAnAgentThatStaysSilentLeavesALineWithItsTranscript(t *testing.T) {
 	r := newRig(t, "alpha")

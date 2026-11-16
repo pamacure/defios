@@ -105,10 +105,20 @@ func (p Paths) DisplayNameFile() string { return filepath.Join(p.Config, "displa
 func (p Paths) AgentProfilesDir() string { return filepath.Join(p.Config, "agents") }
 
 // AgentProfileDir is an Agent Profile's directory, agents/<handle>/ under
-// the config root, holding its SYSTEM.md and config.toml: the whole agent,
+// the config root, holding its BRIEF.md and config.toml: the whole agent,
 // one per Handle on this Node (ADR 0026, ADR 0029).
 func (p Paths) AgentProfileDir(handle string) string {
 	return filepath.Join(p.AgentProfilesDir(), handle)
+}
+
+// BriefFile is the name of an Agent Profile's Agent Brief: what it is and
+// how it works, read afresh at each summon (ADR 0036).
+const BriefFile = "BRIEF.md"
+
+// AgentBriefFile is an Agent Profile's Agent Brief, BRIEF.md in its
+// directory.
+func (p Paths) AgentBriefFile(handle string) string {
+	return filepath.Join(p.AgentProfileDir(handle), BriefFile)
 }
 
 // AgentProfileFile is an Agent Profile's config.toml: its Provider alias,

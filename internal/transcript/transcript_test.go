@@ -139,13 +139,13 @@ func TestNoTranscriptReadsEmpty(t *testing.T) {
 
 // A run's output is its blocks as recorded: each tool call followed by the
 // result the run answered it with; a call the run did not answer, as an
-// accepted say, has none.
+// accepted talk_write, has none.
 func TestOutputHasEachToolCallsResult(t *testing.T) {
 	blocks := []json.RawMessage{
 		json.RawMessage(`{"type":"thinking","thinking":"hm"}`),
 		json.RawMessage(`{"type":"tool_use","id":"t1","name":"shout","input":{}}`),
 		json.RawMessage(`{"type":"tool_result","tool_use_id":"t1","content":"no such tool","is_error":true}`),
-		json.RawMessage(`{"type":"tool_use","id":"t2","name":"say","input":{"text":"ok"}}`),
+		json.RawMessage(`{"type":"tool_use","id":"t2","name":"talk_write","input":{"text":"ok"}}`),
 	}
 	r := transcript.Run{Requests: []json.RawMessage{json.RawMessage(`{"messages":[]}`)}, Blocks: blocks}
 	if got := r.Output(); fmt.Sprintf("%s", got) != fmt.Sprintf("%s", blocks) {

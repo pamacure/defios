@@ -52,7 +52,7 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 	p := &fakeProvider{}
 	p.reply = func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w, "thinking")
-		endSay(w, fmt.Sprint("reply ", n))
+		endTalkWrite(w, fmt.Sprint("reply ", n))
 	}
 	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -155,7 +155,7 @@ func event(w http.ResponseWriter, typ, data string) {
 }
 
 // streamParts begins an Anthropic stream with a text block of parts: a
-// stream that has begun. endSay or endTurn ends it.
+// stream that has begun. endTalkWrite or endTurn ends it.
 func streamParts(w http.ResponseWriter, parts ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	event(w, "message_start", `{"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":1}}}`)
@@ -171,10 +171,10 @@ func streamDeltas(w http.ResponseWriter, parts ...string) {
 	}
 }
 
-// endSay ends a begun stream with a say of text.
-func endSay(w http.ResponseWriter, text string) {
+// endTalkWrite ends a begun stream with a talk_write of text.
+func endTalkWrite(w http.ResponseWriter, text string) {
 	input, _ := json.Marshal(map[string]string{"text": text})
-	endCall(w, "say", string(input))
+	endCall(w, "talk_write", string(input))
 }
 
 // endCall ends a begun stream with a call of the tool name with input, a
@@ -197,10 +197,10 @@ func endTurn(w http.ResponseWriter, stop string) {
 // streamSay says text with no text before it.
 func streamSay(w http.ResponseWriter, text string) {
 	streamParts(w)
-	endSay(w, text)
+	endTalkWrite(w, text)
 }
 
-// streamText streams parts and ends the turn without a say: silence.
+// streamText streams parts and ends the turn without a talk_write: silence.
 func streamText(w http.ResponseWriter, parts ...string) {
 	streamParts(w, parts...)
 	event(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
@@ -210,12 +210,12 @@ func streamText(w http.ResponseWriter, parts ...string) {
 // agentNode configures n with Agent Profiles: each Handle runs on n's
 // Provider "claude", the Messages API at baseURL, with a streamed body; n's
 // key for it is $ANTHROPIC_KEY, set to "sk-<n's name>", and each has a
-// SYSTEM.md saying who it is.
+// BRIEF.md saying who it is.
 func agentNode(t *testing.T, n *node, baseURL string, handles ...string) {
 	t.Helper()
 	var cfg strings.Builder
 	for _, h := range handles {
-		writeSystemPrompt(t, n, h)
+		writeBrief(t, n, h)
 		writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
 	}
 	fmt.Fprintf(&cfg, "[agent]\nprofiles = [\"%s\"]\n\n", strings.Join(handles, `", "`))
@@ -422,7 +422,7 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.MsgID)
-	if got := summary(events); got != `chain.start start:@auditor/1 text:thinking tool:say {"text":"reply 1"} commit:reply 1 end` {
+	if got := summary(events); got != `chain.start start:@auditor/1 text:thinking tool:talk_write {"text":"reply 1"} commit:reply 1 end` {
 		t.Fatalf("events = %s", got)
 	}
 	rows := b.groupLevelRows(t, gid, 2)
@@ -452,7 +452,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.MsgID)
-	want := `chain.start start:@scribe/1 text:thinking tool:say {"text":"reply 1"} commit:reply 1 start:@auditor/1 text:thinking tool:say {"text":"reply 2"} commit:reply 2 end`
+	want := `chain.start start:@scribe/1 text:thinking tool:talk_write {"text":"reply 1"} commit:reply 1 start:@auditor/1 text:thinking tool:talk_write {"text":"reply 2"} commit:reply 2 end`
 	if got := summary(events); got != want {
 		t.Fatalf("events = %s", got)
 	}
@@ -575,7 +575,7 @@ func TestRetryResetsAndCommitsTheFinalReply(t *testing.T) {
 			streamParts(w, "half") // cut off
 		default:
 			streamParts(w, "whole")
-			endSay(w, "whole")
+			endTalkWrite(w, "whole")
 		}
 	})
 	s := watch(t, a)
@@ -583,7 +583,7 @@ func TestRetryResetsAndCommitsTheFinalReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 text:half agent.reset text:whole tool:say {"text":"whole"} commit:whole end` {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 text:half agent.reset text:whole tool:talk_write {"text":"whole"} commit:whole end` {
 		t.Fatalf("events = %s", got)
 	}
 	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "whole" {
@@ -629,7 +629,7 @@ func holdProvider(provider *fakeProvider) (started chan int, release chan struct
 		started <- n
 		select {
 		case <-release:
-			endSay(w, "start done")
+			endTalkWrite(w, "start done")
 		case <-r.Context().Done():
 		}
 	})
@@ -746,7 +746,8 @@ func TestAProviderEditTakesEffectAtTheNextSummon(t *testing.T) {
 }
 
 // An unknown Provider alias fails the agent when summoned, naming the
-// Group, the Handle and the alias (ADR 0029); so does a missing SYSTEM.md.
+// Group, the Handle and the alias (ADR 0029); so does a missing Agent Brief, BRIEF.md,
+// even with a SYSTEM.md left beside it (ADR 0036).
 func TestSummonErrorsNameWhatToFix(t *testing.T) {
 	a, _, _, _ := agentPair(t, "auditor")
 	s := watch(t, a)
@@ -767,9 +768,12 @@ func TestSummonErrorsNameWhatToFix(t *testing.T) {
 		t.Errorf("unknown Provider: %+v", ev)
 	}
 	writeConfig(t, path, cfg)
-	os.Remove(filepath.Join(profileDir(a, "auditor"), "SYSTEM.md"))
-	if ev := send("@auditor"); ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, "SYSTEM.md") {
-		t.Errorf("missing SYSTEM.md: %+v", ev)
+	os.Remove(filepath.Join(profileDir(a, "auditor"), "BRIEF.md"))
+	if err := os.WriteFile(filepath.Join(profileDir(a, "auditor"), "SYSTEM.md"), []byte("You are auditor."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ev := send("@auditor"); ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, "no Agent Brief") || !strings.Contains(ev.Error, "BRIEF.md") {
+		t.Errorf("only a SYSTEM.md, no BRIEF.md: %+v", ev)
 	}
 }
 
@@ -778,14 +782,14 @@ func profileDir(n *node, h string) string {
 	return filepath.Join(n.paths.Config, "agents", h)
 }
 
-// writeSystemPrompt writes n's SYSTEM.md for the Handle h, saying who it is.
-func writeSystemPrompt(t *testing.T, n *node, h string) {
+// writeBrief writes n's BRIEF.md for the Handle h, saying who it is.
+func writeBrief(t *testing.T, n *node, h string) {
 	t.Helper()
 	dir := profileDir(n, h)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "SYSTEM.md"), []byte("You are "+h+"."), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "BRIEF.md"), []byte("You are "+h+"."), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -928,7 +932,7 @@ func TestALateWatcherSeesTheCurrentAgent(t *testing.T) {
 		select {
 		case <-release:
 			streamDeltas(w, " done")
-			endSay(w, "so far done")
+			endTalkWrite(w, "so far done")
 		case <-r.Context().Done():
 		}
 	})
@@ -945,7 +949,7 @@ func TestALateWatcherSeesTheCurrentAgent(t *testing.T) {
 	close(release)
 	untilEnd(t, early, v.MsgID)
 	got := summary(untilEnd(t, late, v.MsgID))
-	if want := `chain.start start:@scribe/1 text:so far done tool:say {"text":"so far done"} commit:so far done end`; got != want {
+	if want := `chain.start start:@scribe/1 text:so far done tool:talk_write {"text":"so far done"} commit:so far done end`; got != want {
 		t.Fatalf("late watcher saw %s, want %s", got, want)
 	}
 }
@@ -959,7 +963,7 @@ func TestALateWatcherSeesTheRunSoFar(t *testing.T) {
 		switch n {
 		case 1:
 			streamParts(w, "plan")
-			endSay(w, "") // refused: a second call follows
+			endTalkWrite(w, "") // refused: a second call follows
 			return
 		case 2:
 			streamParts(w, "half") // cut off: the retry starts the call over
@@ -969,7 +973,7 @@ func TestALateWatcherSeesTheRunSoFar(t *testing.T) {
 		close(started)
 		select {
 		case <-release:
-			endSay(w, "done")
+			endTalkWrite(w, "done")
 		case <-r.Context().Done():
 		}
 	})
@@ -982,7 +986,7 @@ func TestALateWatcherSeesTheRunSoFar(t *testing.T) {
 	late := watch(t, a)
 	close(release)
 	got := summary(untilEnd(t, late, v.MsgID))
-	want := `chain.start start:@auditor/1 text:plan tool:say {"text":""} text:so far tool:say {"text":"done"} commit:done end`
+	want := `chain.start start:@auditor/1 text:plan tool:talk_write {"text":""} text:so far tool:talk_write {"text":"done"} commit:done end`
 	if got != want {
 		t.Fatalf("late watcher saw %s\nwant              %s", got, want)
 	}
@@ -1046,7 +1050,7 @@ func TestAnAgentsMentionAtMaxDepthIsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := untilEnd(t, s, v.MsgID)
-	if got := summary(events); got != `chain.start start:@auditor/1 tool:say {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe end` {
+	if got := summary(events); got != `chain.start start:@auditor/1 tool:talk_write {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe end` {
 		t.Fatalf("events = %s", got)
 	}
 	if reason := events[len(events)-2].Reason; !strings.Contains(reason, "max_depth 1") {
@@ -1075,9 +1079,9 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `chain.start start:@auditor/1 tool:say {"text":"@quant, and me, @auditor"} commit:@quant, and me, @auditor ` +
-		`start:@quant/2 tool:say {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe ` +
-		`start:@scribe/1 tool:say {"text":"reply 3"} commit:reply 3 end`
+	want := `chain.start start:@auditor/1 tool:talk_write {"text":"@quant, and me, @auditor"} commit:@quant, and me, @auditor ` +
+		`start:@quant/2 tool:talk_write {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe ` +
+		`start:@scribe/1 tool:talk_write {"text":"reply 3"} commit:reply 3 end`
 	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
@@ -1099,7 +1103,7 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	}
 }
 
-// An agent sends the same stable system blocks, its SYSTEM.md and the stable
+// An agent sends the same stable system blocks, its BRIEF.md and the stable
 // preamble, at every depth, with the cache breakpoint after them; only the
 // block after it names the depth and whom it may summon (ADR 0018).
 func TestAnAgentsStableSystemIsTheSameAtEveryDepth(t *testing.T) {
@@ -1112,7 +1116,7 @@ func TestAnAgentsStableSystemIsTheSameAtEveryDepth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `chain.start start:@auditor/1 tool:say {"text":"reply 1"} commit:reply 1 start:@scribe/1 tool:say {"text":"ask @auditor"} commit:ask @auditor start:@auditor/2 tool:say {"text":"reply 3"} commit:reply 3 end`
+	want := `chain.start start:@auditor/1 tool:talk_write {"text":"reply 1"} commit:reply 1 start:@scribe/1 tool:talk_write {"text":"ask @auditor"} commit:ask @auditor start:@auditor/2 tool:talk_write {"text":"reply 3"} commit:reply 3 end`
 	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
@@ -1121,7 +1125,7 @@ func TestAnAgentsStableSystemIsTheSameAtEveryDepth(t *testing.T) {
 		t.Fatalf("calls = %+v", calls)
 	}
 	first, second := calls[0], calls[2]
-	if !strings.HasPrefix(first.Stable, "You are auditor.") || !strings.Contains(first.Stable, "say tool") {
+	if !strings.HasPrefix(first.Stable, "You are auditor.") || !strings.Contains(first.Stable, "talk_write tool") {
 		t.Fatalf("stable system = %q", first.Stable)
 	}
 	if second.Stable != first.Stable {
@@ -1154,7 +1158,7 @@ func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 error:@quant end` {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:talk_write {"text":"@quant"} commit:@quant start:@quant/2 error:@quant end` {
 		t.Fatalf("events = %s", got)
 	}
 	if n := len(provider.seen()); n != 2 {
@@ -1189,7 +1193,7 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 	if c, err := a.client().ConversationCancel(ctx, nil, ""); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.MsgID)...)); got != `chain.start start:@auditor/1 tool:say {"text":"@quant"} commit:@quant start:@quant/2 text:start end:cancelled` {
+	if got := summary(append(seen, untilEnd(t, s, v.MsgID)...)); got != `chain.start start:@auditor/1 tool:talk_write {"text":"@quant"} commit:@quant start:@quant/2 text:start end:cancelled` {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)

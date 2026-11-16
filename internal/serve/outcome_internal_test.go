@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// A run's closing outcome. Once its say has committed, it is `said` with
+// A run's closing outcome. Once its talk_write has committed, it is `said` with
 // its msg_id and seq whatever fails after, even a stop; a run cut off by a
 // stop before that has none (ADR 0018).
 func TestRunOutcome(t *testing.T) {

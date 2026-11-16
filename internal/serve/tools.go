@@ -71,8 +71,8 @@ func (s *server) agentTools(handle string, depth uint32, granted []string, conv 
 			continue
 		}
 		switch name {
-		case config.ToolSay:
-			out = append(out, agent.Say)
+		case config.ToolTalkWrite:
+			out = append(out, agent.TalkWrite)
 		case config.ToolSignList:
 			if conv != nil {
 				out = append(out, agent.Tool{Name: name, Description: signListDescription, Schema: signListSchema, Call: s.signListTool(conv)})

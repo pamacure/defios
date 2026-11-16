@@ -77,7 +77,7 @@ func TestRestoreBringsBackTheSameNode(t *testing.T) {
 	// The Record, Workspaces and Agent Profiles are back, byte for byte.
 	for _, name := range []string{
 		"identity", "vault/shared", "group/default/roster.json", "group/default/config.toml",
-		"agents/scout/SYSTEM.md", "agents/scout/config.toml", "display-name", "current-group",
+		"agents/scout/BRIEF.md", "agents/scout/config.toml", "display-name", "current-group",
 		"group/default/secp256k1-0202020202/config.toml",
 	} {
 		a, _ := os.ReadFile(filepath.Join(orig, name))
@@ -313,7 +313,7 @@ func TestRestoreWritesIntoThisMachinesPaths(t *testing.T) {
 	}
 	for _, path := range []string{
 		"data/identity", "data/vault/shared", "data/group/default/roster.json",
-		"config/display-name", "config/agents/scout/SYSTEM.md", "config/group/default/config.toml",
+		"config/display-name", "config/agents/scout/BRIEF.md", "config/group/default/config.toml",
 	} {
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			t.Errorf("%s: %v", path, err)
