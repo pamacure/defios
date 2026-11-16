@@ -270,8 +270,9 @@ func TestAWebhookAttemptTimesOut(t *testing.T) {
 }
 
 // The Hooks that fire on an event are those it matches, in name order, and
-// none at or past the Group's max_depth: depth bounds loops (ADR 0032).
-func TestHooksFireBelowMaxDepthOnly(t *testing.T) {
+// none past the Group's max_depth: depth bounds loops (ADR 0032). An agent's
+// reply at max_depth fires them, so a Hook on its Handle can.
+func TestHooksFireUpToMaxDepthOnly(t *testing.T) {
 	hooks := map[string]config.Hook{
 		"b_said":   {Events: []string{"app.freeform"}},
 		"a_all":    {},
@@ -281,12 +282,20 @@ func TestHooksFireBelowMaxDepthOnly(t *testing.T) {
 	if got := trigger.Firing(hooks, said, self, 1); !slices.Equal(got, []string{"a_all", "b_said"}) {
 		t.Errorf("at depth 0, max 1: %v, want a_all and b_said", got)
 	}
-	said.Depth = 1
+	said.Depth, said.Handle = 1, "general"
+	if got := trigger.Firing(hooks, said, self, 1); !slices.Equal(got, []string{"a_all", "b_said"}) {
+		t.Errorf("at depth 1, max 1: %v, want a_all and b_said", got)
+	}
+	general := map[string]config.Hook{"general": {Handles: []string{"general"}}}
+	if got := trigger.Firing(general, said, self, 1); !slices.Equal(got, []string{"general"}) {
+		t.Errorf("@general's reply at depth 1, max 1: %v, want the Hook on its Handle", got)
+	}
+	said.Depth = 2
 	if got := trigger.Firing(hooks, said, self, 1); len(got) != 0 {
-		t.Errorf("at depth 1, max 1: %v, want none", got)
+		t.Errorf("at depth 2, max 1: %v, want none", got)
 	}
 	if got := trigger.Firing(hooks, said, self, 2); len(got) != 2 {
-		t.Errorf("at depth 1, max 2: %v, want two", got)
+		t.Errorf("at depth 2, max 2: %v, want two", got)
 	}
 }
 

@@ -326,10 +326,12 @@ func (r Runner) post(ctx context.Context, url string, headers http.Header, body 
 }
 
 // Firing is the names of the Hooks in hooks that fire on ev, in name
-// order: those it matches, if its depth is below maxDepth, the Group's
+// order: those it matches, if its depth is at most maxDepth, the Group's
 // [agent] max_depth, so that Jobs answering events cannot loop unbounded.
+// An event at maxDepth fires, so a Hook can answer an agent's reply, but no
+// agent may answer it in turn.
 func Firing(hooks map[string]config.Hook, ev Event, self identity.ID, maxDepth int) []string {
-	if int(ev.Depth) >= maxDepth {
+	if int(ev.Depth) > maxDepth {
 		return nil
 	}
 	var out []string

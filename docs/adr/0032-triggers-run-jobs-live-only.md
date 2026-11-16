@@ -87,8 +87,11 @@ made up later.
   missed, and so is one that falls while the Schedule's last firing still
   runs. A Schedule's event is `schedule`, with the `time` it fired for.
 - **Depth bounds loops**, as for mentions. A Hook fires only on an event
-  below the Group's `[agent] max_depth`. An agent a Hook runs writes at the
-  triggering depth + 1; one a Schedule runs, at depth 1. `SignRequest` gains
+  whose depth is at most the Group's `[agent] max_depth`, so a Hook on an
+  agent's Handle fires on its reply even at the default `max_depth = 1`.
+  An agent a Hook runs writes at the triggering depth + 1, so on an event at
+  `max_depth` an agent Job fails, saying so, while exec and webhook Jobs
+  run. An agent a Schedule runs writes at depth 1. `SignRequest` gains
   a `depth` field, written by an agent as its own depth, and a `sign.*`
   event has the depth of its request. Accepts and refusals are final stances
   and need none. `exec` Jobs get `DEFIOS_DEPTH`, and `conversation send` and
