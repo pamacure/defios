@@ -11,6 +11,8 @@ agent says is what matters. This amends
 longer has no tools, its context is split into turns, the stream carries the
 whole output, and there is a retry verb.
 
+*Superseded in part by [ADR 0036](0036-an-agent-replays-its-own-transcript-not-the-talk.md): a Transcript is one Agent's in one Conversation, not one chain's; an agent replays its own Transcript instead of reading the talk as Turns by Handle; `say` is `talk_write`.*
+
 *Amended by [ADR 0025](0025-an-outbox-holds-what-a-node-writes-without-a-quorum.md):
 a chain and its Transcript are named by the msg_id of the message that
 starts it, not its seq; `said` and `agent.commit` carry the said message's

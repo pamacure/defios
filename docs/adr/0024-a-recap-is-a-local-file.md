@@ -12,6 +12,8 @@ whole each time it is written. **Pruning** no longer depends on a Recap. It
 destroys this Node's `app.freeform` payloads by age or seq, as the operator
 or the prune policy says. This is pre-release, so nothing is migrated.
 
+*Superseded in part by [ADR 0036](0036-an-agent-replays-its-own-transcript-not-the-talk.md): agents no longer read the talk under this Node's Recap; they replay their own Transcript and read talk with `talk_read`.*
+
 ## Considered options
 
 - **Keep the Recap on the log, and read only one's own.** Rejected: every

@@ -69,15 +69,23 @@ A Node's local directory of settings for one Group, or for one Conversation with
 _Avoid_: profile, project, config dir, profile directory
 
 **Agent Profile**:
-One agent persona a Node can summon into talk, defined once for the whole Node in the profile directory named by its Handle: its system prompt, the Provider alias and request it runs on, and the Tools, Skills and MCP Servers granted to it. Node-local and never replicated; it answers only in a Conversation (or Group-level talk) whose config includes its Handle, and runs on that Group's Provider of that alias.
+One agent persona a Node can summon into talk, defined once for the whole Node in the profile directory named by its Handle: its Agent Brief, the Provider alias and request it runs on, and the Tools, Skills and MCP Servers granted to it. Node-local and never replicated; it answers only in a Conversation (or Group-level talk) whose config includes its Handle, and runs on that Group's Provider of that alias.
 _Avoid_: agent (that is the running thing, not its definition), persona, bot, workspace
+
+**DeFiOS Briefing**:
+The part of every agent's instructions that DeFiOS itself supplies, the same for every Agent Profile: what DeFiOS is, that the agent is one of many on one of many Nodes, and what Conversations, the Vault, Plugins, Triggers and Networks are. Comes first; the Agent Brief follows it.
+_Avoid_: system prompt, base prompt, preamble
+
+**Agent Brief**:
+The part of an agent's instructions its Agent Profile supplies, saying what that agent is for. Follows the DeFiOS Briefing.
+_Avoid_: system prompt, SYSTEM.md, soul, persona
 
 **Agent**:
 One Node's Handle in one Group: the party that speaks in talk under that Handle from that Node, running whichever Agent Profile the Handle is bound to. The same Handle on two Nodes is two agents.
 _Avoid_: assistant, bot, the agent across Nodes
 
 **Tool**:
-An action built into DeFiOS that an agent may call during a run, such as `say` or `sign_accept`. An agent may call only the Tools its Agent Profile grants; `say` is granted unless the profile says otherwise. Only Tools act as the Node: nothing else an agent is given can write to the COSL.
+An action built into DeFiOS that an agent may call during a run, such as `talk_write` or `sign_accept`. An agent may call only the Tools its Agent Profile grants; `talk_read` and `talk_write` are granted unless the profile says otherwise. Only Tools act as the Node: nothing else an agent is given can write to the COSL.
 _Avoid_: function, command, capability
 
 **Plugin**:
@@ -101,7 +109,7 @@ The agents one person's message, or one Trigger's firing, summons, in the order 
 _Avoid_: thread, run, cascade
 
 **Transcript**:
-Everything the agents of one chain generated — thinking, text, tool calls and their results — kept on the Node that ran the chain and never replicated. Only what its agents say reaches the COSL; the Transcript is the rest, and other parties never see it.
+One Agent's record of its runs in one Conversation (or Group-level talk), from when it was started until it is cleared: everything it generated in each, thinking, text, tool calls and their results, each run marked with the chain it ran in. Kept on that Agent's Node and never replicated. Only what the agent says reaches the COSL; the Transcript is the rest, and other parties never see it. It is what the agent remembers of its own work there. An Agent has one **live** Transcript per Conversation; **clearing** it closes it, kept but no longer replayed, and the agent's next run starts a new one.
 _Avoid_: work log, trace, output log, reply (that is the message it says)
 
 **Mention**:
