@@ -25,6 +25,9 @@ let profInputs = null; // the profile form's fields, while it shows
 let invalid = null;
 // The Secrets chosen for an MCP Server not granted yet, by its ref.
 const pendingEnv = new Map();
+// The grant groups (Tools, Skills, MCP Servers) expanded, kept across
+// redraws so a toggle does not fold its group shut.
+const grantsOpen = new Set();
 // The parts' bodies, made once: a view loaded while the page is not on
 // screen draws into them, ready for when it is.
 const deviceMount = h("div", { class: "agents" });
@@ -290,9 +293,20 @@ function grants(o) {
     h("h3", {}, "Grants"),
     h("p", { class: "hint" }, "What it may use. A change applies at once, from its next run."),
     av.CatalogProblem && problemBox({ ...av.CatalogProblem, Message: `This device's Plugins could not be read, so their Skills and MCP Servers may be missing below. ${av.CatalogProblem.Message}` }),
-    h("h4", {}, "Tools"), h("div", { class: "grants cols" }, tools),
-    h("h4", {}, "Skills"), skills.length ? h("div", { class: "grants cols wide" }, skills) : h("p", { class: "placeholder" }, "No Plugin on this device brings a Skill."),
-    h("h4", {}, "MCP Servers"), mcp.length ? h("div", { class: "grants cols servers" }, mcp) : h("p", { class: "placeholder" }, "No Plugin on this device brings an MCP Server."));
+    fold("Tools", (o.Tools ?? []).length, tools.length, h("div", { class: "grants cols" }, tools)),
+    fold("Skills", (o.Skills ?? []).length, skills.length, skills.length ? h("div", { class: "grants cols wide" }, skills) : h("p", { class: "placeholder" }, "No Plugin on this device brings a Skill.")),
+    fold("MCP Servers", Object.keys(o.MCP ?? {}).length, mcp.length, mcp.length ? h("div", { class: "grants cols servers" }, mcp) : h("p", { class: "placeholder" }, "No Plugin on this device brings an MCP Server.")));
+}
+
+// fold is one grant group under a collapsing header that says how many of
+// its grants are on, so a folded group still tells what the agent has.
+function fold(label, on, of, body) {
+  return h("details", {
+    class: "gfold", open: grantsOpen.has(label),
+    ontoggle: (e) => { if (e.target.open) grantsOpen.add(label); else grantsOpen.delete(label); },
+  },
+  h("summary", {}, h("h4", {}, label), h("span", { class: "hint" }, `${on} of ${of} granted`)),
+  body);
 }
 
 // server is an MCP Server's grant: on or off, and which of the variables
