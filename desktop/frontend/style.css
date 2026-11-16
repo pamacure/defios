@@ -557,7 +557,15 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .triggers .events .check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
 .triggers .events input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
 .triggers .ranline { padding: 0 12px 10px; }
-.triggers .prow > .link { align-self: center; }
+.triggers .prow.clickable { cursor: pointer; border-radius: var(--radius); }
+.triggers .prow.clickable:hover { background: var(--accent-wash); }
+.triggers .prow.open { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.triggers .fold { flex: none; width: 28px; height: 28px; display: grid; place-items: center; background: none; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); cursor: pointer; padding: 0; }
+.triggers .fold::before { content: "\25BE"; font-size: 12px; transition: transform .12s; }
+.triggers .fold[aria-expanded="true"]::before { transform: rotate(180deg); }
+.triggers .fold:hover { color: var(--text); border-color: var(--muted); }
+.triggers .fold:disabled { opacity: 0.6; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .triggers .fold::before { transition: none; } }
 .triggers .error .btn { margin-top: 6px; }
 .tomledit { display: flex; flex-direction: column; gap: 10px; }
 .tomledit .tomlarea { max-width: none; min-height: 360px; }

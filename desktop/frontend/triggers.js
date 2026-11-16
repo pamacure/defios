@@ -14,14 +14,16 @@ let group = ""; // the Group it is for
 let loading = "";
 let pending = null;
 let busy = false;
-// The form open: "job:<name>", "new-job", "hook:<name>", "new-hook",
-// "schedule:<name>" or "new-schedule"; "" for none. draft is what was
-// typed in it, to draw it again; read reads the form shown.
-let open = "";
-let draft = null;
-// The tab shown: "job", "hook" or "schedule". A form is open only in it.
+// The forms open, any number at once, each by its key: "job:<name>",
+// "new-job", "hook:<name>", "new-hook", "schedule:<name>" or
+// "new-schedule". drafts holds what was typed in each, to draw it again;
+// readers read each form shown.
+const open = new Set();
+const drafts = new Map();
+const readers = new Map();
+// The tab shown: "job", "hook" or "schedule". Forms open in another tab
+// stay open, with what was typed in them, for when it is shown again.
 let tab = "job";
-let read = null;
 let deleting = ""; // the form whose Delete asks to confirm
 let done = ""; // what the last change did, as "Deleted." for the list
 // The field the last refusal named, outlined until edited: { where, field }.
@@ -60,10 +62,10 @@ export function triggersLoad(s) {
 // triggersRefresh reads the view again, as when the page is opened anew,
 // and redraws only if it changed and nothing is being edited.
 export async function triggersRefresh() {
-  if (!tv || loading || busy || open || toml || deleting) return;
+  if (!tv || loading || busy || open.size || toml || deleting) return;
   const g = group;
   const next = await call("Triggers");
-  if (!next || next.Group !== g || g !== group || busy || open || toml || deleting) return;
+  if (!next || next.Group !== g || g !== group || busy || open.size || toml || deleting) return;
   if (mount.contains(document.activeElement)) return;
   if (JSON.stringify(next) === JSON.stringify(tv)) return;
   tv = next;
@@ -80,8 +82,10 @@ async function load(g) {
   }
   if (!next || next.Group !== g) return;
   if (g !== group || next.Served !== tv?.Served) {
-    open = deleting = done = "";
-    draft = toml = invalid = null;
+    open.clear();
+    drafts.clear();
+    deleting = done = "";
+    toml = invalid = null;
     running.clear();
     ran.clear();
   }
@@ -94,14 +98,33 @@ async function load(g) {
   }
 }
 
-// act calls method; on success the form closes and done says what it did.
-async function act(method, args, did = "") {
+// keep holds what is typed in each form shown, so a redraw draws it again.
+function keep() {
+  for (const [key, read] of readers) if (open.has(key)) drafts.set(key, read());
+}
+
+// redraw draws the page again, keeping what is typed in its forms.
+function redraw() {
+  keep();
+  draw();
+}
+
+// close shuts the form key, dropping what was typed in it.
+function close(key) {
+  open.delete(key);
+  drafts.delete(key);
+  if (deleting === key) deleting = "";
+  if (invalid?.where === key) invalid = null;
+}
+
+// act calls method for the form where; on success that form closes and
+// done says what it did. The other forms open stay as typed.
+async function act(method, args, where, did = "") {
   if (busy) return;
-  if (read) draft = read();
   busy = true;
   invalid = null;
   done = "";
-  draw();
+  redraw();
   let next;
   try {
     next = await call(method, ...args);
@@ -114,13 +137,13 @@ async function act(method, args, did = "") {
     refused(next);
     tv = { ...next, Problem: null };
     if (!next.Problem) {
-      open = deleting = "";
-      draft = null;
+      keep();
+      close(where);
       done = did;
     }
   }
-  draw();
-  if (invalid) document.getElementById(`tg-${invalid.field}`)?.focus();
+  redraw();
+  if (invalid) document.getElementById(fieldId(invalid.where, invalid.field))?.focus();
 }
 
 // refused shows a view's refusal as a toast, with Edit TOML when only it
@@ -134,17 +157,20 @@ function refused(next) {
 }
 
 function show(form) {
-  open = form;
-  draft = invalid = null;
-  deleting = done = "";
+  keep();
+  open.add(form);
+  done = "";
   draw();
 }
+
+// fieldId is the id of a form's field, unique among the forms open.
+const fieldId = (where, field) => `tg-${where.replace(/[^\w-]/g, "_")}-${field}`;
 
 // row is a labelled form row with its hint, outlined while it is the
 // field the last refusal named (the refusal itself is a toast).
 function row(where, field, label, input, hint) {
   if (invalid?.where === where && invalid.field === field) markInvalid(input, () => { invalid = null; });
-  if (!input.id) input.id = `tg-${field}`;
+  if (!input.id) input.id = fieldId(where, field);
   return h("div", { class: "frow" },
     h("label", { for: input.id }, label),
     h("div", { class: "fcell" }, input, hint && h("p", { class: "hint" }, hint)));
@@ -161,7 +187,7 @@ function draw() {
     put(mount, tomlEditor());
     return;
   }
-  read = null;
+  readers.clear();
   put(mount,
     h("div", { class: "trighead" },
       h("p", { class: "hint lead" }, `What this device does on its own in ${group}: Jobs are what it runs; Hooks run them on events in talk, Schedules at set times. They are this device's config, never shared with the Group.`),
@@ -175,16 +201,16 @@ function draw() {
 
 const TABS = [["job", "Jobs", () => tv.Jobs], ["hook", "Hooks", () => tv.Hooks], ["schedule", "Schedules", () => tv.Schedules]];
 
-// tabs picks the list shown; leaving one closes the form open in it.
+// tabs picks the list shown; the forms open in the one left stay open.
 function tabs() {
   return h("div", { class: "tabs trigtabs", role: "tablist", "aria-label": "Show" },
     TABS.map(([k, label, items]) => h("button", {
       type: "button", role: "tab", "aria-selected": k === tab ? "true" : "false",
       onclick: () => {
         if (k === tab) return;
+        keep();
         tab = k;
-        open = deleting = done = "";
-        draft = invalid = null;
+        done = "";
         draw();
       },
     }, `${label} (${(items() ?? []).length})`)));
@@ -195,14 +221,50 @@ function section(title, hint, kind, items, rowOf, formOf, addLabel) {
   return h("section", { class: "tsec", role: "tabpanel", "aria-label": title },
     h("p", { class: "hint" }, hint),
     h("div", { class: "providers" },
-      items.length === 0 && open !== `new-${kind}` && h("p", { class: "placeholder" }, `No ${title} yet.`),
-      items.map((it) => h("div", { class: "provider" }, rowOf(it), open === `${kind}:${it.Name}` && formOf(it))),
-      open === `new-${kind}`
+      items.length === 0 && !open.has(`new-${kind}`) && h("p", { class: "placeholder" }, `No ${title} yet.`),
+      items.map((it) => h("div", { class: "provider" }, rowOf(it), open.has(`${kind}:${it.Name}`) && formOf(it))),
+      open.has(`new-${kind}`)
         ? formOf(null)
         : h("button", { class: "btn", type: "button", disabled: busy, onclick: () => show(`new-${kind}`) }, addLabel)));
 }
 
-const editButton = (key) => open !== key && h("button", { class: "link", type: "button", disabled: busy, onclick: () => show(key) }, "Edit");
+// toggle opens the form under a row, or folds it shut if it is open.
+function toggle(key) {
+  if (busy) return;
+  if (open.has(key)) {
+    keep();
+    close(key);
+    draw();
+  } else show(key);
+}
+
+// redrawWith draws the page again with draft as what is typed in the form
+// where, as when a form adds a row to itself.
+function redrawWith(where, draft) {
+  keep();
+  drafts.set(where, draft);
+  draw();
+}
+
+// itemRow is a Job's, Hook's or Schedule's row: a click anywhere on it
+// but its own buttons opens its form, as does the fold button closing it.
+function itemRow(key, name, ...cells) {
+  const isOpen = open.has(key);
+  return h("div", {
+    class: `prow clickable${isOpen ? " open" : ""}`,
+    onclick: (e) => {
+      if (e.target.closest("button, a, input, select, textarea")) return;
+      if (window.getSelection()?.toString()) return;
+      toggle(key);
+    },
+  },
+  cells,
+  h("button", {
+    class: "fold", type: "button", disabled: busy, "aria-expanded": isOpen ? "true" : "false",
+    "aria-label": isOpen ? `Close ${name}` : `Edit ${name}`, title: isOpen ? "Close" : "Edit",
+    onclick: () => toggle(key),
+  }));
+}
 
 // ---- Jobs ----
 
@@ -225,7 +287,7 @@ function jobSummary(j) {
 function jobRow(j) {
   const isRunning = running.has(j.Name);
   return h("div", {},
-    h("div", { class: "prow" },
+    itemRow(`job:${j.Name}`, j.Name,
       h("div", { class: "who" }, h("strong", {}, j.Name), h("code", { title: jobSummary(j) }, jobSummary(j))),
       h("span", { class: "chip" }, KINDS[j.Kind] ?? j.Kind),
       h("span", { class: `chip ${j.UsedBy.length ? "ok" : ""}` }, j.UsedBy.length ? `Run by ${j.UsedBy.join(", ")}` : "No Trigger runs it"),
@@ -233,8 +295,7 @@ function jobRow(j) {
         class: "btn small", type: "button", disabled: !tv.Served || isRunning,
         title: tv.Served ? "Run it now, as no Trigger. Its outcome also shows in Talk." : `Run now needs ${group} online on this device.`,
         onclick: () => runNow(j.Name),
-      }, isRunning ? "Running…" : "Run now"),
-      editButton(`job:${j.Name}`)),
+      }, isRunning ? "Running…" : "Run now")),
     ran.has(j.Name) && h("p", { class: "saved ranline", role: "status" }, "Finished. It shows in Talk too."));
 }
 
@@ -242,7 +303,7 @@ async function runNow(name) {
   if (running.has(name)) return;
   running.add(name);
   ran.delete(name);
-  draw();
+  redraw();
   let next;
   try {
     next = await call("RunJob", name);
@@ -251,7 +312,7 @@ async function runNow(name) {
   } finally {
     running.delete(name);
   }
-  // The rest of the view is left as shown, so an open form keeps what is typed.
+  // The rest of the view is left as shown, so the forms open keep what is typed.
   if (next?.Group === group) {
     showProblem(next.Problem, { scope: "triggers" });
     if (next.Ran?.OK) ran.add(name);
@@ -260,12 +321,12 @@ async function runNow(name) {
         { scope: "triggers" });
     }
   }
-  draw();
+  redraw();
 }
 
 function jobForm(j) {
   const where = j ? `job:${j.Name}` : "new-job";
-  const d = draft ?? (j
+  const d = drafts.get(where) ?? (j
     ? { ...j, Headers: j.Headers.map((x) => ({ ...x })), Exec: [...j.Exec], Secrets: [...j.Secrets] }
     : { Name: "", Kind: "exec", Agent: "", Prompt: "", Target: "", Exec: [], Secrets: [], Webhook: "", WebhookSecret: "", Headers: [], Timeout: "" });
   const name = text(d.Name, { placeholder: "notify_me" });
@@ -299,7 +360,7 @@ function jobForm(j) {
   } else if (d.Kind === "exec") {
     const exec = area(d.Exec.join("\n"), { rows: 3, placeholder: "defios\nsign\naccept\n$DEFIOS_SIGN_REQUEST_ID" });
     const secrets = d.Secrets.map((n) => secretField({ group, value: n, noneLabel: "Choose a Secret" }));
-    const addSecret = h("button", { class: "link", type: "button", onclick: () => { draft = readAll(); draft.Secrets.push(""); draw(); } }, "+ Add a Secret");
+    const addSecret = h("button", { class: "link", type: "button", onclick: () => { const next = readAll(); next.Secrets.push(""); redrawWith(where, next); } }, "+ Add a Secret");
     fields = [
       row(where, "exec", "Program and arguments", exec, "One per line, the program first, run with no shell. $DEFIOS_* variables are filled in from the event."),
       row(where, "secrets", "Secrets", h("div", { class: "stack" }, secrets.map((f) => f.el), addSecret), "Set in its environment, each under its own name."),
@@ -316,7 +377,7 @@ function jobForm(j) {
       hv.hidden = !!x.Secret;
       return { el: h("div", { class: "header" }, hn, hv, hs.el), read: () => ({ Name: hn.value.trim(), Value: hv.value, Secret: hs.value }) };
     });
-    const addHeader = h("button", { class: "link", type: "button", onclick: () => { draft = readAll(); draft.Headers.push({ Name: "", Value: "", Secret: "" }); draw(); } }, "+ Add a header");
+    const addHeader = h("button", { class: "link", type: "button", onclick: () => { const next = readAll(); next.Headers.push({ Name: "", Value: "", Secret: "" }); redrawWith(where, next); } }, "+ Add a header");
     fields = [
       row(where, "webhook", "URL", url, "An http or https URL it POSTs the event to."),
       row(where, "webhook_secret", "Or from a Secret", fromSecret.el, "A URL that carries a token is better kept as a Secret; set, it is used instead."),
@@ -327,14 +388,14 @@ function jobForm(j) {
   }
 
   const readAll = () => ({ ...d, Name: j ? j.Name : name.value.trim(), Kind: kind.value, ...readKind() });
-  read = readAll;
-  kind.addEventListener("change", () => { const next = readAll(); next.Kind = kind.value; draft = next; draw(); });
+  readers.set(where, readAll);
+  kind.addEventListener("change", () => redrawWith(where, readAll()));
   const used = j?.UsedBy ?? [];
   return h("form", {
     class: j ? "gform pform" : "gform pform new",
     onsubmit: (e) => {
       e.preventDefault();
-      act("SaveJob", [{ New: !j, ...readAll() }]);
+      act("SaveJob", [{ New: !j, ...readAll() }], where);
     },
   },
   !j && h("h3", {}, "New Job"),
@@ -352,11 +413,11 @@ function formActions(where, item, deleteMethod, addLabel, blocked = null) {
     deleting === where && h("div", { class: "warning", role: "alert" },
       h("p", {}, blocked ?? `Delete ${item.Name}? It is removed from this device's config.toml for ${group}.`),
       h("div", { class: "row" },
-        h("button", { class: "btn danger", type: "button", disabled: busy || !!blocked, onclick: () => act(deleteMethod, [item.Name], `Deleted ${item.Name}.`) }, "Delete"),
-        h("button", { class: "btn", type: "button", onclick: () => { deleting = ""; draw(); } }, "Keep"))),
+        h("button", { class: "btn danger", type: "button", disabled: busy || !!blocked, onclick: () => act(deleteMethod, [item.Name], where, `Deleted ${item.Name}.`) }, "Delete"),
+        h("button", { class: "btn", type: "button", onclick: () => { deleting = ""; redraw(); } }, "Keep"))),
     h("div", { class: "factions" },
-      item && deleting !== where && h("button", { class: "btn", type: "button", disabled: busy, onclick: () => { if (read) draft = read(); deleting = where; draw(); } }, "Delete…"),
-      h("button", { class: "btn", type: "button", onclick: () => { open = deleting = ""; draft = invalid = null; draw(); } }, "Cancel"),
+      item && deleting !== where && h("button", { class: "btn", type: "button", disabled: busy, onclick: () => { deleting = where; redraw(); } }, "Delete…"),
+      h("button", { class: "btn", type: "button", onclick: () => { keep(); close(where); draw(); } }, "Cancel"),
       h("button", { class: "btn primary", type: "submit", disabled: busy }, item ? "Save" : addLabel)),
   ];
 }
@@ -387,17 +448,16 @@ function hooksSection() {
 
 function hookRow(hk) {
   const on = hk.Events.length ? hk.Events.join(", ") : "every event";
-  return h("div", { class: "prow" },
+  return itemRow(`hook:${hk.Name}`, hk.Name,
     h("div", { class: "who" }, h("strong", {}, hk.Name), h("code", { title: on }, `on ${on}`)),
-    h("span", { class: "chip" }, `Runs ${hk.Jobs.join(", ")}`),
-    editButton(`hook:${hk.Name}`));
+    h("span", { class: "chip" }, `Runs ${hk.Jobs.join(", ")}`));
 }
 
 const FROM = { "": "Anyone", self: "This device", others: "Other devices" };
 
 function hookForm(hk) {
   const where = hk ? `hook:${hk.Name}` : "new-hook";
-  const d = draft ?? (hk ? { ...hk } : { Name: "", Events: ["sign.request"], From: [], Handles: [], Conversation: [], Text: "", Jobs: [] });
+  const d = drafts.get(where) ?? (hk ? { ...hk } : { Name: "", Events: ["sign.request"], From: [], Handles: [], Conversation: [], Text: "", Jobs: [] });
   const name = text(d.Name, { placeholder: "on_sign_request" });
   const chosen = new Set(d.Events);
   const events = h("div", { class: "events" }, (tv.Events ?? []).map((ev) => h("label", { class: "check" },
@@ -415,11 +475,11 @@ function hookForm(hk) {
     From: from.value === "" ? [] : from.value === NODE_IDS ? d.From : [from.value],
     Handles: list(handles.value), Conversation: list(conv.value), Text: re.value, Jobs: jobs.value(),
   });
-  const jobs = jobsPicker(d.Jobs, (next) => { draft = { ...readAll(), Jobs: next }; draw(); });
-  read = readAll;
+  const jobs = jobsPicker(d.Jobs, (next) => redrawWith(where, { ...readAll(), Jobs: next }));
+  readers.set(where, readAll);
   return h("form", {
     class: hk ? "gform pform" : "gform pform new",
-    onsubmit: (e) => { e.preventDefault(); act("SaveHook", [{ New: !hk, ...readAll() }]); },
+    onsubmit: (e) => { e.preventDefault(); act("SaveHook", [{ New: !hk, ...readAll() }], where); },
   },
   !hk && h("h3", {}, "New Hook"),
   !hk && row(where, "name", "Name", name, "Lowercase letters, digits, - and _."),
@@ -443,16 +503,15 @@ const when = (s) => (s.At ? `once at ${s.At}` : `cron ${s.Cron}${s.TZ ? ` (${s.T
 
 function scheduleRow(s) {
   const next = s.Next ? new Date(s.Next) : null;
-  return h("div", { class: "prow" },
+  return itemRow(`schedule:${s.Name}`, s.Name,
     h("div", { class: "who" }, h("strong", {}, s.Name), h("code", {}, when(s))),
     h("span", { class: `chip ${next ? "ok" : ""}`, title: next ? next.toString() : "" }, next ? `Next: ${next.toLocaleString()}` : "Fires no more"),
-    h("span", { class: "chip" }, `Runs ${s.Jobs.join(", ")}`),
-    editButton(`schedule:${s.Name}`));
+    h("span", { class: "chip" }, `Runs ${s.Jobs.join(", ")}`));
 }
 
 function scheduleForm(s) {
   const where = s ? `schedule:${s.Name}` : "new-schedule";
-  const d = draft ?? (s ? { ...s } : { Name: "", Cron: "", TZ: "", At: "", Jobs: [] });
+  const d = drafts.get(where) ?? (s ? { ...s } : { Name: "", Cron: "", TZ: "", At: "", Jobs: [] });
   const name = text(d.Name, { placeholder: "daily_report" });
   const mode = h("select", { class: "field left" },
     h("option", { value: "cron", selected: !d.At }, "Repeatedly, on a cron spec"),
@@ -471,11 +530,11 @@ function scheduleForm(s) {
     Cron: mode.value === "cron" ? cron.value : "", TZ: mode.value === "cron" ? tz.value : "", At: mode.value === "at" ? at.value : "",
     Jobs: jobs.value(),
   });
-  const jobs = jobsPicker(d.Jobs, (next) => { draft = { ...readAll(), Jobs: next }; draw(); });
-  read = readAll;
+  const jobs = jobsPicker(d.Jobs, (next) => redrawWith(where, { ...readAll(), Jobs: next }));
+  readers.set(where, readAll);
   return h("form", {
     class: s ? "gform pform" : "gform pform new",
-    onsubmit: (e) => { e.preventDefault(); act("SaveSchedule", [{ New: !s, ...readAll() }]); },
+    onsubmit: (e) => { e.preventDefault(); act("SaveSchedule", [{ New: !s, ...readAll() }], where); },
   },
   !s && h("h3", {}, "New Schedule"),
   !s && row(where, "name", "Name", name, "Lowercase letters, digits, - and _."),
@@ -501,6 +560,7 @@ async function openTOML(table) {
     busy = false;
   }
   if (!v || v.Group !== group) return;
+  keep();
   toml = { text: v.Text, problem: v.Problem, table };
   draw();
 }
@@ -538,8 +598,9 @@ function tomlEditor() {
       return;
     }
     toml = null;
-    open = deleting = "";
-    draft = null;
+    open.clear();
+    drafts.clear();
+    deleting = "";
     done = "config.toml saved.";
     tv = (await call("Triggers")) ?? tv;
     draw();
