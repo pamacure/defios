@@ -50,7 +50,7 @@ func (s *server) grantedSkills(handle string, refs []string) ([]grantedSkill, er
 		if !ok {
 			return nil, fmt.Errorf("@%s's profile: skills: %q: Plugin %s has no Skill %q", handle, ref, pname, name)
 		}
-		// One line each in the preamble, whatever the frontmatter's folding.
+		// One line each in the system block, whatever the frontmatter's folding.
 		desc := strings.Join(strings.Fields(sk.Description), " ")
 		out = append(out, grantedSkill{Ref: ref, Description: desc, plugin: p, name: name})
 	}

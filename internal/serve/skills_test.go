@@ -34,7 +34,7 @@ func grantSkills(t *testing.T, n *node, h, skills string) {
 }
 
 // An agent granted Skills is offered skill_load without it being in tools,
-// and the stable preamble lists each granted Skill with its description,
+// and the system block lists each granted Skill with its description,
 // sorted whatever order skills lists them in. It loads a Skill's SKILL.md
 // without its frontmatter and a file under that Skill; a path leaving the
 // Skill, a Skill not granted and a file that is not there are tool errors
@@ -76,11 +76,11 @@ func TestAnAgentLoadsAGrantedSkillAndItsFiles(t *testing.T) {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
 	listing := "- audits/erc20: Audit an ERC-20 transfer.\n- defios/review-sign-request: How to review a Sign Request before accepting or refusing it.\n"
-	if !strings.Contains(calls[0].Stable, listing) || strings.Contains(calls[0].Depth, "audits/erc20") {
-		t.Errorf("stable preamble lacks the Skills sorted:\n%s", calls[0].Stable)
+	if !strings.Contains(calls[0].System, listing) || strings.Contains(calls[0].RunFacts, "audits/erc20") {
+		t.Errorf("system block lacks the Skills sorted:\n%s", calls[0].System)
 	}
-	if strings.Contains(calls[0].Stable, "audits/solana") {
-		t.Errorf("preamble lists a Skill not granted:\n%s", calls[0].Stable)
+	if strings.Contains(calls[0].System, "audits/solana") {
+		t.Errorf("system block lists a Skill not granted:\n%s", calls[0].System)
 	}
 	body := lastTurn(calls[1])
 	if !strings.Contains(body, "# ERC-20") || !strings.Contains(body, "Read checklist.md first.") || strings.Contains(body, "description:") || strings.Contains(body, `"is_error":true`) {

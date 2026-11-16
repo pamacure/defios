@@ -82,8 +82,8 @@ func TestEachNodesAgentsReadOnlyItsOwnRecap(t *testing.T) {
 		t.Errorf("bob's agent read\n%s\nwant\n%s", bob[0].Turns, want)
 	}
 	for _, c := range append(alice, bob...) {
-		if strings.Contains(c.System, "missing") {
-			t.Errorf("nothing is pruned, yet the preamble says talk is missing: %q", c.System)
+		if strings.Contains(c.RunFacts, "missing") {
+			t.Errorf("nothing is pruned, yet the last turn says talk is missing: %q", c.RunFacts)
 		}
 	}
 }
@@ -117,28 +117,28 @@ func pruneOn(t *testing.T, n *node, through uint64) {
 }
 
 // When this replica has pruned talk its Recap does not account for, or any
-// talk with no Recap, the preamble says earlier talk is missing; pruned
+// talk with no Recap, the run's last turn says earlier talk is missing; pruned
 // talk the Recap accounts for is not missing.
-func TestThePreambleSaysWhenPrunedTalkIsMissing(t *testing.T) {
+func TestTheLastTurnSaysWhenPrunedTalkIsMissing(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
 	seqs := sendAll(t, a, "one", "two", "three")
 	missing := func() bool {
 		t.Helper()
 		calls := provider.seen()
-		return strings.Contains(calls[len(calls)-1].System, "Earlier talk is missing")
+		return strings.Contains(calls[len(calls)-1].RunFacts, "Earlier talk is missing")
 	}
 
 	pruneOn(t, a, seqs[1])
 	writeRecap(t, a, seqs[1], "one and two")
 	summon(t, a, "@auditor covered?")
 	if missing() {
-		t.Errorf("the Recap accounts for all pruned talk, yet the preamble says talk is missing")
+		t.Errorf("the Recap accounts for all pruned talk, yet the last turn says talk is missing")
 	}
 
 	writeRecap(t, a, seqs[0], "one")
 	summon(t, a, "@auditor past the Recap?")
 	if !missing() {
-		t.Errorf("seq %d is pruned past the Recap, yet the preamble does not say talk is missing", seqs[1])
+		t.Errorf("seq %d is pruned past the Recap, yet the last turn does not say talk is missing", seqs[1])
 	}
 	if calls := provider.seen(); strings.Contains(calls[len(calls)-1].Turns, "alice: two") {
 		t.Errorf("pruned talk was read: %s", calls[len(calls)-1].Turns)
@@ -149,7 +149,7 @@ func TestThePreambleSaysWhenPrunedTalkIsMissing(t *testing.T) {
 	}
 	summon(t, a, "@auditor no Recap?")
 	if !missing() {
-		t.Errorf("talk is pruned and there is no Recap, yet the preamble does not say talk is missing")
+		t.Errorf("talk is pruned and there is no Recap, yet the last turn does not say talk is missing")
 	}
 }
 

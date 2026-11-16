@@ -30,13 +30,17 @@ type providerCall struct {
 	Key    string
 	Path   string // the URL path called
 	System string // the system blocks' text, joined
-	// Stable is the system text up to its cache breakpoint, and Depth the
-	// text after it.
-	Stable, Depth string
-	Prompt        string // the first message's text
-	Turns         string // every message, "[role] content" a line each
-	Messages      int    // how many messages the call carried
-	Tools         string // the names of the tools offered, space-separated
+	// SystemBlocks is how many system blocks the call carried, and
+	// SystemCached whether the last one ends at a cache breakpoint.
+	SystemBlocks int
+	SystemCached bool
+	// RunFacts is what the last message says about this run, after the
+	// talk (ADR 0036); Prompt and Turns leave it out.
+	RunFacts string
+	Prompt   string // the first message's text
+	Turns    string // every message, "[role] content" a line each
+	Messages int    // how many messages the call carried
+	Tools    string // the names of the tools offered, space-separated
 	// Descriptions is each offered tool's description, by name.
 	Descriptions map[string]string
 }
@@ -81,21 +85,20 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 			call.Descriptions[tool.Name] = tool.Description
 		}
 		call.Tools = strings.Join(tools, " ")
-		cached := false
+		call.SystemBlocks = len(body.System)
 		for _, b := range body.System {
 			call.System += b.Text
-			if cached {
-				call.Depth += b.Text
-			} else {
-				call.Stable += b.Text
+			call.SystemCached = b.CacheControl != nil
+		}
+		for i, m := range body.Messages {
+			text := contentText(m.Content)
+			if i == len(body.Messages)-1 {
+				text, call.RunFacts = splitRun(text)
 			}
-			cached = cached || b.CacheControl != nil
-		}
-		if len(body.Messages) > 0 {
-			call.Prompt = contentText(body.Messages[0].Content)
-		}
-		for _, m := range body.Messages {
-			call.Turns += "[" + m.Role + "] " + contentText(m.Content) + "\n"
+			if i == 0 {
+				call.Prompt = text
+			}
+			call.Turns += "[" + m.Role + "] " + text + "\n"
 		}
 		p.mu.Lock()
 		p.calls = append(p.calls, call)
@@ -105,6 +108,22 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 	}))
 	t.Cleanup(p.Close)
 	return p
+}
+
+// splitRun is a run's last message as its talk and what it says about the
+// run, the paragraph that closes it.
+func splitRun(text string) (talk, run string) {
+	const lead = "\n\n(About this run. "
+	if i := strings.LastIndex(text, lead); i >= 0 {
+		return text[:i], text[i+2:]
+	}
+	return text, ""
+}
+
+// briefed reports whether sys carries handle's Agent Brief, "You are
+// <handle>.", after the DeFiOS Briefing.
+func briefed(sys, handle string) bool {
+	return strings.Contains(sys, "\n\nYou are "+handle+".\n\n")
 }
 
 // contentText is a message's content as text: a string, or text blocks
@@ -443,7 +462,7 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 	if len(calls) != 1 || calls[0].Key != "sk-"+a.name || calls[0].Prompt != "alice: @auditor is this fine?" {
 		t.Fatalf("calls = %+v", calls)
 	}
-	if sys := calls[0].System; !strings.HasPrefix(sys, "You are auditor.") || !strings.Contains(sys, "@auditor") || !strings.Contains(sys, "Group-level") {
+	if sys := calls[0].System; !briefed(sys, "auditor") || !strings.Contains(sys, "@auditor") || !strings.Contains(sys, "Group-level") {
 		t.Fatalf("system prompt = %q", sys)
 	}
 }
@@ -463,7 +482,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if len(calls) != 2 || !strings.HasPrefix(calls[1].System, "You are auditor.") {
+	if len(calls) != 2 || !briefed(calls[1].System, "auditor") {
 		t.Fatalf("calls = %+v", calls)
 	}
 	if want := "alice: @scribe then @auditor, @scribe\nalice/@scribe: reply 1"; calls[1].Prompt != want {
@@ -477,7 +496,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 
 // An agent sees its own messages as assistant turns and the rest as lean
 // lines in user turns (ADR 0018). Bob's @auditor is another agent, so
-// alice's sees its message as a lean line (ADR 0021). Its preamble says so.
+// alice's sees its message as a lean line (ADR 0021). Its system block says so.
 func TestAnAgentIsOneNodesHandle(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor")
 	agentNode(t, b, provider.URL, "auditor")
@@ -853,10 +872,11 @@ func TestMentionInAKeysConversation(t *testing.T) {
 	if call.Prompt != "alice: @auditor, check the key" {
 		t.Fatalf("prompt = %q", call.Prompt)
 	}
-	for _, want := range []string{"ecdsa Key 333333333333", "@scribe"} {
-		if !strings.Contains(call.System, want) {
-			t.Errorf("system prompt lacks %q: %q", want, call.System)
-		}
+	if want := "ecdsa Key 333333333333"; !strings.Contains(call.System, want) {
+		t.Errorf("system block lacks %q: %q", want, call.System)
+	}
+	if !strings.Contains(call.RunFacts, "@scribe") {
+		t.Errorf("the last turn does not name @scribe: %q", call.RunFacts)
 	}
 	rows := waitConversation(t, b, gid, id[:], 2)
 	if ff := freeforms(t, rows[1:2])[0]; ff.Handle != "auditor" || ff.Text != "reply 1" {
@@ -870,7 +890,7 @@ func answerAs(provider *fakeProvider, replies map[string]string) {
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		sys := provider.seen()[n-1].System
 		for h, text := range replies {
-			if strings.HasPrefix(sys, "You are "+h+".") {
+			if briefed(sys, h) {
 				streamSay(w, text)
 				return
 			}
@@ -1058,7 +1078,7 @@ func replyAs(provider *fakeProvider, replies map[string]string) {
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		sys := provider.seen()[n-1].System
 		for h, text := range replies {
-			if strings.HasPrefix(sys, "You are "+h+".") {
+			if briefed(sys, h) {
 				streamSay(w, text)
 				return
 			}
@@ -1095,8 +1115,8 @@ func TestAnAgentsMentionAtMaxDepthIsSkipped(t *testing.T) {
 // With max_depth 2 an agent's mention runs depth-first at the next depth:
 // @auditor @scribe, where auditor mentions quant, runs auditor, quant,
 // scribe at depths 1, 2, 1. quant's mention, at max_depth, is skipped, and
-// auditor's mention of itself is ignored. Each agent's preamble gives its
-// depth and the Handles it may summon, or none.
+// auditor's mention of itself is ignored. Each agent's last turn gives its
+// depth and the Handles it may summon, or none (ADR 0036).
 func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe", "quant")
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
@@ -1122,8 +1142,8 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 		"You are at depth 2 of at most 2. Agents you may summon by mentioning them: none.",
 		"You are at depth 1 of at most 2. Agents you may summon by mentioning them: @auditor, @quant.",
 	} {
-		if !strings.Contains(calls[i].System, want) {
-			t.Errorf("call %d system prompt lacks %q:\n%s", i+1, want, calls[i].System)
+		if !strings.Contains(calls[i].RunFacts, want) {
+			t.Errorf("call %d's last turn lacks %q:\n%s", i+1, want, calls[i].RunFacts)
 		}
 	}
 	if want := "alice: @auditor @scribe\nalice/@auditor: @quant, and me, @auditor\nalice/@quant: ask @scribe"; calls[2].Prompt != want {
@@ -1131,10 +1151,10 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	}
 }
 
-// An agent sends the same stable system blocks, its BRIEF.md and the stable
-// preamble, at every depth, with the cache breakpoint after them; only the
-// block after it names the depth and whom it may summon (ADR 0018).
-func TestAnAgentsStableSystemIsTheSameAtEveryDepth(t *testing.T) {
+// An agent sends one system block, byte-identical at every depth and ending
+// at a cache breakpoint: the DeFiOS Briefing, its BRIEF.md and the stable
+// facts. Its depth and whom it may summon are in the last turn (ADR 0036).
+func TestAnAgentsSystemBlockIsTheSameAtEveryDepth(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
 	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
@@ -1153,17 +1173,38 @@ func TestAnAgentsStableSystemIsTheSameAtEveryDepth(t *testing.T) {
 		t.Fatalf("calls = %+v", calls)
 	}
 	first, second := calls[0], calls[2]
-	if !strings.HasPrefix(first.Stable, "You are auditor.") || !strings.Contains(first.Stable, "talk_write tool") {
-		t.Fatalf("stable system = %q", first.Stable)
+	if first.SystemBlocks != 1 || !first.SystemCached || second.SystemBlocks != 1 || !second.SystemCached {
+		t.Fatalf("system blocks: %d cached %t, then %d cached %t; want one cached block each",
+			first.SystemBlocks, first.SystemCached, second.SystemBlocks, second.SystemCached)
 	}
-	if second.Stable != first.Stable {
-		t.Fatalf("stable system differs by depth:\n%q\n%q", first.Stable, second.Stable)
+	if !strings.HasPrefix(first.System, "# DeFiOS Briefing\n") || !briefed(first.System, "auditor") || !strings.Contains(first.System, "talk_write tool") {
+		t.Fatalf("system = %q", first.System)
 	}
-	if strings.Contains(first.Stable, "depth") {
-		t.Fatalf("stable system names a depth: %q", first.Stable)
+	if second.System != first.System {
+		t.Fatalf("system differs by depth:\n%q\n%q", first.System, second.System)
 	}
-	if !strings.Contains(first.Depth, "depth 1") || !strings.Contains(second.Depth, "depth 2") {
-		t.Fatalf("depth blocks %q and %q", first.Depth, second.Depth)
+	if strings.Contains(first.System, "You are at depth") {
+		t.Fatalf("system names this run's depth: %q", first.System)
+	}
+	if !strings.Contains(first.RunFacts, "depth 1 of at most 2") || !strings.Contains(second.RunFacts, "depth 2 of at most 2") {
+		t.Fatalf("last turns say %q and %q", first.RunFacts, second.RunFacts)
+	}
+}
+
+// The DeFiOS Briefing every agent is sent covers what the agent must know
+// of DeFiOS whatever its profile (ADR 0036).
+func TestTheBriefingCoversDeFiOS(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor")
+	summon(t, a, "@auditor")
+	sys := provider.seen()[0].System
+	briefing, _, _ := strings.Cut(sys, "\n\nYou are auditor.")
+	for _, want := range []string{
+		"Node", "Group-level talk", "Conversation", "Agent Brief", "Vault", "Plugin", "Trigger", "Network",
+		"depth 0", "max depth", "never another Node's", `\@`,
+	} {
+		if !strings.Contains(briefing, want) {
+			t.Errorf("the Briefing lacks %q", want)
+		}
 	}
 }
 

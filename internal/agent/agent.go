@@ -65,13 +65,12 @@ type Request struct {
 	Shape  Shape  // the API shape, from the Provider's api_path
 	URL    string // the whole endpoint: base URL and API path
 	APIKey string // empty sends none
-	// System is the stable part of the system prompt, the same for an agent
-	// at every depth; SystemDepth, what differs by depth, follows it directly
-	// as one prompt. Anthropic gets them as two blocks with a cache
-	// breakpoint between; OpenAI caches the shared prefix itself (ADR 0018).
-	System      string
-	SystemDepth string
-	Turns       []Turn // the talk so far, alternating and ending with User
+	// System is the system prompt: only what is the same for an agent on
+	// every run, so a provider caches it (ADR 0036). Anthropic gets it as
+	// one block ending at a cache breakpoint; OpenAI caches the shared
+	// prefix itself.
+	System string
+	Turns  []Turn // the talk so far, alternating and ending with User
 
 	// Tools are what the run offers, in order; none is a run that can only
 	// end its turn. A call of any other name is a tool error.
@@ -400,14 +399,11 @@ func (c *conversation) body() ([]byte, error) {
 	return body, nil
 }
 
-// openMessages starts a Messages conversation: the system prompt as two
-// blocks with a cache breakpoint between, and one on the last turn.
+// openMessages starts a Messages conversation: the system prompt as one
+// block ending at a cache breakpoint, and a breakpoint on the last turn.
 func openMessages(c *conversation) {
 	if c.req.System != "" {
 		c.system = append(c.system, map[string]any{"type": "text", "text": c.req.System, "cache_control": ephemeral})
-	}
-	if c.req.SystemDepth != "" {
-		c.system = append(c.system, map[string]any{"type": "text", "text": c.req.SystemDepth})
 	}
 	for i, t := range c.req.Turns {
 		var content any = t.Text
@@ -421,7 +417,7 @@ func openMessages(c *conversation) {
 // openOpenAI starts a Chat Completions or Responses conversation: the
 // system prompt as one system message, then the turns.
 func openOpenAI(c *conversation) {
-	if system := c.req.System + c.req.SystemDepth; system != "" {
+	if system := c.req.System; system != "" {
 		c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
 	}
 	for _, t := range c.req.Turns {

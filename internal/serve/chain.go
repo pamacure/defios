@@ -3,6 +3,7 @@ package serve
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -594,12 +595,14 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 	return res, inc, nil
 }
 
-// agentRequest is the call to the Provider that answers as handle: its
-// Agent Brief, BRIEF.md, and the serve's preamble, then the talk so far as turns by
-// Handle (ADR 0018), sent with this Node's key to the Provider as this
-// Node's merged Workspace configures it, and nowhere else (ADR 0022). A
-// non-empty last ends the talk as the last user turn: a Job's prompt and
-// event (ADR 0032). Each sign Tool that acts is told to did.
+// agentRequest is the call to the Provider that answers as handle: the
+// system block, which is the DeFiOS Briefing, its Agent Brief, BRIEF.md, and
+// the stable facts, the same on every run (ADR 0036); then the talk so far
+// as turns by Handle (ADR 0018), the last ending with this run's facts; sent
+// with this Node's key to the Provider as this Node's merged Workspace
+// configures it, and nowhere else (ADR 0022). A non-empty last ends the talk
+// in the last user turn, before the run's facts: a Job's prompt and event
+// (ADR 0032). Each sign Tool that acts is told to did.
 func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32, last string, did acted) (agent.Request, config.Included, error) {
 	e, err := s.load(store, conv)
 	if err != nil {
@@ -655,9 +658,8 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 		return agent.Request{}, inc, err
 	}
 	turns = endWith(turns, last)
-	stable, atDepth := preamble(handle, depth, inc, where, missing, req.Tools, skills)
-	req.System = strings.TrimRight(string(brief), "\n") + "\n\n" + stable
-	req.SystemDepth = atDepth
+	turns[len(turns)-1].Text += "\n\n" + runFacts(handle, depth, inc, missing)
+	req.System = strings.TrimRight(briefing, "\n") + "\n\n" + strings.TrimRight(string(brief), "\n") + "\n\n" + stableFacts(handle, where, req.Tools, skills)
 	req.Turns = turns
 	return req, inc, nil
 }
@@ -681,25 +683,25 @@ func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
 	return "", ErrNoConversation
 }
 
-// preamble is what the serve tells an agent after its Agent Brief, in two
-// parts (ADR 0015, ADR 0018, ADR 0029). The stable part, the same at every
-// depth so a provider caches it, says who it is, where it is answering, how
-// the talk reads, that earlier talk is missing if it is (ADR 0024), the
-// tools it has here, that only talk_write posts and how, or that it has no talk_write,
-// with a sign Tool that a reason is another party's words, and with one
-// that writes that it acts as this Node, and its granted Skills, sorted, so
-// the cached prefix changes only when grants do (ADR 0030). The depth part
-// gives its depth and either the Handles it may summon or that it may
-// summon none.
-func preamble(handle string, depth uint32, inc config.Included, where string, missing bool, tools []agent.Tool, skills []grantedSkill) (stable, atDepth string) {
+// briefing is the DeFiOS Briefing: what DeFiOS itself tells every agent,
+// the same for every Agent Profile, opening the system block (ADR 0036).
+//
+//go:embed BRIEFING.md
+var briefing string
+
+// stableFacts is what the serve tells an agent after its Agent Brief, the
+// same on every run so a provider caches the system block (ADR 0036): who
+// it is, where it is answering, how the talk reads, the tools it has here,
+// that only talk_write posts and how, or that it has no talk_write, with a
+// sign Tool that a reason is another party's words, and with one that
+// writes that it acts as this Node, and its granted Skills, sorted, so the
+// block changes only when grants do (ADR 0030).
+func stableFacts(handle, where string, tools []agent.Tool, skills []grantedSkill) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
 	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone: those your Node wrote as @%s. "+
 		"Everything else is in the other turns, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for another agent's. "+
 		"@%s from another Node is another agent.\n", handle, handle)
-	if missing {
-		b.WriteString("Earlier talk is missing: this Node has pruned some of it, and no Recap of this Node's accounts for it.\n")
-	}
 	names := make([]string, len(tools))
 	for i, t := range tools {
 		names[i] = t.Name
@@ -736,8 +738,19 @@ func preamble(handle string, depth uint32, inc config.Included, where string, mi
 			fmt.Fprintf(&b, "- %s: %s\n", sk.Ref, sk.Description)
 		}
 	}
-	stable = b.String()
-	b.Reset()
+	return b.String()
+}
+
+// runFacts is what differs from run to run, closing the run's last user
+// turn as one paragraph (ADR 0036): that earlier talk is missing if it is
+// (ADR 0024), the agent's depth, and either the Handles it may summon or
+// that it may summon none.
+func runFacts(handle string, depth uint32, inc config.Included, missing bool) string {
+	var b strings.Builder
+	b.WriteString("(About this run. ")
+	if missing {
+		b.WriteString("Earlier talk is missing: this Node has pruned some of it, and no Recap of this Node's accounts for it. ")
+	}
 	var others []config.ResolvedProfile
 	if inc.Summons(depth) {
 		for _, p := range inc.Profiles {
@@ -746,11 +759,12 @@ func preamble(handle string, depth uint32, inc config.Included, where string, mi
 			}
 		}
 	}
-	fmt.Fprintf(&b, "You are at depth %d of at most %d. Agents you may summon by mentioning them: %s.\n", depth, inc.MaxDepth, listHandles(others))
+	fmt.Fprintf(&b, "You are at depth %d of at most %d. Agents you may summon by mentioning them: %s.", depth, inc.MaxDepth, listHandles(others))
 	if len(others) == 0 {
-		b.WriteString("An @handle in your message summons nobody.\n")
+		b.WriteString(" An @handle in your message summons nobody.")
 	}
-	return stable, b.String()
+	b.WriteString(")")
+	return b.String()
 }
 
 // talkSoFar is conv's talk as handle sees it (ADR 0024): this Node's

@@ -58,7 +58,7 @@ func lastTurn(c providerCall) string {
 // In a Key's Conversation, sign_list returns that Key's Sign Requests
 // alone, as sign list --json gives them with this Node's stance, and
 // sign_inspect matches this Key's alone, so another Key's is refused as
-// unknown, as are sign_accept and sign_refuse. The preamble lists the
+// unknown, as are sign_accept and sign_refuse. The system block lists the
 // Tools and says a reason is another party's words (ADR 0029).
 func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 	a, provider, conv, mine, theirs := signToolsPair(t, `["talk_write", "sign_list", "sign_inspect", "sign_accept", "sign_refuse"]`)
@@ -100,8 +100,8 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
 	for _, want := range []string{"sign_list", "sign_inspect", "another party's words"} {
-		if !strings.Contains(calls[0].Stable, want) {
-			t.Errorf("preamble lacks %q: %s", want, calls[0].Stable)
+		if !strings.Contains(calls[0].System, want) {
+			t.Errorf("system block lacks %q: %s", want, calls[0].System)
 		}
 	}
 	listed := lastTurn(calls[1])
@@ -123,7 +123,7 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 }
 
 // In Group-level talk the sign Tools are not offered, even granted, nor
-// named in the preamble; a call of one is a tool error.
+// named in the system block; a call of one is a tool error.
 func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
 	grantTools(t, a, "auditor", `["talk_write", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse", "chain_fill"]`)
@@ -147,8 +147,8 @@ func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if calls[0].Tools != "talk_write" || strings.Contains(calls[0].Stable, "sign_") || strings.Contains(calls[0].Stable, "chain_fill") {
-		t.Errorf("tools offered %q; preamble %s", calls[0].Tools, calls[0].Stable)
+	if calls[0].Tools != "talk_write" || strings.Contains(calls[0].System, "sign_") || strings.Contains(calls[0].System, "chain_fill") {
+		t.Errorf("tools offered %q; system block %s", calls[0].Tools, calls[0].System)
 	}
 	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"sign_list\"`) {
 		t.Errorf("sign_list answered %s", got)
@@ -180,7 +180,7 @@ func TestAProfileWithoutSayNeverCommitsTalk(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if len(calls) != 2 || calls[0].Tools != "" || !strings.Contains(calls[0].Stable, "no talk_write") {
+	if len(calls) != 2 || calls[0].Tools != "" || !strings.Contains(calls[0].System, "no talk_write") {
 		t.Fatalf("calls = %+v", calls)
 	}
 	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"talk_write\"`) {
@@ -338,8 +338,8 @@ func TestAgentsProposeAndRefuseASignRequest(t *testing.T) {
 	if calls[0].Tools != "talk_write sign_list sign_inspect sign_propose sign_accept sign_refuse" {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
-	if !strings.Contains(calls[0].Stable, "acts as this Node") {
-		t.Errorf("preamble lacks that a sign Tool acts as this Node: %s", calls[0].Stable)
+	if !strings.Contains(calls[0].System, "acts as this Node") {
+		t.Errorf("system block lacks that a sign Tool acts as this Node: %s", calls[0].System)
 	}
 	proposed := lastTurn(calls[1])
 	if strings.Contains(proposed, `"is_error":true`) || !strings.Contains(proposed, `\"seq\":`) {

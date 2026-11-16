@@ -334,7 +334,7 @@ func run(s *script, shape agent.Shape, ev agent.Events) (agent.Result, error) {
 // runWith runs a Request offering tools against s.
 func runWith(s *script, shape agent.Shape, ev agent.Events, tools ...agent.Tool) (agent.Result, error) {
 	return agent.Client{Backoff: time.Millisecond}.Run(context.Background(), agent.Request{
-		Shape: shape, URL: s.URL, APIKey: "sk-secret", Body: map[string]any{"model": "m"}, System: "be brief\n", SystemDepth: "at depth 1\n", Turns: talk,
+		Shape: shape, URL: s.URL, APIKey: "sk-secret", Body: map[string]any{"model": "m"}, System: "be brief\n", Turns: talk,
 		Tools: tools,
 	}, ev)
 }
@@ -479,7 +479,7 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 		t.Fatalf("tools = %v", body["tools"])
 	}
 	msgs := messages(body)
-	if len(msgs) != 4 || fmt.Sprint(msgs[0]) != "map[content:be brief\nat depth 1\n role:system]" || fmt.Sprint(msgs[1:]) != wantTalk {
+	if len(msgs) != 4 || fmt.Sprint(msgs[0]) != "map[content:be brief\n role:system]" || fmt.Sprint(msgs[1:]) != wantTalk {
 		t.Fatalf("messages = %v", msgs)
 	}
 }
@@ -513,7 +513,7 @@ func TestResponsesSayIsTheResult(t *testing.T) {
 		t.Fatalf("tool = %v, want a flat function tool", tool)
 	}
 	in := messages(body)
-	if len(in) != 4 || fmt.Sprint(in[0]) != "map[content:be brief\nat depth 1\n role:system]" || fmt.Sprint(in[1:]) != wantTalk {
+	if len(in) != 4 || fmt.Sprint(in[0]) != "map[content:be brief\n role:system]" || fmt.Sprint(in[1:]) != wantTalk {
 		t.Fatalf("input = %v", in)
 	}
 }
@@ -714,16 +714,16 @@ func TestARunWithNoToolsOffersNone(t *testing.T) {
 	}
 }
 
-// An Anthropic run sends the system prompt as blocks, the stable part first
-// with a cache breakpoint after it and the depth part last, and a breakpoint
-// on the latest turn: the talk's last turn, then the latest tool result,
+// An Anthropic run sends the system prompt as one block with a cache
+// breakpoint after it (ADR 0036), and a breakpoint on the latest turn: the
+// talk's last turn, then the latest tool result,
 // which takes the breakpoint from the one before it (ADR 0018).
 func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
 	s := newScript(t, anthropicSays("first", ""), anthropicSays("second", ""), anthropicSays("third", "done"))
 	if _, err := run(s, agent.Messages, agent.Events{}); err != nil {
 		t.Fatal(err)
 	}
-	const wantSystem = "[map[cache_control:map[type:ephemeral] text:be brief\n type:text] map[text:at depth 1\n type:text]]"
+	const wantSystem = "[map[cache_control:map[type:ephemeral] text:be brief\n type:text]]"
 	for n := 1; n <= 3; n++ {
 		if got := fmt.Sprint(s.body(n)["system"]); got != wantSystem {
 			t.Fatalf("call %d system = %s", n, got)
