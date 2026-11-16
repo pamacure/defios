@@ -264,6 +264,74 @@ func actedWords(lines []map[string]any) []string {
 
 const payEthTool = `[{"network":"eth","ethereum":{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","nonce":"0","gasLimit":"21000","maxFeePerGas":"30","maxPriorityFeePerGas":"1"}}]`
 
+// sign_list with a status returns only the Key's Sign Requests in that
+// status, leaving out those in another, and an empty list if none is in
+// it; with none it returns them all, and an
+// unknown status or argument is a tool error naming the valid ones
+// (ADR 0036).
+func TestSignListFiltersByStatus(t *testing.T) {
+	a, b, provider, conv := signingAgents(t)
+	ctx := context.Background()
+	ref := "ecdsa:" + hexOf(bytes.Repeat([]byte{0x33}, 33))
+	open, err := a.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay one", Transactions: payEth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused, err := b.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay two", Transactions: payEth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitSign(t, a, refused.MsgID, func(signreq.Detail) bool { return true })
+	if _, err := a.client().SignRefuse(ctx, refused.MsgID, "no"); err != nil {
+		t.Fatal(err)
+	}
+	waitSign(t, a, refused.MsgID, func(d signreq.Detail) bool { return d.Status == signreq.Refused })
+	statuses := strings.Join(signreq.Statuses, ", ")
+	cases := []struct {
+		input string
+		fails bool
+		want  []string // each in the answer
+		lacks string   // not in it
+	}{
+		{input: `{"status":"open"}`, want: []string{open.MsgID}, lacks: refused.MsgID},
+		{input: `{"status":"refused"}`, want: []string{refused.MsgID}, lacks: open.MsgID},
+		{input: `{"status":"expired"}`, want: []string{`"[]"`}},
+		{input: `{}`, want: []string{open.MsgID, refused.MsgID}},
+		{input: `{"status":"pending"}`, fails: true, want: []string{"pending", statuses}},
+		{input: `{"status":""}`, fails: true, want: []string{statuses}},
+		{input: `{"state":"open"}`, fails: true, want: []string{statuses}},
+	}
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		streamParts(w)
+		if n <= len(cases) {
+			endCall(w, "sign_list", cases[n-1].input)
+			return
+		}
+		endTalkWrite(w, "listed")
+	})
+	if _, got := summonIn(t, a, conv, "@auditor what is open?"); !strings.HasSuffix(got, "commit:listed end") {
+		t.Fatalf("events = %s", got)
+	}
+	calls := provider.seenWith("sk-alice")
+	if len(calls) != len(cases)+1 {
+		t.Fatalf("%d calls, want %d", len(calls), len(cases)+1)
+	}
+	for i, c := range cases {
+		got := lastTurn(calls[i+1])
+		if strings.Contains(got, `"is_error":true`) != c.fails {
+			t.Errorf("sign_list %s answered %s", c.input, got)
+		}
+		for _, want := range c.want {
+			if !strings.Contains(got, want) {
+				t.Errorf("sign_list %s lacks %q: %s", c.input, want, got)
+			}
+		}
+		if c.lacks != "" && strings.Contains(got, c.lacks) {
+			t.Errorf("sign_list %s has %q: %s", c.input, c.lacks, got)
+		}
+	}
+}
+
 // An agent proposes a Sign Request of its Conversation's Key under its
 // Handle, and its proposal is its Node's accept. Another Node's agent
 // refuses it with a reason; that Node's stance is then final, so its
