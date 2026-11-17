@@ -415,7 +415,7 @@ func (t *talk) loadSigns() {
 	if t.signVer != ver {
 		// An event or a card read came since: what was read may be older.
 		t.mu.Unlock()
-		go t.loadSigns()
+		t.work.Go(t.loadSigns)
 		return
 	}
 	if t.read("signs", err) {
@@ -767,7 +767,7 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 	t.mu.Unlock()
 	t.emit()
 	if reload != nil {
-		go reload()
+		t.work.Go(reload)
 	}
 }
 
