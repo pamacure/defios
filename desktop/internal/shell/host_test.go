@@ -81,8 +81,25 @@ func meshShell(t *testing.T, p nodedir.Paths, newTailnet func(serve.TsnetOptions
 	return s
 }
 
+// nodeDir is an empty directory for a Node, short enough for its
+// serve.sock: a Unix socket path holds at most 104 bytes on macOS, where
+// t.TempDir is a long path that names the test.
+func nodeDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "defios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
+	return dir
+}
+
 func TestTheAppHostsTheNodeAndTheCLIReachesItOverTheSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir := nodeDir(t)
 	defiosCLI(t, dir, "init", "--name", "laptop")
 	defiosCLI(t, dir, "group", "new", "alpha", "--headscale", "https://hs.example")
 	defiosCLI(t, dir, "group", "new", "beta", "--headscale", "https://hs.example")
@@ -184,7 +201,7 @@ func (t *meshTailnet) Peers(context.Context) ([]serve.Peer, error) {
 // onboard is a fresh app taken through steps 1 and 2 on m.
 func onboard(t *testing.T, m *mesh, name string) (*shell.Shell, nodedir.Paths) {
 	t.Helper()
-	p := nodedir.Resolve(nodedir.Lookup{Dir: t.TempDir()})
+	p := nodedir.Resolve(nodedir.Lookup{Dir: nodeDir(t)})
 	s := meshShell(t, p, m.tailnet)
 	if st := s.State(); st.View != shell.ViewNoNode {
 		t.Fatalf("%s: a fresh Node directory opens on %s", name, st.View)

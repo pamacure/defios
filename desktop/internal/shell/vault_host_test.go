@@ -90,7 +90,7 @@ func TestABackupFromTheAppRestoresWithTheCLI(t *testing.T) {
 		t.Fatalf("a Backup over a file: %+v", v)
 	}
 
-	dir := t.TempDir()
+	dir := nodeDir(t)
 	defiosCLI(t, dir, "init", "--from-backup", file)
 	if out := defiosCLI(t, dir, "secret", "show", "RPC_KEY", "--reveal", "--group", "home"); !strings.Contains(out, "kept") {
 		t.Fatalf("the restored Secret: %s", out)
