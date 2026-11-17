@@ -305,6 +305,9 @@ type Event struct {
 	// Session is a Session whose status moved: started, completed or
 	// aborted.
 	Session *SessionEvent
+	// KeyAlias is this Node's alias for a minted Key, just written: news
+	// no row carries, so what lists Keys reads them again.
+	KeyAlias *KeyAliasEvent
 	// SignRequest is a Sign Request whose status, stances, Session or
 	// Broadcast Receipts moved, one proposed included, or whose deadline
 	// passed: expired, which no message marks.
@@ -332,6 +335,11 @@ type ChainEventIn struct {
 	Group        string
 	Conversation string // hex Conversation ID; GroupTalk for Group-level
 	Event        ChainEvent
+}
+
+// KeyAliasEvent is a Group whose Keys this Node named anew.
+type KeyAliasEvent struct {
+	Group string
 }
 
 // SessionEvent is a Session's new status, in Session.Status.
@@ -668,6 +676,9 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 		},
 		OnSession: func(sum session.Summary) {
 			h.publish(Event{Session: &SessionEvent{Group: alias, Session: sum}})
+		},
+		OnKeyAlias: func() {
+			h.publish(Event{KeyAlias: &KeyAliasEvent{Group: alias}})
 		},
 		OnSignRequest: func(sum signreq.Summary) {
 			h.publish(Event{SignRequest: &SignRequestEvent{Group: alias, Request: sum}})

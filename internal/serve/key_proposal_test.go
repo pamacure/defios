@@ -72,6 +72,43 @@ func TestAProposalBecomesTheKeysAliasOnEveryNode(t *testing.T) {
 	waitAlias(t, b, name, "Cold")
 }
 
+// Writing a Key's alias is news no row carries: OnKeyAlias tells of it,
+// once the alias reads back, so a page that listed the Key before it can
+// list it again.
+func TestOnKeyAliasHearsTheAliasOnceItIsWritten(t *testing.T) {
+	heard := map[string]chan string{}
+	name := "ecdsa-" + strings.Repeat("45", 6)
+	a, b := pairWith(t, func(n *node) {
+		ch := make(chan string, 4)
+		heard[n.name] = ch
+		n.tune = func(o *serve.Options) {
+			o.OnKeyAlias = func() {
+				w, err := config.ReadWorkspace(n.paths.ConversationConfigFile(group.ImplicitAlias, name))
+				if err != nil {
+					ch <- err.Error()
+					return
+				}
+				ch <- w.Alias
+			}
+		}
+	})
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+
+	mintProposing(t, a, b, gid, bytes.Repeat([]byte{0x45}, 33), "Hot")
+	for _, n := range []*node{a, b} {
+		select {
+		case got := <-heard[n.name]:
+			if got != "Hot" {
+				t.Fatalf("%s: OnKeyAlias read the alias %q, want \"Hot\"", n.name, got)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("%s: OnKeyAlias never called", n.name)
+		}
+	}
+}
+
 // A proposal that cannot be an alias leaves the Key with none, and the
 // warning does not repeat what another Node sent. The Key still has its
 // Workspace.

@@ -108,6 +108,8 @@ func (w *workspaceWatcher) catchUp(wk cosl.Wake) error {
 			}
 			if err := applyAlias(k, chosen, keys, aliases); err != nil {
 				w.s.opts.Logf("serve: warning: Key %s keeps no alias on this Node: %v", k.Ref(), err)
+			} else if w.s.opts.OnKeyAlias != nil {
+				w.s.opts.OnKeyAlias()
 			}
 		}
 		w.s.holds.release(k.SessionID) // only now, for its config.toml now says it is taken

@@ -739,6 +739,8 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 	case ev.Session != nil && ev.Session.Group == group:
 		t.session(ev.Session.Session)
 		reload = t.loadConversations
+	case ev.KeyAlias != nil && ev.KeyAlias.Group == group:
+		reload = t.loadConversations
 	case ev.SignRequest != nil && ev.SignRequest.Group == group:
 		r := ev.SignRequest.Request
 		t.signRequest(r)
