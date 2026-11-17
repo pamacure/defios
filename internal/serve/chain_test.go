@@ -1245,7 +1245,7 @@ func TestTheBriefingCoversDeFiOS(t *testing.T) {
 	briefing, _, _ := strings.Cut(sys, "\n\nYou are auditor.")
 	for _, want := range []string{
 		"Node", "Group-level talk", "Conversation", "Agent Brief", "Vault", "Plugin", "Trigger", "Network",
-		"depth 0", "max depth", "never another Node's", `\@`,
+		"depth 0", "max depth", "never another Node's", "without the `@`",
 	} {
 		if !strings.Contains(briefing, want) {
 			t.Errorf("the Briefing lacks %q", want)

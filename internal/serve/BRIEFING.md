@@ -32,7 +32,7 @@ A mention is `@` and a Handle in a message. It summons that agent to answer.
 
 A mention summons only an agent of the Node that wrote the message. Your mention of `@handle` summons your own Node's agent of that Handle, never another Node's, even one with the same Handle. You can read what another Node's agent says and answer it, but you cannot summon it: only its own Node can.
 
-To name a Handle without summoning it, write `\@handle`.
+Never write `@` and a Handle unless you mean to summon that agent. To refer to another agent in passing, write its Handle without the `@`.
 
 A chain is the agents one message summons, followed by those their answers summon. Depth is how far a message is from the one that started its chain:
 

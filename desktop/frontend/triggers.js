@@ -60,13 +60,21 @@ export function triggersLoad(s) {
 }
 
 // triggersRefresh reads the view again, as when the page is opened anew,
-// and redraws only if it changed and nothing is being edited.
+// and redraws only if it changed. While something is being edited it takes
+// only the device's agents, so one made meanwhile can be chosen, and keeps
+// what is typed.
 export async function triggersRefresh() {
-  if (!tv || loading || busy || open.size || toml || deleting) return;
+  if (!tv || loading || busy) return;
   const g = group;
   const next = await call("Triggers");
-  if (!next || next.Group !== g || g !== group || busy || open.size || toml || deleting) return;
+  if (!next || next.Group !== g || g !== group || busy) return;
   if (mount.contains(document.activeElement)) return;
+  if (open.size || toml || deleting) {
+    if (JSON.stringify(next.Handles) === JSON.stringify(tv.Handles)) return;
+    tv = { ...tv, Handles: next.Handles };
+    redraw();
+    return;
+  }
   if (JSON.stringify(next) === JSON.stringify(tv)) return;
   tv = next;
   draw();
