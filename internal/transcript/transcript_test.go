@@ -350,3 +350,46 @@ func TestARunIsWrittenToTheTranscriptItRead(t *testing.T) {
 		t.Fatalf("live = %v, %v, want none", live, err)
 	}
 }
+
+// A run's turn line records what it was made under: its API Shape, the
+// Tools and Skills granted to it, and its Binding; a later run reads them
+// back from it (ADR 0036).
+func TestARunRecordsWhatItWasMadeUnder(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "aaaa",
+		transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindTurn, Turn: "one",
+			Shape: "messages", Tools: []string{"talk_write", "sign_propose"}, Skills: []string{"acme/audit"}, Binding: "b1"},
+		transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent})
+	runs := transcript.Runs(read(t, p, nil)[0].Lines)
+	if r := runs[0]; r.Shape != "messages" || !reflect.DeepEqual(r.Tools, []string{"talk_write", "sign_propose"}) || !reflect.DeepEqual(r.Skills, []string{"acme/audit"}) || r.Binding != "b1" {
+		t.Fatalf("run = %+v", r)
+	}
+}
+
+// Renew closes the live Transcript a run read, as a Clear does, and the
+// run is written to a new live one: it replays nothing it could not (ADR
+// 0036).
+func TestRenewStartsANewTranscriptForTheRun(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "aaaa", transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent})
+	w := transcript.NewWriter(p, group.ImplicitAlias, nil, "bbbb", t.Logf)
+	defer w.Close()
+	if earlier, err := w.Earlier("auditor"); err != nil || len(earlier) != 1 {
+		t.Fatalf("Earlier = %v, %v", earlier, err)
+	}
+	if err := w.Renew("auditor"); err != nil {
+		t.Fatal(err)
+	}
+	w.Write(transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent})
+	ts := read(t, p, nil)
+	if len(ts) != 2 || len(ts[0].Lines) != 1 || ts[0].Lines[0].Chain != "aaaa" || len(ts[1].Lines) != 1 || ts[1].Lines[0].Chain != "bbbb" {
+		t.Fatalf("Transcripts = %+v, want the closed one, then a live one with the new run", ts)
+	}
+	if live, err := transcript.Live(p, group.ImplicitAlias, nil); err != nil || !reflect.DeepEqual(live, []string{"auditor"}) {
+		t.Fatalf("live = %v, %v", live, err)
+	}
+	// With no live Transcript there is nothing to close.
+	if err := transcript.NewWriter(p, group.ImplicitAlias, []byte{9}, "cccc", t.Logf).Renew("auditor"); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -836,6 +836,8 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 		t.say(conv, fmt.Sprintf("@%s failed: %s", ev.Handle, ev.Error))
 	case serve.EventAgentSkipped:
 		t.say(conv, fmt.Sprintf("@%s was skipped: %s", ev.Handle, ev.Reason))
+	case serve.EventAgentTranscript:
+		t.say(conv, fmt.Sprintf("@%s starts a new Transcript: %s.", ev.Handle, ev.Reason))
 	case serve.EventChainEnd:
 		t.live[conv] = slices.DeleteFunc(t.live[conv], func(c *LiveChain) bool { return c.Chain == ev.Chain })
 		switch {

@@ -51,7 +51,7 @@ to.
   button on the Talk page.
 - **A change to grants, Skills, the Brief or the Briefing keeps the
   Transcript.** It costs one cache miss, and the next run's turn says what
-  changed. A change of the Provider's API shape starts a new Transcript
+  changed in its grants and Skills. A change of the Provider's API shape starts a new Transcript
   automatically, because recorded blocks, such as thinking signatures and
   Responses items, cannot be replayed in another shape.
 - **A Transcript only grows.** The Talk page shows each Agent's live
@@ -84,6 +84,12 @@ to.
   kept at all is left for later.
 - An agent no longer sees talk that came before its live Transcript unless it
   calls `talk_read`.
+- The Messages API binds replayed thinking to the system block and the
+  Tools it was generated under (preserved thinking), and may refuse it
+  once either changes. So a change to grants, Skills, the Brief or the Briefing also
+  stops the thinking of the runs before it from being replayed: their
+  text, tool calls and results still are. Each run records what it was
+  made under (its API Shape, grants and that binding) on its turn line.
 - Per-chain `transcripts/` directories are no longer read and nothing is
   migrated; `MIGRATION.md` says how to remove them and rename `SYSTEM.md`
   to `BRIEF.md`.

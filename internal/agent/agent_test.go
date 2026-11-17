@@ -893,6 +893,79 @@ func TestAReplayAnswersCallsItsRunLeftUnanswered(t *testing.T) {
 	}
 }
 
+// A replayed earlier call to a Tool revoked since is accepted (ADR 0036):
+// the call and its answer replay as recorded, though the Tool is no longer
+// offered, and the run goes on. Every shape.
+func TestAReplayedCallToARevokedToolIsAccepted(t *testing.T) {
+	revoked := []agent.Earlier{{Turn: "one", Blocks: []json.RawMessage{
+		json.RawMessage(`{"type":"tool_use","id":"t1","name":"sign_propose","input":{"to":"0xabc"}}`),
+		json.RawMessage(`{"type":"tool_result","tool_use_id":"t1","content":"proposed","is_error":false}`),
+		json.RawMessage(`{"type":"tool_use","id":"t2","name":"talk_write","input":{"text":"done"}}`),
+	}, Posted: true}}
+	for p, says := range says {
+		s := newScript(t, says("", "ok"))
+		res, err := agent.Client{}.Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Earlier: revoked, Turn: "two",
+			Tools: []agent.Tool{agent.TalkWrite}}, agent.Events{})
+		if err != nil || res.Said != "ok" {
+			t.Fatalf("%s: %+v, %v", p, res, err)
+		}
+		if got := toolNames(s.body(1)); got != "talk_write" {
+			t.Errorf("%s: offers %s", p, got)
+		}
+		sent := unmarked(messages(s.body(1)))
+		if !strings.Contains(sent, "sign_propose") || !strings.Contains(sent, "proposed") || !strings.Contains(sent, "Posted.") {
+			t.Errorf("%s: sent %s", p, sent)
+		}
+	}
+}
+
+// The Messages API binds replayed thinking to the system block and the
+// Tools it was generated under (preserved thinking): a run's request
+// replays the thinking of only those earlier runs made since the binding
+// last changed, and the rest of each earlier run as recorded. Responses
+// reasoning items, bound to nothing known, replay as they came. Every
+// shape.
+func TestThinkingReplaysOnlySinceTheBindingChanged(t *testing.T) {
+	thought := func(n string) agent.Earlier {
+		return agent.Earlier{Turn: "turn " + n, Blocks: []json.RawMessage{
+			json.RawMessage(`{"type":"thinking","thinking":"thought ` + n + `","signature":"sig` + n + `"}`),
+			json.RawMessage(`{"type":"redacted_thinking","data":"redacted ` + n + `"}`),
+			json.RawMessage(`{"type":"reasoning","item":{"type":"reasoning","id":"rs_` + n + `","summary":[],"encrypted_content":"enc ` + n + `"}}`),
+			json.RawMessage(`{"type":"text","text":"text ` + n + `"}`),
+		}}
+	}
+	base := agent.Request{System: "be brief", Tools: []agent.Tool{agent.TalkWrite}}
+	revoked := agent.Request{System: "be brief"}
+	if base.Binding() == revoked.Binding() || base.Binding() != (agent.Request{System: "be brief", Tools: []agent.Tool{agent.TalkWrite}}).Binding() {
+		t.Fatal("Binding does not follow the system block and Tools")
+	}
+	if base.Binding() == (agent.Request{System: "be terse", Tools: base.Tools}).Binding() {
+		t.Fatal("Binding does not follow the system block")
+	}
+	runs := []agent.Earlier{thought("1"), thought("2"), thought("3")}
+	runs[0].Binding, runs[1].Binding, runs[2].Binding = base.Binding(), revoked.Binding(), base.Binding()
+	for p, reply := range texts {
+		s := newScript(t, reply("ok"))
+		req := base
+		req.Shape, req.URL, req.Earlier, req.Turn = p, s.URL, runs, "four"
+		if _, err := (agent.Client{}).Run(context.Background(), req, agent.Events{}); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		sent := unmarked(messages(s.body(1)))
+		for _, n := range []string{"1", "2"} {
+			if strings.Contains(sent, "thought "+n) || strings.Contains(sent, "redacted "+n) || !strings.Contains(sent, "text "+n) {
+				t.Errorf("%s: run %s replays as %s", p, n, sent)
+			}
+		}
+		if p == agent.Messages && !strings.Contains(sent, "thought 3") {
+			t.Errorf("%s: the run since the change loses its thinking: %s", p, sent)
+		}
+		if p == agent.Responses && (!strings.Contains(sent, "enc 1") || !strings.Contains(sent, "enc 3")) {
+			t.Errorf("%s: a reasoning item is left out: %s", p, sent)
+		}
+	}
+}
+
 // Each call of a run sends the call before it as an unchanged prefix: the
 // same system prompt and tools, and its messages first. Every shape.
 func TestASecondCallExtendsTheFirst(t *testing.T) {

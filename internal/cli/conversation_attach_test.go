@@ -130,12 +130,14 @@ func runCtx(t *testing.T, ctx context.Context, args ...string) result {
 	return result{code: code, stdout: out.String(), stderr: errb.String()}
 }
 
-// replyEvents is the chain chainA in which @auditor thinks, writes
-// text over a retry, says "all good", and @scribe is skipped.
+// replyEvents is the chain chainA in which @auditor starts a new
+// Transcript, thinks, writes text over a retry, says "all good", and
+// @scribe is skipped.
 var replyEvents = []serve.ChainEvent{
 	{Type: serve.EventChainStart, Chain: chainB}, // another chain's, not this send's
 	{Type: serve.EventChainEnd, Chain: chainB},
 	{Type: serve.EventChainStart, Chain: chainA},
+	{Type: serve.EventAgentTranscript, Chain: chainA, Handle: "auditor", Reason: "its Provider now speaks another API Shape"},
 	{Type: serve.EventAgentStart, Chain: chainA, Handle: "auditor", Depth: 1},
 	{Type: serve.EventAgentDelta, Chain: chainA, Kind: "thinking", Text: "hmm"},
 	{Type: serve.EventAgentDelta, Chain: chainA, Kind: "text", Text: "draft"},
@@ -151,8 +153,8 @@ var replyEvents = []serve.ChainEvent{
 
 // A message that mentions agents stays attached after it commits: it
 // watches before sending, so it misses nothing, and prints its own chain's
-// messages labelled by Handle as they commit, and skips, until the chain
-// ends. It prints none of the output.
+// messages labelled by Handle as they commit, skips, and new Transcripts,
+// until the chain ends. It prints none of the output.
 func TestConversationSendStreamsTheChain(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
@@ -164,7 +166,7 @@ func TestConversationSendStreamsTheChain(t *testing.T) {
 	if got := cs.requests(); len(got) != 2 || got[0] != "GET /v1/conversation/stream" || got[1] != "POST /v1/conversation/send" {
 		t.Fatalf("requests = %v", got)
 	}
-	want := "sent as seq 9 (msg_id " + strings.Repeat("ab", 32) + ")\n@auditor: all good\n@scribe skipped: @scribe is no longer in [agent] profiles here\n"
+	want := "sent as seq 9 (msg_id " + strings.Repeat("ab", 32) + ")\n@auditor starts a new Transcript: its Provider now speaks another API Shape\n@auditor: all good\n@scribe skipped: @scribe is no longer in [agent] profiles here\n"
 	if r.stdout != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
 	}
@@ -206,7 +208,7 @@ func TestConversationSendJSONPrintsWhatTheChainSays(t *testing.T) {
 		}
 		types = append(types, ev.Type)
 	}
-	if got := strings.Join(types, " "); got != "chain.start agent.commit agent.skipped chain.end" {
+	if got := strings.Join(types, " "); got != "chain.start agent.transcript agent.commit agent.skipped chain.end" {
 		t.Fatalf("events = %s\nstdout:\n%s", got, r.stdout)
 	}
 }
@@ -333,6 +335,7 @@ func TestConversationFollowPrintsChainsUntilCtrlC(t *testing.T) {
 	}
 	want := `[agents answering msg_id 03030303]
 [agents answering msg_id abababab]
+@auditor starts a new Transcript: its Provider now speaks another API Shape
 @auditor (thinking): hmm
 @auditor (text): draft
 [retrying; the model call starts over]
@@ -364,8 +367,8 @@ func TestConversationFollowJSON(t *testing.T) {
 		t.Fatalf("%d lines, want %d:\n%s", len(lines), len(replyEvents), r.stdout)
 	}
 	var ev serve.ChainEvent
-	if err := json.Unmarshal([]byte(lines[3]), &ev); err != nil || ev.Type != serve.EventAgentStart || ev.Handle != "auditor" {
-		t.Fatalf("line 4 = %s (%v)", lines[3], err)
+	if err := json.Unmarshal([]byte(lines[4]), &ev); err != nil || ev.Type != serve.EventAgentStart || ev.Handle != "auditor" {
+		t.Fatalf("line 5 = %s (%v)", lines[4], err)
 	}
 	// The serve went away: that ends a follow operationally.
 	if r.code != 2 || !strings.Contains(r.stderr, "serve") {

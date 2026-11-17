@@ -227,6 +227,28 @@ func TestAnAgentThatStaysSilentLeavesALineWithItsTranscript(t *testing.T) {
 	}
 }
 
+// An agent whose Transcript was closed before its run, as when its
+// Provider changed API Shape, leaves a line saying it starts a new one,
+// and why (ADR 0036).
+func TestANewTranscriptLeavesALine(t *testing.T) {
+	r := newRig(t, "alpha")
+	r.node.tk().included[node.GroupTalk] = []string{"auditor"}
+	s := served(t, r)
+	s.SendMessage("@auditor hello")
+	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
+	for _, ev := range []node.ChainEvent{
+		{Type: serve.EventChainStart, Chain: chain},
+		{Type: serve.EventAgentTranscript, Chain: chain, Handle: "auditor", Reason: "its Provider now speaks another API Shape"},
+		{Type: serve.EventChainEnd, Chain: chain},
+	} {
+		chainEvent(r.node, node.GroupTalk, ev)
+	}
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 0 && len(ts.Items) == 2 })
+	if line := ts.Items[1]; line.Kind != shell.KindSystem || line.Text != "@auditor starts a new Transcript: its Provider now speaks another API Shape." {
+		t.Fatalf("line: %+v", line)
+	}
+}
+
 func TestANewKeyIsAProvisionalRowUntilItsKeygenCompletes(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)

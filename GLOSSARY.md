@@ -109,7 +109,7 @@ The agents one person's message, or one Trigger's firing, summons, in the order 
 _Avoid_: thread, run, cascade
 
 **Transcript**:
-One Agent's record of its runs in one Conversation (or Group-level talk), from when it was started until it is cleared: everything it generated in each, thinking, text, tool calls and their results, each run marked with the chain it ran in. Kept on that Agent's Node and never replicated. Only what the agent says reaches the COSL; the Transcript is the rest, and other parties never see it. It is what the agent remembers of its own work there. An Agent has one **live** Transcript per Conversation; **clearing** it closes it, kept but no longer replayed, and the agent's next run starts a new one.
+One Agent's record of its runs in one Conversation (or Group-level talk), from when it was started until it is cleared: everything it generated in each, thinking, text, tool calls and their results, each run marked with the chain it ran in. Kept on that Agent's Node and never replicated. Only what the agent says reaches the COSL; the Transcript is the rest, and other parties never see it. It is what the agent remembers of its own work there. An Agent has one **live** Transcript per Conversation; **clearing** it closes it, kept but no longer replayed, and the agent's next run starts a new one. A run whose Provider now speaks another API Shape than the run before it closes it the same way and starts a new one.
 _Avoid_: work log, trace, output log, reply (that is the message it says)
 
 **Mention**:

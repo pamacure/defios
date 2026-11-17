@@ -13,6 +13,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,6 +109,38 @@ type Earlier struct {
 	Blocks []json.RawMessage
 	// Posted is whether its accepted talk_write was posted.
 	Posted bool
+	// Binding is its Request's Binding, as recorded: its thinking is
+	// replayed only while every run since it was made under the Binding
+	// of the run now.
+	Binding string
+}
+
+// Binding names what the Messages API binds replayed thinking to
+// (preserved thinking): req's system block and the Tools it offers, each as its
+// name, description and schema. A request whose Binding differs from the
+// one an earlier run's thinking was generated under may be refused if it
+// replays that thinking.
+func (req Request) Binding() string {
+	type tool struct {
+		Name, Description string
+		Schema            json.RawMessage
+	}
+	tools := make([]tool, len(req.Tools))
+	for i, t := range req.Tools {
+		tools[i] = tool{t.Name, t.Description, t.Schema}
+	}
+	raw, _ := json.Marshal(struct {
+		System string
+		Tools  []tool
+	}{req.System, tools})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// thinking reports whether b is Messages thinking, which the Messages API
+// binds to the system block and Tools it was generated under.
+func thinking(b Block) bool {
+	return b.Type == "thinking" || b.Type == "redacted_thinking"
 }
 
 // What a replay answers a tool call with that its run ended without
@@ -474,10 +508,25 @@ func newConversation(req Request) (*conversation, error) {
 	// last user message, where a breakpoint may sit.
 	var owed []ToolResult
 	var last map[string]any
+	// sinceBinding is where the runs made since the Binding last changed
+	// start: the thinking of those before it is left out, so the Messages
+	// API, binding it to another system block or other Tools, does not
+	// refuse it. The
+	// same runs leave it out on every later run, so the replay stays a
+	// prefix of the next.
+	binding, sinceBinding := req.Binding(), len(req.Earlier)
+	for sinceBinding > 0 && req.Earlier[sinceBinding-1].Binding == binding {
+		sinceBinding--
+	}
 	for i, e := range req.Earlier {
 		calls, err := e.calls()
 		if err != nil {
 			return nil, fmt.Errorf("agent: replaying earlier run %d: %w", i+1, err)
+		}
+		if i < sinceBinding {
+			for j := range calls {
+				calls[j].blocks = slices.DeleteFunc(calls[j].blocks, thinking)
+			}
 		}
 		last, owed = c.wire.turn(c, e.Turn, owed), nil
 		for j, call := range calls {

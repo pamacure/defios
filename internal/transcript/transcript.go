@@ -60,16 +60,26 @@ type Line struct {
 	// Unapplied the hex msg_ids of this Node's own messages beyond the
 	// replica that it accounts for too, queued or not yet applied: the
 	// agent's next turn carries only the talk after them.
-	Turn      string          `json:"turn,omitempty"`
-	Unapplied []string        `json:"unapplied,omitempty"`
-	Request   json.RawMessage `json:"request,omitempty"`
-	Block     json.RawMessage `json:"block,omitempty"`
-	Usage     json.RawMessage `json:"usage,omitempty"`
-	Tool      string          `json:"tool,omitempty"`
-	Outcome   string          `json:"outcome,omitempty"`
-	MsgID     string          `json:"msg_id,omitempty"`
-	Seq       uint64          `json:"seq,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Turn      string   `json:"turn,omitempty"`
+	Unapplied []string `json:"unapplied,omitempty"`
+	// Shape, Tools, Skills and Binding, with KindTurn, are what the run
+	// was made under: its Provider's API Shape, the names of the Tools
+	// offered it but skill_load, which its Skills imply, and of the Skills
+	// granted to it, and its agent.Request's Binding. A later
+	// run tells its agent what changed since, or starts a new Transcript
+	// in another Shape (ADR 0036).
+	Shape   string          `json:"shape,omitempty"`
+	Tools   []string        `json:"tools,omitempty"`
+	Skills  []string        `json:"skills,omitempty"`
+	Binding string          `json:"binding,omitempty"`
+	Request json.RawMessage `json:"request,omitempty"`
+	Block   json.RawMessage `json:"block,omitempty"`
+	Usage   json.RawMessage `json:"usage,omitempty"`
+	Tool    string          `json:"tool,omitempty"`
+	Outcome string          `json:"outcome,omitempty"`
+	MsgID   string          `json:"msg_id,omitempty"`
+	Seq     uint64          `json:"seq,omitempty"`
+	Error   string          `json:"error,omitempty"`
 }
 
 // Outcome is the closing line of a run that said msgID, hex, at seq
@@ -181,6 +191,18 @@ func (w *Writer) Earlier(handle string) ([]Line, error) {
 	}
 	w.files[handle] = f
 	return parseLines(data), nil
+}
+
+// Renew closes handle's live Transcript, which Earlier read, as Clear
+// does, so the run about to be written starts a new one (ADR 0036). With
+// none live there is nothing to close.
+func (w *Writer) Renew(handle string) error {
+	if f := w.files[handle]; f != nil {
+		delete(w.files, handle)
+		f.Close()
+	}
+	_, err := closeLive(w.p.LiveTranscriptFile(w.alias, w.conv, handle))
+	return err
 }
 
 // Close closes the files its lines opened.
@@ -392,6 +414,12 @@ type Run struct {
 	Turn          string
 	TalkSeq       uint64
 	TalkUnapplied []string
+	// Shape, Tools, Skills and Binding are what it was made under, as its
+	// turn line records them.
+	Shape   string
+	Tools   []string
+	Skills  []string
+	Binding string
 	// Requests are the request bodies of its model calls as sent, Blocks
 	// its output blocks and the results of its tool calls, and Usage each
 	// call's usage, in order.
@@ -447,6 +475,7 @@ func Runs(lines []Line) []Run {
 		switch l.Kind {
 		case KindTurn:
 			r.Turn, r.TalkSeq, r.TalkUnapplied = l.Turn, l.Seq, l.Unapplied
+			r.Shape, r.Tools, r.Skills, r.Binding = l.Shape, l.Tools, l.Skills, l.Binding
 		case KindRequest:
 			r.Requests = append(r.Requests, l.Request)
 		case KindBlock:

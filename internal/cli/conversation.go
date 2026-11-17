@@ -540,6 +540,8 @@ func (c *chainPrinter) print(ev serve.ChainEvent) error {
 		c.handle = ""
 	case serve.EventAgentSkipped:
 		fmt.Fprintln(out, p.dim("@"+ev.Handle+" skipped: "+ev.Reason))
+	case serve.EventAgentTranscript:
+		fmt.Fprintln(out, p.dim("@"+ev.Handle+" starts a new Transcript: "+ev.Reason))
 	case serve.EventAgentError, serve.EventChainEnd:
 		endLine() // the reply was cut off
 		c.handle = ""

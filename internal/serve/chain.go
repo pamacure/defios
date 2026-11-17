@@ -44,10 +44,13 @@ const (
 	EventAgentDelta   = "agent.delta"   // kind, text: output as the agent generates it
 	EventAgentReset   = "agent.reset"   // a provider retry starts the model call over: its deltas are void
 	EventAgentSkipped = "agent.skipped" // handle, reason
-	EventAgentCommit  = "agent.commit"  // msg_id, seq or queued, text: an accepted talk_write was written
-	EventAgentSilent  = "agent.silent"  // handle: it ended without talk_write
-	EventAgentError   = "agent.error"   // handle, error
-	EventChainEnd     = "chain.end"     // cancelled
+	// EventAgentTranscript is an agent's live Transcript closed before its
+	// run, which starts a new one: handle, reason (ADR 0036).
+	EventAgentTranscript = "agent.transcript"
+	EventAgentCommit     = "agent.commit" // msg_id, seq or queued, text: an accepted talk_write was written
+	EventAgentSilent     = "agent.silent" // handle: it ended without talk_write
+	EventAgentError      = "agent.error"  // handle, error
+	EventChainEnd        = "chain.end"    // cancelled
 	// EventTriggerFire is a Hook or Schedule of this Node's firing: trigger,
 	// event. It shows on the stream of its event's Conversation, Group-level
 	// talk for a Schedule.
@@ -550,7 +553,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 	if st.Summoner == "" {
 		by = summoner{msgID: c.id, job: c.job}
 	}
-	req, turn, inc, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, by, tr, did)
+	req, turn, inc, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, by, tr, did, publish)
 	if errors.Is(err, errSkipped) {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
 		return res, said, inc, err
@@ -612,8 +615,11 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 // tr, as it was sent and generated; then this run's one user turn, what by
 // summons it with (ADR 0036). It is sent with this Node's key to the
 // Provider as this Node's merged Workspace configures it, and nowhere else
-// (ADR 0022). Each sign Tool that acts is told to did.
-func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32, by summoner, tr *transcript.Writer, did acted) (agent.Request, TranscriptLine, config.Included, error) {
+// (ADR 0022). Each sign Tool that acts is told to did. The turn opens
+// with what changed in its grants since its last run; a Provider now
+// speaking another API Shape than that run's starts a new Transcript,
+// published as an agent.transcript event.
+func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32, by summoner, tr *transcript.Writer, did acted, publish func(ChainEvent)) (agent.Request, TranscriptLine, config.Included, error) {
 	fail := func(inc config.Included, err error) (agent.Request, TranscriptLine, config.Included, error) {
 		return agent.Request{}, TranscriptLine{}, inc, err
 	}
@@ -670,21 +676,77 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	if err != nil {
 		return fail(inc, fmt.Errorf("@%s's Transcript: %w", handle, err))
 	}
-	var last *transcript.Run
+	var replays []transcript.Run
 	for _, r := range transcript.Runs(earlier) {
 		if r.Replays() {
-			req.Earlier = append(req.Earlier, agent.Earlier{Turn: r.Turn, Blocks: r.Blocks, Posted: r.Outcome == OutcomeSaid})
-			last = &r
+			replays = append(replays, r)
 		}
+	}
+	if n := len(replays); n > 0 && replays[n-1].Shape != req.Shape.Name {
+		// Thinking signatures and Responses items are the Shape's own:
+		// no other Shape takes them back.
+		why := fmt.Sprintf("its Provider now speaks the %s API Shape, not the one its earlier runs here were recorded in, so they cannot be replayed; its Transcript is closed and kept, and this run starts a new one", req.Shape.Name)
+		if err := tr.Renew(handle); err != nil {
+			return fail(inc, fmt.Errorf("@%s's Transcript: closing it: %w", handle, err))
+		}
+		s.opts.Logf("serve: @%s in %s: %s", handle, where, why)
+		publish(ChainEvent{Type: EventAgentTranscript, Handle: handle, Reason: why})
+		replays = nil
+	}
+	var last *transcript.Run
+	for _, r := range replays {
+		req.Earlier = append(req.Earlier, agent.Earlier{Turn: r.Turn, Blocks: r.Blocks, Posted: r.Outcome == OutcomeSaid, Binding: r.Binding})
+		last = &r
 	}
 	v, err := s.talk(ob, store, conv)
 	if err != nil {
 		return fail(inc, err)
 	}
+	refs := make([]string, len(skills))
+	for i, sk := range skills {
+		refs[i] = sk.Ref
+	}
+	var tools []string
+	for _, t := range req.Tools {
+		if t.Name != config.ToolSkillLoad { // its Skills say it
+			tools = append(tools, t.Name)
+		}
+	}
 	turn := runTurn(v.Messages, s.opts.Node.NodeID, handle, by, last, runFacts(handle, depth, inc))
+	if last != nil {
+		turn.Turn = grantChanges(last.Tools, tools, last.Skills, refs) + turn.Turn
+	}
 	req.System = strings.TrimRight(briefing, "\n") + "\n\n" + strings.TrimRight(string(brief), "\n") + "\n\n" + stableFacts(handle, where, req.Tools, skills)
 	req.Turn = turn.Turn
+	turn.Shape, turn.Tools, turn.Skills, turn.Binding = req.Shape.Name, tools, refs, req.Binding()
 	return req, turn, inc, nil
+}
+
+// grantChanges is the line opening a run's turn that says what changed in
+// its agent's grants since its last run, the Tools and Skills granted to
+// it then and now, in order; "" if nothing did (ADR 0036). A change keeps
+// the Transcript: the system block lists what is granted now, and this
+// line tells the agent that what it did before was under other grants.
+func grantChanges(toolsWas, toolsNow, skillsWas, skillsNow []string) string {
+	var changes []string
+	diff := func(kind string, was, now []string) {
+		for _, n := range was {
+			if !slices.Contains(now, n) {
+				changes = append(changes, fmt.Sprintf("%s %s was revoked", kind, n))
+			}
+		}
+		for _, n := range now {
+			if !slices.Contains(was, n) {
+				changes = append(changes, fmt.Sprintf("%s %s was granted", kind, n))
+			}
+		}
+	}
+	diff("Tool", toolsWas, toolsNow)
+	diff("Skill", skillsWas, skillsNow)
+	if len(changes) == 0 {
+		return ""
+	}
+	return "(Since your last run: " + strings.Join(changes, "; ") + ".)\n"
 }
 
 // The lines of DeFiOS's own that frame a run's turn.
@@ -789,7 +851,7 @@ func stableFacts(handle, where string, tools []agent.Tool, skills []grantedSkill
 		names[i] = t.Name
 	}
 	b.WriteString("Your turns here are your own earlier runs in this talk, replayed as they went: what you thought, the tools you called and what they returned. " +
-		"Each run starts with one turn from DeFiOS: the talk since your last run, if there is any, then the message that summoned you, or the Job that did, and a closing line about the run. " +
+		"Each run starts with one turn from DeFiOS: what changed in your tools and Skills since your last run, if anything, then the talk since your last run, if there is any, then the message that summoned you, or the Job that did, and a closing line about the run. " +
 		"Talk is one message per line as \"[<seq>] <display name>: <text>\", or \"[<seq>] <display name>/@<handle>: <text>\" for an agent's; " +
 		"[queued] in place of the seq is a message your Node has written that is not committed yet. ")
 	fmt.Fprintf(&b, "Your own messages are left out of it: they are your talk_write calls. @%s from another Node is another agent. ", handle)

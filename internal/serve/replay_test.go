@@ -178,3 +178,71 @@ jobs = ["review"]
 		t.Fatalf("@auditor's Transcript holds %d runs: %+v", len(runs), runs)
 	}
 }
+
+// A change to an agent's grants between its runs keeps its Transcript
+// (ADR 0036): the next run replays the one before it, and its turn opens
+// with what changed, a Tool revoked and a Skill granted. A run with no
+// change since says nothing of it.
+func TestAGrantChangeIsAnnouncedAndTheTranscriptKept(t *testing.T) {
+	a, _, _, provider := agentPair(t, "bob")
+	installAudits(t, a)
+	summon(t, a, "@bob one")
+	writeConfig(t, a.paths.AgentProfileFile("bob"), "provider = \"claude\"\ntools = [\"talk_write\"]\nskills = [\"audits/erc20\"]\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
+	two := summon(t, a, "@bob two")
+	three := summon(t, a, "@bob three")
+
+	calls := provider.seen()
+	if len(calls) != 3 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if c := calls[1]; c.Messages != 3 || unmarked(c.Raw[0]) != unmarked(calls[0].Raw[0]) {
+		t.Fatalf("the run after the change does not replay the one before it: %s", c.Raw)
+	}
+	want := "(Since your last run: Tool talk_read was revoked; Skill audits/erc20 was granted.)\n" + summonedBy(two.Seq, "alice: @bob two")
+	if c := calls[1]; c.Prompt != want {
+		t.Fatalf("the run after the change =\n%s\nwant\n%s", c.Prompt, want)
+	}
+	if c := calls[2]; c.Messages != 5 || c.Prompt != summonedBy(three.Seq, "alice: @bob three") {
+		t.Fatalf("the run with no change since, of %d messages = %q", c.Messages, c.Prompt)
+	}
+}
+
+// A change of the agent's Provider to another API Shape starts a new
+// Transcript (ADR 0036): the recorded blocks cannot be replayed in it.
+// The live one is closed and kept, the run goes in a new one and replays
+// nothing, and the log and the chain's stream say so.
+func TestAnAPIShapeChangeStartsANewTranscript(t *testing.T) {
+	var logs logLines
+	a, _, _, _ := agentPairTuned(t, func(o *serve.Options) { o.Logf = logs.logf }, "auditor")
+	summon(t, a, "@auditor one")
+	openaiAgent(t, a, func(_ int, w http.ResponseWriter) { responsesReply(w, "", "hello", "") })
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor two", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var note *serve.ChainEvent
+	for _, ev := range untilEnd(t, s, v.MsgID) {
+		if ev.Type == serve.EventAgentTranscript {
+			note = &ev
+		}
+	}
+	const why = "its Provider now speaks the responses API Shape, not the one its earlier runs here were recorded in"
+	if note == nil || note.Handle != "auditor" || !strings.Contains(note.Reason, why) {
+		t.Fatalf("the stream's notice = %+v", note)
+	}
+	if got := logs.matching(why); len(got) != 1 || !strings.Contains(got[0], "@auditor") {
+		t.Fatalf("logged %q", got)
+	}
+	ts, err := transcripts.ReadConversation(a.paths, group.ImplicitAlias, nil)
+	if err != nil || len(ts) != 2 {
+		t.Fatalf("Transcripts = %+v, %v", ts, err)
+	}
+	closed, live := transcripts.Runs(ts[0].Lines), transcripts.Runs(ts[1].Lines)
+	if len(closed) != 1 || closed[0].Shape != "messages" || len(live) != 1 || live[0].Shape != "responses" || live[0].Chain != v.MsgID {
+		t.Fatalf("closed %+v, live %+v", closed, live)
+	}
+	if sent := string(live[0].Requests[0]); strings.Contains(sent, "reply 1") || strings.Contains(sent, "(Since your last run: Tool") {
+		t.Fatalf("the new Transcript's first run replays the old one: %s", sent)
+	}
+}
