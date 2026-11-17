@@ -1,6 +1,8 @@
 package raftx_test
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -196,5 +198,57 @@ func TestDivergedReplicaRefusesLeaderSnapshot(t *testing.T) {
 	}
 	if len(rows) == n {
 		t.Fatal("a diverged replica was overwritten by the leader's snapshot")
+	}
+}
+
+// A follower has caught up once its COSL holds what the leader applied,
+// not once Raft has handed the entries to its FSM: while its COSL is busy,
+// CaughtUp waits, and when it returns the row is there to read.
+func TestCaughtUpWaitsForTheFollowersCOSL(t *testing.T) {
+	c := newPair(t)
+	rs := []*replica{c.open(0), c.open(1)}
+	if _, err := rs[0].Append(c.ctx(20*time.Second), c.freeform(0, "first")); err != nil {
+		t.Fatal(err)
+	}
+	waitRows(t, rs[0].store, 1)
+	waitRows(t, rs[1].store, 1)
+	lead := c.leaderIndex(rs[0])
+	leader, follower := rs[lead], rs[1-lead]
+
+	// Another connection's write transaction keeps the follower's FSM
+	// waiting on its busy timeout.
+	db, err := sql.Open("sqlite", filepath.Join(c.dirs[1-lead], "cosl.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	pos, err := leader.Append(c.ctx(20*time.Second), c.freeform(lead, "second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := follower.CaughtUp(c.ctx(time.Second)); !errors.Is(err, raftx.ErrNotCaughtUp) {
+		t.Fatalf("CaughtUp with its COSL busy = %v, want ErrNotCaughtUp", err)
+	}
+	if _, err := conn.ExecContext(context.Background(), "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	seq, err := follower.CaughtUp(c.ctx(10 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := follower.store.Log(cosl.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seq < pos.Index || len(rows) != 2 || rows[1].Seq != pos.Index {
+		t.Fatalf("caught up to %d with rows %+v; want the row at %d", seq, rows, pos.Index)
 	}
 }

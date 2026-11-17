@@ -386,24 +386,36 @@ func (r *Replica) WaitCaughtUp(ctx context.Context) error {
 	return err
 }
 
-// CaughtUp is WaitCaughtUp, returning the index it caught up to: the
-// leader's applied index when asked, or this replica's own if it is the
+// CaughtUp is WaitCaughtUp, returning the seq it caught up to: the
+// leader's applied seq when asked, or this replica's own if it is the
 // leader. A COSL row at a seq above it was applied after the catch-up.
+// Applied means in the COSL: Raft hands entries to the FSM before the FSM
+// has applied them, so its own applied index can run ahead of what a
+// reader of the COSL sees.
 func (r *Replica) CaughtUp(ctx context.Context) (uint64, error) {
 	for {
+		var target uint64
+		var err error
 		if r.raft.State() == raft.Leader {
-			return r.raft.AppliedIndex(), nil
+			target, err = r.applied(ctx)
+		} else {
+			target, err = r.leaderApplied(ctx)
 		}
-		target, err := r.leaderApplied(ctx)
 		if err == nil {
-			for r.raft.AppliedIndex() < target {
+			for {
+				m, err := r.opts.Store.Mark()
+				if err != nil {
+					return 0, fmt.Errorf("raftx: %w", err)
+				}
+				if m.LastAppliedSeq >= target {
+					return target, nil
+				}
 				select {
 				case <-ctx.Done():
 					return 0, ErrNotCaughtUp
 				case <-time.After(commitTimeout):
 				}
 			}
-			return target, nil
 		}
 		if !errors.Is(err, errRetry) {
 			return 0, err
@@ -414,6 +426,33 @@ func (r *Replica) CaughtUp(ctx context.Context) (uint64, error) {
 		case <-time.After(heartbeatTimeout):
 		}
 	}
+}
+
+// applied is how far this replica, as leader, has applied: its COSL's last
+// applied seq, once a barrier has seen every entry before it through the
+// FSM. errRetry when it is not the leader, or stops being it first.
+func (r *Replica) applied(ctx context.Context) (uint64, error) {
+	if r.raft.State() != raft.Leader {
+		return 0, errRetry
+	}
+	barrier := make(chan error, 1)
+	go func() { barrier <- r.raft.Barrier(0).Error() }()
+	select {
+	case <-ctx.Done():
+		return 0, errRetry
+	case err := <-barrier:
+		switch {
+		case errors.Is(err, raft.ErrRaftShutdown):
+			return 0, ErrClosed
+		case err != nil:
+			return 0, errRetry
+		}
+	}
+	m, err := r.opts.Store.Mark()
+	if err != nil {
+		return 0, fmt.Errorf("raftx: %w", err)
+	}
+	return m.LastAppliedSeq, nil
 }
 
 func (r *Replica) leaderApplied(ctx context.Context) (uint64, error) {

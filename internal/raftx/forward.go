@@ -25,7 +25,7 @@ import (
 // framing matches the formation port; the body is the §4.3 protobuf.
 const (
 	forwardPath     = "/v1/forward"
-	appliedPath     = "/v1/applied" // GET: the leader's applied index, decimal
+	appliedPath     = "/v1/applied" // GET: the leader's applied seq, decimal
 	forwardMaxBytes = 1 << 20
 	forwardTimeout  = ApplyTimeout + 5*time.Second
 )
@@ -54,12 +54,16 @@ func newForwardGate(r *Replica) (*forwardGate, error) {
 	g := &forwardGate{replica: r}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+forwardPath, g.handle)
-	mux.HandleFunc("GET "+appliedPath, func(w http.ResponseWriter, _ *http.Request) {
-		if g.replica.raft.State() != raft.Leader {
+	mux.HandleFunc("GET "+appliedPath, func(w http.ResponseWriter, req *http.Request) {
+		seq, err := g.replica.applied(req.Context())
+		switch {
+		case errors.Is(err, errRetry):
 			http.Error(w, raft.ErrNotLeader.Error(), statusNotLeader)
-			return
+		case err != nil:
+			http.Error(w, err.Error(), statusTransient)
+		default:
+			fmt.Fprint(w, seq)
 		}
-		fmt.Fprint(w, g.replica.raft.AppliedIndex())
 	})
 	g.srv = &http.Server{Handler: mux}
 	g.client = &http.Client{
