@@ -21,6 +21,13 @@ func sample() *vaultv1.VaultContents {
 	}
 }
 
+// A test binary seals with a lower work factor, and opens what it sealed.
+func TestATestBinarySealsWithALowerWorkFactor(t *testing.T) {
+	if got := vault.SealWorkFactor(); got >= vault.WorkFactor {
+		t.Fatalf("SealWorkFactor = %d in a test binary; want under %d", got, vault.WorkFactor)
+	}
+}
+
 func TestSealThenOpenRoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault")
 	if err := vault.Seal(path, sample(), "correct horse"); err != nil {
@@ -36,6 +43,7 @@ func TestSealThenOpenRoundTrips(t *testing.T) {
 }
 
 func TestVaultIsBinaryAgeScryptWorkFactor18SoleRecipient(t *testing.T) {
+	vault.SealAsInProduction(t)
 	path := filepath.Join(t.TempDir(), "vault")
 	if err := vault.Seal(path, sample(), "pw"); err != nil {
 		t.Fatal(err)

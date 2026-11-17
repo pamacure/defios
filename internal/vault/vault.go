@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"testing"
 
 	"filippo.io/age"
 	"google.golang.org/protobuf/proto"
@@ -21,6 +22,23 @@ import (
 
 // WorkFactor is the scrypt log2(N) the spec fixes.
 const WorkFactor = 18
+
+// testWorkFactor is what a test binary seals with: WorkFactor costs
+// seconds a Seal and an Open, and tests unlock Vaults many times.
+const testWorkFactor = 10
+
+// workFactor is what Seal seals with, and SealWorkFactor reports.
+var workFactor = func() int {
+	if testing.Testing() {
+		return testWorkFactor
+	}
+	return WorkFactor
+}()
+
+// SealWorkFactor is the scrypt log2(N) Seal seals with, and anything else
+// sealed under the Vault passphrase should: WorkFactor, but lower in a test
+// binary. Opening takes any of them.
+func SealWorkFactor() int { return workFactor }
 
 var (
 	// ErrEmptyPassphrase is returned when the passphrase is "".
@@ -45,7 +63,7 @@ func Seal(path string, contents *vaultv1.VaultContents, passphrase string) error
 	if err != nil {
 		return fmt.Errorf("vault: %w", err)
 	}
-	recipient.SetWorkFactor(WorkFactor)
+	recipient.SetWorkFactor(workFactor)
 
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, recipient)

@@ -148,7 +148,7 @@ func sealArchive(t *testing.T, passphrase string, entries ...string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipient.SetWorkFactor(vault.WorkFactor)
+	recipient.SetWorkFactor(vault.SealWorkFactor())
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, recipient)
 	if err != nil {

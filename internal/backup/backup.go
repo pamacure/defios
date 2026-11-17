@@ -329,7 +329,7 @@ func seal(m Manifest, files map[string][]byte, passphrase string) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("backup: %w", err)
 	}
-	recipient.SetWorkFactor(vault.WorkFactor)
+	recipient.SetWorkFactor(vault.SealWorkFactor())
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, recipient)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"defios.com/internal/cli"
 	"defios.com/internal/group"
 	"defios.com/internal/nodedir"
+	vaultpkg "defios.com/internal/vault"
 )
 
 type result struct {
@@ -165,8 +167,8 @@ func TestInitWritesIdentityVaultAndName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(vault, []byte("age-encryption.org/v1\n-> scrypt ")) || !bytes.Contains(vault, []byte(" 18\n")) {
-		t.Fatalf("vault is not an age scrypt/18 file:\n%q", vault[:min(len(vault), 80)])
+	if !bytes.HasPrefix(vault, []byte("age-encryption.org/v1\n-> scrypt ")) || !bytes.Contains(vault, []byte(fmt.Sprintf(" %d\n", vaultpkg.SealWorkFactor()))) {
+		t.Fatalf("vault is not an age scrypt file at the Vault's work factor:\n%q", vault[:min(len(vault), 80)])
 	}
 
 	// init writes no config.toml; it persists only the device-level default
