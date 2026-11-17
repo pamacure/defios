@@ -16,7 +16,8 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	_ "modernc.org/sqlite" // pure-Go sqlite driver
+	"modernc.org/sqlite" // pure-Go sqlite driver
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"defios.com/internal/identity"
 	coslv1 "defios.com/proto/cosl/v1"
@@ -105,38 +106,79 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cosl: %w", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("cosl: schema: %w", err)
-	}
-	if err := installTriggers(db); err != nil {
+	if err := setUp(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return &Store{db: db, changed: make(chan struct{})}, nil
 }
 
+// setUpBusy is how long Open waits out another Open setting the same new
+// replica up: the first connection to a new file switches it to WAL,
+// which fails at once, with no busy timeout, while another does the same.
+const setUpBusy = 5 * time.Second
+
+// setUp installs the schema and triggers, again while the file is busy.
+func setUp(db *sql.DB) error {
+	deadline := time.Now().Add(setUpBusy)
+	for {
+		err := installSchema(db)
+		if err != nil {
+			err = fmt.Errorf("cosl: schema: %w", err)
+		} else {
+			err = installTriggers(db)
+		}
+		if !busy(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// busy reports whether err is SQLite's database is locked.
+func busy(err error) bool {
+	var se *sqlite.Error
+	return errors.As(err, &se) && se.Code()&0xff == sqlite3.SQLITE_BUSY
+}
+
+// schemaObjects are what schema creates, by name.
+var schemaObjects = []any{"cosl", "cosl_meta", "idx_cosl_msg_id", "idx_cosl_conversation", "idx_cosl_type"}
+
+// installSchema creates what of schema the replica lacks. With all of it
+// there it only reads, as installTriggers does; otherwise it creates it in
+// a transaction, which takes the write lock as it begins and so waits for
+// another Open doing the same, where a lone statement would read the
+// schema, then fail at once to write it.
+func installSchema(db *sql.DB) error {
+	var n int
+	query := "SELECT count(*) FROM sqlite_master WHERE name IN (?" + strings.Repeat(", ?", len(schemaObjects)-1) + ")"
+	if err := db.QueryRow(query, schemaObjects...).Scan(&n); err != nil {
+		return err
+	}
+	if n == len(schemaObjects) {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(schema); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // installTriggers makes the replica's triggers exactly this binary's. When
 // they already are it only reads, so opening a replica for a CLI read never
 // contends with serve's FSM for the write lock; otherwise it replaces them
 // in one transaction, so no writer sees the replica unguarded in between.
+// That transaction reads them again: another Open, serve's and a reader's
+// of a new replica at once, may have installed them meanwhile.
 func installTriggers(db *sql.DB) error {
-	rows, err := db.Query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'cosl'")
+	have, err := readTriggers(db)
 	if err != nil {
-		return fmt.Errorf("cosl: triggers: %w", err)
-	}
-	have := map[string]string{}
-	for rows.Next() {
-		var name, stmt string
-		if err := rows.Scan(&name, &stmt); err != nil {
-			rows.Close()
-			return fmt.Errorf("cosl: triggers: %w", err)
-		}
-		have[name] = stmt
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("cosl: triggers: %w", err)
+		return err
 	}
 	if maps.Equal(have, triggers) {
 		return nil
@@ -147,6 +189,12 @@ func installTriggers(db *sql.DB) error {
 		return fmt.Errorf("cosl: triggers: %w", err)
 	}
 	defer tx.Rollback()
+	if have, err = readTriggers(tx); err != nil {
+		return err
+	}
+	if maps.Equal(have, triggers) {
+		return nil
+	}
 	for name := range have {
 		// The name may come from a snapshot, so quote it as an identifier.
 		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS "` + strings.ReplaceAll(name, `"`, `""`) + `"`); err != nil {
@@ -162,6 +210,29 @@ func installTriggers(db *sql.DB) error {
 		return fmt.Errorf("cosl: triggers: %w", err)
 	}
 	return nil
+}
+
+// readTriggers is the replica's triggers on cosl, by name.
+func readTriggers(q interface {
+	Query(string, ...any) (*sql.Rows, error)
+}) (map[string]string, error) {
+	rows, err := q.Query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'cosl'")
+	if err != nil {
+		return nil, fmt.Errorf("cosl: triggers: %w", err)
+	}
+	defer rows.Close()
+	have := map[string]string{}
+	for rows.Next() {
+		var name, stmt string
+		if err := rows.Scan(&name, &stmt); err != nil {
+			return nil, fmt.Errorf("cosl: triggers: %w", err)
+		}
+		have[name] = stmt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("cosl: triggers: %w", err)
+	}
+	return have, nil
 }
 
 // Close releases the database.
