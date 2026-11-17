@@ -2,6 +2,9 @@ package tssl
 
 import (
 	"crypto/sha256"
+	"encoding/json"
+	"flag"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +12,50 @@ import (
 	"defios.com/internal/session"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 )
+
+// regenerate makes preparams generate fresh ECDSA preparams and save them
+// as testdata, as `go test -run TestSignerProducesRecoverable -regenerate`.
+var regenerate = flag.Bool("regenerate", false, "generate fresh ECDSA preparams into "+preparamsFile)
+
+const preparamsFile = "testdata/preparams.json"
+
+// preparams are n Nodes' ECDSA preparams, as KeepOrGenerate makes them,
+// from testdata: generating them takes minutes.
+func preparams(t *testing.T, n int) [][]byte {
+	t.Helper()
+	var pre [][]byte
+	if *regenerate {
+		pre = make([][]byte, n)
+		var wg sync.WaitGroup
+		for i := range pre {
+			wg.Go(func() {
+				var err error
+				if pre[i], err = KeepOrGenerate(nil, nil); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		wg.Wait()
+		raw, err := json.Marshal(pre)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(preparamsFile, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(preparamsFile)
+	if err != nil {
+		t.Fatalf("%v; make it with -regenerate", err)
+	}
+	if err := json.Unmarshal(raw, &pre); err != nil {
+		t.Fatal(err)
+	}
+	if len(pre) < n {
+		t.Fatalf("%s holds %d Nodes' preparams, want %d; make more with -regenerate", preparamsFile, len(pre), n)
+	}
+	return pre[:n]
+}
 
 // route delivers every engine's output to the others, the way the Session
 // layer does over the COSL.
@@ -47,25 +94,10 @@ func finished(t *testing.T, e session.Engine) session.Result {
 // A 2-of-3 Key signs two Digests with only two of its three Nodes; each
 // signature is r||s||v and recovers to the Key's public key.
 func TestSignerProducesRecoverableSignaturesFromTwoOfThree(t *testing.T) {
-	if testing.Short() {
-		t.Skip("generates Paillier preparams")
-	}
 	ids := [][32]byte{node(0, 1), node(0, 2), node(0, 3)}
 	nonce := [32]byte{7}
 
-	pre := make([][]byte, 3)
-	var wg sync.WaitGroup
-	for i := range pre {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var err error
-			if pre[i], err = KeepOrGenerate(nil, nil); err != nil {
-				t.Error(err)
-			}
-		}()
-	}
-	wg.Wait()
+	pre := preparams(t, len(ids))
 
 	keygen := map[[32]byte]session.Engine{}
 	for _, id := range ids {
