@@ -87,7 +87,9 @@ func TestTwoDevicesTalkMakeAKeyAndQueueWithoutAMajority(t *testing.T) {
 		t.Fatalf("accept: %+v", ts.Problem)
 	}
 	minted := func(ts shell.TalkState) bool { return len(ts.Keygens) == 0 && len(ts.Conversations) == 2 }
-	ts = talkWithin(t, alice, 60*time.Second, minted)
+	// The alias lands in config.toml just after the Key does.
+	named := func(ts shell.TalkState) bool { return minted(ts) && ts.Conversations[1].Alias != "" }
+	ts = talkWithin(t, alice, 60*time.Second, named)
 	talkWithin(t, bob, 60*time.Second, minted)
 	key := ts.Conversations[1]
 	if key.Alias != "treasury" || key.Curve != "eddsa" || key.T != 2 || key.N != 2 {
