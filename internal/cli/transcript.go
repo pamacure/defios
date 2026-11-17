@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"defios.com/internal/agent"
+	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/transcript"
 )
@@ -37,6 +38,10 @@ func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 		return err
 	}
 	t, err := h.Transcript(context.Background(), alias, conv, p)
+	var notFound *node.ChainNotFoundError
+	if errors.As(err, &notFound) {
+		return exitUsagef("%w%s", notFound, elsewhereHints(notFound))
+	}
 	if errors.Is(err, serve.ErrNotAChain) || errors.Is(err, serve.ErrAmbiguousChain) {
 		return exitUsagef("%w", err)
 	}
@@ -48,6 +53,36 @@ func runConversationTranscript(g *globals, keyQuery, prefix string) error {
 	}
 	printRuns(g, t.Runs)
 	return nil
+}
+
+// elsewhereHints say, for each chain the prefix of e names elsewhere on
+// this Node, where it is and the flags that find it.
+func elsewhereHints(e *node.ChainNotFoundError) string {
+	var b strings.Builder
+	for _, at := range e.Elsewhere {
+		fmt.Fprintf(&b, "; %s is in %s: %s", at.Chain, at.ChainPlace, findFlags(e.Searched, at.ChainPlace))
+	}
+	return b.String()
+}
+
+// findFlags are the flag changes that make conversation transcript read
+// at rather than searched.
+func findFlags(searched, at node.ChainPlace) string {
+	var pass []string
+	if at.Group != searched.Group {
+		pass = append(pass, "--group "+at.Group)
+	}
+	if at.Conversation != node.GroupTalk {
+		pass = append(pass, "--key "+at.Conversation)
+	}
+	var changes []string
+	if len(pass) > 0 {
+		changes = append(changes, "pass "+strings.Join(pass, " "))
+	}
+	if at.Conversation == node.GroupTalk && searched.Conversation != node.GroupTalk {
+		changes = append(changes, "drop --key")
+	}
+	return strings.Join(changes, " and ")
 }
 
 // clearLine is `conversation clear`'s result: the Handles of the agents

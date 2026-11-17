@@ -9,6 +9,7 @@ package transcript
 import (
 	"bytes"
 	"cmp"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -482,8 +483,30 @@ func Tokens(usage json.RawMessage) (input, output int64) {
 }
 
 // ReadAll is every Transcript of alias's Conversations, Group-level talk
-// included, as ReadConversation reads each.
+// included, as ReadByConversation reads them, in one list.
 func ReadAll(p nodedir.Paths, alias string) ([]Transcript, error) {
+	convs, err := ReadByConversation(p, alias)
+	if err != nil {
+		return nil, err
+	}
+	var out []Transcript
+	for _, c := range convs {
+		out = append(out, c.Transcripts...)
+	}
+	return out, nil
+}
+
+// Conversation is the Transcripts of one Conversation as ReadConversation
+// reads them, with its ID, nil for Group-level talk.
+type Conversation struct {
+	ID          []byte
+	Transcripts []Transcript
+}
+
+// ReadByConversation is the Transcripts of alias's Conversations,
+// Group-level talk included, one Conversation per directory, in directory
+// name order; a directory that names no Conversation is passed over.
+func ReadByConversation(p nodedir.Paths, alias string) ([]Conversation, error) {
 	convs, err := os.ReadDir(p.ConversationsDir(alias))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -491,16 +514,22 @@ func ReadAll(p nodedir.Paths, alias string) ([]Transcript, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Transcript
+	var out []Conversation
 	for _, c := range convs {
 		if !c.IsDir() {
 			continue
+		}
+		var id []byte
+		if c.Name() != nodedir.ConversationName(nil) {
+			if id, err = hex.DecodeString(c.Name()); err != nil || nodedir.ConversationName(id) != c.Name() {
+				continue
+			}
 		}
 		ts, err := readDir(p.TranscriptsDir(alias, c.Name()))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ts...)
+		out = append(out, Conversation{ID: id, Transcripts: ts})
 	}
 	return out, nil
 }

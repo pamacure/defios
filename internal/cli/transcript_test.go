@@ -38,8 +38,14 @@ var transcriptLines = []transcript.Line{
 // their agents' Transcripts.
 func writeTranscript(t *testing.T, dir string, conv []byte, chain string) {
 	t.Helper()
+	writeTranscriptIn(t, dir, group.ImplicitAlias, conv, chain)
+}
+
+// writeTranscriptIn is writeTranscript in the Group alias.
+func writeTranscriptIn(t *testing.T, dir, alias string, conv []byte, chain string) {
+	t.Helper()
 	p := nodedir.Resolve(nodedir.Lookup{Dir: dir})
-	w := transcript.NewWriter(p, group.ImplicitAlias, conv, chain, t.Logf)
+	w := transcript.NewWriter(p, alias, conv, chain, t.Logf)
 	defer w.Close()
 	for _, l := range transcriptLines {
 		w.Write(l)
@@ -117,7 +123,7 @@ func TestConversationTranscriptRefusesAnUnknownPrefix(t *testing.T) {
 	writeTranscript(t, dir, nil, transcribedChain)
 	writeTranscript(t, dir, nil, "abcd")
 	for prefix, says := range map[string]string{
-		"ef": "no msg_id here starts with ef",
+		"ef": `no chain of this Node's in Group "default", Group-level talk, starts with ef`,
 		"ab": "names more than one chain",
 		"9z": "not a hex msg_id prefix",
 		"":   "",
@@ -126,6 +132,72 @@ func TestConversationTranscriptRefusesAnUnknownPrefix(t *testing.T) {
 		if r.code != 1 || !strings.Contains(r.stderr, says) {
 			t.Errorf("%q: exit %d, stderr %q", prefix, r.code, r.stderr)
 		}
+	}
+}
+
+// A chain not in the Conversation searched but in a Key's is named there,
+// with the --key that finds it.
+func TestConversationTranscriptPointsToTheKeyItIsIn(t *testing.T) {
+	dir := t.TempDir()
+	ecdsaPK, _ := groupWithKeys(t, dir)
+	id := key.ConversationID("ecdsa", ecdsaPK)
+	writeTranscript(t, dir, id[:], transcribedChain)
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab")
+	conv := hex.EncodeToString(id[:])
+	want := `no chain of this Node's in Group "default", Group-level talk, starts with abab; ` +
+		`abab0000cdcd is in Group "default", Key Conversation ` + conv + `: pass --key ` + conv
+	if r.code != 1 || !strings.Contains(r.stderr, want) {
+		t.Fatalf("exit %d, stderr %q; want %q", r.code, r.stderr, want)
+	}
+}
+
+// A chain in another Group is named there, with the --group that finds
+// it.
+func TestConversationTranscriptPointsToTheGroupItIsIn(t *testing.T) {
+	dir := t.TempDir()
+	groupWithTalk(t, dir)
+	if r := run(t, nil, "", "--dir", dir, "group", "new", "other", "--headscale", "https://hs.example"); r.code != 0 {
+		t.Fatalf("group new: exit %d: %s", r.code, r.stderr)
+	}
+	writeTranscriptIn(t, dir, "other", nil, transcribedChain)
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab", "--group", group.ImplicitAlias)
+	want := `no chain of this Node's in Group "default", Group-level talk, starts with abab; ` +
+		`abab0000cdcd is in Group "other", Group-level talk: pass --group other`
+	if r.code != 1 || !strings.Contains(r.stderr, want) {
+		t.Fatalf("exit %d, stderr %q; want %q", r.code, r.stderr, want)
+	}
+}
+
+// A chain in another Group's Group-level talk, looked for in a Key's
+// Conversation, is found by passing --group and dropping --key.
+func TestConversationTranscriptPointsToAnotherGroupsTalk(t *testing.T) {
+	dir := t.TempDir()
+	ecdsaPK, _ := groupWithKeys(t, dir)
+	if r := run(t, nil, "", "--dir", dir, "group", "new", "other", "--headscale", "https://hs.example"); r.code != 0 {
+		t.Fatalf("group new: exit %d: %s", r.code, r.stderr)
+	}
+	writeTranscriptIn(t, dir, "other", nil, transcribedChain)
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab",
+		"--group", group.ImplicitAlias, "--key", "ecdsa:"+hex.EncodeToString(ecdsaPK))
+	want := `abab0000cdcd is in Group "other", Group-level talk: pass --group other and drop --key`
+	if r.code != 1 || !strings.Contains(r.stderr, want) {
+		t.Fatalf("exit %d, stderr %q; want %q", r.code, r.stderr, want)
+	}
+}
+
+// A chain in Group-level talk, looked for in a Key's Conversation, is
+// found by dropping --key.
+func TestConversationTranscriptPointsBackToGroupTalk(t *testing.T) {
+	dir := t.TempDir()
+	ecdsaPK, _ := groupWithKeys(t, dir)
+	writeTranscript(t, dir, nil, transcribedChain)
+
+	r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab", "--key", "ecdsa:"+hex.EncodeToString(ecdsaPK))
+	if r.code != 1 || !strings.Contains(r.stderr, `abab0000cdcd is in Group "default", Group-level talk: drop --key`) {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
 	}
 }
 

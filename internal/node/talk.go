@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"defios.com/internal/config"
@@ -435,12 +436,81 @@ func (h *Host) Transcript(_ context.Context, groupAlias, conv, chain string) (Tr
 		return Transcript{}, err
 	}
 	full, err := serve.MatchChain(p, transcript.Chains(ts))
+	if errors.Is(err, serve.ErrNotAChain) {
+		return Transcript{}, h.chainNotFound(p, ChainPlace{Group: groupAlias, Conversation: conv})
+	}
 	if err != nil {
 		return Transcript{}, err
 	}
 	lines := transcript.ChainLines(ts, full)
 	return Transcript{Chain: full, Lines: lines, Runs: transcript.Runs(lines)}, nil
 }
+
+// ChainPlace is a Conversation of a Group on this Node: its alias, and
+// the hex Conversation ID, GroupTalk for the Group-level talk.
+type ChainPlace struct {
+	Group        string
+	Conversation string
+}
+
+func (pl ChainPlace) String() string {
+	if pl.Conversation == GroupTalk {
+		return fmt.Sprintf("Group %q, Group-level talk", pl.Group)
+	}
+	return fmt.Sprintf("Group %q, Key Conversation %s", pl.Group, pl.Conversation)
+}
+
+// ChainAt is a chain with a run in Transcripts on this Node: its hex
+// msg_id and the Conversation it is in.
+type ChainAt struct {
+	Chain string
+	ChainPlace
+}
+
+// ChainNotFoundError is a Transcript lookup whose prefix names no chain
+// with a run in the Conversation Searched. Elsewhere are the chains it
+// names in this Node's other Conversations, in every Group, by Group alias
+// then Conversation. It is serve.ErrNotAChain.
+type ChainNotFoundError struct {
+	Prefix    string // the hex msg_id prefix, lower case
+	Searched  ChainPlace
+	Elsewhere []ChainAt
+}
+
+// chainNotFound is the ChainNotFoundError of prefix in searched, with
+// where else on this Node it names a chain. A Group whose Transcripts
+// cannot be read is passed over: the lookup failed anyway.
+func (h *Host) chainNotFound(prefix string, searched ChainPlace) *ChainNotFoundError {
+	e := &ChainNotFoundError{Prefix: prefix, Searched: searched}
+	aliases, _ := h.aliases()
+	for _, alias := range aliases {
+		convs, err := transcript.ReadByConversation(h.p, alias)
+		if err != nil {
+			continue
+		}
+		for _, c := range convs {
+			pl := ChainPlace{Group: alias, Conversation: GroupTalk}
+			if c.ID != nil {
+				pl.Conversation = hex.EncodeToString(c.ID)
+			}
+			if pl == searched {
+				continue
+			}
+			for _, chain := range transcript.Chains(c.Transcripts) {
+				if strings.HasPrefix(chain, prefix) {
+					e.Elsewhere = append(e.Elsewhere, ChainAt{Chain: chain, ChainPlace: pl})
+				}
+			}
+		}
+	}
+	return e
+}
+
+func (e *ChainNotFoundError) Error() string {
+	return fmt.Sprintf("no chain of this Node's in %s, starts with %s", e.Searched, e.Prefix)
+}
+
+func (e *ChainNotFoundError) Unwrap() error { return serve.ErrNotAChain }
 
 // LiveTranscripts are the Handles of this Node's Agents with a live
 // Transcript in conv, in order: those a Clear there would clear.
