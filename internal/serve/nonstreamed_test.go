@@ -125,8 +125,8 @@ func responsesWhole(w http.ResponseWriter, text, said string) {
 }
 
 // runLines is a run's Transcript lines as compared across replies: the
-// request bodies, which differ by stream, and the chain, msg_id and seq
-// left out.
+// request bodies, which differ by stream, and the chain, msg_ids and seqs,
+// and the turn that names them, left out.
 func runLines(t *testing.T, a *node, chain string) string {
 	t.Helper()
 	var out []string
@@ -135,6 +135,8 @@ func runLines(t *testing.T, a *node, chain string) string {
 		delete(l, "chain")
 		delete(l, "msg_id")
 		delete(l, "seq")
+		delete(l, "turn")      // it names its summoner's seq
+		delete(l, "unapplied") // the msg_ids of messages the replica had yet to apply
 		if l["kind"] == serve.KindRequest {
 			delete(l, "request")
 		}

@@ -34,13 +34,24 @@ type providerCall struct {
 	// SystemCached whether the last one ends at a cache breakpoint.
 	SystemBlocks int
 	SystemCached bool
-	// RunFacts is what the last message says about this run, after the
-	// talk (ADR 0036); Prompt and Turns leave it out.
+	// Turn is the run's user turn (ADR 0036): the text of the last message
+	// that carries any, which the answers to the run's tool calls do not.
+	// RunFacts is its closing line, about this run, and Prompt what comes
+	// before that: the talk since the agent's last run and what summons
+	// it.
+	Turn string
+	// Opening is whether the call opens its run: its last message is the
+	// run's turn, not the answers to its tool calls.
+	Opening  bool
 	RunFacts string
-	Prompt   string // the first message's text
+	Prompt   string
 	Turns    string // every message, "[role] content" a line each
 	Messages int    // how many messages the call carried
-	Tools    string // the names of the tools offered, space-separated
+	// Raw is each message as sent, and Marked whether it carries a cache
+	// breakpoint.
+	Raw    []json.RawMessage
+	Marked []bool
+	Tools  string // the names of the tools offered, space-separated
 	// Descriptions is each offered tool's description, by name.
 	Descriptions map[string]string
 }
@@ -90,16 +101,18 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 			call.System += b.Text
 			call.SystemCached = b.CacheControl != nil
 		}
-		for i, m := range body.Messages {
-			text := contentText(m.Content)
-			if i == len(body.Messages)-1 {
-				text, call.RunFacts = splitRun(text)
+		for _, m := range body.Messages {
+			call.Turns += "[" + m.Role + "] " + contentText(m.Content) + "\n"
+			text := turnText(m.Content)
+			if m.Role == "user" && text != "" {
+				call.Turn = text
 			}
-			if i == 0 {
-				call.Prompt = text
-			}
-			call.Turns += "[" + m.Role + "] " + text + "\n"
+			call.Opening = m.Role == "user" && text != ""
+			raw, _ := json.Marshal(m)
+			call.Raw = append(call.Raw, raw)
+			call.Marked = append(call.Marked, bytes.Contains(m.Content, []byte(`"cache_control"`)))
 		}
+		call.Prompt, call.RunFacts = splitRun(call.Turn)
 		p.mu.Lock()
 		p.calls = append(p.calls, call)
 		n, reply := len(p.calls), p.reply
@@ -110,14 +123,43 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 	return p
 }
 
-// splitRun is a run's last message as its talk and what it says about the
-// run, the paragraph that closes it.
-func splitRun(text string) (talk, run string) {
-	const lead = "\n\n(About this run. "
-	if i := strings.LastIndex(text, lead); i >= 0 {
-		return text[:i], text[i+2:]
+// splitRun is a run's turn as what summons it, with the talk before
+// that, and its closing line about the run.
+func splitRun(turn string) (prompt, run string) {
+	const lead = "\n(You are at depth "
+	if i := strings.LastIndex(turn, lead); i >= 0 {
+		return turn[:i], turn[i+1:]
 	}
-	return text, ""
+	return turn, ""
+}
+
+// turnText is the text blocks of a message's content, joined: "" for one
+// that carries none.
+func turnText(raw json.RawMessage) string {
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	json.Unmarshal(raw, &blocks)
+	var s string
+	for _, b := range blocks {
+		if b.Type == "text" {
+			s += b.Text
+		}
+	}
+	return s
+}
+
+// summonedBy is the Prompt of a new Transcript's first run, summoned by
+// the message at seq, which reads line.
+func summonedBy(seq uint64, line string) string {
+	return fmt.Sprintf("(You are summoned by:)\n[%d] %s", seq, line)
+}
+
+// unmarked is a message as sent, without its cache breakpoints, which
+// move from call to call.
+func unmarked(raw json.RawMessage) string {
+	return strings.ReplaceAll(string(raw), `"cache_control":{"type":"ephemeral"},`, "")
 }
 
 // briefed reports whether sys carries handle's Agent Brief, "You are
@@ -437,7 +479,7 @@ func freeforms(t *testing.T, rows []cosl.Row) []*coslv1.AppFreeform {
 // A person's mention runs the agent: its text streams to a watcher as it is
 // generated, and what it says, and nothing else, commits once as one row
 // with its Handle at depth 1. The
-// agent is told who it is and reads the talk in the lean format, and the
+// agent is told who it is and what summons it, as a line of talk, and the
 // provider gets this Node's own key at this Node's own base_url.
 func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor")
@@ -459,7 +501,7 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 		t.Fatalf("agent.commit %+v, row %d %x", commit, rows[1].Seq, rows[1].MsgID)
 	}
 	calls := provider.seen()
-	if len(calls) != 1 || calls[0].Key != "sk-"+a.name || calls[0].Prompt != "alice: @auditor is this fine?" {
+	if len(calls) != 1 || calls[0].Key != "sk-"+a.name || calls[0].Prompt != summonedBy(v.Seq, "alice: @auditor is this fine?") {
 		t.Fatalf("calls = %+v", calls)
 	}
 	if sys := calls[0].System; !briefed(sys, "auditor") || !strings.Contains(sys, "@auditor") || !strings.Contains(sys, "Group-level") {
@@ -467,8 +509,9 @@ func TestMentionStreamsAndCommitsTheReply(t *testing.T) {
 	}
 }
 
-// Two mentions run in mention order, each Handle once, and the second
-// agent's context holds the first's committed reply.
+// Two mentions run in mention order, each Handle once, and each agent's
+// first run holds only the message that summons it: the first's reply is
+// talk the second reads with talk_read (ADR 0036).
 func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe")
 	s := watch(t, a)
@@ -485,7 +528,7 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 	if len(calls) != 2 || !briefed(calls[1].System, "auditor") {
 		t.Fatalf("calls = %+v", calls)
 	}
-	if want := "alice: @scribe then @auditor, @scribe\nalice/@scribe: reply 1"; calls[1].Prompt != want {
+	if want := summonedBy(v.Seq, "alice: @scribe then @auditor, @scribe"); calls[1].Prompt != want || calls[1].Messages != 1 {
 		t.Fatalf("second prompt = %q, want %q", calls[1].Prompt, want)
 	}
 	ffs := freeforms(t, b.groupLevelRows(t, gid, 3))
@@ -494,33 +537,36 @@ func TestMentionsRunInOrderAndSeeEarlierReplies(t *testing.T) {
 	}
 }
 
-// An agent sees its own messages as assistant turns and the rest as lean
-// lines in user turns (ADR 0018). Bob's @auditor is another agent, so
-// alice's sees its message as a lean line (ADR 0021). Its system block says so.
+// An agent is one Node's Handle (ADR 0021): the talk since its last run
+// leaves out its own messages, which are its talk_write calls in the
+// replay, and gives bob's @auditor's as lines, another agent's. Its system
+// block says so.
 func TestAnAgentIsOneNodesHandle(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor")
 	agentNode(t, b, provider.URL, "auditor")
 	ctx := context.Background()
+	first := summon(t, a, "@auditor and\nyou?")
+	b.groupLevelRows(t, gid, 2)
 	sb := watch(t, b)
 	v, err := b.client().ConversationSend(ctx, "@auditor?", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	untilEnd(t, sb, v.MsgID)
-	a.groupLevelRows(t, gid, 2)
-	sa := watch(t, a)
-	if v, err = a.client().ConversationSend(ctx, "@auditor and\nyou?", nil); err != nil {
-		t.Fatal(err)
-	}
-	untilEnd(t, sa, v.MsgID)
+	a.groupLevelRows(t, gid, 4)
+	again := summon(t, a, "@auditor again")
 	calls := provider.seenWith("sk-" + a.name)
-	if len(calls) != 1 {
+	if len(calls) != 2 {
 		t.Fatalf("alice's calls = %+v", calls)
 	}
-	if want := "[user] bob: @auditor?\nbob/@auditor: reply 1\nalice: @auditor and\\nyou?\n"; calls[0].Turns != want {
-		t.Fatalf("turns =\n%s\nwant\n%s", calls[0].Turns, want)
+	if want := summonedBy(first.Seq, "alice: @auditor and\\nyou?"); calls[0].Prompt != want {
+		t.Fatalf("first turn =\n%s\nwant\n%s", calls[0].Prompt, want)
 	}
-	if !strings.Contains(calls[0].System, "your own earlier messages are your turns") ||
+	want := fmt.Sprintf("(Talk since your last run:)\n[%d] bob: @auditor?\n[%d] bob/@auditor: reply 2\n", v.Seq, v.Seq+1) + summonedBy(again.Seq, "alice: @auditor again")
+	if calls[1].Prompt != want {
+		t.Fatalf("second turn =\n%s\nwant\n%s", calls[1].Prompt, want)
+	}
+	if !strings.Contains(calls[0].System, "Your own messages are left out of it: they are your talk_write calls.") ||
 		!strings.Contains(calls[0].System, "another Node is another agent") {
 		t.Fatalf("system prompt = %q", calls[0].System)
 	}
@@ -727,15 +773,14 @@ func TestASecondMentionWaitsForTheRunningChain(t *testing.T) {
 	if want := []string{first.MsgID, first.MsgID, second.MsgID, second.MsgID}; fmt.Sprint(order) != fmt.Sprint(want) {
 		t.Fatalf("chain start/end order %v, want %v", order, want)
 	}
-	// The talk ends with the agent's own reply to the first, so a fixed user
-	// turn follows it.
+	// The second chain's run replays the first's and is summoned by the
+	// second mention, though it was written while the first ran.
 	calls := provider.seen()
 	if len(calls) != 2 {
 		t.Fatalf("calls = %+v", calls)
 	}
-	want := "[user] alice: @auditor one\nalice: @auditor two\n[assistant] start done\n[user] (You have been summoned again. Reply now.)\n"
-	if calls[1].Turns != want {
-		t.Fatalf("second turns =\n%s\nwant\n%s", calls[1].Turns, want)
+	if want := summonedBy(second.Seq, "alice: @auditor two"); calls[1].Messages != 3 || calls[1].Prompt != want {
+		t.Fatalf("second run, of %d messages =\n%s\nwant\n%s", calls[1].Messages, calls[1].Prompt, want)
 	}
 }
 
@@ -869,7 +914,7 @@ func TestMentionInAKeysConversation(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	call := provider.seen()[0]
-	if call.Prompt != "alice: @auditor, check the key" {
+	if call.Prompt != summonedBy(v.Seq, "alice: @auditor, check the key") {
 		t.Fatalf("prompt = %q", call.Prompt)
 	}
 	if want := "ecdsa Key 333333333333"; !strings.Contains(call.System, want) {
@@ -1138,15 +1183,15 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 		t.Fatalf("calls = %+v", calls)
 	}
 	for i, want := range []string{
-		"You are at depth 1 of at most 2. Agents you may summon by mentioning them: @scribe, @quant.",
-		"You are at depth 2 of at most 2. Agents you may summon by mentioning them: none.",
-		"You are at depth 1 of at most 2. Agents you may summon by mentioning them: @auditor, @quant.",
+		"(You are at depth 1 of at most 2. Agents you may summon: @scribe, @quant.)",
+		"(You are at depth 2 of at most 2. Agents you may summon: none.)",
+		"(You are at depth 1 of at most 2. Agents you may summon: @auditor, @quant.)",
 	} {
-		if !strings.Contains(calls[i].RunFacts, want) {
+		if calls[i].RunFacts != want {
 			t.Errorf("call %d's last turn lacks %q:\n%s", i+1, want, calls[i].RunFacts)
 		}
 	}
-	if want := "alice: @auditor @scribe\nalice/@auditor: @quant, and me, @auditor\nalice/@quant: ask @scribe"; calls[2].Prompt != want {
+	if want := summonedBy(v.Seq, "alice: @auditor @scribe"); calls[2].Prompt != want {
 		t.Fatalf("scribe's prompt = %q, want %q", calls[2].Prompt, want)
 	}
 }

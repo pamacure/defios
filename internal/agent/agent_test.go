@@ -334,7 +334,7 @@ func run(s *script, shape agent.Shape, ev agent.Events) (agent.Result, error) {
 // runWith runs a Request offering tools against s.
 func runWith(s *script, shape agent.Shape, ev agent.Events, tools ...agent.Tool) (agent.Result, error) {
 	return agent.Client{Backoff: time.Millisecond}.Run(context.Background(), agent.Request{
-		Shape: shape, URL: s.URL, APIKey: "sk-secret", Body: map[string]any{"model": "m"}, System: "be brief\n", Turns: talk,
+		Shape: shape, URL: s.URL, APIKey: "sk-secret", Body: map[string]any{"model": "m"}, System: "be brief\n", Earlier: earlier, Turn: turn,
 		Tools: tools,
 	}, ev)
 }
@@ -374,20 +374,25 @@ func messages(body map[string]any) []any {
 	return m
 }
 
-// talk is a Request's turns as the serve builds them (ADR 0018), and
-// wantTalk how they read as sent.
-var talk = []agent.Turn{
-	{Role: agent.User, Text: "alice: @auditor hi"},
-	{Role: agent.Assistant, Text: "hello"},
-	{Role: agent.User, Text: "alice: and?"},
-}
+// earlier is a Request's replay as the serve builds it (ADR 0036): one
+// earlier run that said hello, then turn, this run's; wantTalk is how they
+// read as sent.
+var earlier = []agent.Earlier{{
+	Turn:   "alice: @auditor hi",
+	Blocks: []json.RawMessage{json.RawMessage(`{"type":"tool_use","id":"toolu_0","name":"talk_write","input":{"text":"hello"}}`)},
+	Posted: true,
+}}
 
-const wantTalk = "[map[content:alice: @auditor hi role:user] map[content:hello role:assistant] map[content:alice: and? role:user]]"
+const turn = "alice: and?"
 
-// wantAnthropicTalk is talk as an Anthropic request sends it: the latest
-// turn as a block carrying a cache breakpoint.
-const wantAnthropicTalk = "[map[content:alice: @auditor hi role:user] map[content:hello role:assistant] " +
-	"map[content:[map[cache_control:map[type:ephemeral] text:alice: and? type:text]] role:user]]"
+// wantAnthropicTalk is the replay and the turn as an Anthropic request
+// sends them: the earlier run's turn and its talk_write, then one user
+// message answering that call and carrying the turn, with a cache
+// breakpoint where the replay ends and one on the turn.
+const wantAnthropicTalk = "[map[content:[map[cache_control:map[type:ephemeral] text:alice: @auditor hi type:text]] role:user] " +
+	"map[content:[map[id:toolu_0 input:map[text:hello] name:talk_write type:tool_use]] role:assistant] " +
+	"map[content:[map[content:Posted. Your run ended there. is_error:false tool_use_id:toolu_0 type:tool_result] " +
+	"map[cache_control:map[type:ephemeral] text:alice: and? type:text]] role:user]]"
 
 // A Messages run streams its text, sends the turns in order, offers talk_write
 // as its only tool, and a talk_write commits exactly its text: the text outside it
@@ -479,7 +484,10 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 		t.Fatalf("tools = %v", body["tools"])
 	}
 	msgs := messages(body)
-	if len(msgs) != 4 || fmt.Sprint(msgs[0]) != "map[content:be brief\n role:system]" || fmt.Sprint(msgs[1:]) != wantTalk {
+	const wantTalk = "[map[content:alice: @auditor hi role:user] " +
+		"map[role:assistant tool_calls:[map[function:map[arguments:{\"text\":\"hello\"} name:talk_write] id:toolu_0 type:function]]] " +
+		"map[content:Posted. Your run ended there. role:tool tool_call_id:toolu_0] map[content:alice: and? role:user]]"
+	if len(msgs) != 5 || fmt.Sprint(msgs[0]) != "map[content:be brief\n role:system]" || fmt.Sprint(msgs[1:]) != wantTalk {
 		t.Fatalf("messages = %v", msgs)
 	}
 }
@@ -513,7 +521,10 @@ func TestResponsesSayIsTheResult(t *testing.T) {
 		t.Fatalf("tool = %v, want a flat function tool", tool)
 	}
 	in := messages(body)
-	if len(in) != 4 || fmt.Sprint(in[0]) != "map[content:be brief\n role:system]" || fmt.Sprint(in[1:]) != wantTalk {
+	const wantTalk = "[map[content:alice: @auditor hi role:user] " +
+		"map[arguments:{\"text\":\"hello\"} call_id:toolu_0 name:talk_write type:function_call] " +
+		"map[call_id:toolu_0 output:Posted. Your run ended there. type:function_call_output] map[content:alice: and? role:user]]"
+	if len(in) != 5 || fmt.Sprint(in[0]) != "map[content:be brief\n role:system]" || fmt.Sprint(in[1:]) != wantTalk {
 		t.Fatalf("input = %v", in)
 	}
 }
@@ -536,13 +547,13 @@ func TestResponsesReplaysItsOutputItems(t *testing.T) {
 		t.Fatalf("events %s\nwant   %s", &rec, want)
 	}
 	in := messages(s.body(2))
-	if len(in) != 7 {
+	if len(in) != 8 {
 		t.Fatalf("second call's input = %v", in)
 	}
-	if fmt.Sprint(in[:4]) != fmt.Sprint(messages(s.body(1))) {
+	if fmt.Sprint(in[:5]) != fmt.Sprint(messages(s.body(1))) {
 		t.Fatalf("second call's input does not begin with the first's: %v", in)
 	}
-	reasoning, call, output := in[4].(map[string]any), in[5].(map[string]any), in[6].(map[string]any)
+	reasoning, call, output := in[5].(map[string]any), in[6].(map[string]any), in[7].(map[string]any)
 	if reasoning["type"] != "reasoning" || reasoning["id"] != "rs_0" || reasoning["encrypted_content"] != "gAAAA-secret-thoughts" ||
 		fmt.Sprint(reasoning["summary"]) != "[map[text:weighing it type:summary_text]]" {
 		t.Fatalf("reasoning replayed as %v", reasoning)
@@ -715,9 +726,10 @@ func TestARunWithNoToolsOffersNone(t *testing.T) {
 }
 
 // An Anthropic run sends the system prompt as one block with a cache
-// breakpoint after it (ADR 0036), and a breakpoint on the latest turn: the
-// talk's last turn, then the latest tool result,
-// which takes the breakpoint from the one before it (ADR 0018).
+// breakpoint after it, a breakpoint where the replay ends, on the last user
+// message the run before sent, and one on this run's turn, which both stay;
+// and one on the latest tool result, which takes it from the one before it
+// (ADR 0036).
 func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
 	s := newScript(t, anthropicSays("first", ""), anthropicSays("second", ""), anthropicSays("third", "done"))
 	if _, err := run(s, agent.Messages, agent.Events{}); err != nil {
@@ -739,7 +751,7 @@ func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
 		}
 		return at
 	}
-	for n, want := range map[int]string{1: "[2]", 2: "[2 4]", 3: "[2 6]"} {
+	for n, want := range map[int]string{1: "[0 2]", 2: "[0 2 4]", 3: "[0 2 6]"} {
 		if got := fmt.Sprint(marked(n)); got != want {
 			t.Errorf("call %d marks messages %s, want %s", n, got, want)
 		}
@@ -747,6 +759,137 @@ func TestAnthropicMarksCacheBreakpoints(t *testing.T) {
 	last, _ := json.Marshal(messages(s.body(3))[6])
 	if !strings.Contains(string(last), `"type":"tool_result"`) {
 		t.Fatalf("latest turn = %s", last)
+	}
+}
+
+// unmarked is v, part of a request body, as JSON without Anthropic's cache
+// breakpoints, which move.
+func unmarked(v any) string {
+	var strip func(v any)
+	strip = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			delete(v, "cache_control")
+			for _, e := range v {
+				strip(e)
+			}
+		case []any:
+			for _, e := range v {
+				strip(e)
+			}
+		}
+	}
+	strip(v)
+	raw, _ := json.Marshal(v)
+	return string(raw)
+}
+
+// stored is rec's blocks as a Transcript gives them back: each written as
+// part of a JSON line, and read from it.
+func stored(t *testing.T, rec *recorder) []json.RawMessage {
+	t.Helper()
+	var out []json.RawMessage
+	for _, r := range rec.records {
+		if r.Kind != agent.RecordBlock {
+			continue
+		}
+		line, err := json.Marshal(struct{ Block json.RawMessage }{r.Data})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var l struct{ Block json.RawMessage }
+		if err := json.Unmarshal(line, &l); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, l.Block)
+	}
+	return out
+}
+
+// A run replays the agent's earlier runs as they were sent and generated
+// (ADR 0036): its request begins with the last request of the run before
+// it, whatever its tool calls carried, then holds that run's last output,
+// the answer to its accepted talk_write, and this run's turn. A run that
+// ended silent, and one that generated nothing, replay too. Every shape.
+func TestARunReplaysItsEarlierRunsAsTheyWereSent(t *testing.T) {
+	echo := agent.Tool{Name: "echo", Description: "Echo.", Schema: json.RawMessage(`{"type":"object"}`),
+		Call: func(context.Context, json.RawMessage) (string, error) { return "pong <&>", nil }}
+	for p, says := range says {
+		s := newScript(t, callsTool[p]("echo", `{"q": "a<b & c"}`), says("hmm", "first"), texts[p]("nothing to add"), says("", "third"))
+		var earlier []agent.Earlier
+		summon := func(turn string) []any {
+			t.Helper()
+			var rec recorder
+			res, err := agent.Client{}.Run(context.Background(), agent.Request{
+				Shape: p, URL: s.URL, Body: map[string]any{"model": "m"}, System: "be brief", Earlier: earlier, Turn: turn,
+				Tools: []agent.Tool{agent.TalkWrite, echo},
+			}, rec.events())
+			if err != nil {
+				t.Fatalf("%s: %q: %v", p, turn, err)
+			}
+			earlier = append(earlier, agent.Earlier{Turn: turn, Blocks: stored(t, &rec), Posted: !res.Silent})
+			return messages(s.body(s.calls()))
+		}
+		sent := summon("one") // calls echo, then says
+		earlier = append(earlier, agent.Earlier{Turn: "a run that failed at its first call"})
+		for _, turn := range []string{"two", "three"} { // silent, then says
+			before, n := unmarked(sent), len(sent)
+			sent = summon(turn)
+			if len(sent) < n+2 || unmarked(sent[:n]) != before {
+				t.Fatalf("%s: %q does not begin with the run before it:\n%s\n%s", p, turn, before, unmarked(sent))
+			}
+			if last := unmarked(sent[len(sent)-1]); !strings.Contains(last, turn) {
+				t.Errorf("%s: %q ends with %s", p, turn, last)
+			}
+		}
+		all := unmarked(sent)
+		for _, want := range []string{"Posted. Your run ended there.", "nothing to add", "pong", "a run that failed at its first call"} {
+			if strings.Count(all, want) != 1 {
+				t.Errorf("%s: the third run's request holds %q %d times, want once:\n%s", p, want, strings.Count(all, want), all)
+			}
+		}
+	}
+}
+
+// A tool call an earlier run ended without answering is answered in the
+// replay, so every call has its answer: the talk_write of a run that
+// posted nothing, and a call cut off before its Tool returned.
+func TestAReplayAnswersCallsItsRunLeftUnanswered(t *testing.T) {
+	cut := []agent.Earlier{{Turn: "one", Blocks: []json.RawMessage{
+		json.RawMessage(`{"type":"tool_use","id":"t1","name":"echo","input":{}}`),
+		json.RawMessage(`{"type":"tool_use","id":"t2","name":"talk_write","input":{"text":"hi"}}`),
+		json.RawMessage(`{"type":"tool_result","tool_use_id":"t1","content":"pong","is_error":false}`),
+	}}}
+	for p, reply := range texts {
+		s := newScript(t, reply("ok"))
+		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Earlier: cut, Turn: "two"}, agent.Events{}); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		sent := unmarked(messages(s.body(1)))
+		pong, unanswered := strings.Index(sent, "pong"), strings.Index(sent, "No answer was recorded: your run ended first.")
+		if pong < 0 || unanswered < pong || strings.Index(sent, "two") < unanswered || strings.Contains(sent, "Posted.") {
+			t.Errorf("%s: sent %s", p, sent)
+		}
+	}
+	// A call the model never finished, cut off at its token bound, and
+	// thinking cut off unsigned, are left out: a provider refuses them.
+	bound := []agent.Earlier{{Turn: "one", Blocks: []json.RawMessage{
+		json.RawMessage(`{"type":"thinking","thinking":"half a thought"}`),
+		json.RawMessage(`{"type":"text","text":"so far"}`),
+		json.RawMessage(`{"type":"tool_use","id":"t9","name":"talk_write","input":"{\"text\": \"cut he"}`),
+	}}}
+	for p, reply := range texts {
+		s := newScript(t, reply("ok"))
+		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Earlier: bound, Turn: "two"}, agent.Events{}); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if sent := unmarked(messages(s.body(1))); !strings.Contains(sent, "so far") || strings.Contains(sent, "t9") || strings.Contains(sent, "cut he") || strings.Contains(sent, "half a thought") {
+			t.Errorf("%s: sent %s", p, sent)
+		}
+	}
+	if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Shape: agent.Messages, URL: "http://unused.invalid",
+		Earlier: []agent.Earlier{{Turn: "one", Blocks: []json.RawMessage{json.RawMessage(`"not a block"`)}}}, Turn: "two"}, agent.Events{}); err == nil || !strings.Contains(err.Error(), "earlier run 1") {
+		t.Fatalf("a block that does not read: err %v", err)
 	}
 }
 
@@ -813,7 +956,7 @@ func TestTheProfileBodyMergesOverTheRequest(t *testing.T) {
 	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok"), agent.Responses: responsesText("ok")} {
 		s := newScript(t, reply)
 		_, err := agent.Client{}.Run(context.Background(), agent.Request{
-			Shape: p, URL: s.URL, Turns: talk, Body: map[string]any{
+			Shape: p, URL: s.URL, Earlier: earlier, Turn: turn, Body: map[string]any{
 				"model": "m", "stream": true, "max_tokens": int64(1024), "temperature": 0.2,
 				"thinking": map[string]any{"type": "adaptive", "budget": map[string]any{"tokens": int64(7)}},
 				"tools":    []any{"theirs"},
@@ -988,7 +1131,7 @@ func TestShapeOfAPIPath(t *testing.T) {
 func TestMaxTurnsBoundsTheRun(t *testing.T) {
 	s := newScript(t, anthropicSays("again", ""))
 	_, err := agent.Client{}.Run(context.Background(), agent.Request{
-		Shape: agent.Messages, URL: s.URL, Turns: talk, MaxTurns: 3, Tools: []agent.Tool{agent.TalkWrite},
+		Shape: agent.Messages, URL: s.URL, Earlier: earlier, Turn: turn, MaxTurns: 3, Tools: []agent.Tool{agent.TalkWrite},
 	}, agent.Events{})
 	if err == nil || !strings.Contains(err.Error(), "3 model calls") || s.calls() != 3 {
 		t.Fatalf("err %v after %d calls", err, s.calls())
@@ -1041,7 +1184,7 @@ func TestRunRecordsRequestsBlocksAndUsage(t *testing.T) {
 func TestNoKeySendsNoCredential(t *testing.T) {
 	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("ok"), agent.ChatCompletions: openaiText("ok"), agent.Responses: responsesText("ok")} {
 		s := newScript(t, reply)
-		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{}); err != nil {
+		if _, err := (agent.Client{}).Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Turn: "p"}, agent.Events{}); err != nil {
 			t.Fatal(err)
 		}
 		if h := s.headers[0]; h.Get("x-api-key")+h.Get("Authorization") != "" {
@@ -1068,7 +1211,7 @@ func failing(t *testing.T, fail func(n int, w http.ResponseWriter) bool) (*httpt
 
 func generate(srv *httptest.Server, ev agent.Events) (agent.Result, error) {
 	c := agent.Client{Backoff: time.Millisecond}
-	return c.Run(context.Background(), agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}, Tools: []agent.Tool{agent.TalkWrite}}, ev)
+	return c.Run(context.Background(), agent.Request{Shape: agent.Messages, URL: srv.URL, Turn: "p", Tools: []agent.Tool{agent.TalkWrite}}, ev)
 }
 
 // Rate limits, overload, 5xx and dropped connections are retried; a retry
@@ -1161,7 +1304,7 @@ func TestCancelEndsTheRequest(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	_, err := agent.Client{Backoff: time.Millisecond}.Run(ctx, agent.Request{Shape: agent.Messages, URL: srv.URL, Turns: []agent.Turn{{Role: agent.User, Text: "p"}}}, agent.Events{})
+	_, err := agent.Client{Backoff: time.Millisecond}.Run(ctx, agent.Request{Shape: agent.Messages, URL: srv.URL, Turn: "p"}, agent.Events{})
 	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("err %v after %d calls, want context.Canceled once", err, calls)
 	}

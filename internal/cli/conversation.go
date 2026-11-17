@@ -105,7 +105,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	log.Flags().StringVar(&keyQuery, "key", "", keyQueryHelp)
 	log.Flags().IntVar(&opts.limit, "limit", 0, "only the latest N messages (with --lean, after this Node's Recap)")
 	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
-	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it, as its agents read them")
+	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it")
 	log.Flags().BoolVar(&opts.chat, "chat", false, "the talk as chat: \"<display name>: <text>\" with its newlines, every message this Node holds from the first, a blank line between")
 	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each message this Node's agents said preceded by the Transcript blocks of the run that said it: thinking, text, tool calls and their results")
 	bindGroupFlag(g, log)
@@ -114,7 +114,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	var text string
 	recapCmd := &cobra.Command{
 		Use:   "recap --base-seq <n> --text <text>",
-		Short: "Write this Node's RECAP.md, its own account of the talk up to --base-seq, which its agents read in place of that talk. Nothing reaches the COSL. --key scopes it to that Key",
+		Short: "Write this Node's RECAP.md, its own account of the talk up to --base-seq, which conversation log --lean prints in place of that talk; agents are not given it. Nothing reaches the COSL. --key scopes it to that Key",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			return runConversationRecap(g, keyQuery, baseSeq, text)
@@ -643,8 +643,8 @@ type pruneLine struct {
 // runConversationPrune writes this Node's replica directly: Pruning is
 // Node-local, appends nothing and tells no other Node, so it needs no serve
 // (ADR 0012, ADR 0024). It warns when it destroys talk this Node's RECAP.md
-// does not account for: this Node's agents lose that talk with no account
-// in its place.
+// does not account for: nothing on this Node accounts for that talk any
+// more.
 func runConversationPrune(g *globals, keyQuery string, cut pruneCut) error {
 	var age config.Age
 	if cut.olderThan != "" {
@@ -692,9 +692,9 @@ func runConversationPrune(g *globals, keyQuery string, cut pruneCut) error {
 	warn := paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:")
 	switch {
 	case lost && rc == nil:
-		fmt.Fprintln(g.app.Stderr, warn+" this Node has no RECAP.md for this talk, so its agents lose what was pruned with no account of it in its place; `conversation recap` writes one")
+		fmt.Fprintln(g.app.Stderr, warn+" this Node has no RECAP.md for this talk, so nothing on this Node accounts for what was pruned; `conversation recap` writes one")
 	case lost:
-		fmt.Fprintf(g.app.Stderr, "%s this pruned talk past seq %d, the base_seq of this Node's RECAP.md, so its agents lose it with no account of it in its place\n", warn, rc.BaseSeq)
+		fmt.Fprintf(g.app.Stderr, "%s this pruned talk past seq %d, the base_seq of this Node's RECAP.md, so nothing on this Node accounts for it\n", warn, rc.BaseSeq)
 	}
 	if policy == 0 {
 		fmt.Fprintln(g.app.Stderr, warn+` this Node has no prune policy, so a later snapshot restore from a Node that kept this talk brings it back; set an age, such as prune = "90d", in this Group's config.toml to keep it pruned`)
@@ -796,8 +796,8 @@ type logOptions struct {
 // runConversationLog prints this Node's view of the Conversation's talk
 // (ADR 0025), unfolded (ADR 0024): every message this replica holds that is
 // not pruned, and under --full the pruned ones too as placeholders, then
-// those queued in its Outbox. --lean is what this Node's agents read, and
-// --chat the talk as chat.
+// those queued in its Outbox. --lean is the talk under this Node's Recap,
+// and --chat the talk as chat.
 func runConversationLog(g *globals, keyQuery string, opts logOptions) error {
 	if opts.limit < 0 {
 		return exitUsagef("--limit must be >= 0")
@@ -922,7 +922,7 @@ func newTalkLine(m node.Message) messageLine {
 	return l
 }
 
-// emitLean prints the Conversation as this Node's agents read it: its
+// emitLean prints the Conversation's lean view: its
 // RECAP.md as `[recap to seq <n>] <text>`, then the talk after it that
 // this replica holds, the latest limit of it, as `<display name>: <text>`,
 // or `<display name>/@handle: <text>` for an agent's, one entry per line

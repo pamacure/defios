@@ -291,3 +291,62 @@ func TestARunInProgressFinishesIntoTheClearedTranscript(t *testing.T) {
 		t.Fatalf("transcripts = %+v", got)
 	}
 }
+
+// A run reads its Agent's live Transcript as it starts, earlier runs in
+// order (ADR 0036): each with its turn and the talk that turn accounts
+// for, and replayed only if it was given its turn and generated something.
+// An Agent with no live Transcript reads none.
+func TestARunReadsItsAgentsEarlierRuns(t *testing.T) {
+	p := paths(t)
+	w := transcript.NewWriter(p, group.ImplicitAlias, nil, chainID, t.Logf)
+	defer w.Close()
+	if earlier, err := w.Earlier("auditor"); err != nil || earlier != nil {
+		t.Fatalf("no Transcript reads %v, %v", earlier, err)
+	}
+	block := json.RawMessage(`{"type":"text","text":"ok"}`)
+	write(t, p, nil, "aaaa",
+		transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindTurn, Turn: "one", Seq: 4, Unapplied: []string{"beef"}},
+		transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: block},
+		transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent})
+	write(t, p, nil, "bbbb",
+		transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindTurn, Turn: "two", Seq: 6},
+		transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "refused"},
+		transcript.Line{Step: 2, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: block})
+	earlier, err := w.Earlier("auditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := transcript.Runs(earlier)
+	if len(runs) != 3 {
+		t.Fatalf("runs = %+v", runs)
+	}
+	if r := runs[0]; !r.Replays() || r.Turn != "one" || r.TalkSeq != 4 || !reflect.DeepEqual(r.TalkUnapplied, []string{"beef"}) || len(r.Blocks) != 1 {
+		t.Errorf("first run = %+v", r)
+	}
+	if runs[1].Replays() || runs[2].Replays() {
+		t.Errorf("a run with no output, or with no turn, replays: %+v", runs[1:])
+	}
+}
+
+// The Transcript a run reads is the one it is written to, though a Clear
+// closes it between the two (ADR 0036).
+func TestARunIsWrittenToTheTranscriptItRead(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "aaaa", transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent})
+	w := transcript.NewWriter(p, group.ImplicitAlias, nil, "bbbb", t.Logf)
+	defer w.Close()
+	if earlier, err := w.Earlier("auditor"); err != nil || len(earlier) != 1 {
+		t.Fatalf("Earlier = %v, %v", earlier, err)
+	}
+	if cleared, err := transcript.Clear(p, group.ImplicitAlias, nil, "auditor"); err != nil || len(cleared) != 1 {
+		t.Fatalf("Clear = %v, %v", cleared, err)
+	}
+	w.Write(transcript.Line{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent})
+	ts := read(t, p, nil)
+	if len(ts) != 1 || len(ts[0].Lines) != 2 || ts[0].Lines[1].Chain != "bbbb" {
+		t.Fatalf("Transcripts = %+v, want the closed one holding both runs", ts)
+	}
+	if live, err := transcript.Live(p, group.ImplicitAlias, nil); err != nil || live != nil {
+		t.Fatalf("live = %v, %v, want none", live, err)
+	}
+}

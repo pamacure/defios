@@ -436,3 +436,21 @@ func TestAPageShowsAPrunedStretchAsOneGapLine(t *testing.T) {
 		t.Errorf("before 2 = %s", got)
 	}
 }
+
+// Lines is all of the talk as a page's lines, however many there are: no
+// page bounds it, a pruned stretch is one gap line, and queued messages
+// come last.
+func TestLinesAreTheWholeTalkAsAPagesLines(t *testing.T) {
+	f := newFixture(t)
+	for i := range talk.MaxPage + 3 {
+		f.say(f.alice, fmt.Sprint("m", i))
+	}
+	if _, err := f.store.Prune(nil, 2); err != nil {
+		t.Fatal(err)
+	}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.bob, nil, said("later"))}}
+	lines := f.read(nil).Messages.Lines(func(m talk.Message) string { return m.Sender })
+	if n := len(lines); n != talk.MaxPage+3 || lines[0] != "[1–2 pruned on this Node]" || lines[1] != "[3] alice: m2" || lines[n-1] != "[queued] bob: later" {
+		t.Fatalf("%d lines, from %q and %q to %q", n, lines[0], lines[1], lines[n-1])
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"defios.com/internal/cosl"
@@ -49,59 +48,6 @@ func summon(t *testing.T, n *node, text string) serve.SendView {
 	return v
 }
 
-// recapOpening is how the first user turn opens under a Recap of baseSeq.
-func recapOpening(baseSeq uint64, text string) string {
-	return fmt.Sprintf("(This Node's Recap: its own account of the talk up to seq %d, in place of that talk.)\n%s\n(End of the Recap. The talk after it follows.)", baseSeq, text)
-}
-
-// Each Node's agents read its own RECAP.md, at the start of the first user
-// turn, then only the talk after its base_seq; another Node's Recap never
-// reaches them.
-func TestEachNodesAgentsReadOnlyItsOwnRecap(t *testing.T) {
-	a, b, gid, provider := agentPair(t, "auditor")
-	agentNode(t, b, provider.URL, "auditor")
-	seqs := sendAll(t, a, "one", "two", "three")
-	b.groupLevelRows(t, gid, 3)
-	writeRecap(t, a, seqs[0], "alice's account of one")
-	writeRecap(t, b, seqs[1], "bob's account of one and two")
-
-	summon(t, a, "@auditor what now?")
-	b.groupLevelRows(t, gid, 5)
-	summon(t, b, "@auditor and you?")
-
-	alice, bob := provider.seenWith("sk-"+a.name), provider.seenWith("sk-"+b.name)
-	if len(alice) != 1 || len(bob) != 1 {
-		t.Fatalf("calls: alice %d, bob %d", len(alice), len(bob))
-	}
-	want := "[user] " + recapOpening(seqs[0], "alice's account of one") + "\nalice: two\nalice: three\nalice: @auditor what now?\n"
-	if alice[0].Turns != want {
-		t.Errorf("alice's agent read\n%s\nwant\n%s", alice[0].Turns, want)
-	}
-	want = "[user] " + recapOpening(seqs[1], "bob's account of one and two") + "\nalice: three\nalice: @auditor what now?\nalice/@auditor: reply 1\nbob: @auditor and you?\n"
-	if bob[0].Turns != want {
-		t.Errorf("bob's agent read\n%s\nwant\n%s", bob[0].Turns, want)
-	}
-	for _, c := range append(alice, bob...) {
-		if strings.Contains(c.RunFacts, "missing") {
-			t.Errorf("nothing is pruned, yet the last turn says talk is missing: %q", c.RunFacts)
-		}
-	}
-}
-
-// A Recap that opens the talk takes the place of the fixed turn that would
-// open talk starting with the agent's own message.
-func TestARecapOpensTalkThatStartsWithTheAgentsOwnMessage(t *testing.T) {
-	a, _, _, provider := agentPair(t, "auditor")
-	v := summon(t, a, "@auditor first")
-	writeRecap(t, a, v.Seq, "alice asked first")
-	summon(t, a, "@auditor again")
-	calls := provider.seen()
-	want := "[user] " + recapOpening(v.Seq, "alice asked first") + "\n[assistant] reply 1\n[user] alice: @auditor again\n"
-	if len(calls) != 2 || calls[1].Turns != want {
-		t.Fatalf("turns =\n%s\nwant\n%s", calls[len(calls)-1].Turns, want)
-	}
-}
-
 // pruneOn destroys the payloads of n's Group-level talk at or below seq, as
 // `conversation prune` does.
 func pruneOn(t *testing.T, n *node, through uint64) {
@@ -116,62 +62,23 @@ func pruneOn(t *testing.T, n *node, through uint64) {
 	}
 }
 
-// When this replica has pruned talk its Recap does not account for, or any
-// talk with no Recap, the run's last turn says earlier talk is missing; pruned
-// talk the Recap accounts for is not missing.
-func TestTheLastTurnSaysWhenPrunedTalkIsMissing(t *testing.T) {
+// An agent is given no Recap (ADR 0036): this Node's RECAP.md is not read
+// for it, so one that does not parse fails no summon. Talk this Node has
+// pruned since the agent's last run shows in its turn as one line giving
+// its seqs, the agent's own pruned reply among them.
+func TestATurnShowsPrunedTalkAsAGapAndReadsNoRecap(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
+	first := summon(t, a, "@auditor first")
 	seqs := sendAll(t, a, "one", "two", "three")
-	missing := func() bool {
-		t.Helper()
-		calls := provider.seen()
-		return strings.Contains(calls[len(calls)-1].RunFacts, "Earlier talk is missing")
-	}
-
 	pruneOn(t, a, seqs[1])
-	writeRecap(t, a, seqs[1], "one and two")
-	summon(t, a, "@auditor covered?")
-	if missing() {
-		t.Errorf("the Recap accounts for all pruned talk, yet the last turn says talk is missing")
-	}
-
-	writeRecap(t, a, seqs[0], "one")
-	summon(t, a, "@auditor past the Recap?")
-	if !missing() {
-		t.Errorf("seq %d is pruned past the Recap, yet the last turn does not say talk is missing", seqs[1])
-	}
-	if calls := provider.seen(); strings.Contains(calls[len(calls)-1].Turns, "alice: two") {
-		t.Errorf("pruned talk was read: %s", calls[len(calls)-1].Turns)
-	}
-
-	if err := os.Remove(a.paths.RecapFile(group.ImplicitAlias, "group")); err != nil {
-		t.Fatal(err)
-	}
-	summon(t, a, "@auditor no Recap?")
-	if !missing() {
-		t.Errorf("talk is pruned and there is no Recap, yet the last turn does not say talk is missing")
-	}
-}
-
-// A RECAP.md that does not parse fails the summon, naming the file, rather
-// than being silently ignored.
-func TestABadRECAPmdFailsTheSummon(t *testing.T) {
-	a, _, _, _ := agentPair(t, "auditor")
-	path := a.paths.RecapFile(group.ImplicitAlias, "group")
 	writeRecap(t, a, 1, "fine")
-	if err := os.WriteFile(path, []byte("no front matter\n"), 0o600); err != nil {
+	if err := os.WriteFile(a.paths.RecapFile(group.ImplicitAlias, "group"), []byte("no front matter\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := watch(t, a)
-	v, err := a.client().ConversationSend(context.Background(), "@auditor?", nil)
-	if err != nil {
-		t.Fatal(err)
+	again := summon(t, a, "@auditor again")
+	calls := provider.seen()
+	want := fmt.Sprintf("(Talk since your last run:)\n[%d–%d pruned on this Node]\n[%d] alice: three\n", first.Seq+1, seqs[1], seqs[2]) + summonedBy(again.Seq, "alice: @auditor again")
+	if len(calls) != 2 || calls[1].Prompt != want {
+		t.Fatalf("turn =\n%s\nwant\n%s", calls[len(calls)-1].Prompt, want)
 	}
-	events := untilEnd(t, s, v.MsgID)
-	for _, ev := range events {
-		if ev.Type == serve.EventAgentError && strings.Contains(ev.Error, path) {
-			return
-		}
-	}
-	t.Fatalf("events = %s, want an agent error naming %s", summary(events), path)
 }

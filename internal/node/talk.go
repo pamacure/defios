@@ -85,7 +85,7 @@ type Message struct {
 // Readable reports whether m says anything.
 func (m Message) Readable() bool { return !m.Pruned && !m.Unreadable }
 
-// Lean is a Conversation as this Node's agents read it (ADR 0024).
+// Lean is a Conversation under this Node's Recap (ADR 0024).
 type Lean struct {
 	Recap *Recap // this Node's, nil if it has none
 	// Messages is the readable talk after the Recap, all of it with none.
@@ -280,8 +280,8 @@ func (h *Host) Messages(_ context.Context, groupAlias, conv string) ([]Message, 
 	return h.messages(v.Messages), nil
 }
 
-// Lean is conv as this Node's agents read it: its Recap, then the talk
-// after it.
+// Lean is conv under this Node's Recap: the Recap, then the talk after
+// it.
 func (h *Host) Lean(_ context.Context, groupAlias, conv string) (Lean, error) {
 	v, _, _, done, err := h.read(groupAlias, conv)
 	if err != nil {

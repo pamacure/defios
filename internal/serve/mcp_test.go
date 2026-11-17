@@ -240,7 +240,7 @@ func TestAnMCPServerStartsLazilyIsSharedAndStopsWithTheServe(t *testing.T) {
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w)
 		c := provider.seen()[n-1]
-		if strings.Contains(c.Tools, "tools__fx__pid") && !strings.Contains(c.Turns, `"tool_result"`) {
+		if strings.Contains(c.Tools, "tools__fx__pid") && c.Opening {
 			endCall(w, "tools__fx__pid", `{}`)
 			return
 		}
@@ -259,7 +259,7 @@ func TestAnMCPServerStartsLazilyIsSharedAndStopsWithTheServe(t *testing.T) {
 	}
 	var pids []string
 	for _, c := range provider.seen() {
-		if strings.Contains(c.Turns, `"tool_result"`) {
+		if !c.Opening {
 			pids = append(pids, pidAnswer(t, c))
 		}
 	}

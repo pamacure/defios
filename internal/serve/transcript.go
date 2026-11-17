@@ -12,6 +12,7 @@ const (
 
 // Transcript line kinds: which of a TranscriptLine's fields it holds.
 const (
+	KindTurn    = transcript.KindTurn
 	KindRequest = transcript.KindRequest
 	KindBlock   = transcript.KindBlock
 	KindUsage   = transcript.KindUsage

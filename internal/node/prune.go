@@ -14,7 +14,7 @@ import (
 type Pruning struct {
 	Messages int
 	// Unaccounted: this Node's RECAP.md does not account for all of that
-	// talk, so this Node's agents lose it with no account in its place.
+	// talk, so nothing on this Node accounts for it any more.
 	Unaccounted bool
 	// NoPolicy: the Group has no prune policy, so a later snapshot restore
 	// from a Node that kept the talk brings it back.

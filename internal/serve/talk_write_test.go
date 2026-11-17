@@ -203,7 +203,7 @@ func TestProfileOptionsShapeTheRun(t *testing.T) {
 	if n := len(provider.seen()); n != 2 {
 		t.Fatalf("%d calls, want 2", n)
 	}
-	req, _ := transcript(t, a, v.MsgID)[0]["request"].(map[string]any)
+	req, _ := transcript(t, a, v.MsgID)[1]["request"].(map[string]any)
 	thinking, _ := req["thinking"].(map[string]any)
 	if req["model"] != "claude-test" || req["stream"] != true || req["max_tokens"] != float64(1024) || thinking["type"] != "adaptive" {
 		t.Fatalf("request = %v", req)
@@ -255,7 +255,8 @@ func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
 }
 
 // An agent's Transcript holds one line per request, output block, usage,
-// tool result and outcome of each run, each tagged with its chain, step,
+// tool result and outcome of each run, after its turn, each tagged with
+// its chain, step,
 // Handle and depth, and never the key.
 func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
@@ -276,9 +277,9 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	}
 	events := untilEnd(t, s, v.MsgID)
 	lines := transcript(t, a, v.MsgID)
-	want := "1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:block " +
+	want := "1/auditor/1:turn 1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:block " +
 		"1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:outcome=said " +
-		"2/scribe/1:request 2/scribe/1:block 2/scribe/1:usage 2/scribe/1:outcome=silent"
+		"2/scribe/1:turn 2/scribe/1:request 2/scribe/1:block 2/scribe/1:usage 2/scribe/1:outcome=silent"
 	if got := lineWords(lines); got != want {
 		t.Fatalf("transcript = %s\nwant         %s", got, want)
 	}
@@ -288,13 +289,16 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 			commit = ev
 		}
 	}
-	if res, _ := lines[4]["block"].(map[string]any); res["type"] != "tool_result" || res["is_error"] != true || !strings.Contains(fmt.Sprint(res["content"]), "empty") {
-		t.Fatalf("the refused talk_write's answer = %v", lines[4])
+	if turn := lines[0]; turn["turn"] != provider.seen()[0].Turn {
+		t.Fatalf("the run's turn = %v, sent %q", turn, provider.seen()[0].Turn)
 	}
-	if said := lines[9]; commit.Text != "ok" || said["seq"] != float64(commit.Seq) || said["msg_id"] != commit.MsgID || commit.MsgID == "" {
+	if res, _ := lines[5]["block"].(map[string]any); res["type"] != "tool_result" || res["is_error"] != true || !strings.Contains(fmt.Sprint(res["content"]), "empty") {
+		t.Fatalf("the refused talk_write's answer = %v", lines[5])
+	}
+	if said := lines[10]; commit.Text != "ok" || said["seq"] != float64(commit.Seq) || said["msg_id"] != commit.MsgID || commit.MsgID == "" {
 		t.Fatalf("said seq %v, agent.commit %+v", said, commit)
 	}
-	req, _ := lines[5]["request"].(map[string]any)
+	req, _ := lines[6]["request"].(map[string]any)
 	if req["model"] != "claude-test" || len(req["messages"].([]any)) != 3 {
 		t.Fatalf("second request = %v", req)
 	}
@@ -346,7 +350,7 @@ func TestCancelWritesOutcomeCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	untilEnd(t, s, v.MsgID)
-	if got := lineWords(transcript(t, a, v.MsgID)); got != "1/auditor/1:request 1/auditor/1:outcome=cancelled" {
+	if got := lineWords(transcript(t, a, v.MsgID)); got != "1/auditor/1:turn 1/auditor/1:request 1/auditor/1:outcome=cancelled" {
 		t.Fatalf("transcript = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)

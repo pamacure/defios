@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,7 @@ const (
 
 // Line kinds: which of a Line's fields it holds.
 const (
+	KindTurn    = "turn"              // turn, seq and unapplied: the run's user turn, and the talk it accounts for
 	KindRequest = agent.RecordRequest // request: a request body as sent, never its headers
 	KindBlock   = agent.RecordBlock   // block: one output block, or a tool call's result
 	KindUsage   = agent.RecordUsage   // usage: a model call's usage
@@ -48,16 +50,25 @@ type Line struct {
 	Step   int    `json:"step"`
 	Handle string `json:"handle"`
 	Depth  uint32 `json:"depth"`
-	// Kind is KindRequest, KindBlock, KindUsage, KindActed or KindOutcome.
-	Kind    string          `json:"kind"`
-	Request json.RawMessage `json:"request,omitempty"`
-	Block   json.RawMessage `json:"block,omitempty"`
-	Usage   json.RawMessage `json:"usage,omitempty"`
-	Tool    string          `json:"tool,omitempty"`
-	Outcome string          `json:"outcome,omitempty"`
-	MsgID   string          `json:"msg_id,omitempty"`
-	Seq     uint64          `json:"seq,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	// Kind is KindTurn, KindRequest, KindBlock, KindUsage, KindActed or
+	// KindOutcome.
+	Kind string `json:"kind"`
+	// Turn, with KindTurn, is the run's user turn as sent, which a later
+	// run replays (ADR 0036). Seq is then the last seq of the talk its
+	// Node's replica held, all of which the turn accounts for, and
+	// Unapplied the hex msg_ids of this Node's own messages beyond the
+	// replica that it accounts for too, queued or not yet applied: the
+	// agent's next turn carries only the talk after them.
+	Turn      string          `json:"turn,omitempty"`
+	Unapplied []string        `json:"unapplied,omitempty"`
+	Request   json.RawMessage `json:"request,omitempty"`
+	Block     json.RawMessage `json:"block,omitempty"`
+	Usage     json.RawMessage `json:"usage,omitempty"`
+	Tool      string          `json:"tool,omitempty"`
+	Outcome   string          `json:"outcome,omitempty"`
+	MsgID     string          `json:"msg_id,omitempty"`
+	Seq       uint64          `json:"seq,omitempty"`
+	Error     string          `json:"error,omitempty"`
 }
 
 // Outcome is the closing line of a run that said msgID, hex, at seq
@@ -142,6 +153,33 @@ func (w *Writer) append(l Line) error {
 		err = errors.Join(err, f.Close())
 	}
 	return err
+}
+
+// Earlier are the lines of handle's live Transcript as its run about to be
+// written starts, nil if it has none. The Transcript is held open from
+// here, so the run is recorded in the one it replays though a Clear closes
+// it meanwhile (ADR 0036).
+func (w *Writer) Earlier(handle string) ([]Line, error) {
+	if f := w.files[handle]; f != nil {
+		// Left by a run that wrote no outcome: whichever is live now is
+		// the one to read.
+		delete(w.files, handle)
+		f.Close()
+	}
+	f, err := os.OpenFile(w.p.LiveTranscriptFile(w.alias, w.conv, handle), os.O_RDWR|os.O_APPEND, 0o600)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	w.files[handle] = f
+	return parseLines(data), nil
 }
 
 // Close closes the files its lines opened.
@@ -294,6 +332,12 @@ func readFile(file string) ([]Line, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseLines(data), nil
+}
+
+// parseLines is the lines of a Transcript file's data, passing over any
+// it cannot read.
+func parseLines(data []byte) []Line {
 	var lines []Line
 	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		var l Line
@@ -302,7 +346,7 @@ func readFile(file string) ([]Line, error) {
 		}
 		lines = append(lines, l)
 	}
-	return lines, nil
+	return lines
 }
 
 // Chains are the chains with a run in ts, in order; nil if there is none.
@@ -340,6 +384,13 @@ type Run struct {
 	Step   int
 	Handle string
 	Depth  uint32
+	// Turn is its user turn as sent, "" for a run that never got as far.
+	// The turn accounts for the talk its Node's replica held, up to
+	// TalkSeq, and for this Node's own messages beyond the replica,
+	// TalkUnapplied, hex msg_ids (ADR 0036).
+	Turn          string
+	TalkSeq       uint64
+	TalkUnapplied []string
 	// Requests are the request bodies of its model calls as sent, Blocks
 	// its output blocks and the results of its tool calls, and Usage each
 	// call's usage, in order.
@@ -360,6 +411,12 @@ type Acted struct {
 	Tool  string
 	MsgID string
 }
+
+// Replays reports whether a later run of its Agent replays r: it was given
+// its turn and generated something. A run that failed before any output,
+// such as one whose Provider refused it, is left out of the replay, and
+// the talk in its turn is given again (ADR 0036).
+func (r Run) Replays() bool { return r.Turn != "" && len(r.Blocks) > 0 }
 
 // Output is what r generated, in order: each model call's blocks,
 // thinking, text and tool calls, followed by the results the run answered
@@ -387,6 +444,8 @@ func Runs(lines []Line) []Run {
 		}
 		r := &runs[i]
 		switch l.Kind {
+		case KindTurn:
+			r.Turn, r.TalkSeq, r.TalkUnapplied = l.Turn, l.Seq, l.Unapplied
 		case KindRequest:
 			r.Requests = append(r.Requests, l.Request)
 		case KindBlock:

@@ -38,7 +38,10 @@ func (a *postingAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.systems = append(a.systems, string(sys))
 	a.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	if strings.Contains(string(raw), `"tool_result"`) {
+	// A run's own tool result is answered by ending its turn. Earlier runs
+	// replayed before its turn hold tool results too (ADR 0036): only the
+	// last message says where this call is.
+	if n := len(req.Messages); n > 0 && !strings.Contains(string(req.Messages[n-1]), `"type":"text"`) {
 		io.WriteString(w, `{"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"done"}],`+
 			`"stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":1}}`)
 		return

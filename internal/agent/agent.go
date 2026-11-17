@@ -70,7 +70,12 @@ type Request struct {
 	// one block ending at a cache breakpoint; OpenAI caches the shared
 	// prefix itself.
 	System string
-	Turns  []Turn // the talk so far, alternating and ending with User
+	// Earlier are the agent's earlier runs in its live Transcript, oldest
+	// first, replayed in full before Turn, so each run's request begins
+	// with the one before it (ADR 0036).
+	Earlier []Earlier
+	// Turn is this run's user turn: what the agent is summoned with.
+	Turn string
 
 	// Tools are what the run offers, in order; none is a run that can only
 	// end its turn. A call of any other name is a tool error.
@@ -92,18 +97,98 @@ func (req Request) maxTurns() int {
 	return DefaultMaxTurns
 }
 
-// Turn is one message of the talk as the Model sees it (ADR 0018): the
-// agent's own message is an Assistant turn, everything else User content.
-type Turn struct {
-	Role string // User or Assistant
-	Text string
+// Earlier is one earlier run of the agent's, as its Transcript recorded it
+// (ADR 0036).
+type Earlier struct {
+	Turn string // its user turn, as sent
+	// Blocks are what it generated, in order, each as Events.Record gave
+	// it under RecordBlock: every call's output blocks, then the answers
+	// to its tool calls.
+	Blocks []json.RawMessage
+	// Posted is whether its accepted talk_write was posted.
+	Posted bool
 }
 
-// The roles a Turn takes; both providers name them alike.
+// What a replay answers a tool call with that its run ended without
+// answering: every shape wants each call answered before the next turn.
 const (
-	User      = "user"
-	Assistant = "assistant"
+	replayPosted     = "Posted. Your run ended there."
+	replayUnanswered = "No answer was recorded: your run ended first. The call may still have taken effect."
 )
+
+// pastCall is one model call of an earlier run: its output blocks and the
+// answers to its tool calls.
+type pastCall struct {
+	blocks  []Block
+	results []ToolResult
+}
+
+// calls are e's model calls, in order: a block after an answer starts the
+// next call.
+func (e Earlier) calls() ([]pastCall, error) {
+	var calls []pastCall
+	open := false // whether the last call still takes output blocks
+	for _, raw := range e.Blocks {
+		var b Block
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, fmt.Errorf("a recorded block does not read: %w", err)
+		}
+		if b.Type != "tool_result" {
+			if !open {
+				calls, open = append(calls, pastCall{}), true
+			}
+			calls[len(calls)-1].blocks = append(calls[len(calls)-1].blocks, b)
+			continue
+		}
+		var r ToolResult
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, fmt.Errorf("a recorded tool result does not read: %w", err)
+		}
+		if len(calls) > 0 {
+			calls[len(calls)-1].results = append(calls[len(calls)-1].results, r)
+			open = false
+		}
+	}
+	if n := len(calls); n > 0 {
+		calls[n-1].blocks = slices.DeleteFunc(calls[n-1].blocks, calls[n-1].cutOff)
+	}
+	return calls, nil
+}
+
+// cutOff reports whether b is a tool call the model never finished: its
+// input is no JSON object, and it was never answered, as when a run's last
+// call stops at its token bound. A replay leaves it out: a provider would
+// refuse it, and every later run of the agent with it.
+func (c pastCall) cutOff(b Block) bool {
+	if b.Type != "tool_use" || bytes.HasPrefix(bytes.TrimSpace(b.Input), []byte("{")) {
+		return false
+	}
+	return !slices.ContainsFunc(c.results, func(r ToolResult) bool { return r.ToolUseID == b.ID })
+}
+
+// settle is call's tool calls each with its answer, in the order they were
+// made: the one recorded, or what a replay says of a call its run ended
+// without answering, the first such talk_write of a run that posted being
+// the one accepted. whole is whether every one was recorded.
+func (e Earlier) settle(call pastCall) (results []ToolResult, whole bool) {
+	whole, posted := true, e.Posted
+	for _, b := range call.blocks {
+		if b.Type != "tool_use" {
+			continue
+		}
+		if i := slices.IndexFunc(call.results, func(r ToolResult) bool { return r.ToolUseID == b.ID }); i >= 0 {
+			results = append(results, call.results[i])
+			continue
+		}
+		whole = false
+		r := ToolResult{Type: "tool_result", ToolUseID: b.ID, Content: replayUnanswered}
+		if b.Name == TalkWriteName && posted {
+			r.Content, posted = replayPosted, false
+		}
+		results = append(results, r)
+	}
+	return results, whole
+}
 
 // Result is how a run ended: with Said, what its accepted talk_write carried, or
 // Silent when the model ended its turn without one.
@@ -354,18 +439,22 @@ type ToolResult struct {
 	IsError   bool   `json:"is_error"`
 }
 
-// conversation is a run's request so far, in its provider's shape. Each
-// call's content begins with the content of the one before it, unchanged,
-// so a provider can read that prefix from cache (ADR 0018). The bodies are
-// not byte-for-byte prefixes: from the third call on, the earlier tool
-// result's Anthropic cache breakpoint moves to the newest one.
+// conversation is a run's request so far, in its provider's shape: the
+// agent's earlier runs replayed as they were sent and generated, this
+// run's user turn, then its calls (ADR 0036). Each call's content begins
+// with the content of the one before it, unchanged, the last call of the
+// run before included, so a provider can read that prefix from cache. The
+// bodies are byte-for-byte prefixes but for Anthropic's cache breakpoints,
+// which move: one stays where the replay ends, where the run before left
+// its last, one on this run's turn, and one moves to the newest tool
+// result, which with the system block's are the four allowed.
 type conversation struct {
 	req    Request
 	wire   *wire
 	system []any // Anthropic's system blocks
 	msgs   []any
 	// latest is the Anthropic tool result holding the moving cache
-	// breakpoint; the next one takes it, keeping within the four allowed.
+	// breakpoint; the next one takes it.
 	latest map[string]any
 }
 
@@ -380,12 +469,51 @@ func newConversation(req Request) (*conversation, error) {
 	}
 	c := &conversation{req: req, wire: req.Shape.wire}
 	c.wire.open(c)
+	// owed are the answers to the calls the run before ended without
+	// answering: they open the next turn. last is the last block of the
+	// last user message, where a breakpoint may sit.
+	var owed []ToolResult
+	var last map[string]any
+	for i, e := range req.Earlier {
+		calls, err := e.calls()
+		if err != nil {
+			return nil, fmt.Errorf("agent: replaying earlier run %d: %w", i+1, err)
+		}
+		last, owed = c.wire.turn(c, e.Turn, owed), nil
+		for j, call := range calls {
+			results, whole := e.settle(call)
+			if !whole && j == len(calls)-1 {
+				results, owed = nil, results
+			}
+			if l := c.wire.add(c, call.blocks, results); l != nil {
+				last = l
+			}
+		}
+	}
+	mark(last)
+	mark(c.wire.turn(c, req.Turn, owed))
 	return c, nil
 }
 
-// add appends a call's output and the answers to its tool calls.
+// mark puts an Anthropic cache breakpoint on block, if there is one.
+func mark(block map[string]any) {
+	if block != nil {
+		block["cache_control"] = ephemeral
+	}
+}
+
+// add appends a call's output and the answers to its tool calls, the
+// newest of which takes the moving breakpoint.
 func (c *conversation) add(blocks []Block, results []ToolResult) {
-	c.wire.add(c, blocks, results)
+	last := c.wire.add(c, blocks, results)
+	if last == nil {
+		return
+	}
+	if c.latest != nil {
+		delete(c.latest, "cache_control")
+	}
+	c.latest = last
+	mark(last)
 }
 
 // body is the next call's request body: the conversation and the tools
@@ -400,29 +528,52 @@ func (c *conversation) body() ([]byte, error) {
 }
 
 // openMessages starts a Messages conversation: the system prompt as one
-// block ending at a cache breakpoint, and a breakpoint on the last turn.
+// block ending at a cache breakpoint.
 func openMessages(c *conversation) {
 	if c.req.System != "" {
 		c.system = append(c.system, map[string]any{"type": "text", "text": c.req.System, "cache_control": ephemeral})
 	}
-	for i, t := range c.req.Turns {
-		var content any = t.Text
-		if i == len(c.req.Turns)-1 {
-			content = []any{map[string]any{"type": "text", "text": t.Text, "cache_control": ephemeral}}
-		}
-		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": content})
+}
+
+// turnMessages appends a run's user turn as one user message: the answers
+// owed, then its text as a block, which it returns.
+func turnMessages(c *conversation, text string, owed []ToolResult) map[string]any {
+	content := make([]any, 0, len(owed)+1)
+	for _, r := range owed {
+		content = append(content, messagesResult(r))
 	}
+	block := map[string]any{"type": "text", "text": text}
+	c.msgs = append(c.msgs, map[string]any{"role": "user", "content": append(content, block)})
+	return block
+}
+
+// messagesResult is r as a Messages tool_result block.
+func messagesResult(r ToolResult) map[string]any {
+	return map[string]any{"type": "tool_result", "tool_use_id": r.ToolUseID, "content": r.Content, "is_error": r.IsError}
 }
 
 // openOpenAI starts a Chat Completions or Responses conversation: the
-// system prompt as one system message, then the turns.
+// system prompt as one system message.
 func openOpenAI(c *conversation) {
 	if system := c.req.System; system != "" {
 		c.msgs = append(c.msgs, map[string]any{"role": "system", "content": system})
 	}
-	for _, t := range c.req.Turns {
-		c.msgs = append(c.msgs, map[string]any{"role": t.Role, "content": t.Text})
-	}
+}
+
+// turnChatCompletions appends a run's user turn: the answers owed, then
+// its text as a user message.
+func turnChatCompletions(c *conversation, text string, owed []ToolResult) map[string]any {
+	chatResults(c, owed)
+	c.msgs = append(c.msgs, map[string]any{"role": "user", "content": text})
+	return nil
+}
+
+// turnResponses appends a run's user turn: the answers owed, then its text
+// as a user message.
+func turnResponses(c *conversation, text string, owed []ToolResult) map[string]any {
+	responsesResults(c, owed)
+	c.msgs = append(c.msgs, map[string]any{"role": "user", "content": text})
+	return nil
 }
 
 func messagesFields(c *conversation) map[string]any {
@@ -467,7 +618,7 @@ func offer(fields map[string]any, tools []Tool, form func(Tool) any) {
 
 // addResponses appends each output item as it came back, then the answers
 // to its function calls.
-func addResponses(c *conversation, blocks []Block, results []ToolResult) {
+func addResponses(c *conversation, blocks []Block, results []ToolResult) map[string]any {
 	for _, b := range blocks {
 		switch {
 		case b.Item != nil:
@@ -478,6 +629,12 @@ func addResponses(c *conversation, blocks []Block, results []ToolResult) {
 			c.msgs = append(c.msgs, map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": toolArguments(b.Input)})
 		}
 	}
+	responsesResults(c, results)
+	return nil
+}
+
+// responsesResults appends the answers to function calls.
+func responsesResults(c *conversation, results []ToolResult) {
 	for _, r := range results {
 		c.msgs = append(c.msgs, map[string]any{"type": "function_call_output", "call_id": r.ToolUseID, "output": r.Content})
 	}
@@ -492,13 +649,20 @@ func toolArguments(input json.RawMessage) string {
 	return string(input)
 }
 
-func addMessages(c *conversation, blocks []Block, results []ToolResult) {
+// addMessages appends a call's output as one assistant message, then the
+// answers to its tool calls as one user message, and returns the last of
+// them, nil with none. Output with nothing a request can carry adds no
+// assistant message.
+func addMessages(c *conversation, blocks []Block, results []ToolResult) map[string]any {
 	content := make([]any, 0, len(blocks))
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
 			content = append(content, map[string]any{"type": "text", "text": b.Text})
 		case "thinking":
+			if b.Signature == "" {
+				continue // cut off before it was signed: no request may carry it
+			}
 			content = append(content, map[string]any{"type": "thinking", "thinking": b.Thinking, "signature": b.Signature})
 		case "redacted_thinking":
 			content = append(content, map[string]any{"type": "redacted_thinking", "data": b.Data})
@@ -506,21 +670,26 @@ func addMessages(c *conversation, blocks []Block, results []ToolResult) {
 			content = append(content, map[string]any{"type": "tool_use", "id": b.ID, "name": b.Name, "input": b.Input})
 		}
 	}
+	if len(content) > 0 {
+		c.msgs = append(c.msgs, map[string]any{"role": "assistant", "content": content})
+	}
+	if len(results) == 0 {
+		return nil
+	}
 	answers := make([]any, len(results))
+	var last map[string]any
 	for i, r := range results {
-		answers[i] = map[string]any{"type": "tool_result", "tool_use_id": r.ToolUseID, "content": r.Content, "is_error": r.IsError}
+		last = messagesResult(r)
+		answers[i] = last
 	}
-	if c.latest != nil {
-		delete(c.latest, "cache_control")
-	}
-	c.latest = answers[len(answers)-1].(map[string]any)
-	c.latest["cache_control"] = ephemeral
-	c.msgs = append(c.msgs,
-		map[string]any{"role": "assistant", "content": content},
-		map[string]any{"role": "user", "content": answers})
+	c.msgs = append(c.msgs, map[string]any{"role": "user", "content": answers})
+	return last
 }
 
-func addChatCompletions(c *conversation, blocks []Block, results []ToolResult) {
+// addChatCompletions appends a call's output as one assistant message,
+// then the answers to its tool calls. Output with neither text nor a tool
+// call adds no assistant message.
+func addChatCompletions(c *conversation, blocks []Block, results []ToolResult) map[string]any {
 	var text strings.Builder
 	var calls []any
 	for _, b := range blocks {
@@ -531,11 +700,22 @@ func addChatCompletions(c *conversation, blocks []Block, results []ToolResult) {
 			calls = append(calls, map[string]any{"id": b.ID, "type": "function", "function": map[string]any{"name": b.Name, "arguments": toolArguments(b.Input)}})
 		}
 	}
-	msg := map[string]any{"role": "assistant", "tool_calls": calls}
+	msg := map[string]any{"role": "assistant"}
+	if len(calls) > 0 {
+		msg["tool_calls"] = calls
+	}
 	if text.Len() > 0 {
 		msg["content"] = text.String()
 	}
-	c.msgs = append(c.msgs, msg)
+	if len(msg) > 1 {
+		c.msgs = append(c.msgs, msg)
+	}
+	chatResults(c, results)
+	return nil
+}
+
+// chatResults appends the answers to tool calls, a tool message each.
+func chatResults(c *conversation, results []ToolResult) {
 	for _, r := range results {
 		c.msgs = append(c.msgs, map[string]any{"role": "tool", "tool_call_id": r.ToolUseID, "content": r.Content})
 	}
@@ -870,15 +1050,17 @@ func (p *anthropicParser) result() call {
 }
 
 // toolInput is a tool call's streamed input as JSON: {} when empty, and a
-// JSON string when it is not valid JSON, so the refusal can say so.
+// JSON string when it is not valid JSON, so the refusal can say so. Valid
+// JSON is taken as the Transcript will hold it, so a replay sends the
+// bytes its run sent (ADR 0036).
 func toolInput(s string) json.RawMessage {
 	if strings.TrimSpace(s) == "" {
 		return json.RawMessage(`{}`)
 	}
-	if json.Valid([]byte(s)) {
-		return json.RawMessage(s)
+	raw, err := json.Marshal(json.RawMessage(s))
+	if err != nil {
+		raw, _ = json.Marshal(s)
 	}
-	raw, _ := json.Marshal(s)
 	return raw
 }
 

@@ -160,7 +160,7 @@ func TestAChainRunsWithNoLeader(t *testing.T) {
 		}
 	}
 	calls := provider.seen()
-	if want := "alice: @auditor check\nalice/@auditor: ask @scribe"; len(calls) != 2 || calls[1].Prompt != want {
+	if want := "(You are summoned by:)\n[queued] alice/@auditor: ask @scribe"; len(calls) != 2 || calls[1].Prompt != want {
 		t.Fatalf("calls = %+v, want @scribe's prompt %q", calls, want)
 	}
 

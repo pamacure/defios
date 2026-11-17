@@ -39,7 +39,10 @@ type Step struct {
 	N      int // its number, from 1, depth-first in mention order
 	Handle string
 	Depth  uint32 // the depth its agent answers at, from 1
-	Action Action
+	// Summoner names the message that summons it: the MsgID of the
+	// Outcome whose Said mentions it, "" for a step the chain starts with.
+	Summoner string
+	Action   Action
 	// Reason, with Skip, is why the Handle cannot run.
 	Reason string
 }
@@ -49,6 +52,9 @@ type Outcome struct {
 	// Said is what the step's agent said, "" if it was silent or was
 	// skipped: only a said text summons.
 	Said string
+	// MsgID names the message Said was written as, for the steps it
+	// summons.
+	MsgID string
 	// Included is what was included where it said it, which decides whom
 	// Said summons.
 	Included config.Included
@@ -69,7 +75,7 @@ func Walk(start []string, do func(Step) Outcome) bool {
 	for i, h := range start {
 		sums[i] = summons{handle: h}
 	}
-	return w.walk(sums, 1)
+	return w.walk(sums, 1, "")
 }
 
 // WalkFrom is Walk for a message written at depth by no agent, such as an
@@ -93,7 +99,7 @@ func WalkFrom(depth uint32, inc config.Included, start []string, do func(Step) O
 		}
 		sums = append(sums, sm)
 	}
-	return w.walk(sums, depth+1)
+	return w.walk(sums, depth+1, "")
 }
 
 type walker struct {
@@ -108,12 +114,13 @@ type summons struct {
 	skip   string
 }
 
-// walk performs sums at depth, each followed by the steps its said text
-// summons at depth+1; it reports whether the chain goes on.
-func (w *walker) walk(sums []summons, depth uint32) bool {
+// walk performs sums, the steps the message named by summons, at depth,
+// each followed by the steps its said text summons at depth+1; it reports
+// whether the chain goes on.
+func (w *walker) walk(sums []summons, depth uint32, by string) bool {
 	for _, sm := range sums {
 		w.n++
-		st := Step{N: w.n, Handle: sm.handle, Depth: depth}
+		st := Step{N: w.n, Handle: sm.handle, Depth: depth, Summoner: by}
 		if sm.skip != "" {
 			st.Action, st.Reason = Skip, sm.skip
 		}
@@ -124,7 +131,7 @@ func (w *walker) walk(sums []summons, depth uint32) bool {
 		if st.Action == Skip || out.Said == "" {
 			continue // a silent agent summons nobody
 		}
-		if !w.walk(summoned(sm.handle, depth, out.Said, out.Included), depth+1) {
+		if !w.walk(summoned(sm.handle, depth, out.Said, out.Included), depth+1, out.MsgID) {
 			return false
 		}
 	}

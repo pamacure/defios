@@ -118,3 +118,18 @@ func TestWalkFromADepthSummonsOneDeeper(t *testing.T) {
 		"2 skip @x d3: @x is not in [agent] profiles here",
 	})
 }
+
+// Each step names the message that summons it: none for those the chain
+// starts with, and for one a reply summons, that reply's.
+func TestAStepNamesTheMessageThatSummonsIt(t *testing.T) {
+	inc := included(3, "a", "b", "c")
+	var by []string
+	chain.Walk([]string{"a", "c"}, func(s chain.Step) chain.Outcome {
+		by = append(by, s.Handle+"<"+s.Summoner)
+		return map[string]chain.Outcome{
+			"a": {Said: "@b", MsgID: "from-a", Included: inc},
+			"b": {Said: "@c", MsgID: "from-b", Included: inc},
+		}[s.Handle]
+	})
+	check(t, by, []string{"a<", "b<from-a", "c<from-b", "c<"})
+}

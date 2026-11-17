@@ -17,8 +17,9 @@ import (
 
 // runAgentJob runs agent Job name, j, on ev (ADR 0032): a chain that no
 // person's message started, in j's target, joining that Conversation's
-// queue. Its agent reads the talk, then the Job's prompt and ev as its
-// last user turn, never committed, and answers at ev's depth + 1. It waits
+// queue. Its agent's run goes in its live Transcript there like any other
+// (ADR 0036), summoned by the Job's prompt and ev in place of a message,
+// never committed, and answers at ev's depth + 1. It waits
 // for the chain to end, and fails if the chain stopped short: an agent's
 // error, a cancel, or the serve stopping. A Handle not in the target's
 // [agent] profiles is a config error, and nothing runs. If ctx ends first,
@@ -54,7 +55,7 @@ func (s *server) runAgentJob(ctx context.Context, store *cosl.Store, name string
 	if err != nil {
 		return err
 	}
-	c := &chain{id: id, conv: conv, handles: []string{j.Agent}, depth: ev.Depth, inc: inc, lastTurn: turn, done: make(chan struct{})}
+	c := &chain{id: id, conv: conv, handles: []string{j.Agent}, depth: ev.Depth, inc: inc, job: turn, done: make(chan struct{})}
 	queued := false
 	if !s.onChains(ctx, func(ctx context.Context, chains *sync.WaitGroup) {
 		queued = s.chains.enqueue(ctx, chains, c, s.runChain)
@@ -103,8 +104,9 @@ func jobTarget(store *cosl.Store, j config.Job, ev trigger.Event) ([]byte, strin
 	return nil, "", fmt.Errorf("target %q: no Key of this Group has that Workspace name", j.Target)
 }
 
-// jobTurn is the last user turn of agent Job name, j, on ev: the Job's
-// prompt and the event, framed as this Node's own instruction, not talk.
+// jobTurn is what summons the agent of agent Job name, j, on ev, in its
+// run's turn: the Job's prompt and the event, framed as this Node's own
+// instruction, not talk.
 func jobTurn(name string, j config.Job, ev trigger.Event) (string, error) {
 	event, err := json.Marshal(ev) // as an exec Job reads it on stdin
 	if err != nil {

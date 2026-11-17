@@ -69,6 +69,10 @@ type Message struct {
 	// payloads, ADR 0022): neither says anything.
 	Pruned, Unreadable bool
 	Sender             string // the sender's display name, "" with no Roster or none for it
+	// Unapplied is a message of this Node's that its replica does not
+	// hold yet: queued, or committed, with its seq, and not yet applied.
+	// The replica may still lack talk before such a seq (ADR 0025).
+	Unapplied bool
 }
 
 // MsgID is m's msg_id in hex, as a chain and a Transcript name it (ADR
@@ -99,16 +103,17 @@ type View struct {
 	recapErr error
 }
 
-// Lean is the talk as this Node's agents read it, and as `conversation log
-// --lean` prints it (ADR 0024).
+// Lean is the talk under this Node's Recap, as `conversation log --lean`
+// prints it (ADR 0024). Agents are not given it: each replays its own
+// Transcript, and reads the talk itself (ADR 0036).
 type Lean struct {
 	Recap *recap.Recap // this Node's, nil if it has none
 	// Messages is the readable talk after Recap.BaseSeq, queued talk
 	// included; all of it with no Recap.
 	Messages Messages
 	// Missing is whether this replica has pruned talk the Recap does not
-	// account for, or any talk with no Recap: this Node's agents read
-	// nothing in its place.
+	// account for, or any talk with no Recap: nothing stands in its
+	// place.
 	Missing bool
 }
 
@@ -164,6 +169,7 @@ func (r Reader) Read(conv []byte) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
+	applied := len(rows) // the rest are this Node's own, from Mine
 	held := make(map[[32]byte]bool, len(rows))
 	for _, row := range rows {
 		held[row.MsgID] = true
@@ -181,11 +187,12 @@ func (r Reader) Read(conv []byte) (View, error) {
 		}
 	}
 	v := View{Messages: make(Messages, 0, len(rows)), recap: rc, recapErr: recapErr}
-	for _, row := range rows {
+	for i, row := range rows {
 		m, err := r.message(row)
 		if err != nil {
 			return View{}, err
 		}
+		m.Unapplied = i >= applied
 		v.Messages = append(v.Messages, m)
 	}
 	return v, nil
@@ -263,14 +270,41 @@ func (ms Messages) Page(last int, before uint64, name func(Message) string) Page
 		last = DefaultPage
 	}
 	last = min(last, MaxPage)
-	// line is one committed line of a page: a message, or a pruned stretch.
-	type line struct {
-		text     string
-		from, to uint64 // its seqs
-		gap      bool
+	lines, queued := ms.lines(before, name)
+	var p Page
+	if cut := len(lines) - last; cut > 0 {
+		p.Earlier = lines[cut-1].to + 1
+		lines = lines[cut:]
 	}
-	var lines []line
-	var queued []string
+	for _, l := range lines {
+		p.Lines = append(p.Lines, l.text)
+	}
+	p.Lines = append(p.Lines, queued...)
+	return p
+}
+
+// Lines is all of ms as an agent reads it, oldest first: as Page's lines,
+// however many there are.
+func (ms Messages) Lines(name func(Message) string) []string {
+	committed, queued := ms.lines(0, name)
+	text := make([]string, len(committed))
+	for i, l := range committed {
+		text[i] = l.text
+	}
+	return append(text, queued...)
+}
+
+// line is one committed line of talk as an agent reads it: a message, or
+// a pruned stretch, from its first seq to its last.
+type line struct {
+	text     string
+	from, to uint64
+}
+
+// lines are ms as an agent reads them: the committed lines, a message or
+// a pruned stretch each, then the queued ones; with before, only the talk
+// before that seq, which no queued message is.
+func (ms Messages) lines(before uint64, name func(Message) string) (committed []line, queued []string) {
 	inGap := false // whether the message before was pruned
 	for _, m := range ms {
 		seq := m.Row.Seq
@@ -281,31 +315,26 @@ func (ms Messages) Page(last int, before uint64, name func(Message) string) Page
 		inGap = m.Pruned
 		switch {
 		case m.Pruned && wasGap:
-			lines[len(lines)-1].to = seq
+			gap := &committed[len(committed)-1]
+			gap.to, gap.text = seq, fmt.Sprintf("[%d–%d pruned on this Node]", gap.from, seq)
 		case m.Pruned:
-			lines = append(lines, line{from: seq, to: seq, gap: true})
+			committed = append(committed, line{text: fmt.Sprintf("[%d pruned on this Node]", seq), from: seq, to: seq})
 		case m.Unreadable:
 		case m.Row.Queued():
-			queued = append(queued, "[queued] "+LeanLine(name(m), m.Handle, m.Text))
+			queued = append(queued, m.Line(name))
 		default:
-			lines = append(lines, line{text: fmt.Sprintf("[%d] %s", seq, LeanLine(name(m), m.Handle, m.Text)), from: seq, to: seq})
+			committed = append(committed, line{text: m.Line(name), from: seq, to: seq})
 		}
 	}
-	var p Page
-	if cut := len(lines) - last; cut > 0 {
-		p.Earlier = lines[cut-1].to + 1
-		lines = lines[cut:]
+	return committed, queued
+}
+
+// Line is m, which is readable, as an agent reads it: `[<seq>] <speaker>:
+// <text>`, with `[queued]` for one that has no seq yet (ADR 0036).
+func (m Message) Line(name func(Message) string) string {
+	at := "[queued]"
+	if !m.Row.Queued() {
+		at = fmt.Sprintf("[%d]", m.Row.Seq)
 	}
-	for _, l := range lines {
-		switch {
-		case !l.gap:
-			p.Lines = append(p.Lines, l.text)
-		case l.from == l.to:
-			p.Lines = append(p.Lines, fmt.Sprintf("[%d pruned on this Node]", l.from))
-		default:
-			p.Lines = append(p.Lines, fmt.Sprintf("[%d–%d pruned on this Node]", l.from, l.to))
-		}
-	}
-	p.Lines = append(p.Lines, queued...)
-	return p
+	return at + " " + LeanLine(name(m), m.Handle, m.Text)
 }

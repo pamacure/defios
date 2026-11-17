@@ -17,10 +17,16 @@ type Shape struct {
 
 // wire is how a shape writes its request and reads its reply.
 type wire struct {
-	open   func(c *conversation)                                       // the system prompt and turns
-	add    func(c *conversation, blocks []Block, results []ToolResult) // a call's output and the answers to its tool calls
-	fields func(c *conversation) map[string]any                        // the body's own fields: the conversation and the tools
-	parser func(st *stream) parser                                     // a reader for one call's reply
+	open func(c *conversation) // the system prompt
+	// turn appends a run's user turn, after the answers owed to the calls
+	// the run before ended without answering; add a call's output and the
+	// answers to its tool calls, either of which may be empty. Each
+	// returns the last block of the user message it appended, where an
+	// Anthropic cache breakpoint may sit: nil for none, or another shape.
+	turn   func(c *conversation, text string, owed []ToolResult) map[string]any
+	add    func(c *conversation, blocks []Block, results []ToolResult) map[string]any
+	fields func(c *conversation) map[string]any // the body's own fields: the conversation and the tools
+	parser func(st *stream) parser              // a reader for one call's reply
 }
 
 func (s Shape) String() string { return s.Name }
@@ -56,17 +62,17 @@ func (a auth) set(h http.Header, key string) {
 var (
 	// Messages is Anthropic's Messages API.
 	Messages = Shape{Name: "messages", Suffix: "/messages", auth: authAnthropic, wire: &wire{
-		open: openMessages, add: addMessages, fields: messagesFields,
+		open: openMessages, turn: turnMessages, add: addMessages, fields: messagesFields,
 		parser: func(st *stream) parser { return &anthropicParser{st: st} },
 	}}
 	// ChatCompletions is OpenAI's Chat Completions API.
 	ChatCompletions = Shape{Name: "chat_completions", Suffix: "/chat/completions", auth: authBearer, wire: &wire{
-		open: openOpenAI, add: addChatCompletions, fields: chatCompletionsFields,
+		open: openOpenAI, turn: turnChatCompletions, add: addChatCompletions, fields: chatCompletionsFields,
 		parser: func(st *stream) parser { return &openaiParser{st: st} },
 	}}
 	// Responses is OpenAI's Responses API.
 	Responses = Shape{Name: "responses", Suffix: "/responses", auth: authBearer, wire: &wire{
-		open: openOpenAI, add: addResponses, fields: responsesFields,
+		open: openOpenAI, turn: turnResponses, add: addResponses, fields: responsesFields,
 		parser: func(st *stream) parser { return &responsesParser{st: st} },
 	}}
 

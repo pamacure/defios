@@ -28,7 +28,6 @@ import (
 	"defios.com/internal/nodedir"
 	"defios.com/internal/outbox"
 	"defios.com/internal/raftx"
-	"defios.com/internal/recap"
 	"defios.com/internal/secret"
 	"defios.com/internal/talk"
 	"defios.com/internal/transcript"
@@ -161,15 +160,16 @@ type chain struct {
 	// where it was written, by which a Job's message summons (ADR 0032).
 	depth uint32
 	inc   config.Included
-	// lastTurn, for a Job's chain, is its first agent's last user turn:
-	// the Job's prompt and event, never committed. done, if set, closes
+	// job, for a Job's chain, is what summons its first agent in place of
+	// a message: the Job's prompt and event, never committed. done, if
+	// set, closes
 	// when the chain has ended, err then saying why it stopped short, or
 	// why the Job's agent did not answer, if it did not.
-	lastTurn string
-	done     chan struct{}
-	err      error
-	ctx      context.Context
-	cancel   context.CancelFunc
+	job    string
+	done   chan struct{}
+	err    error
+	ctx    context.Context
+	cancel context.CancelFunc
 	// cancelled tells a cancel from the serve stopping; both end ctx.
 	cancelled atomic.Bool
 }
@@ -493,12 +493,12 @@ func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish fun
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: st.Handle, Reason: st.Reason})
 		return plan.Outcome{}
 	}
-	res, inc, err := s.runAgent(c, tr, st, publish)
+	res, said, inc, err := s.runAgent(c, tr, st, publish)
 	if c.ctx.Err() != nil {
 		return plan.Outcome{Stop: true}
 	}
 	if errors.Is(err, errSkipped) {
-		if st.N == 1 && c.lastTurn != "" {
+		if st.N == 1 && c.job != "" {
 			c.err = fmt.Errorf("@%s did not answer: it is no longer in [agent] profiles here", st.Handle)
 		}
 		return plan.Outcome{}
@@ -512,49 +512,59 @@ func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish fun
 	if res.Silent {
 		return plan.Outcome{}
 	}
-	return plan.Outcome{Said: res.Said, Included: inc}
+	return plan.Outcome{Said: res.Said, MsgID: said.MsgID, Included: inc}
 }
 
 // errSkipped is an agent the chain passes over because it is no longer
 // included; runAgent has already published the skip.
 var errSkipped = errors.New("skipped")
 
-// runAgent runs st's agent on the talk so far, as step st of c: writes
-// what it says, committed or queued, or reports it silent, and returns how
-// it ended, with what was included where it answered. Everything the run
-// generates, and how it ended, goes through tr to that agent's live
-// Transcript, marked with c (ADR 0036); a run cut off by the serve stopping
-// records no outcome.
-func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) (res agent.Result, inc config.Included, err error) {
+// summoner is what summons a run: with job set, a Job's prompt and event
+// (ADR 0032); otherwise the message with hex msg_id msgID.
+type summoner struct {
+	msgID string
+	job   string // the Job's turn, as jobTurn writes it
+}
+
+// runAgent runs st's agent, as step st of c: replaying its live Transcript
+// and summoned by the message that mentions it, or by c's Job; writes what
+// it says, committed or queued, as said, or reports it silent, and returns
+// how it ended, with what was included where it answered. The run's turn,
+// everything it generates and how it ended go through tr to that agent's
+// live Transcript, marked with c (ADR 0036); a run cut off by the serve
+// stopping records no outcome.
+func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) (res agent.Result, said SendView, inc config.Included, err error) {
 	handle, depth := st.Handle, st.Depth
 	ob, store, ok := s.writer()
 	if !ok {
-		return res, inc, ErrNoReplica
+		return res, said, inc, ErrNoReplica
 	}
 	line := func(l TranscriptLine) {
 		l.Step, l.Handle, l.Depth = st.N, handle, depth
 		tr.Write(l)
 	}
 	did := func(tool, msgID string) { line(TranscriptLine{Kind: KindActed, Tool: tool, MsgID: msgID}) }
-	var last string
-	if st.N == 1 {
-		last = c.lastTurn // the Job's agent; those its reply summons read the talk alone
+	// The chain's first agents are summoned by its message, or its Job;
+	// those a reply summons, by that reply.
+	by := summoner{msgID: st.Summoner}
+	if st.Summoner == "" {
+		by = summoner{msgID: c.id, job: c.job}
 	}
-	req, inc, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, last, did)
+	req, turn, inc, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, by, tr, did)
 	if errors.Is(err, errSkipped) {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
-		return res, inc, err
+		return res, said, inc, err
 	}
-	var said SendView
 	defer func() {
 		if l, ok := runOutcome(said, err, c.cancelled.Load(), c.ctx.Err() != nil); ok {
 			line(l)
 		}
 	}()
 	if err != nil {
-		return res, inc, err
+		return res, said, inc, err
 	}
 	publish(ChainEvent{Type: EventAgentStart, Handle: handle, Depth: depth})
+	line(turn)
 	client := agent.Client{Backoff: s.opts.AgentBackoff}
 	res, err = client.Run(c.ctx, req, agent.Events{
 		Delta: func(kind, t string) { publish(ChainEvent{Type: EventAgentDelta, Kind: kind, Text: t}) },
@@ -574,65 +584,68 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 		},
 	})
 	if err != nil {
-		return res, inc, err
+		return res, said, inc, err
 	}
 	if res.Silent {
 		publish(ChainEvent{Type: EventAgentSilent, Handle: handle})
-		return res, inc, nil
+		return res, said, inc, nil
 	}
 	// Once a talk_write is accepted, a cancel no longer cuts it: an append in
 	// flight could land anyway, and agent.commit must report it if it does.
 	commit := context.WithoutCancel(c.ctx)
 	v, err := s.conversationSend(commit, res.Said, handle, depth, c.conv)
 	if err != nil {
-		return res, inc, err
+		return res, said, inc, err
 	}
 	// It is posted: whatever fails from here, the Transcript says so.
 	said = v
 	// The next agent reads it from this Node's view of the talk at once,
 	// applied or not (ADR 0025).
 	publish(ChainEvent{Type: EventAgentCommit, MsgID: v.MsgID, Seq: v.Seq, Queued: v.Queued, Text: res.Said})
-	return res, inc, nil
+	return res, said, inc, nil
 }
 
-// agentRequest is the call to the Provider that answers as handle: the
-// system block, which is the DeFiOS Briefing, its Agent Brief, BRIEF.md, and
-// the stable facts, the same on every run (ADR 0036); then the talk so far
-// as turns by Handle (ADR 0018), the last ending with this run's facts; sent
-// with this Node's key to the Provider as this Node's merged Workspace
-// configures it, and nowhere else (ADR 0022). A non-empty last ends the talk
-// in the last user turn, before the run's facts: a Job's prompt and event
-// (ADR 0032). Each sign Tool that acts is told to did.
-func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32, last string, did acted) (agent.Request, config.Included, error) {
+// agentRequest is the call to the Provider that answers as handle, and the
+// Transcript line of its turn: the system block, which is the DeFiOS
+// Briefing, its Agent Brief, BRIEF.md, and the stable facts, the same on
+// every run; then every earlier run of its live Transcript, read through
+// tr, as it was sent and generated; then this run's one user turn, what by
+// summons it with (ADR 0036). It is sent with this Node's key to the
+// Provider as this Node's merged Workspace configures it, and nowhere else
+// (ADR 0022). Each sign Tool that acts is told to did.
+func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string, depth uint32, by summoner, tr *transcript.Writer, did acted) (agent.Request, TranscriptLine, config.Included, error) {
+	fail := func(inc config.Included, err error) (agent.Request, TranscriptLine, config.Included, error) {
+		return agent.Request{}, TranscriptLine{}, inc, err
+	}
 	e, err := s.load(store, conv)
 	if err != nil {
-		return agent.Request{}, config.Included{}, err
+		return fail(config.Included{}, err)
 	}
 	ws := e.Workspace
 	inc, err := e.Included()
 	if err != nil {
-		return agent.Request{}, inc, err
+		return fail(inc, err)
 	}
 	i := slices.IndexFunc(inc.Profiles, func(p config.ResolvedProfile) bool { return p.Handle == handle })
 	if i < 0 {
-		return agent.Request{}, inc, errSkipped
+		return fail(inc, errSkipped)
 	}
 	p := inc.Profiles[i]
 	briefFile := filepath.Join(p.Dir, nodedir.BriefFile)
 	brief, err := os.ReadFile(briefFile)
 	if errors.Is(err, fs.ErrNotExist) {
-		return agent.Request{}, inc, fmt.Errorf("@%s has no Agent Brief: write its %s at %s", handle, nodedir.BriefFile, briefFile)
+		return fail(inc, fmt.Errorf("@%s has no Agent Brief: write its %s at %s", handle, nodedir.BriefFile, briefFile))
 	} else if err != nil {
-		return agent.Request{}, inc, fmt.Errorf("@%s's Agent Brief: %w", handle, err)
+		return fail(inc, fmt.Errorf("@%s's Agent Brief: %w", handle, err))
 	}
 	prov, err := ws.Provider(p.Provider)
 	if err != nil {
-		return agent.Request{}, inc, fmt.Errorf("@%s runs on Provider %q, which Group %s must define: %w", handle, p.Provider, s.opts.Alias, err)
+		return fail(inc, fmt.Errorf("@%s runs on Provider %q, which Group %s must define: %w", handle, p.Provider, s.opts.Alias, err))
 	}
 	at := prov.Endpoint(p.Provider)
 	skills, err := s.grantedSkills(handle, p.Skills)
 	if err != nil {
-		return agent.Request{}, inc, err
+		return fail(inc, err)
 	}
 	req := agent.Request{Shape: at.Shape(), URL: at.URL(), Body: p.Body, MaxTurns: p.MaxTurns, Tools: s.agentTools(ob, store, handle, depth, p.Tools, conv, did)}
 	if len(skills) > 0 {
@@ -640,28 +653,93 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	}
 	mcpTools, err := s.mcpTools(ctx, handle, p.MCP)
 	if err != nil {
-		return agent.Request{}, inc, err
+		return fail(inc, err)
 	}
 	req.Tools = append(req.Tools, mcpTools...)
 	if prov.APIKey != "" {
 		r := &secret.Resolver{Group: s.opts.Alias, Getenv: s.opts.Getenv, Vault: s.opts.Secrets}
 		if req.APIKey, err = r.Resolve(prov.APIKey); err != nil {
-			return agent.Request{}, inc, fmt.Errorf("[providers.%s] api_key: %w", p.Provider, err)
+			return fail(inc, fmt.Errorf("[providers.%s] api_key: %w", p.Provider, err))
 		}
 	}
 	where, err := s.whereSaid(store, conv)
 	if err != nil {
-		return agent.Request{}, inc, err
+		return fail(inc, err)
 	}
-	turns, missing, err := s.talkSoFar(ob, store, conv, handle)
+	earlier, err := tr.Earlier(handle)
 	if err != nil {
-		return agent.Request{}, inc, err
+		return fail(inc, fmt.Errorf("@%s's Transcript: %w", handle, err))
 	}
-	turns = endWith(turns, last)
-	turns[len(turns)-1].Text += "\n\n" + runFacts(handle, depth, inc, missing)
+	var last *transcript.Run
+	for _, r := range transcript.Runs(earlier) {
+		if r.Replays() {
+			req.Earlier = append(req.Earlier, agent.Earlier{Turn: r.Turn, Blocks: r.Blocks, Posted: r.Outcome == OutcomeSaid})
+			last = &r
+		}
+	}
+	v, err := s.talk(ob, store, conv)
+	if err != nil {
+		return fail(inc, err)
+	}
+	turn := runTurn(v.Messages, s.opts.Node.NodeID, handle, by, last, runFacts(handle, depth, inc))
 	req.System = strings.TrimRight(briefing, "\n") + "\n\n" + strings.TrimRight(string(brief), "\n") + "\n\n" + stableFacts(handle, where, req.Tools, skills)
-	req.Turns = turns
-	return req, inc, nil
+	req.Turn = turn.Turn
+	return req, turn, inc, nil
+}
+
+// The lines of DeFiOS's own that frame a run's turn.
+const (
+	turnTalkSince  = "(Talk since your last run:)"
+	turnSummonedBy = "(You are summoned by:)"
+	turnNoSummoner = "(You are summoned by a message your Node does not hold.)"
+)
+
+// runTurn is the user turn of a run of node's agent handle, as its
+// Transcript's line (ADR 0036): the talk in said since last, the run its
+// replay ends with, leaving out its own messages, which are its talk_write
+// calls there; then what summons it, by's message or Job; then facts. With
+// no last, a new Transcript's first run, it holds no earlier talk. The
+// line says what talk the turn accounts for, by which the next run's turn
+// starts after it: the last seq this Node's replica holds, and each of
+// this Node's own messages beyond it, queued or not yet applied. A seq
+// beyond the replica's is no mark to start after: other Nodes' talk
+// before it may not have arrived (ADR 0025).
+func runTurn(said talk.Messages, node identity.ID, handle string, by summoner, last *transcript.Run, facts string) TranscriptLine {
+	l := TranscriptLine{Kind: KindTurn}
+	var since talk.Messages
+	var summons *talk.Message
+	for _, m := range said {
+		id := m.MsgID()
+		if m.Unapplied {
+			l.Unapplied = append(l.Unapplied, id)
+		} else {
+			l.Seq = max(l.Seq, m.Row.Seq)
+		}
+		switch {
+		case by.job == "" && id == by.msgID:
+			summons = &m
+		case last == nil:
+		case slices.Contains(last.TalkUnapplied, id), !m.Unapplied && m.Row.Seq <= last.TalkSeq:
+		case m.Handle == handle && m.Row.Sender == node:
+		default:
+			since = append(since, m)
+		}
+	}
+	var b strings.Builder
+	if lines := since.Lines(displayName); len(lines) > 0 {
+		b.WriteString(turnTalkSince + "\n" + strings.Join(lines, "\n") + "\n")
+	}
+	switch {
+	case by.job != "":
+		b.WriteString(by.job + "\n")
+	case summons != nil && summons.Readable():
+		b.WriteString(turnSummonedBy + "\n" + summons.Line(displayName) + "\n")
+	default:
+		b.WriteString(turnNoSummoner + "\n")
+	}
+	b.WriteString(facts)
+	l.Turn = b.String()
+	return l
 }
 
 // whereSaid names where conv's talk is: a Key's Conversation by its curve
@@ -691,7 +769,7 @@ var briefing string
 
 // stableFacts is what the serve tells an agent after its Agent Brief, the
 // same on every run so a provider caches the system block (ADR 0036): who
-// it is, where it is answering, how the talk reads, the tools it has here,
+// it is, where it is answering, how its turns and the talk read, the tools it has here,
 // that only talk_write posts and how, or that it has no talk_write, with a
 // sign Tool that a reason is another party's words, and with one that
 // writes that it acts as this Node, and its granted Skills, sorted, so the
@@ -699,12 +777,19 @@ var briefing string
 func stableFacts(handle, where string, tools []agent.Tool, skills []grantedSkill) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are @%s, an agent answering in %s of a DeFiOS Group.\n", handle, where)
-	fmt.Fprintf(&b, "The talk so far follows as turns: your own earlier messages are your turns, holding the text alone: those your Node wrote as @%s. "+
-		"Everything else is in the other turns, one message per line as \"<display name>: <text>\", or \"<display name>/@<handle>: <text>\" for another agent's. "+
-		"@%s from another Node is another agent.\n", handle, handle)
 	names := make([]string, len(tools))
 	for i, t := range tools {
 		names[i] = t.Name
+	}
+	b.WriteString("Your turns here are your own earlier runs in this talk, replayed as they went: what you thought, the tools you called and what they returned. " +
+		"Each run starts with one turn from DeFiOS: the talk since your last run, if there is any, then the message that summoned you, or the Job that did, and a closing line about the run. " +
+		"Talk is one message per line as \"[<seq>] <display name>: <text>\", or \"[<seq>] <display name>/@<handle>: <text>\" for an agent's; " +
+		"[queued] in place of the seq is a message your Node has written that is not committed yet. ")
+	fmt.Fprintf(&b, "Your own messages are left out of it: they are your talk_write calls. @%s from another Node is another agent. ", handle)
+	if slices.Contains(names, config.ToolTalkRead) {
+		b.WriteString("Talk from before your first run here is not given to you: read it with talk_read when you need it.\n")
+	} else {
+		b.WriteString("Talk from before your first run here is not given to you.\n")
 	}
 	if len(names) == 0 {
 		b.WriteString("You have no tools here.\n")
@@ -741,16 +826,10 @@ func stableFacts(handle, where string, tools []agent.Tool, skills []grantedSkill
 	return b.String()
 }
 
-// runFacts is what differs from run to run, closing the run's last user
-// turn as one paragraph (ADR 0036): that earlier talk is missing if it is
-// (ADR 0024), the agent's depth, and either the Handles it may summon or
-// that it may summon none.
-func runFacts(handle string, depth uint32, inc config.Included, missing bool) string {
-	var b strings.Builder
-	b.WriteString("(About this run. ")
-	if missing {
-		b.WriteString("Earlier talk is missing: this Node has pruned some of it, and no Recap of this Node's accounts for it. ")
-	}
+// runFacts is what differs from run to run, closing the run's user turn
+// as one line (ADR 0036): the agent's depth, and the Handles it may
+// summon, none at the max depth.
+func runFacts(handle string, depth uint32, inc config.Included) string {
 	var others []config.ResolvedProfile
 	if inc.Summons(depth) {
 		for _, p := range inc.Profiles {
@@ -759,34 +838,7 @@ func runFacts(handle string, depth uint32, inc config.Included, missing bool) st
 			}
 		}
 	}
-	fmt.Fprintf(&b, "You are at depth %d of at most %d. Agents you may summon by mentioning them: %s.", depth, inc.MaxDepth, listHandles(others))
-	if len(others) == 0 {
-		b.WriteString(" An @handle in your message summons nobody.")
-	}
-	b.WriteString(")")
-	return b.String()
-}
-
-// talkSoFar is conv's talk as handle sees it (ADR 0024): this Node's
-// RECAP.md opening the first user turn, then the lean view of this Node's
-// view of the talk after it (ADR 0025) as turns; and whether earlier talk
-// is missing, pruned with no Recap of this Node's in its place. Another
-// Node's Recap is never read: it is that Node's file. A RECAP.md that does
-// not parse fails the summon.
-func (s *server) talkSoFar(ob *outbox.Outbox, store *cosl.Store, conv []byte, handle string) ([]agent.Turn, bool, error) {
-	v, err := s.talk(ob, store, conv)
-	if err != nil {
-		return nil, false, err
-	}
-	l, err := v.Lean()
-	if err != nil {
-		return nil, false, err
-	}
-	var opening string
-	if l.Recap != nil {
-		opening = recapOpening(*l.Recap)
-	}
-	return talkTurns(opening, l.Messages, displayName, s.opts.Node.NodeID, handle), l.Missing, nil
+	return fmt.Sprintf("(You are at depth %d of at most %d. Agents you may summon: %s.)", depth, inc.MaxDepth, listHandles(others))
 }
 
 // talk is this Node's view of conv's talk (ADR 0025): its committed
@@ -799,73 +851,6 @@ func (s *server) talk(ob *outbox.Outbox, store *cosl.Store, conv []byte) (talk.V
 		roster = &r
 	}
 	return talk.Reader{Paths: s.opts.Paths, Alias: s.opts.Alias, Store: store, Mine: talk.Live(ob), Roster: roster}.Read(conv)
-}
-
-// recapOpening is how this Node's Recap opens the first user turn: framed
-// as this Node's own account of the talk up to its base seq.
-func recapOpening(r recap.Recap) string {
-	return fmt.Sprintf("(This Node's Recap: its own account of the talk up to seq %d, in place of that talk.)\n%s\n(End of the Recap. The talk after it follows.)", r.BaseSeq, r.Text)
-}
-
-// The fixed user turns that keep the talk alternating when it opens or ends
-// with the agent's own message.
-const (
-	talkOpensWithYou = "(The talk opens with your own message.)"
-	talkEndsWithYou  = "(You have been summoned again. Reply now.)"
-)
-
-// talkTurns is said as node's agent handle sees it (ADR 0018, "Turns by
-// Handle"; ADR 0021): every message node wrote under handle is an
-// assistant turn holding its text alone; everything else, the same Handle
-// from another Node included, is a lean line, consecutive lines merged
-// into one user turn. Consecutive messages of its
-// own merge a blank line apart. A non-empty opening, this Node's Recap,
-// starts the first user turn (ADR 0024). Without one, a fixed user turn goes
-// before talk that opens with its own message; and one goes after talk that
-// ends with its own, so the turns alternate and start and end with user.
-func talkTurns(opening string, said []talk.Message, name func(talk.Message) string, node identity.ID, handle string) []agent.Turn {
-	var turns []agent.Turn
-	if opening != "" {
-		turns = append(turns, agent.Turn{Role: agent.User, Text: opening})
-	}
-	add := func(role, text, sep string) {
-		if n := len(turns); n > 0 && turns[n-1].Role == role {
-			turns[n-1].Text += sep + text
-			return
-		}
-		turns = append(turns, agent.Turn{Role: role, Text: text})
-	}
-	for _, l := range said {
-		if l.Handle == handle && l.Row.Sender == node {
-			if len(turns) == 0 {
-				add(agent.User, talkOpensWithYou, "")
-			}
-			add(agent.Assistant, l.Text, "\n\n")
-			continue
-		}
-		add(agent.User, talk.LeanLine(name(l), l.Handle, l.Text), "\n")
-	}
-	if len(turns) == 0 || turns[len(turns)-1].Role != agent.User {
-		add(agent.User, talkEndsWithYou, "")
-	}
-	return turns
-}
-
-// endWith is turns, which end with a user turn, with last ending that
-// turn, a blank line after the talk, or standing in for the fixed turn
-// that says the agent was summoned again; turns as they are if last is
-// empty.
-func endWith(turns []agent.Turn, last string) []agent.Turn {
-	if last == "" {
-		return turns
-	}
-	end := &turns[len(turns)-1]
-	if end.Text == talkEndsWithYou {
-		end.Text = last
-	} else {
-		end.Text += "\n\n" + last
-	}
-	return turns
 }
 
 // displayName is the name the Roster pins for m's sender, or the start of

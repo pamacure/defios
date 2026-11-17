@@ -159,18 +159,18 @@ func (p *prunePolicy) prune(now time.Time, restores uint64) error {
 	return nil
 }
 
-// lostTalk is why a prune of r leaves this Node's agents without talk that
-// nothing accounts for (ADR 0024), or "" if this Node's RECAP.md accounts for
+// lostTalk is why a prune of r leaves talk that nothing on this Node
+// accounts for (ADR 0024), or "" if this Node's RECAP.md accounts for
 // all of it.
 func (s *server) lostTalk(r cosl.Pruned) string {
 	rc, err := recap.Read(s.opts.Paths.RecapFile(s.opts.Alias, nodedir.ConversationName(r.ConversationID)))
 	switch {
 	case err != nil:
-		return fmt.Sprintf("this Node's agents may have lost talk with no account of it: %v", err)
+		return fmt.Sprintf("pruned talk may have no account of it on this Node: %v", err)
 	case rc == nil:
-		return "there is no RECAP.md, so this Node's agents lost that talk with no account of it in its place"
+		return "there is no RECAP.md, so nothing on this Node accounts for that talk"
 	case !rc.Covers(r.Last):
-		return fmt.Sprintf("talk past seq %d, the base_seq of this Node's RECAP.md, is pruned, so this Node's agents lost it with no account of it in its place", rc.BaseSeq)
+		return fmt.Sprintf("talk past seq %d, the base_seq of this Node's RECAP.md, is pruned, so nothing on this Node accounts for it", rc.BaseSeq)
 	}
 	return ""
 }

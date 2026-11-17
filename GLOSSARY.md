@@ -169,7 +169,7 @@ A Conversation's 32-byte identity, derived as SHA-256("defios-conversation-id-v1
 _Avoid_: chat id, channel id, thread id
 
 **Recap**:
-One Node's own account of a Conversation's talk up to a stated seq, kept on that Node as `RECAP.md` and never on the COSL, which stands in place of that talk for its agents. Writing a new Recap replaces the old one.
+One Node's own account of a Conversation's talk up to a stated seq, kept on that Node as `RECAP.md` and never on the COSL. `conversation log --lean` prints it in place of that talk. It is not given to the Node's agents, which replay their own Transcripts and read the talk itself (ADR 0036). Writing a new Recap replaces the old one.
 _Avoid_: summary (that is the one-line payload line `cosl log` prints), digest, compaction, checkpoint
 
 **Pruning**:

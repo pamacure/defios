@@ -87,8 +87,8 @@ func nextChain(t *testing.T, s *serve.ChainStream) []serve.ChainEvent {
 }
 
 // A Hook's agent Job runs a chain in the event's Conversation, streamed
-// and written to a Transcript as any chain is: the agent reads the talk,
-// then the Job's prompt and the event as its last user turn, which is
+// and written to a Transcript as any chain is: the agent's turn holds the
+// Job's prompt and the event in place of a summoning message, which is
 // never committed, and answers at the event's depth + 1. The Hook's next
 // Job runs once the chain has ended. An agent Job whose Handle is not in
 // its target's profiles fails, and its Hook's next Job does not run.
@@ -134,7 +134,7 @@ jobs = ["stranger", "never"]
 	}
 	call := provider.seen()[calls]
 	last := call.Turns[strings.LastIndex(call.Turns, "[user] "):]
-	for _, want := range []string{"bob: hello", "Review what bob said.", `"trigger":"review"`, `"text":"hello"`} {
+	for _, want := range []string{"Review what bob said.", `"trigger":"review"`, `"text":"hello"`} {
 		if !strings.Contains(last, want) {
 			t.Errorf("last user turn lacks %q: %q", want, last)
 		}

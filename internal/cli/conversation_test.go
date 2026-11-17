@@ -844,8 +844,8 @@ func TestConversationPruneOlderThan(t *testing.T) {
 }
 
 // conversation prune warns when it destroys talk past this Node's RECAP.md,
-// or any talk with no RECAP.md: this Node's agents lose it with no account
-// in its place. Pruning only talk the Recap accounts for does not.
+// or any talk with no RECAP.md: nothing on this Node accounts for it any
+// more. Pruning only talk the Recap accounts for does not.
 func TestConversationPruneWarnsPastTheRecap(t *testing.T) {
 	dir := t.TempDir()
 	groupWithTalk(t, dir) // Group-level talk at 2, 4, 5
