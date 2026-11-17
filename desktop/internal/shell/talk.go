@@ -239,12 +239,15 @@ type talk struct {
 	// Node works.
 	loadMu sync.Mutex
 	mu     sync.Mutex
-	n      TalkNode
-	self   string
-	group  string
-	gen    uint64 // bumped each time the served Group changes
-	open   string
-	seq    uint64
+	// work is the reads started off the caller's goroutine, which the
+	// Shell's Close waits out.
+	work  sync.WaitGroup
+	n     TalkNode
+	self  string
+	group string
+	gen   uint64 // bumped each time the served Group changes
+	open  string
+	seq   uint64
 
 	convs  node.Conversations
 	status node.Status
@@ -302,7 +305,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 	t.mu.Unlock()
 	t.emit()
 	if !same {
-		go t.loadAll()
+		t.work.Go(t.loadAll)
 	}
 }
 

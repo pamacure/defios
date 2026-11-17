@@ -232,6 +232,8 @@ type Shell struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	stopNode context.CancelFunc // ends the current Node's subscription
+	// work is the goroutines that use the Node, which Close waits out.
+	work sync.WaitGroup
 
 	talk   *talk
 	notify *notifier
@@ -327,7 +329,8 @@ func (s *Shell) open() {
 	s.st.Node = NodeInfo{Name: name, ID: n.NodeID()}
 	s.mu.Unlock()
 	// Subscribed here, not in follow, so no event after open is missed.
-	go s.follow(ctx, n, n.Subscribe(ctx))
+	events := n.Subscribe(ctx)
+	s.work.Go(func() { s.follow(ctx, n, events) })
 	s.route(nil)
 }
 
@@ -397,7 +400,7 @@ func (s *Shell) servedElsewhere(groups []Group, selected string) {
 		st.View, st.Groups, st.Selected, st.Served, st.Problem = ViewServedElsewhere, groups, selected, "", nil
 	})
 	if start {
-		go s.retry()
+		s.work.Go(s.retry)
 	}
 }
 
@@ -457,7 +460,17 @@ func (s *Shell) unlockAtLogin() {
 
 // follow applies the Node's status as it changes, until ctx is done.
 func (s *Shell) follow(ctx context.Context, n Node, events <-chan node.Event) {
-	for ev := range events {
+	for {
+		var ev node.Event
+		select {
+		case <-ctx.Done():
+			return
+		case e, open := <-events:
+			if !open {
+				return
+			}
+			ev = e
+		}
 		s.talk.event(n, ev)
 		s.notify.event(s.State().Served, n.NodeID(), ev)
 		s.keyMinted(s.State().Served, ev.Session)
@@ -469,13 +482,13 @@ func (s *Shell) follow(ctx context.Context, n Node, events <-chan node.Event) {
 		// or Switch, and off this goroutine, so the Node's events never
 		// wait on one. The status is read then, not taken from the event:
 		// a stale event must not undo a Lock that came after it.
-		go func() {
+		s.work.Go(func() {
 			s.op.Lock()
 			defer s.op.Unlock()
 			if ctx.Err() == nil && s.node() == n {
 				s.apply(n.Status())
 			}
-		}()
+		})
 	}
 }
 
@@ -790,10 +803,10 @@ func (s *Shell) forget() {
 	s.talk.stop()
 }
 
-// Close locks the Node and stops the Shell, as the app quits.
+// Close locks the Node and stops the Shell, as the app quits. It returns
+// once nothing of the Shell's still reads or writes the Node directory.
 func (s *Shell) Close() {
 	s.op.Lock()
-	defer s.op.Unlock()
 	// Stop following first, so the Lock below routes nothing.
 	s.cancel()
 	s.plugins.drop()
@@ -803,6 +816,10 @@ func (s *Shell) Close() {
 		}
 	}
 	s.forget()
+	s.op.Unlock()
+	// Out of s.op, which a status being applied waits on.
+	s.work.Wait()
+	s.talk.work.Wait()
 }
 
 // State is the Shell's state now.
