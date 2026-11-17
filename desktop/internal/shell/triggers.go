@@ -62,6 +62,9 @@ type TriggersView struct {
 	ListProblem *Problem
 	// Handles are this device's agents, for an agent Job to summon.
 	Handles []string
+	// Keys are the Group's Keys, for an agent Job to answer in one's
+	// Conversation, in mint order.
+	Keys []KeyChoice
 	// Events are what a Hook may fire on.
 	Events []string
 
@@ -94,6 +97,14 @@ type JobView struct {
 	// UsedBy are the Triggers that run it, as "Hook <name>" or
 	// "Schedule <name>".
 	UsedBy []string
+}
+
+// KeyChoice is a Key an agent Job may answer in the Conversation of:
+// Workspace is its Conversation's Workspace name, which the Job's target
+// is written as, and Label names it as Talk does, by its alias if it has
+// one.
+type KeyChoice struct {
+	Workspace, Label string
 }
 
 // Header is a webhook Job's header: its Value literal, or the Secret of
@@ -314,6 +325,14 @@ func (s *Shell) fillTriggers(n Node, v *TriggersView) {
 	if list, err := n.AgentProfiles(s.ctx); err == nil {
 		for _, p := range list {
 			v.Handles = append(v.Handles, p.Handle)
+		}
+	}
+	v.Keys = []KeyChoice{}
+	if convs, err := n.Conversations(s.ctx, v.Group); err == nil {
+		for _, c := range convs.Talk {
+			if c.Key != nil && c.Key.Workspace != "" {
+				v.Keys = append(v.Keys, KeyChoice{Workspace: c.Key.Workspace, Label: keyLabel(*c.Key)})
+			}
 		}
 	}
 	jobs, err := n.Jobs(s.ctx, v.Group)

@@ -35,8 +35,7 @@ const ran = new Set(); // the Jobs whose last Run now finished
 let toml = null; // { text, problem, table }
 const mount = h("div", { class: "agents triggers" });
 
-// Choices that stand for a value typed beside them.
-const WORKSPACE = "\u0000ws";
+// A choice that stands for a value typed beside it.
 const NODE_IDS = "\u0000ids";
 const KINDS = { agent: "Agent", exec: "Exec", webhook: "Webhook" };
 
@@ -61,8 +60,8 @@ export function triggersLoad(s) {
 
 // triggersRefresh reads the view again, as when the page is opened anew,
 // and redraws only if it changed. While something is being edited it takes
-// only the device's agents, so one made meanwhile can be chosen, and keeps
-// what is typed.
+// only the device's agents and the Group's Keys, so one made meanwhile can
+// be chosen, and keeps what is typed.
 export async function triggersRefresh() {
   if (!tv || loading || busy) return;
   const g = group;
@@ -70,8 +69,9 @@ export async function triggersRefresh() {
   if (!next || next.Group !== g || g !== group || busy) return;
   if (mount.contains(document.activeElement)) return;
   if (open.size || toml || deleting) {
-    if (JSON.stringify(next.Handles) === JSON.stringify(tv.Handles)) return;
-    tv = { ...tv, Handles: next.Handles };
+    const choices = (v) => JSON.stringify([v.Handles, v.Keys]);
+    if (choices(next) === choices(tv)) return;
+    tv = { ...tv, Handles: next.Handles, Keys: next.Keys };
     redraw();
     return;
   }
@@ -283,9 +283,15 @@ function jobsSection() {
   return el;
 }
 
+// keyLabel names the Key whose Conversation has Workspace name ws as Talk
+// does, by its alias if it has one; ws itself for no Key of the Group.
+function keyLabel(ws) {
+  return (tv.Keys ?? []).find((k) => k.Workspace === ws)?.Label ?? ws;
+}
+
 function jobSummary(j) {
   switch (j.Kind) {
-    case "agent": return `@${j.Agent}${j.Target === "group" ? " in Group talk" : j.Target ? ` in ${j.Target}` : ""}`;
+    case "agent": return `@${j.Agent}${j.Target === "group" ? " in Group talk" : j.Target ? ` in ${keyLabel(j.Target)}` : ""}`;
     case "exec": return j.Exec.join(" ");
     case "webhook": return j.WebhookSecret ? `$${j.WebhookSecret}` : "a URL";
   }
@@ -350,21 +356,23 @@ function jobForm(j) {
       handles.map((x) => h("option", { value: x, selected: x === d.Agent }, `@${x}`)),
       d.Agent && !handles.includes(d.Agent) && h("option", { value: d.Agent, selected: true }, `@${d.Agent} (not on this device)`));
     const prompt = area(d.Prompt, { rows: 3, placeholder: "Review the Sign Request and accept it if it matches policy." });
-    const known = d.Target === "" || d.Target === "group";
+    // A Key is shown by its alias but written as its Workspace name, which
+    // never changes.
+    const keys = tv.Keys ?? [];
+    const known = d.Target === "" || d.Target === "group" || keys.some((k) => k.Workspace === d.Target);
     const target = h("select", { class: "field left" },
       h("option", { value: "", selected: d.Target === "" }, "The event's conversation"),
       h("option", { value: "group", selected: d.Target === "group" }, "Group talk"),
-      h("option", { value: WORKSPACE, selected: !known }, "A Key's conversation, by its Workspace name…"));
-    const workspace = text(known ? "" : d.Target, { placeholder: "ecdsa-02ab34cd", "aria-label": "Workspace name" });
-    workspace.hidden = known;
-    target.addEventListener("change", () => { workspace.hidden = target.value !== WORKSPACE; });
+      keys.length > 0 && h("optgroup", { label: "A Key's conversation" },
+        keys.map((k) => h("option", { value: k.Workspace, selected: k.Workspace === d.Target }, k.Label))),
+      !known && h("option", { value: d.Target, selected: true }, `${d.Target} (no such Key in ${group})`));
     fields = [
       row(where, "agent", "Agent", agent, "It runs here, on this device."),
       row(where, "prompt", "Prompt", prompt, "Its instruction, with the event that fired."),
-      row(where, "target", "Answers in", h("div", { class: "stack" }, target, workspace),
-        "A Schedule has no event, so a Job it runs must name Group talk or a Workspace. In Group talk the agent must be included there."),
+      row(where, "target", "Answers in", target,
+        "A Schedule has no event, so a Job it runs must name Group talk or a Key. In Group talk the agent must be included there."),
     ];
-    readKind = () => ({ Agent: agent.value, Prompt: prompt.value, Target: target.value === WORKSPACE ? workspace.value.trim() : target.value });
+    readKind = () => ({ Agent: agent.value, Prompt: prompt.value, Target: target.value });
   } else if (d.Kind === "exec") {
     const exec = area(d.Exec.join("\n"), { rows: 3, placeholder: "defios\nsign\naccept\n$DEFIOS_SIGN_REQUEST_ID" });
     const secrets = d.Secrets.map((n) => secretField({ group, value: n, noneLabel: "Choose a Secret" }));

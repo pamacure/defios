@@ -44,8 +44,11 @@ type Key struct {
 	// PublicKey is hex, ConversationID and SessionID (its keygen's) too.
 	PublicKey      string
 	ConversationID string
-	SessionID      string
-	T, N           int
+	// Workspace is its Conversation's Workspace name (key.WorkspaceNames),
+	// which a Job's target names it by.
+	Workspace string
+	SessionID string
+	T, N      int
 	// Share: this Node holds a share of it, as far as can be told: see
 	// Keys.
 	Share bool
@@ -71,9 +74,10 @@ func (h *Host) Keys(ctx context.Context, groupAlias string, passphrase Passphras
 		return nil, err
 	}
 	aliases := config.ReadKeyAliases(h.p, groupAlias, keys)
+	names := key.WorkspaceNames(keys)
 	out := make([]Key, len(keys))
 	for i, k := range keys {
-		out[i] = keyOf(k, have, aliases[k.Ref()])
+		out[i] = keyOf(k, have, aliases[k.Ref()], names)
 	}
 	return out, nil
 }
@@ -94,7 +98,7 @@ func (h *Host) InspectKey(ctx context.Context, groupAlias, query string, passphr
 	if err != nil {
 		return Key{}, err
 	}
-	return keyOf(k, have, aliases[k.Ref()]), nil
+	return keyOf(k, have, aliases[k.Ref()], key.WorkspaceNames(keys)), nil
 }
 
 // SetKeyAlias sets, renames or with alias "" clears the alias of the Key
@@ -142,7 +146,7 @@ func (h *Host) SetKeyAlias(ctx context.Context, groupAlias, query, alias string)
 		}
 	}
 	own.Alias = alias
-	return keyOf(k, nil, own), nil
+	return keyOf(k, nil, own, key.WorkspaceNames(keys)), nil
 }
 
 // refuseWaitingAlias fails if the process serving this Node holds alias
@@ -243,10 +247,10 @@ func (h *Host) shares(ctx context.Context, groupAlias string, passphrase Passphr
 	return out, nil
 }
 
-func keyOf(k key.Key, have map[string]bool, a config.KeyAlias) Key {
+func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byte]string) Key {
 	v := Key{
 		Key: k.Ref(), Alias: a.Alias, AliasErr: a.Err, Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey),
-		ConversationID: k.Conversation(), SessionID: k.SessionID.String(),
+		ConversationID: k.Conversation(), Workspace: names[key.ConversationID(k.Curve, k.PublicKey)], SessionID: k.SessionID.String(),
 		T: k.T, N: k.N, Share: have[k.Ref()],
 	}
 	if k.Curve == "ecdsa" {

@@ -54,12 +54,13 @@ func TestKeyListAndInspectWithoutServe(t *testing.T) {
 	var view struct {
 		Key            string `json:"key"`
 		ConversationID string `json:"conversation_id"`
+		Workspace      string `json:"workspace"`
 		Share          bool   `json:"share"`
 	}
 	if err := json.Unmarshal([]byte(r.stdout), &view); err != nil {
 		t.Fatal(err)
 	}
-	if view.Key != ref || view.Share || len(view.ConversationID) != 64 {
+	if view.Key != ref || view.Share || len(view.ConversationID) != 64 || view.Workspace != "ecdsa-"+hex.EncodeToString(pk)[:12] {
 		t.Fatalf("inspect = %+v", view)
 	}
 	r = run(t, withPass, "", "--dir", dir, "key", "inspect", view.ConversationID)

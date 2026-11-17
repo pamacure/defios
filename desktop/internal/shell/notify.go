@@ -327,10 +327,16 @@ func (t *talk) convName(conv string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if k := t.key(conv); k != nil {
-		if k.Alias != "" {
-			return k.Alias
-		}
-		return curveName(k.Curve) + " " + shortKey(k.PublicKey)
+		return keyLabel(*k)
 	}
 	return shortKey(conv)
+}
+
+// keyLabel names Key k as people see it: its alias, else its curve and
+// public key in short.
+func keyLabel(k node.Key) string {
+	if k.Alias != "" {
+		return k.Alias
+	}
+	return curveName(k.Curve) + " " + shortKey(k.PublicKey)
 }

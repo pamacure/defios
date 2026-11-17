@@ -99,6 +99,11 @@ func TestTwoDevicesTalkMakeAKeyAndQueueWithoutAMajority(t *testing.T) {
 	if ts.Key == nil || !ts.Key.Share {
 		t.Fatalf("key detail: %+v", ts.Key)
 	}
+	// The Triggers page offers it by alias for an agent Job to answer in,
+	// to be written as its Workspace name.
+	if ks := alice.Triggers().Keys; len(ks) != 1 || ks[0] != (shell.KeyChoice{Workspace: "eddsa-" + ts.Key.PublicKey[:12], Label: "treasury"}) {
+		t.Fatalf("triggers keys: %+v", ks)
+	}
 
 	// bob goes offline: alice's message queues, and Drop removes it.
 	bob.Lock()
