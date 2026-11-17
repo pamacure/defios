@@ -246,3 +246,39 @@ func TestAnAPIShapeChangeStartsANewTranscript(t *testing.T) {
 		t.Fatalf("the new Transcript's first run replays the old one: %s", sent)
 	}
 }
+
+// A run that fails because its context is too long for the model ends
+// with an error telling the operator to clear that agent (ADR 0036): in
+// its outcome, the serve's log and the chain's stream.
+func TestAContextTooLongFailureSaysToClear(t *testing.T) {
+	var logs logLines
+	a, _, _, provider := agentPairTuned(t, func(o *serve.Options) { o.Logf = logs.logf }, "auditor")
+	provider.set(func(_ int, w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}`)
+	})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor go on", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const hint = "Clear @auditor's Transcript to continue"
+	var failed *serve.ChainEvent
+	for _, ev := range untilEnd(t, s, v.MsgID) {
+		if ev.Type == serve.EventAgentError {
+			failed = &ev
+		}
+	}
+	if failed == nil || !strings.Contains(failed.Error, "prompt is too long") || !strings.Contains(failed.Error, hint) {
+		t.Fatalf("the stream's error = %+v", failed)
+	}
+	if got := logs.matching(hint); len(got) != 1 {
+		t.Fatalf("logged %q", got)
+	}
+	lines := transcript(t, a, v.MsgID)
+	last := lines[len(lines)-1]
+	if last["outcome"] != serve.OutcomeError || !strings.Contains(fmt.Sprint(last["error"]), hint) {
+		t.Fatalf("the outcome = %v", last)
+	}
+}

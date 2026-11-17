@@ -40,7 +40,7 @@ type fakeTalk struct {
 	sign      *fakeSign
 	// liveTranscripts are the Handles with a live Transcript, by
 	// Conversation ID.
-	liveTranscripts map[string][]string
+	liveTranscripts map[string][]node.LiveTranscript
 }
 
 func (n *fakeNode) tk() *fakeTalk {
@@ -49,7 +49,7 @@ func (n *fakeNode) tk() *fakeTalk {
 			committed: map[string][]node.Message{}, queued: map[string][]node.Message{},
 			blocks: map[string][]json.RawMessage{}, included: map[string][]string{},
 			providers: map[string][]node.Provider{}, networks: map[string][]node.Network{},
-			liveTranscripts: map[string][]string{},
+			liveTranscripts: map[string][]node.LiveTranscript{},
 		}
 	}
 	return n.talk
@@ -362,35 +362,56 @@ func (n *fakeNode) Networks(_ context.Context, group, conv string) ([]node.Netwo
 	return slices.Clone(t.networks[node.GroupTalk]), nil
 }
 
-// live gives handles a live Transcript in conv.
+// live gives handles a live Transcript in conv, of no size yet.
 func (n *fakeNode) live(conv string, handles ...string) {
+	for _, h := range handles {
+		n.sized(conv, h, 0)
+	}
+}
+
+// sized gives handle a live Transcript in conv of tokens, or makes the one
+// it has that size.
+func (n *fakeNode) sized(conv, handle string, tokens int64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	t := n.tk()
-	t.liveTranscripts[conv] = append(t.liveTranscripts[conv], handles...)
+	for i, l := range t.liveTranscripts[conv] {
+		if l.Handle == handle {
+			t.liveTranscripts[conv][i].Tokens = tokens
+			return
+		}
+	}
+	t.liveTranscripts[conv] = append(t.liveTranscripts[conv], node.LiveTranscript{Handle: handle, Tokens: tokens})
 }
 
 // liveIn are the Handles with a live Transcript in conv.
 func (n *fakeNode) liveIn(conv string) []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return slices.Clone(n.tk().liveTranscripts[conv])
+	var out []string
+	for _, l := range n.tk().liveTranscripts[conv] {
+		out = append(out, l.Handle)
+	}
+	return out
 }
 
-func (n *fakeNode) LiveTranscripts(_ context.Context, group, conv string) ([]string, error) {
-	return n.liveIn(conv), nil
+func (n *fakeNode) LiveTranscripts(_ context.Context, group, conv string) ([]node.LiveTranscript, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.tk().liveTranscripts[conv]), nil
 }
 
 func (n *fakeNode) ClearTranscripts(_ context.Context, group, conv, handle string) ([]string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	t := n.tk()
-	var cleared, left []string
-	for _, h := range t.liveTranscripts[conv] {
-		if handle == "" || h == handle {
-			cleared = append(cleared, h)
+	var cleared []string
+	var left []node.LiveTranscript
+	for _, l := range t.liveTranscripts[conv] {
+		if handle == "" || l.Handle == handle {
+			cleared = append(cleared, l.Handle)
 		} else {
-			left = append(left, h)
+			left = append(left, l)
 		}
 	}
 	t.liveTranscripts[conv] = left

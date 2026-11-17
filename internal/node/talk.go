@@ -512,9 +512,14 @@ func (e *ChainNotFoundError) Error() string {
 
 func (e *ChainNotFoundError) Unwrap() error { return serve.ErrNotAChain }
 
-// LiveTranscripts are the Handles of this Node's Agents with a live
-// Transcript in conv, in order: those a Clear there would clear.
-func (h *Host) LiveTranscripts(_ context.Context, groupAlias, conv string) ([]string, error) {
+// LiveTranscript is one of this Node's Agents with a live Transcript in a
+// Conversation, and how large it has grown: Tokens are the input tokens of
+// the last model call it records, 0 before its first (ADR 0036).
+type LiveTranscript = transcript.Size
+
+// LiveTranscripts are this Node's Agents with a live Transcript in conv,
+// by Handle in order, with their sizes: those a Clear there would clear.
+func (h *Host) LiveTranscripts(_ context.Context, groupAlias, conv string) ([]LiveTranscript, error) {
 	id, err := conversationID(conv)
 	if err != nil {
 		return nil, err
@@ -522,7 +527,7 @@ func (h *Host) LiveTranscripts(_ context.Context, groupAlias, conv string) ([]st
 	if err := h.knownGroup(groupAlias); err != nil {
 		return nil, err
 	}
-	return transcript.Live(h.p, groupAlias, id)
+	return transcript.Sizes(h.p, groupAlias, id)
 }
 
 // ClearTranscripts clears the Agent handle in conv, or with handle ""

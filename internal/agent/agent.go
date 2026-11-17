@@ -378,6 +378,9 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 		if out.usage != nil {
 			ev.record(RecordUsage, out.usage)
 		}
+		if out.stop == "model_context_window_exceeded" {
+			return Result{}, &contextTooLong{fmt.Errorf("agent: the model reached its context window (stop reason %s) before it finished", out.stop)}
+		}
 		if out.truncated {
 			return Result{}, fmt.Errorf("agent: the model stopped at its token bound (stop reason %s) before it finished", out.stop)
 		}
@@ -811,6 +814,37 @@ func (c Client) call(ctx context.Context, req Request, body []byte, ev Events, s
 	}
 }
 
+// ErrContextTooLong is a Provider refusing a call because its context, the
+// replayed Transcript and the run so far, is longer than its model takes,
+// or a reply stopped at the model's context window. A Transcript only
+// grows, so the Agent's runs go on failing until it is cleared (ADR 0036).
+var ErrContextTooLong = errors.New("agent: the context is too long for the model")
+
+// contextTooLong is a failure that is ErrContextTooLong, saying it as the
+// Provider did.
+type contextTooLong struct{ err error }
+
+func (e *contextTooLong) Error() string        { return e.err.Error() }
+func (e *contextTooLong) Unwrap() error        { return e.err }
+func (e *contextTooLong) Is(target error) bool { return target == ErrContextTooLong }
+
+// contextMarks are what Providers say, in their error codes or messages,
+// when a request's context is too long: the Messages API, OpenAI's APIs and
+// the servers that speak their shapes.
+var contextMarks = []string{"context_length_exceeded", "prompt is too long", "context limit", "context length", "context window"}
+
+// ofContext is err, a Provider's refusal saying why in said, as
+// ErrContextTooLong when said says the context is too long.
+func ofContext(err error, said string) error {
+	said = strings.ToLower(said)
+	for _, m := range contextMarks {
+		if strings.Contains(said, m) {
+			return &contextTooLong{err}
+		}
+	}
+	return err
+}
+
 // retryable is a failure worth trying again: after, when not negative, is
 // how long the provider asked to wait.
 type retryable struct {
@@ -862,7 +896,7 @@ func (c Client) attempt(ctx context.Context, req Request, body []byte, st *strea
 		if retryStatus(resp.StatusCode) {
 			return call{}, &retryable{err: err, after: retryAfter(resp.Header)}
 		}
-		return call{}, err
+		return call{}, ofContext(err, string(msg))
 	}
 	p := req.Shape.wire.parser(st)
 	// The reply's type picks its reader, whatever the body's stream says.
@@ -1022,9 +1056,9 @@ func (p *anthropicParser) event(data string) (bool, error) {
 	case "error":
 		err := fmt.Errorf("agent: %s: %s", ev.Error.Type, ev.Error.Message)
 		if retryEvents[ev.Error.Type] {
-			err = retry(err)
+			return false, retry(err)
 		}
-		return false, err
+		return false, ofContext(err, ev.Error.Message)
 	}
 	return false, nil
 }
@@ -1047,9 +1081,9 @@ func (p *anthropicParser) reply(body []byte) error {
 	if m.Type == "error" {
 		err := fmt.Errorf("agent: %s: %s", m.Error.Type, m.Error.Message)
 		if retryEvents[m.Error.Type] {
-			err = retry(err)
+			return retry(err)
 		}
-		return err
+		return ofContext(err, m.Error.Message)
 	}
 	for _, b := range m.Content {
 		var input strings.Builder

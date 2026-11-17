@@ -36,7 +36,7 @@ type TalkNode interface {
 	Providers(ctx context.Context, group, conv string) ([]node.Provider, error)
 	Networks(ctx context.Context, group, conv string) ([]node.Network, error)
 	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)
-	LiveTranscripts(ctx context.Context, group, conv string) ([]string, error)
+	LiveTranscripts(ctx context.Context, group, conv string) ([]node.LiveTranscript, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 
 	// Sign Requests.
@@ -83,6 +83,10 @@ type TalkState struct {
 
 	// Handles are the agents' Handles a message here may mention.
 	Handles []string
+	// Transcripts are this device's agents with a live Transcript here,
+	// and how large each has grown, shown beside Clear: a Transcript only
+	// grows, so its size says when to clear it (ADR 0036).
+	Transcripts []TranscriptSize
 
 	// The right column: the open Conversation's Key, nil for Group talk;
 	// every Agent Profile and whether it is included here; and the
@@ -177,6 +181,14 @@ type Item struct {
 	Sign *SignCard
 }
 
+// TranscriptSize is one agent's live Transcript in the open Conversation:
+// Tokens are the input tokens of the last model call it records, about
+// what its next run replays; 0 before its first.
+type TranscriptSize struct {
+	Handle string
+	Tokens int64
+}
+
 // LiveChain is a chain of agents running here now.
 type LiveChain struct {
 	Chain  string // the msg_id that started it
@@ -258,6 +270,7 @@ type talk struct {
 	// Transcript there, so it is not read on every message.
 	saidStale bool
 	handles   []string
+	sizes     []node.LiveTranscript
 	agents    []Agent
 	over      []Override
 	system    map[string][]Item // by Conversation
@@ -296,7 +309,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 		t.n, t.self, t.group, t.open = n, self, group, node.GroupTalk
 		t.gen++
 		t.convs, t.msgs, t.said, t.saidStale = node.Conversations{}, nil, nil, true
-		t.handles, t.agents, t.over = nil, nil, nil
+		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
 		t.reqs, t.cards, t.focus = nil, map[string]node.SignRequestDetail{}, ""
@@ -383,6 +396,29 @@ func (t *talk) loadOpen() {
 	t.loadMessages()
 	t.loadSigns()
 	t.loadSide()
+	t.loadSizes()
+}
+
+// loadSizes reads the open Conversation's live Transcripts and their
+// sizes: as it opens, as a chain or Job there ends, and after a Clear.
+func (t *talk) loadSizes() {
+	a, ok := t.now()
+	if !ok {
+		return
+	}
+	t.loadMu.Lock()
+	sizes, err := a.n.LiveTranscripts(t.ctx, a.group, a.conv)
+	t.loadMu.Unlock()
+	t.mu.Lock()
+	if !t.still(a) {
+		t.mu.Unlock()
+		return
+	}
+	if t.read("sizes", err) {
+		t.sizes = sizes
+	}
+	t.mu.Unlock()
+	t.emit()
 }
 
 // loadSigns reads the Group's Sign Requests again, and the open
@@ -584,7 +620,7 @@ func (t *talk) snapshot() TalkState {
 	st := TalkState{
 		Seq: t.seq, Group: t.group,
 		Conversations: []Conversation{}, Keygens: []Keygen{}, Roster: []RosterNode{},
-		Live: []LiveChain{}, Handles: []string{}, Agents: []Agent{}, Overrides: []Override{},
+		Live: []LiveChain{}, Handles: []string{}, Transcripts: []TranscriptSize{}, Agents: []Agent{}, Overrides: []Override{},
 		SignRequests: []SignRow{},
 	}
 	if t.group == "" {
@@ -592,12 +628,15 @@ func (t *talk) snapshot() TalkState {
 	}
 	st.Open, st.Focus = t.open, t.focus
 	st.SignRequests = t.signRows()
-	for _, what := range []string{"conversations", "messages", "signs", "side"} {
+	for _, what := range []string{"conversations", "messages", "signs", "side", "sizes"} {
 		if st.Unread == nil {
 			st.Unread = t.failed[what]
 		}
 	}
 	st.Handles = append(st.Handles, t.handles...)
+	for _, l := range t.sizes {
+		st.Transcripts = append(st.Transcripts, TranscriptSize{Handle: l.Handle, Tokens: l.Tokens})
+	}
 	st.Agents = append(st.Agents, t.agents...)
 	st.Overrides = append(st.Overrides, t.over...)
 	st.MajorityReachable = t.status.MajorityReachable
@@ -757,7 +796,10 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 	case ev.Chain != nil && ev.Chain.Group == group:
 		if t.chain(ev.Chain.Conversation, ev.Chain.Event) && ev.Chain.Conversation == open {
 			t.saidStale = true
-			reload = t.loadMessages
+			reload = func() {
+				t.loadMessages()
+				t.loadSizes()
+			}
 		}
 	default:
 		t.mu.Unlock()

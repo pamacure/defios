@@ -96,7 +96,7 @@ type Node interface {
 	Cancel(ctx context.Context, group, conv, chain string) (Cancelled, error)
 	Follow(ctx context.Context, group, conv string) (*ChainStream, error)
 	Transcript(ctx context.Context, group, conv, chain string) (Transcript, error)
-	LiveTranscripts(ctx context.Context, group, conv string) ([]string, error)
+	LiveTranscripts(ctx context.Context, group, conv string) ([]LiveTranscript, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 	Outbox(ctx context.Context, group string) ([]Queued, error)
 	DropQueued(ctx context.Context, group, msgID string) (string, error)

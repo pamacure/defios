@@ -100,7 +100,7 @@ func (t *talk) openConversation(conv string) TalkState {
 	}
 	if t.open != conv {
 		t.open, t.msgs, t.said, t.saidStale = conv, nil, nil, true
-		t.handles, t.agents, t.over = nil, nil, nil
+		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.cards = map[string]node.SignRequestDetail{}
 	}
 	t.focus = ""

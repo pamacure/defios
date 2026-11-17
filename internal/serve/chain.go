@@ -586,6 +586,12 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 			line(l)
 		},
 	})
+	if errors.Is(err, agent.ErrContextTooLong) {
+		// Its Transcript only grows: every run will fail until it is
+		// cleared (ADR 0036). The hint goes first, ahead of the
+		// Provider's own words.
+		err = fmt.Errorf("its context is too long for the model; Clear @%s's Transcript to continue (%w)", handle, err)
+	}
 	if err != nil {
 		return res, said, inc, err
 	}

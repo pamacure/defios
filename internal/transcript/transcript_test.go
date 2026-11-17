@@ -393,3 +393,33 @@ func TestRenewStartsANewTranscriptForTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A live Transcript's size is the input tokens of the last model call it
+// records, cached ones included, whichever API Shape wrote it: what its
+// Agent's next run replays, give or take that call's output (ADR 0036).
+// One with no model call yet is 0; a cleared one has no size.
+func TestSizesAreEachLiveTranscriptsLastInputTokens(t *testing.T) {
+	p := paths(t)
+	usage := func(step int, handle, u string) transcript.Line {
+		return transcript.Line{Step: step, Handle: handle, Kind: transcript.KindUsage, Usage: json.RawMessage(u)}
+	}
+	write(t, p, nil, "cd34", lines...)
+	write(t, p, nil, "ef56",
+		usage(1, "auditor", `{"input_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":9}`),
+		usage(1, "auditor", `{"input_tokens":40,"cache_read_input_tokens":1200,"output_tokens":3}`),
+		usage(2, "critic", `{"prompt_tokens":800,"completion_tokens":20}`),
+		transcript.Line{Step: 2, Handle: "critic", Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"})
+	want := []transcript.Size{{Handle: "auditor", Tokens: 1240}, {Handle: "critic", Tokens: 800}, {Handle: "scribe", Tokens: 0}}
+	if got, err := transcript.Sizes(p, group.ImplicitAlias, nil); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Sizes = %+v, %v; want %+v", got, err, want)
+	}
+	if _, err := transcript.Clear(p, group.ImplicitAlias, nil, "auditor"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := transcript.Sizes(p, group.ImplicitAlias, nil); err != nil || !reflect.DeepEqual(got, want[1:]) {
+		t.Fatalf("Sizes after clearing @auditor = %+v, %v", got, err)
+	}
+	if got, err := transcript.Sizes(p, group.ImplicitAlias, []byte{0xab}); err != nil || got != nil {
+		t.Fatalf("Sizes where none is live = %+v, %v", got, err)
+	}
+}

@@ -242,6 +242,40 @@ func Live(p nodedir.Paths, alias string, conv []byte) ([]string, error) {
 	return live, nil
 }
 
+// Size is how large one Agent's live Transcript has grown: Tokens are the
+// input tokens of the last model call it records, which its next run
+// replays give or take that call's output; 0 before its first.
+type Size struct {
+	Handle string
+	Tokens int64
+}
+
+// Sizes are the sizes of the live Transcripts in conv (nil for Group-level
+// talk), by Handle in order; nil if there is none. A Transcript only grows,
+// and nothing compacts it: its size says when to clear it (ADR 0036).
+func Sizes(p nodedir.Paths, alias string, conv []byte) ([]Size, error) {
+	live, err := Live(p, alias, conv)
+	if err != nil {
+		return nil, err
+	}
+	var out []Size
+	for _, h := range live {
+		lines, err := readFile(p.LiveTranscriptFile(alias, nodedir.ConversationName(conv), h))
+		if err != nil {
+			return nil, err
+		}
+		s := Size{Handle: h}
+		for _, l := range slices.Backward(lines) {
+			if l.Kind == KindUsage {
+				s.Tokens, _ = Tokens(l.Usage)
+				break
+			}
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 // Clear closes the live Transcript of the Agent handle in conv (nil for
 // Group-level talk), or with handle "" of every Agent there, and returns
 // the Handles it closed one of, in order: nil if none had one. A closed

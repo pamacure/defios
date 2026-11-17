@@ -278,6 +278,7 @@ function center() {
   return h("section", { class: "chat", "aria-label": convName(conv) },
     h("header", { class: "chat-head" },
       h("h2", {}, convName(conv)), sign, h("span", { class: "spacer" }), online,
+      transcriptSizes(),
       h("button", { class: "btn small", type: "button", disabled: tui.busy || !!tui.clearing, onclick: askClear }, "Clear"),
       h("button", {
         class: "btn small about-toggle", type: "button", "aria-expanded": tui.about ? "true" : "false",
@@ -289,6 +290,22 @@ function center() {
     tui.clearing && clearConfirm(conv),
     transcript(),
     composer.el);
+}
+
+// transcriptSizes shows, beside Clear, how large each of this device's
+// agents' live Transcripts here has grown: the input tokens of its last
+// model call. A Transcript only grows, so this says when to clear it.
+function transcriptSizes() {
+  if (!ts.Transcripts?.length) return null;
+  return h("span", { class: "transcript-sizes", title: "Each agent's Transcript here: the input tokens of its last model call. It only grows; Clear starts it afresh." },
+    ts.Transcripts.map((s) => h("span", { class: "chip" }, `@${s.Handle} ${tokens(s.Tokens)}`)));
+}
+
+// tokens is a token count, short: 950, 12.4k, 1.2M tokens.
+function tokens(n) {
+  if (n < 1000) return `${n} tokens`;
+  if (n < 1e6) return `${(n / 1000).toFixed(n < 1e4 ? 1 : 0)}k tokens`;
+  return `${(n / 1e6).toFixed(1)}M tokens`;
 }
 
 // askClear asks which agents Clear can clear here, to choose among them.

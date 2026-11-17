@@ -3,6 +3,7 @@ package shell_test
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -265,7 +266,13 @@ func TestANewKeyIsAProvisionalRowUntilItsKeygenCompletes(t *testing.T) {
 	}
 
 	k := r.node.mint(kg.SessionID)
-	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Keygens) == 0 && len(ts.Conversations) == 2 })
+	// The row comes with a reload, the system line with the Session's
+	// event: wait for both.
+	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool {
+		return len(ts.Keygens) == 0 && len(ts.Conversations) == 2 && slices.ContainsFunc(ts.Items, func(it shell.Item) bool {
+			return it.Kind == shell.KindSystem && strings.Contains(it.Text, "New Key ready")
+		})
+	})
 	if row := ts.Conversations[1]; row.ID != k.ConversationID || row.Alias != "treasury" || row.T != 2 || row.N != 2 {
 		t.Fatalf("key row: %+v", row)
 	}

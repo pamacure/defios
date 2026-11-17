@@ -43,7 +43,9 @@ func (t *talk) clearCheck() ClearView {
 		v.Problem = problemOf(err)
 		return v
 	}
-	v.Agents = append(v.Agents, live...)
+	for _, l := range live {
+		v.Agents = append(v.Agents, l.Handle)
+	}
 	return v
 }
 
@@ -54,5 +56,5 @@ func (t *talk) clear(conv, handle string) TalkState {
 		}
 		_, err := a.n.ClearTranscripts(t.ctx, a.group, conv, handle)
 		return err
-	})
+	}, t.loadSizes)
 }

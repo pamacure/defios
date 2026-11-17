@@ -1382,3 +1382,59 @@ func TestCancelEndsTheRequest(t *testing.T) {
 		t.Fatalf("err %v after %d calls, want context.Canceled once", err, calls)
 	}
 }
+
+// A Provider refusing a request because its context is too long, in any
+// API Shape, or a Messages reply stopped at the context window, is
+// ErrContextTooLong and says why; another refusal is not (ADR 0036).
+func TestAContextTooLongFailureIsErrContextTooLong(t *testing.T) {
+	refused := func(status int, body string) func(w http.ResponseWriter) {
+		return func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			w.Write([]byte(body))
+		}
+	}
+	streamed := func(events ...string) func(w http.ResponseWriter) {
+		return func(w http.ResponseWriter) { sse(w, events...) }
+	}
+	for name, c := range map[string]struct {
+		shape agent.Shape
+		reply func(w http.ResponseWriter)
+		want  string
+	}{
+		"messages 400": {agent.Messages, refused(400,
+			`{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}`),
+			"prompt is too long"},
+		"messages limit": {agent.Messages, refused(400,
+			`{"type":"error","error":{"type":"invalid_request_error","message":"input length and `+"`max_tokens`"+` exceed context limit: 198000 + 8192 > 200000"}}`),
+			"exceed context limit"},
+		"messages window": {agent.Messages, streamed(append(append([]string{anthropicStart()}, anthropicTextBlock(0, "and so")...),
+			anthropicEnd("model_context_window_exceeded")...)...), "context window"},
+		"chat completions 400": {agent.ChatCompletions, refused(400,
+			`{"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}`),
+			"maximum context length"},
+		"responses 400": {agent.Responses, refused(400,
+			`{"error":{"message":"Your input exceeds the context window of this model.","type":"invalid_request_error","param":"input","code":"context_length_exceeded"}}`),
+			"exceeds the context window"},
+		"responses failed": {agent.Responses, streamed(responsesEvent("response.failed",
+			`"response":{"id":"resp_1","status":"failed","error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}`)),
+			"exceeds the context window"},
+	} {
+		calls := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; c.reply(w) }))
+		_, err := agent.Client{Backoff: time.Millisecond}.Run(context.Background(),
+			agent.Request{Shape: c.shape, URL: srv.URL, Turn: "p", Tools: []agent.Tool{agent.TalkWrite}}, agent.Events{})
+		srv.Close()
+		if !errors.Is(err, agent.ErrContextTooLong) || !strings.Contains(err.Error(), c.want) || calls != 1 {
+			t.Errorf("%s: err %v after %d calls, want ErrContextTooLong saying %q once", name, err, calls, c.want)
+		}
+	}
+	srv, _ := failing(t, func(_ int, w http.ResponseWriter) bool {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: 99999 > 64000"}}`))
+		return true
+	})
+	if _, err := generate(srv, agent.Events{}); err == nil || errors.Is(err, agent.ErrContextTooLong) {
+		t.Fatalf("another 400: err %v, want an error that is not ErrContextTooLong", err)
+	}
+}

@@ -46,7 +46,7 @@ func (e responsesError) err() error {
 	if e.Code == "server_error" || e.Code == "rate_limit_exceeded" {
 		return retry(err)
 	}
-	return err
+	return ofContext(err, e.Code+" "+e.Message)
 }
 
 func (p *responsesParser) event(data string) (bool, error) {
