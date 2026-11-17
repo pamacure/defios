@@ -706,7 +706,6 @@ const (
 // before it may not have arrived (ADR 0025).
 func runTurn(said talk.Messages, node identity.ID, handle string, by summoner, last *transcript.Run, facts string) TranscriptLine {
 	l := TranscriptLine{Kind: KindTurn}
-	var since talk.Messages
 	var summons *talk.Message
 	for _, m := range said {
 		id := m.MsgID()
@@ -715,18 +714,26 @@ func runTurn(said talk.Messages, node identity.ID, handle string, by summoner, l
 		} else {
 			l.Seq = max(l.Seq, m.Row.Seq)
 		}
+		if by.job == "" && id == by.msgID {
+			summons = &m
+		}
+	}
+	// What the talk since leaves out ends a pruned stretch: no gap line
+	// claims the agent's own message, or any other, was pruned.
+	leftOut := func(m talk.Message) bool {
+		id := m.MsgID()
 		switch {
 		case by.job == "" && id == by.msgID:
-			summons = &m
 		case last == nil:
 		case slices.Contains(last.TalkUnapplied, id), !m.Unapplied && m.Row.Seq <= last.TalkSeq:
 		case m.Handle == handle && m.Row.Sender == node:
 		default:
-			since = append(since, m)
+			return false
 		}
+		return true
 	}
 	var b strings.Builder
-	if lines := since.Lines(displayName); len(lines) > 0 {
+	if lines := said.Lines(leftOut, displayName); len(lines) > 0 {
 		b.WriteString(turnTalkSince + "\n" + strings.Join(lines, "\n") + "\n")
 	}
 	switch {

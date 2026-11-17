@@ -270,7 +270,7 @@ func (ms Messages) Page(last int, before uint64, name func(Message) string) Page
 		last = DefaultPage
 	}
 	last = min(last, MaxPage)
-	lines, queued := ms.lines(before, name)
+	lines, queued := ms.lines(before, nil, name)
 	var p Page
 	if cut := len(lines) - last; cut > 0 {
 		p.Earlier = lines[cut-1].to + 1
@@ -284,9 +284,11 @@ func (ms Messages) Page(last int, before uint64, name func(Message) string) Page
 }
 
 // Lines is all of ms as an agent reads it, oldest first: as Page's lines,
-// however many there are.
-func (ms Messages) Lines(name func(Message) string) []string {
-	committed, queued := ms.lines(0, name)
+// however many there are, less each message leftOut reports (none with
+// nil leftOut). A message left out ends a pruned stretch, as an unreadable
+// one does: no gap line covers it.
+func (ms Messages) Lines(leftOut func(Message) bool, name func(Message) string) []string {
+	committed, queued := ms.lines(0, leftOut, name)
 	text := make([]string, len(committed))
 	for i, l := range committed {
 		text[i] = l.text
@@ -303,12 +305,17 @@ type line struct {
 
 // lines are ms as an agent reads them: the committed lines, a message or
 // a pruned stretch each, then the queued ones; with before, only the talk
-// before that seq, which no queued message is.
-func (ms Messages) lines(before uint64, name func(Message) string) (committed []line, queued []string) {
+// before that seq, which no queued message is. A message leftOut reports
+// is on no line, and ends a pruned stretch.
+func (ms Messages) lines(before uint64, leftOut func(Message) bool, name func(Message) string) (committed []line, queued []string) {
 	inGap := false // whether the message before was pruned
 	for _, m := range ms {
 		seq := m.Row.Seq
 		if before > 0 && (m.Row.Queued() || seq >= before) {
+			continue
+		}
+		if leftOut != nil && leftOut(m) {
+			inGap = false
 			continue
 		}
 		wasGap := inGap

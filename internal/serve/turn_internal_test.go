@@ -39,3 +39,23 @@ func TestATurnStartsAfterWhatTheReplicaHeld(t *testing.T) {
 		t.Fatalf("a Job's turn = %s", job.Turn)
 	}
 }
+
+// A gap line claims only talk this Node has pruned: the agent's own
+// message, which a turn leaves out, ends a pruned stretch, so stretches
+// either side of it are two lines; a stretch with nothing left out in it
+// is still one.
+func TestATurnsGapLinesStopAtTheAgentsOwnMessage(t *testing.T) {
+	alice := identity.ID{1}
+	msg := func(seq uint64, handle, text string) talk.Message {
+		return talk.Message{Row: cosl.Row{Seq: seq, MsgID: [32]byte{byte(seq)}, Sender: alice}, Handle: handle, Text: text, Sender: "alice"}
+	}
+	pruned := func(seq uint64) talk.Message { m := msg(seq, "", ""); m.Pruned = true; return m }
+	summon := msg(10, "", "@bob again")
+	said := talk.Messages{msg(4, "", "old"), pruned(5), msg(6, "bob", "bob's own"), pruned(7), pruned(8), pruned(9), summon}
+	last := transcript.Run{TalkSeq: 4}
+	got := runTurn(said, alice, "bob", summoner{msgID: summon.MsgID()}, &last, "(facts)").Turn
+	want := "(Talk since your last run:)\n[5 pruned on this Node]\n[7–9 pruned on this Node]\n(You are summoned by:)\n[10] alice: @bob again\n(facts)"
+	if got != want {
+		t.Fatalf("turn =\n%s\nwant\n%s", got, want)
+	}
+}

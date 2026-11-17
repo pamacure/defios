@@ -449,7 +449,7 @@ func TestLinesAreTheWholeTalkAsAPagesLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.mine = []outbox.Entry{{Signed: f.sign(f.bob, nil, said("later"))}}
-	lines := f.read(nil).Messages.Lines(func(m talk.Message) string { return m.Sender })
+	lines := f.read(nil).Messages.Lines(nil, func(m talk.Message) string { return m.Sender })
 	if n := len(lines); n != talk.MaxPage+3 || lines[0] != "[1–2 pruned on this Node]" || lines[1] != "[3] alice: m2" || lines[n-1] != "[queued] bob: later" {
 		t.Fatalf("%d lines, from %q and %q to %q", n, lines[0], lines[1], lines[n-1])
 	}
