@@ -27,8 +27,11 @@ const (
 	forwardPath     = "/v1/forward"
 	appliedPath     = "/v1/applied" // GET: the leader's applied seq, decimal
 	forwardMaxBytes = 1 << 20
-	forwardTimeout  = ApplyTimeout + 5*time.Second
 )
+
+// forwardTimeout bounds one forwarded append: the apply timeout, and time
+// to carry it.
+func forwardTimeout() time.Duration { return ApplyTimeout() + 5*time.Second }
 
 // statusNotLeader tells the forwarder to look the leader up again;
 // statusTransient tells it the leader could not settle the entry right now
@@ -67,7 +70,7 @@ func newForwardGate(r *Replica) (*forwardGate, error) {
 	})
 	g.srv = &http.Server{Handler: mux}
 	g.client = &http.Client{
-		Timeout: forwardTimeout,
+		Timeout: forwardTimeout(),
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				conn, err := r.opts.Transport.Dial(ctx, network, addr)

@@ -436,7 +436,7 @@ func (s *server) onChains(ctx context.Context, do func(ctx context.Context, chai
 	case s.chainCalls <- call:
 	case <-ctx.Done():
 		return false
-	case <-time.After(raftx.ApplyTimeout):
+	case <-time.After(raftx.ApplyTimeout()):
 		return false
 	}
 	<-call.done

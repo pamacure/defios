@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -30,12 +31,25 @@ const (
 
 // ApplyTimeout bounds one append (§4.2): with n=2 and the other Node down,
 // this is how long a write waits before failing.
-const ApplyTimeout = 10 * time.Second
+func ApplyTimeout() time.Duration { return timing.apply }
+
+// timing is the §4.2 timeouts: the spec's, but shorter in a test binary,
+// where Groups form, lose a majority and queue writes many times over and
+// every Node is on loopback.
+var timing = func() struct{ apply, heartbeat, election time.Duration } {
+	if testing.Testing() {
+		return struct{ apply, heartbeat, election time.Duration }{2 * time.Second, 100 * time.Millisecond, 500 * time.Millisecond}
+	}
+	return struct{ apply, heartbeat, election time.Duration }{10 * time.Second, 500 * time.Millisecond, 2 * time.Second}
+}()
 
 // §4.2 knobs.
+var (
+	heartbeatTimeout = timing.heartbeat
+	electionTimeout  = timing.election
+)
+
 const (
-	heartbeatTimeout  = 500 * time.Millisecond
-	electionTimeout   = 2 * time.Second
 	commitTimeout     = 50 * time.Millisecond
 	snapshotInterval  = 120 * time.Second
 	snapshotThreshold = 1024
@@ -327,7 +341,7 @@ func (r *Replica) apply(ctx context.Context, s cosl.Signed) (Position, error) {
 		close(p.done)
 	}()
 
-	f := r.raft.Apply(s.Bytes, ApplyTimeout)
+	f := r.raft.Apply(s.Bytes, ApplyTimeout())
 	if err := f.Error(); err != nil {
 		switch {
 		case errors.Is(err, raft.ErrNotLeader), errors.Is(err, raft.ErrEnqueueTimeout):

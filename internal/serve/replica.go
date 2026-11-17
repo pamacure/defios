@@ -67,7 +67,7 @@ func (s *server) startReplica() {
 	ob, err := outbox.Open(outbox.Config{
 		Path: s.opts.Paths.OutboxFile(s.opts.Alias),
 		Append: func(ctx context.Context, signed cosl.Signed) (raftx.Position, error) {
-			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout)
+			ctx, cancel := context.WithTimeout(ctx, raftx.ApplyTimeout())
 			defer cancel()
 			return replica.Append(ctx, signed)
 		},
