@@ -17,7 +17,7 @@ import (
 // waits until both membership.join rows are on both replicas.
 func formValidPair(t *testing.T, hs *headscale) (alice, bob *node, gid string) {
 	t.Helper()
-	alice, bob = newNodeOpts(t, hs, "alice", false), newNodeOpts(t, hs, "bob", false)
+	alice, bob = newNodeOpts(t, hs, "alice", savedPreparams), newNodeOpts(t, hs, "bob", savedPreparams)
 	for _, n := range []*node{alice, bob} {
 		n.env["DEFIOS_SESSION_TIMEOUT"] = "5m"
 	}

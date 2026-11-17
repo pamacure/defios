@@ -19,14 +19,15 @@ import (
 // TestKeygenECDSA_2of2 (§11.1, ECDSA half): a real tss-lib keygen on a
 // 2-Node Group mints one secp256k1 Key. Each replica has one session.start
 // and two agreeing session.completes, and both Nodes report the same
-// ecdsa:<hex> with share=yes.
+// ecdsa:<hex> with share=yes. Alice's init generates its preparams, as
+// a real one does; bob's are a saved set, which saves minutes.
 func TestKeygenECDSA_2of2(t *testing.T) {
 	hs := startHeadscale(t)
-	alice, bob := initKeygenNodes(t, hs)
+	alice, bob := initKeygenNodesWith(t, hs, generatedPreparams)
+	if !strings.Contains(alice.logs.String(), "generating ECDSA preparams") {
+		t.Fatal("alice's init did not report preparam generation")
+	}
 	for _, n := range []*node{alice, bob} {
-		if !strings.Contains(n.logs.String(), "generating ECDSA preparams") {
-			t.Fatalf("%s init did not report preparam generation", n.name)
-		}
 		contents, err := vault.Open(filepath.Join(n.dir, "vault", "shared"), passphrase)
 		if err != nil {
 			t.Fatal(err)
@@ -123,8 +124,15 @@ func waitKeyByAlias(t *testing.T, n *node, alias string) keyView {
 
 func initKeygenNodes(t *testing.T, hs *headscale) (alice, bob *node) {
 	t.Helper()
-	alice = newNodeOpts(t, hs, "alice", false)
-	bob = newNodeOpts(t, hs, "bob", false)
+	return initKeygenNodesWith(t, hs, savedPreparams)
+}
+
+// initKeygenNodesWith is initKeygenNodes with alice's preparams from
+// alicePre; bob's are saved.
+func initKeygenNodesWith(t *testing.T, hs *headscale, alicePre preparams) (alice, bob *node) {
+	t.Helper()
+	alice = newNodeOpts(t, hs, "alice", alicePre)
+	bob = newNodeOpts(t, hs, "bob", savedPreparams)
 	for _, n := range []*node{alice, bob} {
 		n.env["DEFIOS_SESSION_TIMEOUT"] = "5m"
 	}

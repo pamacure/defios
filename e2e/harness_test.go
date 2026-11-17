@@ -259,18 +259,62 @@ type node struct {
 
 func newNode(t *testing.T, hs *headscale, name string) *node {
 	t.Helper()
-	return newNodeOpts(t, hs, name, true)
+	return newNodeOpts(t, hs, name, noPreparams)
 }
 
-// newNodeOpts with skipPreparams false generates ECDSA preparams at init.
-func newNodeOpts(t *testing.T, hs *headscale, name string, skipPreparams bool) *node {
+// preparams is where a Node's init gets its ECDSA preparams.
+type preparams int
+
+const (
+	noPreparams        preparams = iota // none: the Node mints no ECDSA Key
+	savedPreparams                      // a set made once, kept as testdata
+	generatedPreparams                  // made at init, which takes minutes
+)
+
+// savedPreparamsFile is the sets the tssl tests keep; regenerate them there.
+const savedPreparamsFile = "../internal/engine/tssl/testdata/preparams.json"
+
+// savedPreparamsFor writes name's saved set to a file init can read: alice
+// has the first, bob the second, any other Node the third.
+func savedPreparamsFor(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(savedPreparamsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sets [][]byte
+	if err := json.Unmarshal(raw, &sets); err != nil {
+		t.Fatal(err)
+	}
+	i := 2
+	switch name {
+	case "alice":
+		i = 0
+	case "bob":
+		i = 1
+	}
+	if i >= len(sets) {
+		t.Fatalf("%s holds %d sets of preparams, want %d", savedPreparamsFile, len(sets), i+1)
+	}
+	path := filepath.Join(t.TempDir(), "preparams.json")
+	if err := os.WriteFile(path, sets[i], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// newNodeOpts is newNode with its ECDSA preparams from pre.
+func newNodeOpts(t *testing.T, hs *headscale, name string, pre preparams) *node {
 	t.Helper()
 	env := map[string]string{
 		"DEFIOS_PASSPHRASE": passphrase,
 		"TS_AUTHKEY":        hs.preauthKey(t, name),
 	}
-	if skipPreparams {
+	switch pre {
+	case noPreparams:
 		env["DEFIOS_ECDSA_PREPARAMS"] = "skip"
+	case savedPreparams:
+		env["DEFIOS_ECDSA_PREPARAMS"] = savedPreparamsFor(t, name)
 	}
 	n := &node{
 		t:    t,
