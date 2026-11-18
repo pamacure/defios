@@ -585,3 +585,33 @@ func TestAgentLiveryIsAssignedSetAndCleared(t *testing.T) {
 		t.Fatalf("list: exit %d, stdout %q", r.code, r.stdout)
 	}
 }
+
+// agent edit --livery random gives a profile a Livery no other party
+// holds, other than its own.
+func TestAgentEditGivesARandomLivery(t *testing.T) {
+	dir := agentGroup(t)
+	if r := run(t, nil, "", "--dir", dir, "agent", "add", "auditor", "--provider", "claude", "--livery", "none"); r.code != 0 {
+		t.Fatalf("add: exit %d: %s", r.code, r.stderr)
+	}
+	livery := func() string {
+		r := run(t, nil, "", "--dir", dir, "agent", "show", "auditor", "--json")
+		var got struct{ Livery string }
+		if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
+			t.Fatalf("show --json: exit %d, stdout %q", r.code, r.stdout)
+		}
+		return got.Livery
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "edit", "auditor", "--livery", "random"); r.code != 0 {
+		t.Fatalf("edit --livery random: exit %d: %s", r.code, r.stderr)
+	}
+	first := livery()
+	if first == "" {
+		t.Fatal("edit --livery random left auditor without a Livery")
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "edit", "auditor", "--livery", "random"); r.code != 0 {
+		t.Fatalf("edit --livery random again: exit %d: %s", r.code, r.stderr)
+	}
+	if again := livery(); again == "" || again == first {
+		t.Fatalf("random again gave %q after %q; want another", again, first)
+	}
+}

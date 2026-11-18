@@ -35,7 +35,7 @@ func (f *agentFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.model, "model", "", "the model it asks for: body.model, over --body")
 	cmd.Flags().StringVar(&f.body, "body", "", "its request body, a JSON object: inline, @path to read a file, or - for stdin")
 	cmd.Flags().IntVar(&f.maxTurns, "max-turns", 0, "model calls a summon may make (default 8)")
-	cmd.Flags().StringVar(&f.livery, "livery", "", "the colour and brick this Node marks it with in talk, <colour>-<brick>, or none (ADR 0037)")
+	cmd.Flags().StringVar(&f.livery, "livery", "", "the colour and brick this Node marks it with in talk, <colour>-<brick>; none to clear it; or random for one no other party holds (ADR 0037)")
 }
 
 // edit is the node.ProfileEdit of each field whose flag cmd was given.
@@ -84,7 +84,7 @@ func agentError(handle string, err error) error {
 		return exitUsagef("Agent Profile %q already exists; change it with `defios agent edit`", handle)
 	case errors.Is(err, node.ErrProfileUnchanged):
 		return exitUsagef("Agent Profile %q is unchanged: nothing to change", handle)
-	case errors.As(err, &taken):
+	case errors.As(err, &taken), errors.Is(err, node.ErrNoFreeLivery):
 		return exitUsagef("%w", err)
 	case errors.As(err, &included):
 		return exitUsagef("Agent Profile %q is included in %s; exclude it there first", handle, strings.Join(placeNames(included.In), ", "))
@@ -164,7 +164,8 @@ none if all 64 are taken.`,
 		Short: "Change an Agent Profile's Provider, model, body, max_turns or Livery; unspecified fields keep their value",
 		Long: `Change an Agent Profile's config.toml. --body replaces its body whole; --model sets only body.model, over
 the new body when both are given. --livery sets its Livery in liveries.toml, refusing one another party
-holds, or with none clears it. A Handle cannot be renamed: add another and delete this one.`,
+holds; with none clears it; and with random gives it one no other party holds, refused if every
+one is. A Handle cannot be renamed: add another and delete this one.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)

@@ -137,8 +137,10 @@ type Node interface {
 	// Liveries: the colour and brick this Node marks each party of talk
 	// with, by party key (AgentParty, NodeParty, NodeAgentParty; ADR
 	// 0037). The Node gives them as it first sees each party; SetLivery
-	// sets or, with NoLivery, clears one, refusing one another party
-	// holds with a *LiveryTakenError. None needs serve.
+	// sets one, clears it with NoLivery or gives a free one with
+	// RandomLivery, refusing one another party holds with a
+	// *LiveryTakenError and RandomLivery with none free with
+	// ErrNoFreeLivery. None needs serve.
 	Liveries(ctx context.Context) (map[string]string, error)
 	SetLivery(ctx context.Context, party, livery string) error
 	FreeLiveries(ctx context.Context) ([]string, error)

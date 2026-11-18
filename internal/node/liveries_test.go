@@ -267,3 +267,38 @@ func TestAnAddOrEditRefusedForATakenLiveryChangesNothing(t *testing.T) {
 		t.Fatalf("the refused edit set the model: %+v", s)
 	}
 }
+
+// An edit to the random Livery gives the profile a free one, never the
+// one it had; with none free it is refused and changes nothing.
+func TestAnEditToARandomLiveryGivesAFreeOne(t *testing.T) {
+	p := nodeDir(t)
+	h, err := node.Open(p, node.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := h.AddAgentProfile(ctx, "auditor", node.ProfileEdit{Provider: ptr("claude"), Livery: ptr("blue-arch")}); err != nil {
+		t.Fatal(err)
+	}
+	free, _ := h.FreeLiveries(ctx)
+	// Leave one free besides auditor's own.
+	for i, l := range free[1:] {
+		if err := h.SetLivery(ctx, fmt.Sprintf("node:%064x", i+1), l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := h.EditAgentProfile(ctx, "auditor", node.ProfileEdit{Livery: ptr(node.RandomLivery)})
+	if err != nil || a.Livery != free[0] {
+		t.Fatalf("edit to random = %+v, %v; want the one free Livery, %s", a, err, free[0])
+	}
+	if err := h.SetLivery(ctx, fmt.Sprintf("node:%064x", 64), "blue-arch"); err != nil {
+		t.Fatal(err) // the one auditor gave up
+	}
+	_, err = h.EditAgentProfile(ctx, "auditor", node.ProfileEdit{Model: ptr("m"), Livery: ptr(node.RandomLivery)})
+	if !errors.Is(err, node.ErrNoFreeLivery) {
+		t.Fatalf("edit to random with none free: %v; want ErrNoFreeLivery", err)
+	}
+	if a, _ := h.AgentProfile(ctx, "auditor"); a.Livery != free[0] || a.Model != "" {
+		t.Fatalf("the refused edit changed auditor: %+v", a)
+	}
+}

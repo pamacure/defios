@@ -106,8 +106,10 @@ type ProfileEdit struct {
 	Model    *string
 	Body     map[string]any
 	MaxTurns *int // at least 1
-	// Livery is <colour>-<brick>, or NoLivery to clear it. AddAgentProfile
-	// gives a random free one when it is nil.
+	// Livery is <colour>-<brick>, NoLivery to clear it, or RandomLivery
+	// for a free one other than its own. AddAgentProfile gives a random
+	// free one when it is nil, staying without if none is free, where
+	// RandomLivery is refused.
 	Livery *string
 }
 
@@ -144,16 +146,14 @@ func (e ProfileEdit) apply(p *config.Profile) error {
 }
 
 // checkLivery refuses the Livery e sets for handle before anything is
-// written: one that is neither <colour>-<brick> nor NoLivery, or one
-// another party holds. It reports whether e changes handle's Livery.
+// written: one that is neither <colour>-<brick>, NoLivery nor
+// RandomLivery, one another party holds, or RandomLivery with none free. It reports whether e changes handle's Livery.
 func (h *Host) checkLivery(handle string, e ProfileEdit) (changes bool, err error) {
 	if e.Livery == nil {
 		return false, nil
 	}
-	if *e.Livery != NoLivery {
-		if err := validLivery(*e.Livery); err != nil {
-			return false, onField(FieldLivery, err)
-		}
+	if err := validWrite(*e.Livery); err != nil {
+		return false, onField(FieldLivery, err)
 	}
 	held, err := h.readLiveries()
 	if err != nil {

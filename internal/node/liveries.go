@@ -28,8 +28,15 @@ var LiveryColours = []string{"blue", "indigo", "violet", "magenta", "orange", "c
 var LiveryBricks = []string{"stud", "twin", "plate", "tile", "slope", "arch", "round", "corner"}
 
 // NoLivery, as the Livery SetLivery or a ProfileEdit gives, clears a
-// party's Livery.
-const NoLivery = "none"
+// party's Livery; RandomLivery gives it a random one no party holds,
+// never the one it had.
+const (
+	NoLivery     = "none"
+	RandomLivery = "random"
+)
+
+// ErrNoFreeLivery: RandomLivery refused, as every Livery is held.
+var ErrNoFreeLivery = errors.New("every Livery is taken: clear one first")
 
 // The kinds of party a Livery marks, as the prefix of its key: one of this
 // Node's Agent Profiles (agent:<handle>), another Node (node:<node id>), or
@@ -74,10 +81,19 @@ func allLiveries() []string {
 func validLivery(l string) error {
 	c, b, ok := strings.Cut(l, "-")
 	if !ok || !slices.Contains(LiveryColours, c) || !slices.Contains(LiveryBricks, b) {
-		return invalidf("%q is not a Livery: write <colour>-<brick>, with a colour of %s and a brick of %s, or %s",
-			l, strings.Join(LiveryColours, " "), strings.Join(LiveryBricks, " "), NoLivery)
+		return invalidf("%q is not a Livery: write <colour>-<brick>, with a colour of %s and a brick of %s, or %s, or %s",
+			l, strings.Join(LiveryColours, " "), strings.Join(LiveryBricks, " "), NoLivery, RandomLivery)
 	}
 	return nil
+}
+
+// validWrite refuses what a write cannot set: a Livery, NoLivery or
+// RandomLivery.
+func validWrite(l string) error {
+	if l == NoLivery || l == RandomLivery {
+		return nil
+	}
+	return validLivery(l)
 }
 
 // validParty refuses a party key that names no party.
@@ -114,17 +130,16 @@ func (h *Host) FreeLiveries(ctx context.Context) ([]string, error) {
 	return freeOf(held), nil
 }
 
-// SetLivery gives party the Livery livery, or with NoLivery clears it. A
-// Livery another party holds is a *LiveryTakenError; an agent: party must
-// be one of this Node's Agent Profiles.
+// SetLivery gives party the Livery livery, with NoLivery clears it, or
+// with RandomLivery gives it a free one. A Livery another party holds is a
+// *LiveryTakenError, and RandomLivery with none free is ErrNoFreeLivery;
+// an agent: party must be one of this Node's Agent Profiles.
 func (h *Host) SetLivery(ctx context.Context, party, livery string) error {
 	if err := validParty(party); err != nil {
 		return err
 	}
-	if livery != NoLivery {
-		if err := validLivery(livery); err != nil {
-			return err
-		}
+	if err := validWrite(livery); err != nil {
+		return err
 	}
 	if handle, ok := strings.CutPrefix(party, agentParty); ok {
 		if _, err := h.readProfile(handle); err != nil {
@@ -138,8 +153,16 @@ func (h *Host) SetLivery(ctx context.Context, party, livery string) error {
 
 // setLivery sets party's Livery in held, refusing one another party holds.
 func setLivery(held map[string]string, party, livery string) error {
-	if livery == NoLivery {
+	switch livery {
+	case NoLivery:
 		delete(held, party)
+		return nil
+	case RandomLivery:
+		free := freeOf(held) // never party's own, which it holds
+		if len(free) == 0 {
+			return ErrNoFreeLivery
+		}
+		held[party] = free[rand.IntN(len(free))]
 		return nil
 	}
 	for p, l := range held {
