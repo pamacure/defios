@@ -363,7 +363,7 @@ button.avatar:hover { box-shadow: 0 0 0 2px var(--lv, var(--line)); }
 button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 /* An avatar in a list: smaller, beside a name. */
 .about .avatar, .pitem .avatar, .livery-now .avatar { width: 22px; height: 22px; color: var(--surface); }
-.about .avatar .brick, .pitem .avatar .brick, .livery-now .avatar .brick { width: 14px; height: 14px; }
+.about .avatar .brick, .pitem .avatar .brick, .livery-now .avatar .brick { width: 14px; height: 14px; color: inherit; } /* not .pitem span's muted grey */
 .pitem strong { display: inline-flex; align-items: center; gap: 6px; }
 /* Devices here: each device, and under it its agents seen writing here. */
 .about .parties { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
