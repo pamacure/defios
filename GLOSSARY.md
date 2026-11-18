@@ -104,6 +104,10 @@ _Avoid_: tool server, toolset, integration
 The name of an Agent Profile on one Node, written `@handle` in talk to summon it where a Group's or Conversation's config includes it. Local to one Node: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
 _Avoid_: agent name, username, alias (that is a Group's, Key's, Network's or Provider's local label)
 
+**Livery**:
+The colour and brick one Node marks a party of talk with, wherever that party writes or is mentioned: one of its own Agent Profiles, another Node (the person writing from it), or another Node's Agent. Given by this Node alone and never replicated: another Node may mark the same party differently, or not at all. No two parties a Node marks may share a Livery, and a party may have none. A mention is marked with the Livery of the Agent it resolves to on the Node whose message carries it.
+_Avoid_: badge (that is a conversation row's count), avatar, colour (alone), theme
+
 **Chain**:
 The agents one person's message, or one Trigger's firing, summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id, or a random id for a Job's. Each agent reached is one **step**, numbered in that order whether it runs or is skipped.
 _Avoid_: thread, run, cascade
