@@ -319,7 +319,7 @@ button.conv > .sub { grid-column: 1 / -1; }
 .msg .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .msg .who { display: flex; gap: 6px; align-items: baseline; }
 .msg .who strong { color: var(--text-soft); font-weight: 600; }
-.msg .handle { color: var(--accent-strong); font-weight: 600; }
+.msg .handle { color: var(--lv, var(--accent-strong)); font-weight: 600; } /* an agent's in its Livery's colour */
 .msg .text { padding: 8px 12px; border-radius: var(--radius-l); background: var(--surface); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
 .msg.right .text { background: var(--accent-wash); border-color: transparent; border-bottom-right-radius: 0; }
 .msg.left .text { border-bottom-left-radius: 0; }
@@ -345,16 +345,19 @@ button.conv > .sub { grid-column: 1 / -1; }
 .brick-arch { --brick: url(bricks/arch.svg); }
 .brick-round { --brick: url(bricks/round.svg); }
 .brick-corner { --brick: url(bricks/corner.svg); }
-/* A left-side message sits beside its sender's avatar: the party's colour
-   with the brick cut out in --surface, or plain --line for none. Only a
-   run's last message shows it; the others keep its column. */
-.msgrow { align-self: flex-start; display: flex; align-items: flex-end; gap: 8px; max-width: min(676px, 85%); }
-.msgrow .msg { max-width: none; min-width: 0; }
-.msgrow.cont { margin-top: -6px; }
+/* A left-side message's bubble sits beside its sender's avatar, bottoms
+   aligned: the party's colour with the brick cut out in --surface, or
+   plain --line for none. Only a run's last message shows it; the others
+   keep its column, and all else in the message is indented past it. */
+.msg.left { max-width: min(676px, 85%); }
+.msg.left > :not(.line) { margin-left: 36px; }
+.msg.left.cont { margin-top: -6px; }
+.msg .line { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.msg .line > .text { min-width: 0; }
+.msg .line > .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .avatar { flex: none; width: 28px; height: 28px; border-radius: var(--radius-s); background: var(--lv, var(--line)); color: var(--surface); display: grid; place-items: center; }
 .avatar .brick { width: 18px; height: 18px; }
 .avatar.blank { visibility: hidden; }
-.live .msgrow { max-width: 100%; }
 /* A mention in a sent message: its brick and @handle on a wash of the
    colour; neutral for none. */
 .mention { display: inline-flex; align-items: center; gap: 3px; padding: 0 5px; border-radius: 4px; background: var(--lv-wash, var(--bg)); color: var(--lv, var(--text-soft)); font-weight: 600; white-space: nowrap; vertical-align: baseline; }

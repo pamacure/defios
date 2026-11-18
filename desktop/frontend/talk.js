@@ -434,30 +434,33 @@ function item(it) {
   // A run of one sender's messages names its author on the first only.
   const who = left && it.Author && h("span", { class: "who" },
     h("strong", {}, it.From),
-    it.Handle && h("span", { class: "handle" }, `@${it.Handle}`),
+    it.Handle && h("span", { class: `handle ${liveryClass(it.Livery)}` }, `@${it.Handle}`),
     it.Job && h("span", { class: "handle" }, "Job"));
+  const run = left && !it.Author ? "cont" : "";
   const meta = h("div", { class: "meta" }, who, h("time", {}, time(it.At)),
     it.Queued && h("span", { class: "chip warn" }, "Queued"));
   if (it.Kind === "unreadable") {
-    return beside(it, h("div", { class: `msg ${it.Side} unreadable` }, meta, h("p", { class: "text" }, "This message can't be read.")));
+    return h("div", { class: `msg ${it.Side} unreadable ${run}` }, meta, beside(it, h("p", { class: "text" }, "This message can't be read.")));
   }
   const open = tui.expanded.get(it.MsgID);
-  return beside(it, h("div", { class: `msg ${it.Side}` },
+  return h("div", { class: `msg ${it.Side} ${run}` },
     meta,
-    h("div", { class: "text" }, (it.Parts ?? [{ Text: it.Text }]).map(part)),
+    beside(it, h("div", { class: "text" }, (it.Parts ?? [{ Text: it.Text }]).map(part))),
     (it.Droppable || it.Transcript) && h("div", { class: "actions" },
       it.Droppable && h("button", { class: "link", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop"),
       it.Transcript && h("button", {
         class: "link", type: "button", "aria-expanded": open ? "true" : "false", onclick: () => toggleTranscript(it.MsgID, () => call("Transcript", it.MsgID)),
       }, open ? "Hide transcript" : "Transcript")),
-    open && transcriptBlocks(open)));
+    open && transcriptBlocks(open));
 }
 
-// beside puts a left-side message beside its avatar column: the avatar on
-// the last message of a run, the column kept empty on the others.
-function beside(it, msg) {
-  if (it.Side !== "left") return msg;
-  return h("div", { class: `msgrow ${it.Author ? "" : "cont"}` }, avatar(it.Livery, it.Avatar), msg);
+// beside puts a left-side message's bubble beside its avatar column,
+// bottoms aligned, so what follows the bubble (its actions, a Transcript)
+// hangs below both: the avatar on the last message of a run, the column
+// kept empty on the others.
+function beside(it, bubble) {
+  if (it.Side !== "left") return bubble;
+  return h("div", { class: "line" }, avatar(it.Livery, it.Avatar), bubble);
 }
 
 // part is a run of a sent message's text: a mention is a chip in the
@@ -528,13 +531,14 @@ function liveChain(c) {
     h("div", { class: "live-head" },
       h("span", { class: "pulse", "aria-hidden": "true" }),
       h("span", {}, c.Chain ? "Agents are answering…" : "Running…")),
-    c.Agents.map((a) => h("div", { class: "msgrow" }, avatar(a.Livery), h("div", { class: "msg left streaming" },
-      h("div", { class: "meta" }, h("span", { class: "who" }, h("strong", {}, "This Device"), h("span", { class: "handle" }, `@${a.Handle}`))),
-      a.Blocks.length
-        ? a.Blocks.map((b) => h("div", { class: `blk ${b.Kind}` },
-          b.Kind !== "text" && h("span", { class: "kind" }, b.Kind === "thinking" ? "Thinking" : "Tool"),
-          h("div", {}, b.Text)))
-        : h("p", { class: "placeholder" }, "Thinking…")))));
+    c.Agents.map((a) => h("div", { class: "msg left streaming" },
+      h("div", { class: "meta" }, h("span", { class: "who" }, h("strong", {}, "This Device"), h("span", { class: `handle ${liveryClass(a.Livery)}` }, `@${a.Handle}`))),
+      h("div", { class: "line" }, avatar(a.Livery), h("div", { class: "body" },
+        a.Blocks.length
+          ? a.Blocks.map((b) => h("div", { class: `blk ${b.Kind}` },
+            b.Kind !== "text" && h("span", { class: "kind" }, b.Kind === "thinking" ? "Thinking" : "Tool"),
+            h("div", {}, b.Text)))
+          : h("p", { class: "placeholder" }, "Thinking…"))))));
 }
 
 // The composer: @ autocompletes the Handles included here; \@ writes an @
@@ -664,7 +668,7 @@ function makeComposer() {
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        choose(shown[pick]);
+        choose(shown[pick].Handle);
         return;
       }
       if (e.key === "Escape") {
