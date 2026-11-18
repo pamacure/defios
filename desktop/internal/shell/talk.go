@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +43,7 @@ type TalkNode interface {
 	LiveTranscripts(ctx context.Context, group, conv string) ([]node.LiveTranscript, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 	Liveries(ctx context.Context) (map[string]string, error)
+	SetLivery(ctx context.Context, party, livery string) error
 
 	// Sign Requests.
 	SignRequests(ctx context.Context, group string) ([]node.SignRequest, error)
@@ -74,6 +77,9 @@ type TalkState struct {
 	Roster            []RosterNode
 	Online            int
 	MajorityReachable bool
+	// Devices are the Roster as Devices here lists it: this device first,
+	// then the others by name.
+	Devices []Device
 
 	// The transcript: what was said and the Sign Requests proposed, in
 	// order, with system lines among them; then the chains of agents
@@ -83,6 +89,10 @@ type TalkState struct {
 	// Focus is the Sign Request whose card to bring into view, as a
 	// notification about it was clicked; "" for none.
 	Focus string
+
+	// Liveries are every Livery this Node has given, by party key, for
+	// the picker to grey out those another party holds.
+	Liveries map[string]string
 
 	// Handles are the agents' Handles a message here may mention.
 	Handles []Handle
@@ -143,6 +153,22 @@ type RosterNode struct {
 	Self      bool
 }
 
+// Device is one device of the Roster in Devices here. This device is
+// "This Device", with no Party, Livery or Agents: its agents are under
+// Agents here. Another's Agents are those seen writing in the open
+// Conversation, in the order they first did.
+type Device struct {
+	Party, Name, Livery string
+	Self                bool
+	Agents              []Party
+}
+
+// Party is one party of talk a Livery marks (ADR 0037): Party is its key,
+// as node.SetLivery takes it, and Livery "" for none.
+type Party struct {
+	Party, Handle, Livery string
+}
+
 // ItemKind is what a line of the transcript is.
 type ItemKind string
 
@@ -186,6 +212,9 @@ type Item struct {
 	// Livery is the sender's, "" for none: on the left only, and never a
 	// Job's, which is no party (ADR 0037).
 	Livery string
+	// Party is the sender's party key, to set its Livery by; "" for this
+	// person's and a Job's.
+	Party string
 	// Parts are Text split at its mentions, each marked with the Livery
 	// of the agent it names on the device that sent it.
 	Parts []Part
@@ -233,6 +262,7 @@ type LiveChain struct {
 // LiveAgent is one agent's output in a chain as it generates it.
 type LiveAgent struct {
 	Handle string
+	Party  string // node.AgentParty(Handle)
 	Livery string // "" for none
 	Depth  uint32
 	Blocks []LiveBlock
@@ -253,10 +283,11 @@ type KeyDetail struct {
 	CanSign   bool
 }
 
-// Agent is an Agent Profile of this device, and whether it answers here.
+// Agent is an Agent Profile of this device, its party key and Livery,
+// "" for none, and whether it answers here.
 type Agent struct {
-	Handle   string
-	Included bool
+	Handle, Party, Livery string
+	Included              bool
 }
 
 // OverrideKind is what an Override sets.
@@ -587,6 +618,23 @@ func (t *talk) loadSide() {
 	t.emit()
 }
 
+// loadLiveries reads the Liveries again, as one was set.
+func (t *talk) loadLiveries() {
+	a, ok := t.now()
+	if !ok {
+		return
+	}
+	t.loadMu.Lock()
+	liveries, err := a.n.Liveries(t.ctx)
+	t.loadMu.Unlock()
+	t.mu.Lock()
+	if t.gen == a.gen {
+		t.setLiveries(liveries, err)
+	}
+	t.mu.Unlock()
+	t.emit()
+}
+
 // setLiveries keeps the Liveries just read; t.mu is held. Liveries only
 // mark talk, so one that fails to read keeps those read before rather
 // than stop the page.
@@ -611,7 +659,7 @@ func (t *talk) readSide(a at) ([]string, []Agent, []Override, error) {
 	}
 	agents := make([]Agent, 0, len(profiles))
 	for _, p := range profiles {
-		agents = append(agents, Agent{Handle: p.Handle, Included: slices.Contains(included, p.Handle)})
+		agents = append(agents, Agent{Handle: p.Handle, Party: node.AgentParty(p.Handle), Included: slices.Contains(included, p.Handle)})
 	}
 	over, err := t.overrides(a)
 	return handles, agents, over, err
@@ -673,7 +721,7 @@ func (t *talk) snapshot() TalkState {
 	// Lists are never nil: the page iterates them, and nil is JSON null.
 	st := TalkState{
 		Seq: t.seq, Group: t.group,
-		Conversations: []Conversation{}, Keygens: []Keygen{}, Roster: []RosterNode{},
+		Conversations: []Conversation{}, Keygens: []Keygen{}, Roster: []RosterNode{}, Devices: []Device{},
 		Live: []LiveChain{}, Handles: []Handle{}, Transcripts: []TranscriptSize{}, Agents: []Agent{}, Overrides: []Override{},
 		SignRequests: []SignRow{},
 	}
@@ -693,7 +741,14 @@ func (t *talk) snapshot() TalkState {
 	for _, l := range t.sizes {
 		st.Transcripts = append(st.Transcripts, TranscriptSize{Handle: l.Handle, Tokens: l.Tokens})
 	}
-	st.Agents = append(st.Agents, t.agents...)
+	for _, a := range t.agents {
+		a.Livery = t.liveries[a.Party]
+		st.Agents = append(st.Agents, a)
+	}
+	st.Liveries = maps.Clone(t.liveries)
+	if st.Liveries == nil {
+		st.Liveries = map[string]string{}
+	}
 	st.Overrides = append(st.Overrides, t.over...)
 	st.MajorityReachable = t.status.MajorityReachable
 	for _, r := range t.status.Roster {
@@ -702,6 +757,7 @@ func (t *talk) snapshot() TalkState {
 			st.Online++
 		}
 	}
+	st.Devices = t.devices()
 	for _, c := range t.convs.Talk {
 		row := Conversation{ID: c.ID, OpenSignRequests: c.OpenSignRequests}
 		if c.ID != t.open {
@@ -726,12 +782,44 @@ func (t *talk) snapshot() TalkState {
 		lc := LiveChain{Chain: c.Chain, Agents: []LiveAgent{}}
 		for _, a := range c.Agents {
 			lc.Agents = append(lc.Agents, LiveAgent{
-				Handle: a.Handle, Livery: t.liveries[node.AgentParty(a.Handle)], Depth: a.Depth, Blocks: append([]LiveBlock{}, a.Blocks...),
+				Handle: a.Handle, Party: t.party(t.self, a.Handle), Livery: t.liveries[t.party(t.self, a.Handle)], Depth: a.Depth, Blocks: append([]LiveBlock{}, a.Blocks...),
 			})
 		}
 		st.Live = append(st.Live, lc)
 	}
 	return st
+}
+
+// devices are the Roster for Devices here; t.mu is held.
+func (t *talk) devices() []Device {
+	seen := map[string][]Party{} // each device's agents writing here
+	for _, m := range t.msgs {
+		if m.NodeID == t.self || m.Handle == "" || !m.Readable() {
+			continue
+		}
+		p := t.party(m.NodeID, m.Handle)
+		if !slices.ContainsFunc(seen[m.NodeID], func(a Party) bool { return a.Party == p }) {
+			seen[m.NodeID] = append(seen[m.NodeID], Party{Party: p, Handle: m.Handle, Livery: t.liveries[p]})
+		}
+	}
+	var out []Device
+	self := false
+	for _, r := range t.status.Roster {
+		if r.NodeID == t.self {
+			self = true
+			continue
+		}
+		p := t.party(r.NodeID, "")
+		out = append(out, Device{Party: p, Name: t.device(r.NodeID), Livery: t.liveries[p], Agents: append([]Party{}, seen[r.NodeID]...)})
+	}
+	slices.SortStableFunc(out, func(a, b Device) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
+	if self {
+		out = append([]Device{{Name: t.device(t.self), Self: true, Agents: []Party{}}}, out...)
+	}
+	if out == nil {
+		out = []Device{}
+	}
+	return out
 }
 
 func (t *talk) keyDetail(k node.Key) *KeyDetail {
@@ -818,7 +906,8 @@ func (t *talk) item(m node.Message) Item {
 	}
 	it.Side, it.Handle, it.Job = Left, m.Handle, m.Readable() && m.Handle == "" && m.Depth > 0
 	if !it.Job {
-		it.Livery = t.liveries[t.party(m.NodeID, m.Handle)]
+		it.Party = t.party(m.NodeID, m.Handle)
+		it.Livery = t.liveries[it.Party]
 	}
 	it.sender = fmt.Sprintf("%s/%s/%v", m.NodeID, m.Handle, it.Job)
 	it.From = m.DisplayName

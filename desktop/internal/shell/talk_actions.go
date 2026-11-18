@@ -69,6 +69,11 @@ func (s *Shell) SetAgentIncluded(handle string, on bool) TalkState {
 	return s.talk.setAgentIncluded(handle, on)
 }
 
+// SetLivery gives party, a party key, the Livery livery: <colour>-<brick>,
+// node.NoLivery to clear it or node.RandomLivery for a free one. It shows
+// at once wherever the party is marked.
+func (s *Shell) SetLivery(party, livery string) TalkState { return s.talk.setLivery(party, livery) }
+
 // TranscriptView is a message's Transcript, or why there is none.
 type TranscriptView struct {
 	Blocks  []json.RawMessage
@@ -95,6 +100,12 @@ func (t *talk) act(do func(a at) error, then ...func()) TalkState {
 	}
 	t.mu.Unlock()
 	return st
+}
+
+func (t *talk) setLivery(party, livery string) TalkState {
+	return t.act(func(a at) error {
+		return a.n.SetLivery(t.ctx, party, livery)
+	}, t.loadLiveries)
 }
 
 func (t *talk) readTo(conv string, seq uint64) error {

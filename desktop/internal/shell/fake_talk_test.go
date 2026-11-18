@@ -450,3 +450,35 @@ func (n *fakeNode) Liveries(context.Context) (map[string]string, error) {
 	defer n.mu.Unlock()
 	return maps.Clone(n.tk().liveries), nil
 }
+
+// SetLivery sets party's Livery as the Node does: none clears it, random
+// gives a free one, and one another party holds is refused.
+func (n *fakeNode) SetLivery(_ context.Context, party, livery string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	held := n.tk().liveries
+	taken := map[string]string{}
+	for p, l := range held {
+		taken[l] = p
+	}
+	switch livery {
+	case node.NoLivery:
+		delete(held, party)
+		return nil
+	case node.RandomLivery:
+		for _, c := range node.LiveryColours {
+			for _, b := range node.LiveryBricks {
+				if l := c + "-" + b; taken[l] == "" {
+					held[party] = l
+					return nil
+				}
+			}
+		}
+		return node.ErrNoFreeLivery
+	}
+	if p := taken[livery]; p != "" && p != party {
+		return &node.LiveryTakenError{Livery: livery, Holder: p}
+	}
+	held[party] = livery
+	return nil
+}

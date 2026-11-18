@@ -5,6 +5,7 @@
 // it holds only what is being typed or is open on screen. UI text says
 // "device" for a Node.
 import { call, h, icon, put } from "./dom.js";
+import { avatar, brick, forgetPicks, liveryClass, liveryPicker } from "./livery.js";
 import { mentionSpans } from "./mention.js";
 import { callFailed, problemBox, problemLine, showProblem } from "./notice.js";
 import { openSignForm, signCard, signForm, signInit, statusChip } from "./sign.js";
@@ -37,6 +38,7 @@ const tui = {
   focused: "", // the Sign Request whose card was last brought into view
   readTo: new Map(), // Group/Conversation -> the seq last marked read there
   clearing: null, // the shell.ClearView Clear chooses from; with done, what it then cleared
+  livery: null, // the Livery picker open from an avatar: { party, label, x, y }
 };
 
 // talkPage is the page, drawn into a new element; go opens another page.
@@ -134,7 +136,7 @@ function draw() {
   const caret = field ? [active.selectionStart, active.selectionEnd] : null;
   const focused = active === composer.input;
   mount.classList.toggle("about-open", tui.about);
-  mount.replaceChildren(left(), center(), right(), signForm() ?? "");
+  mount.replaceChildren(left(), center(), right(), signForm() ?? "", liveryPop() ?? "");
   const tr = mount.querySelector(".transcript");
   const scroll = () => { if (tr.isConnected) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top; };
   if (tr) {
@@ -460,7 +462,8 @@ function item(it) {
 // kept empty on the others.
 function beside(it, bubble) {
   if (it.Side !== "left") return bubble;
-  return h("div", { class: "line" }, avatar(it.Livery, it.Avatar), bubble);
+  const label = it.Handle ? (it.From === "This Device" ? `@${it.Handle}` : `@${it.Handle} on ${it.From}`) : it.From;
+  return h("div", { class: "line" }, avatar(it.Livery, { shown: it.Avatar, open: it.Party && openLivery(it.Party, label), label }), bubble);
 }
 
 // part is a run of a sent message's text: a mention is a chip in the
@@ -470,18 +473,34 @@ function part(p) {
   return h("span", { class: `mention ${liveryClass(p.Livery)}` }, brick(p.Livery), p.Text);
 }
 
-// A Livery (ADR 0037) is <colour>-<brick>; "" is none.
-const liveryClass = (l) => (l ? `lv-${l.slice(0, l.indexOf("-"))}` : "");
+// openLivery opens the Livery picker of party beside the avatar clicked.
+const openLivery = (party, label) => (el) => {
+  const r = el.getBoundingClientRect();
+  tui.livery = { party, label, x: r.right + 8, y: r.top };
+  draw();
+};
 
-// brick is the Livery's brick in currentColor; null for none.
-function brick(l) {
-  return l ? h("span", { class: `brick brick-${l.slice(l.indexOf("-") + 1)}`, "aria-hidden": "true" }) : null;
+// closeLivery closes the Livery picker, forgetting a Livery half chosen.
+function closeLivery() {
+  tui.livery = null;
+  forgetPicks();
+  draw();
 }
 
-// avatar is a party's square: its colour with its brick cut out, plain
-// gray for none; hidden, it only keeps the column.
-function avatar(l, shown = true) {
-  return h("span", { class: `avatar ${liveryClass(l)} ${shown ? "" : "blank"}`, "aria-hidden": "true" }, brick(l));
+// liveryPop is the Livery picker open from an avatar, for any party: a
+// change applies at once, wherever the party is marked.
+function liveryPop() {
+  const l = tui.livery;
+  if (!l) return null;
+  const x = Math.max(8, Math.min(l.x, window.innerWidth - 310));
+  const y = Math.max(8, Math.min(l.y, window.innerHeight - 190));
+  return h("div", { class: "popover livery-pop", role: "dialog", "aria-label": `Livery of ${l.label}`, style: `left: ${x}px; top: ${y}px` },
+    h("strong", {}, `Livery of ${l.label}`),
+    liveryPicker({
+      key: l.party, current: ts.Liveries?.[l.party] ?? "", held: ts.Liveries, disabled: tui.busy,
+      onPick: (v) => act("SetLivery", l.party, v || "none"),
+    }),
+    h("p", { class: "hint" }, "Only this device sees it."));
 }
 
 // toggleTranscript shows or hides the Transcript under key, read by fetch.
@@ -533,7 +552,7 @@ function liveChain(c) {
       h("span", {}, c.Chain ? "Agents are answering…" : "Running…")),
     c.Agents.map((a) => h("div", { class: "msg left streaming" },
       h("div", { class: "meta" }, h("span", { class: "who" }, h("strong", {}, "This Device"), h("span", { class: `handle ${liveryClass(a.Livery)}` }, `@${a.Handle}`))),
-      h("div", { class: "line" }, avatar(a.Livery), h("div", { class: "body" },
+      h("div", { class: "line" }, avatar(a.Livery, { open: openLivery(a.Party, `@${a.Handle}`), label: `@${a.Handle}` }), h("div", { class: "body" },
         a.Blocks.length
           ? a.Blocks.map((b) => h("div", { class: `blk ${b.Kind}` },
             b.Kind !== "text" && h("span", { class: "kind" }, b.Kind === "thinking" ? "Thinking" : "Tool"),
@@ -698,6 +717,7 @@ function right() {
       h("p", { class: "hint" }, "Talk with everyone in the Group. Each Key has a conversation of its own.")),
     ts.Key && signRequests(),
     agents(),
+    devices(),
     overrides());
 }
 
@@ -752,6 +772,7 @@ function agents() {
   const list = ts.Agents.length
     ? ts.Agents.map((a) => h("label", { class: "toggle" },
       h("input", { type: "checkbox", checked: a.Included, disabled: tui.busy, onchange: (e) => act("SetAgentIncluded", a.Handle, e.target.checked) }),
+      avatar(a.Livery, { open: openLivery(a.Party, `@${a.Handle}`), label: `@${a.Handle}` }),
       h("span", { class: "text" }, h("strong", {}, `@${a.Handle}`)),
       h("button", { class: "link", type: "button", onclick: () => nav("agents", { profile: a.Handle }) }, "Profile")))
     : h("p", { class: "hint" }, "This device has no agents yet. Make one on the Agents page.");
@@ -759,6 +780,21 @@ function agents() {
     h("h3", {}, "Agents here"),
     h("p", { class: "hint" }, "The agents of this device that answer when mentioned here."),
     list);
+}
+
+// devices is Devices here: the Roster, and under each other device the
+// agents of it seen writing in this Conversation, each with its avatar.
+function devices() {
+  const party = (p, label, ...rest) => h("div", { class: "party" },
+    p.Party ? avatar(p.Livery, { open: openLivery(p.Party, label), label }) : avatar(""), ...rest);
+  return h("section", {},
+    h("h3", {}, "Devices here"),
+    ts.Devices.length
+      ? h("div", { class: "parties" }, ts.Devices.map((d) => h("div", { class: "device" },
+        party(d, d.Name, h("strong", {}, d.Name)),
+        d.Agents.map((a) => party(a, `@${a.Handle} on ${d.Name}`, h("span", { class: `handle ${liveryClass(a.Livery)}` }, `@${a.Handle}`))))))
+      : h("p", { class: "hint" }, "Connecting…"),
+    h("p", { class: "hint" }, "Click an avatar to change the Livery this device marks it with."));
 }
 
 function overrides() {
@@ -778,8 +814,14 @@ signInit({ ts: () => ts, act, draw, blocks: transcriptBlocks, convName, curveNam
 document.addEventListener("click", (e) => {
   if (!e.target.isConnected) return; // a click that redrew the page
   if (tui.roster && !e.target.closest(".online-menu")) { tui.roster = false; draw(); }
-  if (tui.about && !e.target.closest(".about, .about-toggle")) { tui.about = false; draw(); }
+  if (tui.about && !e.target.closest(".about, .about-toggle, .livery-pop")) { tui.about = false; draw(); }
+  if (tui.livery && !e.target.closest(".livery-pop")) closeLivery();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && tui.roster) { tui.roster = false; draw(); } else if (e.key === "Escape" && tui.about) { tui.about = false; draw(); }
+  if (e.key === "Escape" && tui.livery) { closeLivery(); } else if (e.key === "Escape" && tui.roster) { tui.roster = false; draw(); } else if (e.key === "Escape" && tui.about) { tui.about = false; draw(); }
 });
+// The picker sits where its avatar was as it opened: scrolling, which
+// moves the avatar, closes it.
+document.addEventListener("wheel", (e) => {
+  if (tui.livery && !e.target.closest?.(".livery-pop")) closeLivery();
+}, { passive: true });

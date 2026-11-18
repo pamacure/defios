@@ -46,3 +46,4 @@ func (n *fakeNode) RemoveProvider(context.Context, string, string, string) error
 func (n *fakeNode) Secrets(context.Context, string, node.Passphrase) ([]node.Secret, error) {
 	return nil, nil
 }
+func (n *fakeNode) FreeLiveries(context.Context) ([]string, error) { return nil, errNotFaked }

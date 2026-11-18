@@ -358,6 +358,35 @@ button.conv > .sub { grid-column: 1 / -1; }
 .avatar { flex: none; width: 28px; height: 28px; border-radius: var(--radius-s); background: var(--lv, var(--line)); color: var(--surface); display: grid; place-items: center; }
 .avatar .brick { width: 18px; height: 18px; }
 .avatar.blank { visibility: hidden; }
+button.avatar { border: 0; padding: 0; cursor: pointer; }
+button.avatar:hover { box-shadow: 0 0 0 2px var(--lv, var(--line)); }
+button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+/* An avatar in a list: smaller, beside a name. */
+.about .avatar, .pitem .avatar, .livery-now .avatar { width: 22px; height: 22px; color: var(--surface); }
+.about .avatar .brick, .pitem .avatar .brick, .livery-now .avatar .brick { width: 14px; height: 14px; }
+.pitem strong { display: inline-flex; align-items: center; gap: 6px; }
+/* Devices here: each device, and under it its agents seen writing here. */
+.about .parties { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.about .device { display: flex; flex-direction: column; gap: 4px; }
+.about .party { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.about .device .party + .party { padding-left: 30px; }
+.about .handle { color: var(--lv, var(--accent-strong)); font-weight: 600; }
+/* The Livery picker: a row of the 8 colours and a row of the 8 bricks in
+   the colour chosen. What another party holds is greyed out; a colour
+   whose bricks are all held is struck through. */
+.picker { display: flex; flex-direction: column; gap: 6px; }
+.picker .prow { display: grid; grid-template-columns: repeat(8, 28px); gap: 6px; }
+.picker .swatch, .picker .bpick { width: 28px; height: 28px; padding: 0; border-radius: var(--radius-s); cursor: pointer; display: grid; place-items: center; position: relative; }
+.picker .swatch { background: var(--lv); border: 0; }
+.picker .bpick { background: var(--surface); border: 1px solid var(--line); color: var(--lv, var(--muted)); }
+.picker [aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 2px; }
+.picker button:disabled { opacity: 0.25; cursor: not-allowed; }
+.picker .swatch.full::after { content: ""; position: absolute; left: -2px; right: -2px; top: 13px; height: 2px; background: var(--text); transform: rotate(-45deg); }
+.picker .pacts { display: flex; gap: 6px; margin-top: 2px; }
+.picker[aria-invalid="true"] { outline: 2px solid var(--danger); outline-offset: 4px; border-radius: var(--radius-s); }
+.livery-now { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; color: var(--muted); font-weight: 400; }
+.livery-pop { position: fixed; right: auto; min-width: 0; width: max-content; gap: 8px; z-index: 40; }
+.livery-pop .hint { margin: 0; }
 /* A mention in a sent message: its brick and @handle on a wash of the
    colour; neutral for none. */
 .mention { display: inline-flex; align-items: center; gap: 3px; padding: 0 5px; border-radius: 4px; background: var(--lv-wash, var(--bg)); color: var(--lv, var(--text-soft)); font-weight: 600; white-space: nowrap; vertical-align: baseline; }
@@ -550,7 +579,8 @@ button.conv > .sub { grid-column: 1 / -1; }
 .fgrid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 640px) { .fgrid, .fgrid.four { grid-template-columns: minmax(0, 1fr); } }
 .ffield { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.ffield > label { color: var(--text); font-weight: 500; }
+.ffield > label, .ffield > .label { color: var(--text); font-weight: 500; }
+.ffield > .label { display: flex; align-items: center; }
 .ffield .hint { margin: 0; }
 .pdetail .gform > .factions { max-width: none; }
 .grants.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 2px 16px; }

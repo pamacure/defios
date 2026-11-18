@@ -112,7 +112,7 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsBrief(t *testing.T) {
 		t.Fatalf("open: %+v", v.Open)
 	}
 	// Talk, already open, lists it to include.
-	if agents := alice.Talk().Agents; !slices.Contains(agents, shell.Agent{Handle: "auditor"}) {
+	if agents := alice.Talk().Agents; !slices.ContainsFunc(agents, func(a shell.Agent) bool { return a.Handle == "auditor" && !a.Included }) {
 		t.Fatalf("Talk's agents after adding one: %+v", agents)
 	}
 
@@ -148,7 +148,7 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsBrief(t *testing.T) {
 }
 
 func draftOf(o shell.ProfileView) shell.ProfileDraft {
-	return shell.ProfileDraft{Handle: o.Handle, Provider: o.Provider, Model: o.Model, Body: o.Body, MaxTurns: o.MaxTurns, Brief: o.Brief}
+	return shell.ProfileDraft{Handle: o.Handle, Provider: o.Provider, Model: o.Model, Body: o.Body, MaxTurns: o.MaxTurns, Brief: o.Brief, Livery: o.Livery}
 }
 
 // Grants round-trip as the CLI's agent verbs see them; Providers edit a
@@ -268,4 +268,63 @@ func TestGrantsProvidersAndRefusedEditsOnTheAgentsPage(t *testing.T) {
 
 func equalProfiles(a, b shell.ProfileView) bool {
 	return a.Provider == b.Provider && a.Model == b.Model && a.Body == b.Body && a.MaxTurns == b.MaxTurns && a.Brief == b.Brief
+}
+
+// A profile's Livery is picked on the Agents page as agent edit --livery
+// sets it: one another party holds is refused and names its field, none
+// clears it, and Talk shows a change at once.
+func TestAProfilesLiveryIsPickedOnTheAgentsPage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("forms a Group")
+	}
+	alice, _, ap, _ := formedAt(t)
+	agentsOK(t, "add provider", alice.SaveProvider(shell.ProviderDraft{New: true, Alias: "anthropic", Preset: "anthropic"}))
+	talkWithin(t, alice, 20*time.Second, func(ts shell.TalkState) bool { return len(ts.Conversations) == 1 })
+	v := alice.Agents("")
+	if len(v.FreeLiveries) != 63 || slices.Contains(v.FreeLiveries, v.Liveries[node.NodeParty(bobID(t, alice))]) {
+		t.Fatalf("free %d of 64, held %+v", len(v.FreeLiveries), v.Liveries)
+	}
+	pick, other := v.FreeLiveries[0], v.FreeLiveries[1]
+
+	v = agentsOK(t, "add with a Livery", alice.SaveAgentProfile(shell.ProfileDraft{New: true, Handle: "auditor", Provider: "anthropic", Livery: pick}))
+	if v.Open.Livery != pick || slices.Contains(v.FreeLiveries, pick) || v.Liveries[node.AgentParty("auditor")] != pick {
+		t.Fatalf("added: %q, free has it: %v", v.Open.Livery, slices.Contains(v.FreeLiveries, pick))
+	}
+	if cli := defiosCLI(t, ap.Config, "agent", "show", "auditor"); !strings.Contains(cli, pick) {
+		t.Fatalf("the CLI after the add:\n%s", cli)
+	}
+	v = alice.SaveAgentProfile(shell.ProfileDraft{New: true, Handle: "helper", Provider: "anthropic", Livery: pick})
+	if v.Problem == nil || v.Field != node.FieldLivery || len(v.Profiles) != 1 {
+		t.Fatalf("another with the same Livery: %+v %q %+v", v.Problem, v.Field, v.Profiles)
+	}
+	v = agentsOK(t, "add with none", alice.SaveAgentProfile(shell.ProfileDraft{New: true, Handle: "helper", Provider: "anthropic"}))
+	if v.Open.Livery != "" {
+		t.Fatalf("added with none: %q", v.Open.Livery)
+	}
+
+	d := draftOf(*alice.Agents("auditor").Open)
+	d.Livery = other
+	if v := agentsOK(t, "change it", alice.SaveAgentProfile(d)); v.Open.Livery != other {
+		t.Fatalf("changed: %q", v.Open.Livery)
+	}
+	if a := alice.Talk().Agents; !slices.Contains(a, shell.Agent{Handle: "auditor", Party: node.AgentParty("auditor"), Livery: other}) {
+		t.Fatalf("Talk at once: %+v", a)
+	}
+	d.Livery, d.Brief = "", "a new Brief"
+	if v := agentsOK(t, "clear it", alice.SaveAgentProfile(d)); v.Open.Livery != "" {
+		t.Fatalf("cleared: %q", v.Open.Livery)
+	}
+}
+
+// bobID is the other device's Node ID on s's Roster.
+func bobID(t *testing.T, s *shell.Shell) string {
+	t.Helper()
+	ts := talkWithin(t, s, 20*time.Second, func(ts shell.TalkState) bool { return len(ts.Roster) == 2 })
+	for _, r := range ts.Roster {
+		if !r.Self {
+			return r.ID
+		}
+	}
+	t.Fatal("no other device")
+	return ""
 }

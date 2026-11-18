@@ -728,3 +728,99 @@ func TestLiveAgentsAndHandlesTakeThisDevicesAgentsLiveries(t *testing.T) {
 		t.Errorf("live agents %+v", a)
 	}
 }
+
+// Devices here lists the Roster, this device first as This Device without
+// a Livery, the others by name with their Liveries, and under each the
+// agents of that device seen writing in the open Conversation.
+func TestDevicesHereListsTheRosterAndTheAgentsSeenWritingHere(t *testing.T) {
+	r := newRig(t, "alpha")
+	self := r.node.NodeID()
+	r.node.tk().liveries = map[string]string{
+		node.AgentParty("auditor"):           "blue-stud",
+		node.NodeParty("b0b"):                "orange-arch",
+		node.NodeAgentParty("b0b", "scribe"): "cyan-round",
+	}
+	k := withKey(t, r)
+	for _, m := range []node.Message{
+		{NodeID: "b0b", DisplayName: "bob", Text: "hi"},
+		{NodeID: "b0b", DisplayName: "bob", Handle: "scribe", Depth: 1, Text: "noted"},
+		{NodeID: self, Handle: "auditor", Depth: 1, Text: "this device's own"},
+		{NodeID: "b0b", DisplayName: "bob", Handle: "auditor", Depth: 1, Text: "bob's auditor"},
+		{NodeID: "b0b", DisplayName: "bob", Handle: "scribe", Depth: 1, Text: "again"},
+	} {
+		r.node.commit(node.GroupTalk, m)
+	}
+	r.node.commit(k.ConversationID, node.Message{NodeID: "ca7", DisplayName: "cat", Handle: "elsewhere", Depth: 1, Text: "in the Key's"})
+	s := served(t, r)
+	r.node.mu.Lock()
+	r.node.publish(node.Status{Group: "alpha", Serving: true, MajorityReachable: true, Roster: []node.RosterNode{
+		{NodeID: "ca7", DisplayName: "cat"}, {NodeID: self, DisplayName: "laptop", Reachable: true}, {NodeID: "b0b", DisplayName: "bob"},
+	}})
+	r.node.mu.Unlock()
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Items) == 5 && len(ts.Devices) == 3 })
+
+	want := []shell.Device{
+		{Name: "This Device", Self: true, Agents: []shell.Party{}},
+		{Party: node.NodeParty("b0b"), Name: "bob", Livery: "orange-arch", Agents: []shell.Party{
+			{Party: node.NodeAgentParty("b0b", "scribe"), Handle: "scribe", Livery: "cyan-round"},
+			{Party: node.NodeAgentParty("b0b", "auditor"), Handle: "auditor"},
+		}},
+		{Party: node.NodeParty("ca7"), Name: "cat", Agents: []shell.Party{}},
+	}
+	if fmt.Sprint(ts.Devices) != fmt.Sprint(want) {
+		t.Fatalf("Devices\n %+v\nwant\n %+v", ts.Devices, want)
+	}
+}
+
+// Any party's Livery can be set from Talk, by the party key each avatar
+// carries, and shows at once on its messages and in the side panel; one
+// another party holds is refused, random gives a free one and none clears
+// it.
+func TestSettingAPartysLiveryShowsAtOnceAcrossTheTranscriptAndThePanel(t *testing.T) {
+	r := newRig(t, "alpha")
+	self := r.node.NodeID()
+	r.node.tk().profiles = []string{"auditor"}
+	r.node.tk().liveries = map[string]string{
+		node.AgentParty("auditor"): "blue-stud",
+		node.NodeParty("b0b"):      "orange-arch",
+	}
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Handle: "scribe", Depth: 1, Text: "noted"})
+	r.node.commit(node.GroupTalk, node.Message{NodeID: self, Handle: "auditor", Depth: 1, Text: "ours"})
+	r.node.commit(node.GroupTalk, node.Message{NodeID: self, Mine: true, Text: "mine"})
+	s := served(t, r)
+	r.node.mu.Lock()
+	r.node.publish(node.Status{Group: "alpha", Serving: true, MajorityReachable: true, Roster: []node.RosterNode{
+		{NodeID: self, DisplayName: "laptop", Reachable: true}, {NodeID: "b0b", DisplayName: "bob"},
+	}})
+	r.node.mu.Unlock()
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Items) == 3 && len(ts.Devices) == 2 && len(ts.Agents) == 1 })
+
+	scribe := node.NodeAgentParty("b0b", "scribe")
+	if p := []string{ts.Items[0].Party, ts.Items[1].Party, ts.Items[2].Party}; !slices.Equal(p, []string{scribe, node.AgentParty("auditor"), ""}) {
+		t.Fatalf("items' parties %q", p)
+	}
+	if a := ts.Agents[0]; a.Party != node.AgentParty("auditor") || a.Livery != "blue-stud" {
+		t.Fatalf("Agents here: %+v", a)
+	}
+	// The picker greys out what other parties hold.
+	if ts.Liveries[node.NodeParty("b0b")] != "orange-arch" || len(ts.Liveries) != 2 {
+		t.Fatalf("Liveries %+v", ts.Liveries)
+	}
+
+	ts = s.SetLivery(scribe, "cyan-round")
+	if ts.Problem != nil || ts.Items[0].Livery != "cyan-round" || ts.Devices[1].Agents[0].Livery != "cyan-round" || ts.Liveries[scribe] != "cyan-round" {
+		t.Fatalf("set: %+v %+v %+v", ts.Problem, ts.Items[0], ts.Devices[1])
+	}
+	ts = s.SetLivery(scribe, "orange-arch")
+	if ts.Problem == nil || ts.Problem.Code != "livery-taken" || ts.Items[0].Livery != "cyan-round" {
+		t.Fatalf("taken: %+v %+v", ts.Problem, ts.Items[0])
+	}
+	ts = s.SetLivery(node.AgentParty("auditor"), node.NoLivery)
+	if ts.Problem != nil || ts.Items[1].Livery != "" || ts.Agents[0].Livery != "" {
+		t.Fatalf("none: %+v %+v", ts.Problem, ts.Items[1])
+	}
+	ts = s.SetLivery(node.NodeParty("b0b"), node.RandomLivery)
+	if l := ts.Devices[1].Livery; ts.Problem != nil || l == "" || l == "orange-arch" || l == "cyan-round" {
+		t.Fatalf("random: %+v %q", ts.Problem, l)
+	}
+}

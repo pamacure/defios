@@ -168,6 +168,9 @@ func (u *UI) NewKey(curve string, t int, alias string) shell.TalkState {
 func (u *UI) SetAgentIncluded(handle string, on bool) shell.TalkState {
 	return u.shell.SetAgentIncluded(handle, on)
 }
+func (u *UI) SetLivery(party, livery string) shell.TalkState {
+	return u.shell.SetLivery(party, livery)
+}
 
 func (u *UI) Transcript(msgID string) shell.TranscriptView { return u.shell.Transcript(msgID) }
 

@@ -45,8 +45,13 @@ func problemOf(err error) *Problem {
 		inv   *node.InvalidError
 
 		notReached *node.NotReachedError
+		taken      *node.LiveryTakenError
 	)
 	switch {
+	case errors.As(err, &taken):
+		return &Problem{Code: "livery-taken", Message: fmt.Sprintf("%s is already another party's Livery. Clear it there first, or pick another.", taken.Livery)}
+	case errors.Is(err, node.ErrNoFreeLivery):
+		return &Problem{Code: "no-free-livery", Message: "Every Livery is taken. Clear one first."}
 	case errors.Is(err, vault.ErrBadPassphrase):
 		return &Problem{Code: "bad-passphrase", Message: "That passphrase does not unlock this device."}
 	case errors.Is(err, node.ErrServedElsewhere):

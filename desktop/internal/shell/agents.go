@@ -37,6 +37,8 @@ type AgentsNode interface {
 	EditProvider(ctx context.Context, group, conv, alias string, e node.ProviderEdit) (node.Provider, error)
 	RemoveProvider(ctx context.Context, group, conv, alias string) error
 	Secrets(ctx context.Context, group string, passphrase node.Passphrase) ([]node.Secret, error)
+	Liveries(ctx context.Context) (map[string]string, error)
+	FreeLiveries(ctx context.Context) ([]string, error)
 }
 
 // FieldBody is the body field of an Agent Profile or Provider, which the
@@ -61,6 +63,13 @@ type AgentsView struct {
 	// Presets are what a new Provider may start from.
 	Presets []string
 
+	// Liveries are every Livery this Node has given, by party key, for the
+	// picker to grey out those another party holds; FreeLiveries are those
+	// none holds, a new profile's pick among them. Liveries only mark
+	// talk, so failing to read them leaves both empty.
+	Liveries     map[string]string
+	FreeLiveries []string
+
 	// Catalog is what a profile may be granted.
 	Catalog        Catalog
 	CatalogProblem *Problem
@@ -76,9 +85,10 @@ type AgentsView struct {
 	Saved bool
 }
 
-// ProfileSummary is one Agent Profile in the list.
+// ProfileSummary is one Agent Profile in the list, with its Livery, ""
+// for none.
 type ProfileSummary struct {
-	Handle, Provider, Model string
+	Handle, Provider, Model, Livery string
 }
 
 // ProfileView is one Agent Profile as its form shows it.
@@ -91,6 +101,8 @@ type ProfileView struct {
 	Brief         string
 	BriefProblem  *Problem
 	Tools, Skills []string
+	// Livery is <colour>-<brick>, "" for none.
+	Livery string
 	// MCP is each MCP Server granted with the Secrets it gets.
 	MCP        map[string][]string
 	IncludedIn []PlaceView
@@ -133,11 +145,13 @@ type CatalogServer struct {
 
 // ProfileDraft is an Agent Profile's form as filled in. New adds one by
 // Handle; else Handle names the one to edit. Body is a JSON object, ""
-// for none; MaxTurns "" leaves it as it is.
+// for none; MaxTurns "" leaves it as it is. Livery is <colour>-<brick>,
+// "" for none.
 type ProfileDraft struct {
 	New                     bool
 	Handle, Provider, Model string
 	Body, MaxTurns, Brief   string
+	Livery                  string
 }
 
 // ProviderDraft is a Provider's form as filled in. New adds one by Alias,
@@ -191,6 +205,8 @@ func (s *Shell) SaveAgentProfile(d ProfileDraft) AgentsView {
 	}
 	if d.New {
 		s.talk.loadSide() // Talk lists the agents to include
+	} else {
+		s.talk.loadLiveries() // Talk marks it with its Livery
 	}
 	s.fillAgents(n, &v, open)
 	return v
@@ -212,8 +228,12 @@ func (s *Shell) saveProfile(n Node, d ProfileDraft) error {
 		}
 		e.MaxTurns = &turns
 	}
+	livery := d.Livery
+	if livery == "" {
+		livery = node.NoLivery
+	}
 	if d.New {
-		e.Provider = &d.Provider
+		e.Provider, e.Livery = &d.Provider, &livery
 		if len(body) > 0 {
 			e.Body = body
 		}
@@ -238,7 +258,10 @@ func (s *Shell) saveProfile(n Node, d ProfileDraft) error {
 	if !sameBody(body, cur.Body) {
 		e.Body = body
 	}
-	if e.Provider != nil || e.MaxTurns != nil || e.Body != nil {
+	if d.Livery != cur.Livery {
+		e.Livery = &livery
+	}
+	if e.Provider != nil || e.MaxTurns != nil || e.Body != nil || e.Livery != nil {
 		if _, err := n.EditAgentProfile(s.ctx, d.Handle, e); err != nil {
 			return err
 		}
@@ -416,7 +439,7 @@ func (s *Shell) fillAgents(n Node, v *AgentsView, open string) {
 	} else {
 		v.Profiles = make([]ProfileSummary, len(list))
 		for i, p := range list {
-			v.Profiles[i] = ProfileSummary{Handle: p.Handle, Provider: p.Provider, Model: p.Model}
+			v.Profiles[i] = ProfileSummary{Handle: p.Handle, Provider: p.Provider, Model: p.Model, Livery: p.Livery}
 		}
 	}
 	if open != "" {
@@ -439,6 +462,12 @@ func (s *Shell) fillAgents(n Node, v *AgentsView, open string) {
 			v.Providers[i] = ProviderView{Alias: p.Alias, BaseURL: p.BaseURL, APIPath: p.APIPath, Shape: p.Shape, URL: p.URL,
 				APIKey: authKeySecret(p.APIKey), Body: bodyText(p.Body)}
 		}
+	}
+	if held, err := n.Liveries(s.ctx); err == nil {
+		v.Liveries = held
+	}
+	if free, err := n.FreeLiveries(s.ctx); err == nil {
+		v.FreeLiveries = free
 	}
 	v.Presets = node.PresetNames()
 	v.Catalog.Tools = config.Tools
@@ -464,7 +493,7 @@ func profileView(p node.AgentProfile) *ProfileView {
 		}
 	}
 	o := &ProfileView{Handle: p.Handle, Provider: p.Provider, Model: p.Model, Body: bodyText(body),
-		Tools: p.Tools, Skills: p.Skills, MCP: map[string][]string{}, IncludedIn: []PlaceView{}}
+		Tools: p.Tools, Skills: p.Skills, Livery: p.Livery, MCP: map[string][]string{}, IncludedIn: []PlaceView{}}
 	if p.MaxTurns > 0 {
 		o.MaxTurns = strconv.Itoa(p.MaxTurns)
 	}
@@ -562,6 +591,8 @@ func fieldOf(err error) string {
 	switch {
 	case errors.Is(err, node.ErrProfileExists):
 		return node.FieldHandle
+	case errors.As(err, new(*node.LiveryTakenError)), errors.Is(err, node.ErrNoFreeLivery):
+		return node.FieldLivery
 	case errors.Is(err, provider.ErrExists):
 		return node.FieldAlias
 	}

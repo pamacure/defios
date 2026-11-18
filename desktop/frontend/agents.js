@@ -5,6 +5,7 @@
 // new edit-target Group, so a redraw of the app never drops what is
 // being typed. UI text says "device" for a Node.
 import { call, h, put } from "./dom.js";
+import { avatar, forgetPicks, liveryPicker, randomFree } from "./livery.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { secretField } from "./secretfield.js";
 
@@ -21,6 +22,9 @@ let busy = false;
 let profDraft = null;
 let provDraft = null;
 let profInputs = null; // the profile form's fields, while it shows
+// The Livery the profile form has picked, until it is saved: { for: the
+// Handle, or NEW, and livery }. A new profile starts with a random free one.
+let picked = null;
 // The field the last refusal named, outlined until edited: { where, field }.
 let invalid = null;
 // The Secrets chosen for an MCP Server not granted yet, by its ref.
@@ -174,9 +178,9 @@ function drawDevice() {
     (av.Profiles ?? []).map((p) => h("button", {
       class: "pitem", "aria-current": !creating && p.Handle === open ? "true" : false, disabled: busy,
       onclick: () => openProfile(p.Handle),
-    }, h("strong", {}, `@${p.Handle}`), h("span", {}, [p.Provider, p.Model].filter(Boolean).join(" · ")))),
+    }, h("strong", {}, avatar(p.Livery), `@${p.Handle}`), h("span", {}, [p.Provider, p.Model].filter(Boolean).join(" · ")))),
     h("button", { class: "pitem add", "aria-current": creating ? "true" : false, disabled: busy, onclick: () => {
-      creating = true; deleting = false; profDraft = null; invalid = null; draw();
+      creating = true; deleting = false; profDraft = null; invalid = null; picked = null; forgetPicks(); draw();
     } }, "+ New agent"));
   let detail;
   if (creating) detail = profileForm(null);
@@ -192,6 +196,8 @@ function drawDevice() {
 async function openProfile(handle) {
   creating = deleting = false;
   profDraft = null;
+  picked = null;
+  forgetPicks();
   invalid = null;
   pendingEnv.clear();
   open = handle;
@@ -221,6 +227,21 @@ function profileForm(o) {
   profInputs = o ? inputs : null;
   const saved = h("span", { class: "saved", "aria-live": "polite" }, av.Where === where && av.Saved ? "Saved." : "");
   for (const el of Object.values(inputs)) el.addEventListener("input", () => { saved.textContent = ""; });
+  const key = o ? o.Handle : NEW;
+  if (picked?.for !== key) picked = { for: key, livery: profDraft?.New === !o ? profDraft.Livery : o ? o.Livery : randomFree(av.FreeLiveries) };
+  const swatch = h("span", { class: "livery-now" });
+  const showPicked = () => put(swatch, avatar(picked.livery), picked.livery || "None");
+  showPicked();
+  const picker = liveryPicker({
+    key: o ? `agent:${o.Handle}` : NEW, current: picked.livery, held: av.Liveries, disabled: busy,
+    onPick: (l) => {
+      picked.livery = l;
+      saved.textContent = "";
+      showPicked();
+      picker.removeAttribute("aria-invalid");
+      if (invalid?.field === "livery") invalid = null;
+    },
+  });
   const submit = h("button", { class: "btn primary", type: "submit", disabled: busy }, o ? "Save" : "Add agent");
   const providers = av.Providers ?? [];
   return h("form", {
@@ -231,8 +252,9 @@ function profileForm(o) {
       for (const k of ["Provider", "Model", "MaxTurns"]) draft[k] = inputs[k].value.trim();
       draft.Body = inputs.Body.value;
       draft.Brief = inputs.Brief.value;
+      draft.Livery = picked.livery;
       profDraft = draft;
-      act("SaveAgentProfile", [draft], () => { open = draft.Handle; creating = false; profDraft = null; });
+      act("SaveAgentProfile", [draft], () => { open = draft.Handle; creating = false; profDraft = null; picked = null; });
     },
   },
   !o && h("div", { class: "phead" }, h("div", { class: "ptitle" }, h("h3", {}, "New agent"))),
@@ -246,11 +268,25 @@ function profileForm(o) {
     cell(where, "max_turns", "Max turns", inputs.MaxTurns, o?.MaxTurns
       ? "How many turns one run may take. Once set, it can be changed but not cleared."
       : "How many turns one run may take. Leave empty for the default.")),
+  liveryCell(where, swatch, picker),
   cell(where, "brief", "Agent Brief", inputs.Brief, "Its Agent Brief, BRIEF.md: what this agent is and how it works. Each run reads it afresh, so a change applies to the next."),
   cell(where, "body", "Request body", inputs.Body, "Other request options, as a JSON object. Leave empty for none."),
   h("div", { class: "factions" }, saved,
     !o && h("button", { class: "btn", type: "button", onclick: () => { creating = false; profDraft = null; invalid = null; draw(); } }, "Cancel"),
     submit));
+}
+
+// liveryCell is the profile's Livery: what Talk marks it with, on this
+// device only. The picker applies on Save, as the form's other fields do.
+function liveryCell(where, now, picker) {
+  // A refusal outlines it until the next pick.
+  if (invalid?.where === where && invalid.field === "livery") picker.setAttribute("aria-invalid", "true");
+  picker.id = fieldID(where, "livery");
+  picker.tabIndex = -1;
+  return h("div", { class: "ffield" },
+    h("span", { class: "label" }, "Livery ", now),
+    picker,
+    h("p", { class: "hint" }, "The colour and brick Talk marks it with, wherever it writes or is mentioned. Only this device sees it."));
 }
 
 function providerSelect(value, isNew) {
@@ -267,6 +303,7 @@ function grant(method, args) {
   if (profInputs) {
     const d = { New: false, Handle: open };
     for (const [k, el] of Object.entries(profInputs)) d[k] = k === "Body" || k === "Brief" ? el.value : el.value.trim();
+    d.Livery = picked?.livery ?? "";
     profDraft = d;
   }
   act(method, args);
