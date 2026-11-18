@@ -421,6 +421,9 @@ type Host struct {
 	passphrase string   // held while cur is set
 	status     Status
 	subs       map[*subscriber]struct{}
+
+	// readMu serializes MarkRead, so a mark only moves forward.
+	readMu sync.Mutex
 }
 
 var _ Node = (*Host)(nil)

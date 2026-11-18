@@ -34,6 +34,7 @@ const tui = {
   // app makes it anew.
   scroll: { top: 0, pinned: true },
   focused: "", // the Sign Request whose card was last brought into view
+  readTo: new Map(), // Group/Conversation -> the seq last marked read there
   clearing: null, // the shell.ClearView Clear chooses from; with done, what it then cleared
 };
 
@@ -123,6 +124,7 @@ function draw() {
     tui.shownOpen = ts.Open;
     tui.editAlias = false;
     tui.clearing = null;
+    tui.scroll = { top: 0, pinned: true }; // a Conversation opens at its end
     composer.closeSuggestions();
   }
   // A field being typed in is made anew: focus its successor.
@@ -142,6 +144,7 @@ function draw() {
   }
   composer.update();
   focusCard();
+  queueMicrotask(markRead); // once the page is in the document
   const again = field && mount.querySelector(`[data-field="${field}"]`);
   if (again) {
     again.focus();
@@ -152,6 +155,22 @@ function draw() {
     mount.querySelector("[data-autofocus]")?.focus();
   }
 }
+
+// markRead marks the open Conversation read to its last message, as its
+// end is in view: the page on screen, the window focused, and the
+// transcript scrolled to the end. What came while it was not stays unread.
+function markRead() {
+  if (!ts?.Group || !mount?.isConnected || !tui.scroll.pinned) return;
+  if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+  const seq = ts.Items.reduce((m, it) => Math.max(m, it.Seq || 0), 0);
+  const at = `${ts.Group}/${ts.Open}`;
+  if (seq <= (tui.readTo.get(at) ?? 0)) return;
+  tui.readTo.set(at, seq);
+  // Failing leaves it unread here, to try again with the next message.
+  call("ReadTo", ts.Open, seq).catch(() => tui.readTo.delete(at));
+}
+window.addEventListener("focus", markRead);
+document.addEventListener("visibilitychange", markRead);
 
 // focusCard brings the card ts.Focus names into view, once, as a
 // notification about it was clicked.
@@ -389,6 +408,7 @@ function transcript() {
     onscroll: (e) => {
       const el = e.target;
       tui.scroll = { top: el.scrollTop, pinned: el.scrollHeight - el.scrollTop - el.clientHeight < 40 };
+      markRead();
     },
   }, empty, items, live, sending);
 }

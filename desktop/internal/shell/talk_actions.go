@@ -19,6 +19,11 @@ func (s *Shell) Talk() TalkState { return s.talk.State() }
 // OpenConversation shows conv: node.GroupTalk or a Key's Conversation ID.
 func (s *Shell) OpenConversation(conv string) TalkState { return s.talk.openConversation(conv) }
 
+// ReadTo marks conv's talk read up to seq on the Node, as the page shows
+// it read to there: conv is open and its end is in view. A conv no longer
+// open is left as it is, as the page moved on before this came.
+func (s *Shell) ReadTo(conv string, seq uint64) error { return s.talk.readTo(conv, seq) }
+
 // SendMessage sends text to the open Conversation.
 func (s *Shell) SendMessage(text string) TalkState { return s.talk.send(text) }
 
@@ -92,6 +97,14 @@ func (t *talk) act(do func(a at) error, then ...func()) TalkState {
 	return st
 }
 
+func (t *talk) readTo(conv string, seq uint64) error {
+	a, ok := t.now()
+	if !ok || a.conv != conv || seq == 0 {
+		return nil
+	}
+	return a.n.MarkRead(t.ctx, a.group, conv, seq)
+}
+
 func (t *talk) openConversation(conv string) TalkState {
 	t.mu.Lock()
 	if t.group == "" {
@@ -103,7 +116,6 @@ func (t *talk) openConversation(conv string) TalkState {
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.cards = map[string]node.SignRequestDetail{}
 	}
-	delete(t.unread, conv)
 	t.focus = ""
 	t.mu.Unlock()
 	t.emit()

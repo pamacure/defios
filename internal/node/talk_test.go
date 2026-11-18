@@ -279,3 +279,60 @@ func TestReadsOfAGroupWithNoReplicaSaySo(t *testing.T) {
 		t.Fatalf("Sessions of an unknown Group: %v; want ErrUnknownGroup", err)
 	}
 }
+
+func TestAConversationCountsWhatWasSaidPastItsReadMark(t *testing.T) {
+	alice, bob := formed(t)
+	ctx := context.Background()
+	groupTalk := func(mb *member) node.ConversationSummary {
+		t.Helper()
+		cs, err := mb.h.Conversations(ctx, "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cs.Talk[0]
+	}
+
+	one, two := send(t, alice, "one"), send(t, alice, "two")
+	job, err := alice.h.Send(ctx, "alpha", node.GroupTalk, node.Outgoing{Text: "job output", Depth: 1})
+	if err != nil || job.Queued {
+		t.Fatalf("job's message: %+v, %v", job, err)
+	}
+	for _, mb := range []*member{alice, bob} {
+		for _, s := range []node.Sent{one, two, job} {
+			applied(t, mb, s)
+		}
+	}
+
+	// Never read: everything counts but this person's own.
+	if c := groupTalk(bob); c.Unread != 2 || !c.UnreadAutomated {
+		t.Fatalf("bob's Group talk = %+v; want 2 unread and automation", c)
+	}
+	if c := groupTalk(alice); c.Unread != 0 || !c.UnreadAutomated {
+		t.Fatalf("alice's Group talk = %+v; want her Job's output alone", c)
+	}
+
+	if err := bob.h.MarkRead(ctx, "alpha", node.GroupTalk, two.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if c := groupTalk(bob); c.Unread != 0 || !c.UnreadAutomated {
+		t.Fatalf("read to %d = %+v; want the Job's output alone", two.Seq, c)
+	}
+	// A mark never moves back.
+	if err := bob.h.MarkRead(ctx, "alpha", node.GroupTalk, one.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := bob.h.MarkRead(ctx, "alpha", node.GroupTalk, job.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if c := groupTalk(bob); c.Unread != 0 || c.UnreadAutomated {
+		t.Fatalf("read to the end = %+v; want nothing", c)
+	}
+	// It is this Node's alone.
+	if c := groupTalk(alice); !c.UnreadAutomated {
+		t.Fatalf("bob's mark moved alice's: %+v", c)
+	}
+
+	if err := bob.h.MarkRead(ctx, "alpha", "zz", 1); !errors.As(err, new(*node.InvalidError)) {
+		t.Fatalf("a bad Conversation ID: %v; want InvalidError", err)
+	}
+}

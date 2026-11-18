@@ -20,6 +20,7 @@ import (
 type TalkNode interface {
 	Conversations(ctx context.Context, group string) (node.Conversations, error)
 	Messages(ctx context.Context, group, conv string) ([]node.Message, error)
+	MarkRead(ctx context.Context, group, conv string, seq uint64) error
 	Chat(ctx context.Context, group, conv string, limit int, transcripts bool) ([]node.ChatMessage, error)
 	Send(ctx context.Context, group, conv string, m node.Outgoing) (node.Sent, error)
 	Cancel(ctx context.Context, group, conv, chain string) (node.Cancelled, error)
@@ -116,10 +117,9 @@ type Conversation struct {
 	T, N                   int
 	// OpenSignRequests counts its Sign Requests not yet settled.
 	OpenSignRequests int
-	// Unread counts what people on other devices said here since it was
-	// last open; UnreadAutomated is whether agents or Jobs said anything.
-	// Only what this app heard while running counts: it is a hint on the
-	// row, not a record, and the open Conversation never counts.
+	// Unread counts what people on other devices said here past this
+	// Node's read mark; UnreadAutomated is whether agents or Jobs said
+	// anything. The open Conversation shows neither: it is being read.
 	Unread          int
 	UnreadAutomated bool
 }
@@ -167,8 +167,11 @@ const (
 type Item struct {
 	Kind  ItemKind
 	MsgID string
-	At    time.Time
-	Side  Side // "" for a system line
+	// Seq is where a committed message sits in the log; 0 for one queued
+	// and for a system line. Reading up to it marks it read (ReadTo).
+	Seq  uint64
+	At   time.Time
+	Side Side // "" for a system line
 	// From is the device that wrote it, "This Device" for this one; ""
 	// on the right. Handle is the agent's, and Job marks a Job's.
 	From   string
@@ -292,9 +295,6 @@ type talk struct {
 	// whole, so a read that overlapped one is read again, not applied.
 	signVer uint64
 	signed  map[string]string // each Sign Request's last status seen
-	// unread is what was said in each Conversation not open since it was
-	// last open, by Conversation.
-	unread map[string]unread
 	// failed is why each read last failed, by what it reads; while one
 	// has, the next status change reads everything again, as a Group just
 	// formed has no replica until Raft starts.
@@ -322,7 +322,6 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
 		t.reqs, t.cards, t.focus = nil, map[string]node.SignRequestDetail{}, ""
-		t.unread = map[string]unread{}
 		t.failed = map[string]*Problem{}
 	}
 	t.mu.Unlock()
@@ -657,8 +656,10 @@ func (t *talk) snapshot() TalkState {
 		}
 	}
 	for _, c := range t.convs.Talk {
-		u := t.unread[c.ID]
-		row := Conversation{ID: c.ID, OpenSignRequests: c.OpenSignRequests, Unread: u.people, UnreadAutomated: u.automated}
+		row := Conversation{ID: c.ID, OpenSignRequests: c.OpenSignRequests}
+		if c.ID != t.open {
+			row.Unread, row.UnreadAutomated = c.Unread, c.UnreadAutomated
+		}
 		if k := c.Key; k != nil {
 			row.Alias, row.Curve, row.ShortKey, row.T, row.N = k.Alias, k.Curve, shortKey(k.PublicKey), k.T, k.N
 			if c.ID == t.open {
@@ -738,7 +739,7 @@ func (t *talk) items() []Item {
 // person's own, else on the left, labelled with its device and its agent
 // or Job.
 func (t *talk) item(m node.Message) Item {
-	it := Item{Kind: KindMessage, MsgID: m.MsgID, At: m.CreatedAt, Text: m.Text, Queued: m.Queued}
+	it := Item{Kind: KindMessage, MsgID: m.MsgID, Seq: m.Seq, At: m.CreatedAt, Text: m.Text, Queued: m.Queued}
 	if !m.Readable() {
 		it.Kind = KindUnreadable
 	}
@@ -756,28 +757,6 @@ func (t *talk) item(m node.Message) Item {
 	}
 	_, it.Transcript = t.said[m.MsgID]
 	return it
-}
-
-// unread is what was said in a Conversation while it was not open.
-type unread struct {
-	people    int
-	automated bool
-}
-
-// heard counts m as unread in conv, which is not open: a person's on
-// another device counts, an agent's or a Job's marks it, and this
-// person's own and one that does not read leave it be. t.mu is held.
-func (t *talk) heard(conv string, m node.Message) {
-	if m.Mine || !m.Readable() {
-		return
-	}
-	u := t.unread[conv]
-	if m.Handle == "" && m.Depth == 0 {
-		u.people++
-	} else {
-		u.automated = true
-	}
-	t.unread[conv] = u
 }
 
 // shortKey is a hex key or ID shortened for a label.
@@ -805,8 +784,8 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 	case ev.Message != nil && ev.Message.Group == group:
 		if ev.Message.Conversation == open {
 			reload = t.loadMessages
-		} else {
-			t.heard(ev.Message.Conversation, ev.Message.Message)
+		} else if !ev.Message.Message.Mine {
+			reload = t.loadConversations // its row's unread
 		}
 	case ev.Outbox != nil && ev.Outbox.Group == group:
 		reload = t.loadMessages

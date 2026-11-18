@@ -322,7 +322,7 @@ func withKey(t *testing.T, r *rig) node.Key {
 	return r.node.mint("k3y")
 }
 
-func TestAConversationNotOpenCountsWhatPeopleSaidAndMarksWhatAutomationSaid(t *testing.T) {
+func TestARowCountsWhatWasSaidPastTheReadMarkAndTheOpenOneShowsNone(t *testing.T) {
 	r := newRig(t, "alpha")
 	k := withKey(t, r)
 	s := served(t, r)
@@ -341,35 +341,35 @@ func TestAConversationNotOpenCountsWhatPeopleSaidAndMarksWhatAutomationSaid(t *t
 	r.node.commit(k.ConversationID, node.Message{NodeID: self, Mine: true, Text: "mine, sent elsewhere"})
 	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "one"})
 	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "two"})
-	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", Unreadable: true})
 	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return row(ts, k.ConversationID).Unread == 2 })
 	if c := row(ts, k.ConversationID); c.UnreadAutomated {
 		t.Fatalf("people alone marked automated: %+v", c)
 	}
-
 	r.node.commit(k.ConversationID, node.Message{NodeID: self, Depth: 1, Text: "job output"})
-	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return row(ts, k.ConversationID).UnreadAutomated })
-	if c := row(ts, k.ConversationID); c.Unread != 2 {
-		t.Fatalf("a Job counted as a person: %+v", c)
-	}
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return row(ts, k.ConversationID).UnreadAutomated })
 
-	// The open Conversation counts nothing: it is being read.
+	// The open Conversation shows none, read or not.
 	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "here"})
-	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", Handle: "scribe", Depth: 1, Text: "noted"})
-	ts = eventuallyTalk(t, s, items(2))
+	ts = eventuallyTalk(t, s, items(1))
 	if c := row(ts, node.GroupTalk); c.Unread != 0 || c.UnreadAutomated {
 		t.Fatalf("open Conversation counted: %+v", c)
 	}
-
-	// Opening it reads it; leaving it starts counting it again.
-	ts = s.OpenConversation(k.ConversationID)
-	if c := row(ts, k.ConversationID); c.Unread != 0 || c.UnreadAutomated {
-		t.Fatalf("opened but still unread: %+v", c)
+	// Read to its end, it stays read once left; a Conversation not open
+	// is not marked.
+	if err := s.ReadTo(node.GroupTalk, ts.Items[0].Seq); err != nil {
+		t.Fatal(err)
 	}
-	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", Handle: "scribe", Depth: 1, Text: "more"})
-	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return row(ts, node.GroupTalk).UnreadAutomated })
-	if c := row(ts, node.GroupTalk); c.Unread != 0 {
-		t.Fatalf("an agent counted as a person: %+v", c)
+	if err := s.ReadTo(k.ConversationID, 99); err != nil {
+		t.Fatal(err)
+	}
+	ts = s.OpenConversation(k.ConversationID)
+	if c := row(ts, node.GroupTalk); c.Unread != 0 || c.UnreadAutomated {
+		t.Fatalf("Group talk read but counted: %+v", c)
+	}
+	// Opened but never read to its end: it counts again once left.
+	ts = s.OpenConversation(node.GroupTalk)
+	if c := row(ts, k.ConversationID); c.Unread != 2 || !c.UnreadAutomated {
+		t.Fatalf("left unread: %+v", c)
 	}
 }
 

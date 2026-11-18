@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/key"
+	"defios.com/internal/nodedir"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -48,6 +51,12 @@ type ConversationSummary struct {
 	// OpenSignRequests counts its Sign Requests not yet settled: open,
 	// waiting or signing.
 	OpenSignRequests int
+	// Unread counts the messages people wrote past this Node's read mark,
+	// this person's own aside; UnreadAutomated is whether agents or Jobs
+	// wrote any there, this Node's included. All of it is unread until
+	// MarkRead first marks it.
+	Unread          int
+	UnreadAutomated bool
 }
 
 // Conversations are what a Talk page lists.
@@ -224,6 +233,11 @@ func (h *Host) Conversations(ctx context.Context, groupAlias string) (Conversati
 		k := &keys[i]
 		out.Talk = append(out.Talk, ConversationSummary{ID: k.ConversationID, Key: k, OpenSignRequests: open[k.ConversationID]})
 	}
+	for i := range out.Talk {
+		if err := h.unread(store, groupAlias, &out.Talk[i]); err != nil {
+			return Conversations{}, err
+		}
+	}
 	sessions, err := session.List(rows, serve.SignInfoOf(rows))
 	if err != nil {
 		return Conversations{}, err
@@ -234,6 +248,93 @@ func (h *Host) Conversations(ctx context.Context, groupAlias string) (Conversati
 		}
 	}
 	return out, nil
+}
+
+// unread counts c's talk past this Node's read mark into c.
+func (h *Host) unread(store *cosl.Store, groupAlias string, c *ConversationSummary) error {
+	id, err := conversationID(c.ID)
+	if err != nil {
+		return err
+	}
+	mark, err := readMark(h.p.ReadMarkFile(groupAlias, nodedir.ConversationName(id)))
+	if err != nil {
+		return err
+	}
+	rows, err := store.Log(cosl.Query{MsgTypes: []uint32{cosl.TypeAppFreeform}, GroupLevel: id == nil, ConversationID: id, AfterSeq: mark})
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		m, err := talk.Decode(row, nil)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !m.Readable():
+		case m.Handle != "" || m.Depth > 0:
+			c.UnreadAutomated = true
+		case row.Sender != h.pub.NodeID:
+			c.Unread++
+		}
+	}
+	return nil
+}
+
+// MarkRead marks conv's talk in groupAlias read up to seq on this Node.
+// A mark never moves back: a seq at or before it changes nothing.
+func (h *Host) MarkRead(_ context.Context, groupAlias, conv string, seq uint64) error {
+	id, err := conversationID(conv)
+	if err != nil {
+		return err
+	}
+	if err := h.knownGroup(groupAlias); err != nil {
+		return err
+	}
+	h.readMu.Lock()
+	defer h.readMu.Unlock()
+	path := h.p.ReadMarkFile(groupAlias, nodedir.ConversationName(id))
+	mark, err := readMark(path)
+	if err != nil || seq <= mark {
+		return err
+	}
+	return writeMark(path, seq)
+}
+
+// readMark is the seq a read-mark file holds, 0 if there is none.
+func readMark(path string) (uint64, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	seq, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("read mark %s: %w", path, err)
+	}
+	return seq, nil
+}
+
+// writeMark replaces path's read mark with seq, whole or not at all.
+func writeMark(path string, seq uint64) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".read-mark.*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // a no-op once renamed
+	_, err = tmp.WriteString(strconv.FormatUint(seq, 10) + "\n")
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	return err
 }
 
 // reader is groupAlias's talk as this Node holds it, from the files: a

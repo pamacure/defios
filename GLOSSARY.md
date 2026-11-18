@@ -57,7 +57,7 @@ The one secret that unlocks every part of a Node's Vault, and any Backup taken w
 _Avoid_: password, PIN, master key
 
 **Backup**:
-One Node sealed into a single file under its Vault passphrase: its Identity, its Vault, each Group's Record, and its Workspaces, Agent Profiles and other local config — everything needed to bring the same Node back on another machine. It leaves out what the Node's peers give back (the COSL replica) and what belongs to one machine or one run alone (tailnet state, the Outbox, Recaps, Transcripts). Restoring a Backup brings back the same Node, not a new one, so the original must never run again.
+One Node sealed into a single file under its Vault passphrase: its Identity, its Vault, each Group's Record, and its Workspaces, Agent Profiles and other local config — everything needed to bring the same Node back on another machine. It leaves out what the Node's peers give back (the COSL replica) and what belongs to one machine or one run alone (tailnet state, the Outbox, Recaps, Transcripts, read marks). Restoring a Backup brings back the same Node, not a new one, so the original must never run again.
 _Avoid_: export, archive, snapshot (that is Raft's)
 
 **Secret**:

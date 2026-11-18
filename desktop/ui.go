@@ -156,6 +156,7 @@ func (u *UI) Decline(reason string) shell.State    { return u.shell.Decline(reas
 func (u *UI) Talk() shell.TalkState                         { return u.shell.Talk() }
 func (u *UI) OpenConversation(conv string) shell.TalkState  { return u.shell.OpenConversation(conv) }
 func (u *UI) SendMessage(text string) shell.TalkState       { return u.shell.SendMessage(text) }
+func (u *UI) ReadTo(conv string, seq uint64) error          { return u.shell.ReadTo(conv, seq) }
 func (u *UI) CancelChain(chain string) shell.TalkState      { return u.shell.CancelChain(chain) }
 func (u *UI) DropQueued(msgID string) shell.TalkState       { return u.shell.DropQueued(msgID) }
 func (u *UI) SetKeyAlias(alias string) shell.TalkState      { return u.shell.SetKeyAlias(alias) }

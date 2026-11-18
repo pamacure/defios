@@ -41,6 +41,8 @@ type fakeTalk struct {
 	// liveTranscripts are the Handles with a live Transcript, by
 	// Conversation ID.
 	liveTranscripts map[string][]node.LiveTranscript
+	// read is each Conversation's read mark.
+	read map[string]uint64
 }
 
 func (n *fakeNode) tk() *fakeTalk {
@@ -50,6 +52,7 @@ func (n *fakeNode) tk() *fakeTalk {
 			blocks: map[string][]json.RawMessage{}, included: map[string][]string{},
 			providers: map[string][]node.Provider{}, networks: map[string][]node.Network{},
 			liveTranscripts: map[string][]node.LiveTranscript{},
+			read:            map[string]uint64{},
 		}
 	}
 	return n.talk
@@ -117,8 +120,28 @@ func (n *fakeNode) Conversations(_ context.Context, group string) (node.Conversa
 		k := t.keys[i]
 		out.Talk = append(out.Talk, node.ConversationSummary{ID: k.ConversationID, Key: &k})
 	}
+	for i := range out.Talk {
+		c := &out.Talk[i]
+		for _, m := range t.committed[c.ID] {
+			switch {
+			case m.Seq <= t.read[c.ID] || !m.Readable() || m.Mine:
+			case m.Handle != "" || m.Depth > 0:
+				c.UnreadAutomated = true
+			default:
+				c.Unread++
+			}
+		}
+	}
 	out.Keygens = slices.Clone(t.keygens)
 	return out, nil
+}
+
+func (n *fakeNode) MarkRead(_ context.Context, _, conv string, seq uint64) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	t := n.tk()
+	t.read[conv] = max(t.read[conv], seq)
+	return nil
 }
 
 func (n *fakeNode) Messages(_ context.Context, group, conv string) ([]node.Message, error) {

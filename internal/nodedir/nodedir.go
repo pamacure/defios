@@ -203,6 +203,13 @@ func (p Paths) RecapFile(alias, conversation string) string {
 	return filepath.Join(p.ConversationDir(alias, conversation), "RECAP.md")
 }
 
+// ReadMarkFile is a Conversation's read-mark: the seq up to which this
+// Node's person has read its talk, local to this Node and never on the
+// COSL.
+func (p Paths) ReadMarkFile(alias, conversation string) string {
+	return filepath.Join(p.ConversationDir(alias, conversation), "read-mark")
+}
+
 // TranscriptsDir is a Conversation's transcripts/: what this Node's agents
 // generated, one directory per Handle, never replicated and outside the
 // Vault (ADR 0036). A replica wipe, a restore and Pruning leave it alone.
