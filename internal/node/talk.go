@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -348,6 +349,7 @@ func (h *Host) reader(groupAlias string) (talk.Reader, func(), error) {
 	if err != nil {
 		return talk.Reader{}, nil, err
 	}
+	h.seeRosters()
 	roster := rec.Roster()
 	r := talk.Reader{Paths: h.p, Alias: groupAlias, Store: store, Mine: talk.File(h.p.OutboxFile(groupAlias)), Roster: &roster}
 	return r, func() { store.Close() }, nil
@@ -411,6 +413,7 @@ func (h *Host) Chat(_ context.Context, groupAlias, conv string, limit int, trans
 	}
 	defer done()
 	msgs := v.Chat().Last(limit)
+	h.seeAgents(h.otherAgents(msgs))
 	expanded := make([]talk.Expanded, len(msgs))
 	for i, m := range msgs {
 		expanded[i].Message = m
@@ -428,9 +431,24 @@ func (h *Host) Chat(_ context.Context, groupAlias, conv string, limit int, trans
 }
 
 func (h *Host) messages(ms talk.Messages) []Message {
+	h.seeAgents(h.otherAgents(ms))
 	out := make([]Message, len(ms))
 	for i, m := range ms {
 		out[i] = h.message(m)
+	}
+	return out
+}
+
+// otherAgents is the party key of each other Node's Agent that wrote one
+// of ms, once each.
+func (h *Host) otherAgents(ms []talk.Message) []string {
+	var out []string
+	for _, m := range ms {
+		if m.Readable() && m.Handle != "" && m.Row.Sender != h.pub.NodeID {
+			if p := NodeAgentParty(m.Row.Sender.String(), m.Handle); !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
 	}
 	return out
 }

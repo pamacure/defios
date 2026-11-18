@@ -17,6 +17,16 @@
   --warn-text: #9D7302;
   --danger: #DF2935;
   --danger-bg: #FBE3E5;
+  /* Liveries (ADR 0037): each full colour is at least 4.5:1 on --surface;
+     the wash is for a mention chip. Clear of the accent, danger and warn. */
+  --livery-blue: #1F5FBF; --livery-blue-wash: #E3ECFA;
+  --livery-indigo: #4B4FC4; --livery-indigo-wash: #E7E8FA;
+  --livery-violet: #7A3FC0; --livery-violet-wash: #EFE6FA;
+  --livery-magenta: #B0307F; --livery-magenta-wash: #F8E4F0;
+  --livery-orange: #B4530A; --livery-orange-wash: #FBEADC;
+  --livery-cyan: #0B7285; --livery-cyan-wash: #DDF1F4;
+  --livery-slate: #4F6475; --livery-slate-wash: #E5EAEF;
+  --livery-brown: #8A5A2B; --livery-brown-wash: #F2E8DE;
   --bar: #6C8E88;
   --soft: #ADDFD7;
   --on-bright: #151A1F;
@@ -46,6 +56,14 @@
     --warn-bg: #3A2E0A;
     --warn-text: #FDCA40;
     --danger-bg: #3B1216;
+    --livery-blue: #6EA8FF; --livery-blue-wash: #17284A;
+    --livery-indigo: #9A9DFF; --livery-indigo-wash: #22234D;
+    --livery-violet: #C39BFF; --livery-violet-wash: #2E1F4A;
+    --livery-magenta: #F27BC0; --livery-magenta-wash: #42182F;
+    --livery-orange: #FFA15C; --livery-orange-wash: #45280F;
+    --livery-cyan: #4FD1E0; --livery-cyan-wash: #0E3A40;
+    --livery-slate: #A9BBCB; --livery-slate-wash: #2A3540;
+    --livery-brown: #D3A272; --livery-brown-wash: #3A2A1A;
     --bar: #8BB5AE;
     --soft: #23524A;
     color-scheme: dark;
@@ -65,6 +83,14 @@
   --warn-bg: #3A2E0A;
   --warn-text: #FDCA40;
   --danger-bg: #3B1216;
+  --livery-blue: #6EA8FF; --livery-blue-wash: #17284A;
+  --livery-indigo: #9A9DFF; --livery-indigo-wash: #22234D;
+  --livery-violet: #C39BFF; --livery-violet-wash: #2E1F4A;
+  --livery-magenta: #F27BC0; --livery-magenta-wash: #42182F;
+  --livery-orange: #FFA15C; --livery-orange-wash: #45280F;
+  --livery-cyan: #4FD1E0; --livery-cyan-wash: #0E3A40;
+  --livery-slate: #A9BBCB; --livery-slate-wash: #2A3540;
+  --livery-brown: #D3A272; --livery-brown-wash: #3A2A1A;
   --bar: #8BB5AE;
   --soft: #23524A;
   color-scheme: dark;

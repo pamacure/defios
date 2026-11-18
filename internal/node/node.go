@@ -7,6 +7,7 @@
 // the Outbox, keygen Sessions and minted Keys; Sign Requests, with the
 // Hooks of this Node's that fired on them; and agents: the Node's Agent
 // Profiles, where each is included, and each Group's Providers; and the
+// Liveries talk's parties are marked with; and the
 // Vault: each Group's Secrets, Backups and the passphrase change; and
 // Trigger config: each Group's Jobs, Hooks and Schedules; and the Node's
 // Plugins and each Group's Networks; and each Group's settings, and the
@@ -132,6 +133,15 @@ type Node interface {
 	SetAgentBrief(ctx context.Context, handle, brief string) error
 	Grant(ctx context.Context, handle, item string, secrets []string) (GrantKind, AgentProfile, error)
 	Revoke(ctx context.Context, handle, item string) (GrantKind, AgentProfile, error)
+
+	// Liveries: the colour and brick this Node marks each party of talk
+	// with, by party key (AgentParty, NodeParty, NodeAgentParty; ADR
+	// 0037). The Node gives them as it first sees each party; SetLivery
+	// sets or, with NoLivery, clears one, refusing one another party
+	// holds with a *LiveryTakenError. None needs serve.
+	Liveries(ctx context.Context) (map[string]string, error)
+	SetLivery(ctx context.Context, party, livery string) error
+	FreeLiveries(ctx context.Context) ([]string, error)
 
 	// Which agents answer where: a Group's Group-level talk (GroupTalk) or
 	// one of its Conversations. The Group need not be served.
@@ -583,6 +593,7 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 	if err != nil {
 		return nil, err
 	}
+	h.seeRosters()
 	// Held for as long as the Node serves: it reseals a Group's shares on
 	// keygen, so no passphrase change may run under it.
 	unlockVault, err := useVault(h.p)
@@ -669,12 +680,14 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 			h.publish(Event{Proposal: ev})
 		},
 		OnAccept: func(gid group.ID, who identity.ID, st group.Status) {
+			h.seeRosters()
 			h.publish(Event{Accepted: &Accepted{Group: alias, GroupID: gid.String(), NodeID: who.String(), Status: st.String()}})
 		},
 		OnChain: func(conv []byte, ev serve.ChainEvent) {
 			h.publish(Event{Chain: &ChainEventIn{Group: alias, Conversation: hex.EncodeToString(conv), Event: ev}})
 		},
 		OnTalk: func(conv []byte, m talk.Message) {
+			h.seeAgents(h.otherAgents([]talk.Message{m}))
 			h.publish(Event{Message: &MessageEvent{Group: alias, Conversation: hex.EncodeToString(conv), Message: h.message(m)}})
 		},
 		OnSession: func(sum session.Summary) {

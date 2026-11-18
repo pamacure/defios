@@ -185,6 +185,7 @@ func (h *Host) Groups(ctx context.Context) ([]GroupSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	h.seeRosters()
 	served, _ := h.servedAlias(ctx)
 	out := make([]GroupSummary, 0, len(aliases))
 	for _, alias := range aliases {
@@ -235,6 +236,7 @@ func (h *Host) InspectGroup(ctx context.Context, groupAlias string) (GroupDetail
 	if err != nil {
 		return GroupDetail{}, err
 	}
+	h.seeRosters()
 	joined, err := joinedNodes(h.p.CoslFile(groupAlias))
 	if err != nil {
 		return GroupDetail{}, err

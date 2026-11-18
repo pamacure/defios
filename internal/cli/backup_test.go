@@ -40,6 +40,8 @@ func backupNode(t *testing.T, dir string) (gid group.ID, pub []byte) {
 	for path, body := range map[string]string{
 		filepath.Join(dir, "agents", "scout", "BRIEF.md"):          "You scout.",
 		filepath.Join(dir, "agents", "scout", "config.toml"):       "provider = \"claude\"\n",
+		filepath.Join(dir, "liveries.toml"):                        "\"agent:scout\" = \"blue-arch\"\n",
+		filepath.Join(dir, "liveries.toml.lock"):                   "",
 		filepath.Join(gdir, "secp256k1-0202020202", "config.toml"): "",
 		filepath.Join(gdir, "cosl.sqlite"):                         "replica",
 		filepath.Join(gdir, "cosl.sqlite-wal"):                     "wal",
@@ -89,6 +91,7 @@ func TestBackupHoldsTheNodeAndNothingPeersGiveBack(t *testing.T) {
 		"config/display-name",
 		"config/group/default/config.toml",
 		"config/group/default/secp256k1-0202020202/config.toml",
+		"config/liveries.toml",
 		"data/group/default/roster.json",
 		"data/identity",
 		"data/vault/secrets-default",

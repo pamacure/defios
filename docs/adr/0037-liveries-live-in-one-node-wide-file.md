@@ -20,6 +20,12 @@ Group removes the entries of devices, and their agents, that are in no Group
 this Node still has. With only 64 Liveries, old entries would otherwise use
 them up.
 
+The Node has no verb that removes a Group, so the second rule is applied
+lazily: each time `internal/node` loads the Rosters it holds, it frees the
+entries of devices in none of them. A Group removed by hand is caught the
+same way. If a Record fails to load, nothing is freed, since that Group's
+Roster cannot be read.
+
 ## Considered options
 
 - **Desktop prefs keyed by party**: rejected. A restored Node would come back

@@ -216,6 +216,7 @@ profiles = ["auditor"]
 	writeFile(t, p.AgentProfileFile("scribe"), "provider = \"claude\"\n")
 	writeFile(t, p.AgentProfileFile("auditor"), "provider = \"claude\"\nmax_turns = 4\n\n[body]\nmodel = \"claude-opus-5-5\"\nstream = true\n")
 	writeFile(t, p.ConversationConfigFile(group.ImplicitAlias, "ecdsa-ab1111111111"), "[agent]\nprofiles = [\"scribe\"]\n")
+	writeFile(t, p.LiveriesFile(), "\"agent:auditor\" = \"blue-arch\"\n")
 	return p
 }
 
@@ -230,19 +231,19 @@ func writeFile(t *testing.T, path, body string) {
 }
 
 // agent list prints one line per Agent Profile on the Node, sorted: its
-// Handle, Provider, model and whether it is included, in the Current
+// Handle, Provider, model, Livery and whether it is included, in the Current
 // Group's [agent] profiles or with --key in that Conversation's list merged
 // over it. A directory with no config.toml is not a profile.
 func TestAgentListMarksTheIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
 	writeFile(t, filepath.Join(p.AgentProfileDir("draft"), "BRIEF.md"), "unfinished")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "list")
-	want := "auditor  claude  claude-opus-5-5  [included]\nscribe  claude  -\n"
+	want := "auditor  claude  claude-opus-5-5  blue-arch  [included]\nscribe  claude  -  -\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("list: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
 	}
 	r = run(t, nil, "", "--dir", p.Config, "agent", "list", "--key", ecdsaKeyRef)
-	want = "auditor  claude  claude-opus-5-5\nscribe  claude  -  [included]\n"
+	want = "auditor  claude  claude-opus-5-5  blue-arch\nscribe  claude  -  -  [included]\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("list --key: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
 	}
@@ -251,7 +252,7 @@ func TestAgentListMarksTheIncluded(t *testing.T) {
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
 		t.Fatalf("list --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
-	if len(got) != 2 || got[0]["handle"] != "auditor" || got[0]["included"] != true || got[1]["handle"] != "scribe" || got[1]["included"] != false {
+	if len(got) != 2 || got[0]["handle"] != "auditor" || got[0]["livery"] != "blue-arch" || got[0]["included"] != true || got[1]["handle"] != "scribe" || got[1]["included"] != false {
 		t.Fatalf("list --json = %v", got)
 	}
 }
@@ -263,7 +264,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
 	dir := p.AgentProfileDir("auditor")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "show", "auditor")
-	want := "handle auditor\nprovider claude\nmax_turns 4\ntools talk_write, talk_read\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
+	want := "handle auditor\nprovider claude\nmax_turns 4\nlivery blue-arch\ntools talk_write, talk_read\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
 		`body {"model":"claude-opus-5-5","stream":true}` + "\nincluded_in default\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("show: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
@@ -539,5 +540,48 @@ func TestAgentIncludeExcludeKeyDoNotMergeTheConfig(t *testing.T) {
 	}
 	if r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "scribe", "--key", ecdsaKeyRef); r.code != 0 || r.stdout != "auditor\n" {
 		t.Fatalf("exclude --key: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+}
+
+// agent add gives a new profile a random free Livery, or the one --livery
+// names; edit --livery sets or, with none, clears it, refusing one another
+// party holds or that is no Livery; show prints it, none when it has none.
+func TestAgentLiveryIsAssignedSetAndCleared(t *testing.T) {
+	dir := agentGroup(t)
+	if r := run(t, nil, "", "--dir", dir, "agent", "add", "auditor", "--provider", "claude"); r.code != 0 {
+		t.Fatalf("add: exit %d: %s", r.code, r.stderr)
+	}
+	r := run(t, nil, "", "--dir", dir, "agent", "show", "auditor", "--json")
+	var got map[string]any
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil || got["livery"] == nil {
+		t.Fatalf("show --json after add: exit %d, stdout %q; want a livery", r.code, r.stdout)
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "add", "scribe", "--provider", "claude", "--livery", "slate-tile"); r.code != 0 {
+		t.Fatalf("add --livery: exit %d: %s", r.code, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "show", "scribe"); r.code != 0 || !strings.Contains(r.stdout, "\nlivery slate-tile\n") {
+		t.Fatalf("show scribe: exit %d, stdout %q", r.code, r.stdout)
+	}
+
+	r = run(t, nil, "", "--dir", dir, "agent", "edit", "auditor", "--livery", "slate-tile")
+	if r.code != 1 || !strings.Contains(r.stderr, "agent:scribe") {
+		t.Fatalf("edit to scribe's Livery: exit %d, stderr %q; want it refused naming agent:scribe", r.code, r.stderr)
+	}
+	for _, bad := range []string{"green-tile", "slate", "slate-blob"} {
+		if r := run(t, nil, "", "--dir", dir, "agent", "edit", "auditor", "--livery", bad); r.code != 1 || !strings.Contains(r.stderr, "Livery") {
+			t.Errorf("edit --livery %s: exit %d, stderr %q", bad, r.code, r.stderr)
+		}
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "edit", "scribe", "--livery", "none"); r.code != 0 {
+		t.Fatalf("edit --livery none: exit %d: %s", r.code, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "show", "scribe"); r.code != 0 || !strings.Contains(r.stdout, "\nlivery none\n") {
+		t.Fatalf("show scribe after none: exit %d, stdout %q", r.code, r.stdout)
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "edit", "auditor", "--livery", "slate-tile"); r.code != 0 {
+		t.Fatalf("edit to the freed Livery: exit %d: %s", r.code, r.stderr)
+	}
+	if r := run(t, nil, "", "--dir", dir, "agent", "list"); r.code != 0 || !strings.Contains(r.stdout, "auditor  claude  -  slate-tile\n") {
+		t.Fatalf("list: exit %d, stdout %q", r.code, r.stdout)
 	}
 }

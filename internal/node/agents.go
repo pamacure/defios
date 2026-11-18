@@ -40,6 +40,7 @@ const (
 	FieldHandle   = "handle"
 	FieldProvider = "provider"
 	FieldMaxTurns = "max_turns"
+	FieldLivery   = "livery"
 )
 
 // ProfileIncludedError: a delete refused because the Agent Profile is
@@ -78,6 +79,9 @@ type AgentProfile struct {
 	MCP      map[string]MCPGrant // by <plugin>/<server>
 	Body     map[string]any      // nil if unset
 	Dir      string              // its directory, config.toml and BRIEF.md
+	// Livery is what this Node marks it with, <colour>-<brick>; "" for
+	// none (ADR 0037).
+	Livery string
 	// IncludedIn is every place on this Node that includes its Handle,
 	// sorted by Group then Workspace.
 	IncludedIn []Place
@@ -102,6 +106,9 @@ type ProfileEdit struct {
 	Model    *string
 	Body     map[string]any
 	MaxTurns *int // at least 1
+	// Livery is <colour>-<brick>, or NoLivery to clear it. AddAgentProfile
+	// gives a random free one when it is nil.
+	Livery *string
 }
 
 // apply sets e on p.
@@ -136,6 +143,29 @@ func (e ProfileEdit) apply(p *config.Profile) error {
 	return nil
 }
 
+// checkLivery refuses the Livery e sets for handle before anything is
+// written: one that is neither <colour>-<brick> nor NoLivery, or one
+// another party holds. It reports whether e changes handle's Livery.
+func (h *Host) checkLivery(handle string, e ProfileEdit) (changes bool, err error) {
+	if e.Livery == nil {
+		return false, nil
+	}
+	if *e.Livery != NoLivery {
+		if err := validLivery(*e.Livery); err != nil {
+			return false, onField(FieldLivery, err)
+		}
+	}
+	held, err := h.readLiveries()
+	if err != nil {
+		return false, err
+	}
+	before := held[AgentParty(handle)]
+	if err := setLivery(held, AgentParty(handle), *e.Livery); err != nil {
+		return false, err
+	}
+	return held[AgentParty(handle)] != before, nil
+}
+
 // validHandle refuses an invalid Handle.
 func validHandle(handle string) error {
 	if err := config.ValidateHandle(handle); err != nil {
@@ -154,13 +184,17 @@ func (h *Host) AgentProfiles(ctx context.Context) ([]AgentProfile, error) {
 	if err != nil {
 		return nil, err
 	}
+	held, err := h.readLiveries()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]AgentProfile, 0, len(handles))
 	for _, handle := range handles {
 		p, err := h.readProfile(handle)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, h.profileOf(handle, p, in[handle]))
+		out = append(out, h.profileOf(handle, p, in[handle], held[AgentParty(handle)]))
 	}
 	return out, nil
 }
@@ -175,12 +209,17 @@ func (h *Host) AgentProfile(ctx context.Context, handle string) (AgentProfile, e
 	if err != nil {
 		return AgentProfile{}, err
 	}
-	return h.profileOf(handle, p, in[handle]), nil
+	held, err := h.readLiveries()
+	if err != nil {
+		return AgentProfile{}, err
+	}
+	return h.profileOf(handle, p, in[handle], held[AgentParty(handle)]), nil
 }
 
 // AddAgentProfile adds an Agent Profile running on e.Provider, which is
 // required, and scaffolds its Agent Brief, BRIEF.md, with a placeholder unless
-// one is there. It is included nowhere until IncludeAgent.
+// one is there. It is given e.Livery, or a random free Livery, none if
+// every one is taken. It is included nowhere until IncludeAgent.
 func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit) (AgentProfile, error) {
 	if err := validHandle(handle); err != nil {
 		return AgentProfile{}, err
@@ -190,6 +229,9 @@ func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit
 	}
 	var p config.Profile
 	if err := e.apply(&p); err != nil {
+		return AgentProfile{}, err
+	}
+	if _, err := h.checkLivery(handle, e); err != nil {
 		return AgentProfile{}, err
 	}
 	path := h.p.AgentProfileFile(handle)
@@ -202,6 +244,19 @@ func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit
 		return AgentProfile{}, err
 	}
 	if err := h.scaffoldBrief(handle); err != nil {
+		return AgentProfile{}, err
+	}
+	err := h.editLiveries(func(held map[string]string) error {
+		if e.Livery == nil {
+			delete(held, AgentParty(handle)) // a deleted profile's, left by a hand delete
+			assign(held, AgentParty(handle))
+			return nil
+		}
+		return setLivery(held, AgentParty(handle), *e.Livery)
+	})
+	if err != nil {
+		// Taken since checkLivery: undo the add, keeping a BRIEF.md that was there.
+		os.Remove(path)
 		return AgentProfile{}, err
 	}
 	return h.AgentProfile(ctx, handle)
@@ -218,18 +273,33 @@ func (h *Host) EditAgentProfile(ctx context.Context, handle string, e ProfileEdi
 	if err := e.apply(&p); err != nil {
 		return AgentProfile{}, err
 	}
-	if reflect.DeepEqual(p, cur) {
+	livery, err := h.checkLivery(handle, e)
+	if err != nil {
+		return AgentProfile{}, err
+	}
+	profile := !reflect.DeepEqual(p, cur)
+	if !livery && !profile {
 		return AgentProfile{}, fmt.Errorf("%w: %q", ErrProfileUnchanged, handle)
 	}
-	if err := writeProfile(h.p.AgentProfileFile(handle), p); err != nil {
-		return AgentProfile{}, err
+	if profile {
+		if err := writeProfile(h.p.AgentProfileFile(handle), p); err != nil {
+			return AgentProfile{}, err
+		}
+	}
+	if livery {
+		err := h.editLiveries(func(held map[string]string) error {
+			return setLivery(held, AgentParty(handle), *e.Livery)
+		})
+		if err != nil {
+			return AgentProfile{}, err
+		}
 	}
 	return h.AgentProfile(ctx, handle)
 }
 
-// DeleteAgentProfile deletes handle's Agent Profile directory. It refuses,
-// with a *ProfileIncludedError and changing nothing, while any Group or
-// Conversation on this Node includes it.
+// DeleteAgentProfile frees handle's Livery and deletes its Agent Profile
+// directory. It refuses, with a *ProfileIncludedError and changing
+// nothing, while any Group or Conversation on this Node includes it.
 func (h *Host) DeleteAgentProfile(ctx context.Context, handle string) error {
 	if err := validHandle(handle); err != nil {
 		return err
@@ -246,6 +316,13 @@ func (h *Host) DeleteAgentProfile(ctx context.Context, handle string) error {
 	}
 	if len(in[handle]) > 0 {
 		return &ProfileIncludedError{Handle: handle, In: in[handle]}
+	}
+	err = h.editLiveries(func(held map[string]string) error {
+		delete(held, AgentParty(handle))
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return os.RemoveAll(dir)
 }
@@ -445,7 +522,7 @@ func (h *Host) readProfile(handle string) (config.Profile, error) {
 	return p, err
 }
 
-func (h *Host) profileOf(handle string, p config.Profile, in []Place) AgentProfile {
+func (h *Host) profileOf(handle string, p config.Profile, in []Place, livery string) AgentProfile {
 	model, _ := p.Body["model"].(string)
 	skills := p.Skills
 	if skills == nil {
@@ -462,7 +539,7 @@ func (h *Host) profileOf(handle string, p config.Profile, in []Place) AgentProfi
 		in = []Place{}
 	}
 	return AgentProfile{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: p.Granted(),
-		Skills: skills, MCP: mcp, Body: p.Body, Dir: h.p.AgentProfileDir(handle), IncludedIn: in}
+		Skills: skills, MCP: mcp, Body: p.Body, Dir: h.p.AgentProfileDir(handle), Livery: livery, IncludedIn: in}
 }
 
 // writeProfile writes p as the Agent Profile config.toml at path, making

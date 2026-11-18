@@ -27,6 +27,7 @@ type agentFlags struct {
 	model    string
 	body     string
 	maxTurns int
+	livery   string
 }
 
 func (f *agentFlags) bind(cmd *cobra.Command) {
@@ -34,6 +35,7 @@ func (f *agentFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.model, "model", "", "the model it asks for: body.model, over --body")
 	cmd.Flags().StringVar(&f.body, "body", "", "its request body, a JSON object: inline, @path to read a file, or - for stdin")
 	cmd.Flags().IntVar(&f.maxTurns, "max-turns", 0, "model calls a summon may make (default 8)")
+	cmd.Flags().StringVar(&f.livery, "livery", "", "the colour and brick this Node marks it with in talk, <colour>-<brick>, or none (ADR 0037)")
 }
 
 // edit is the node.ProfileEdit of each field whose flag cmd was given.
@@ -59,6 +61,9 @@ func (f *agentFlags) edit(g *globals, cmd *cobra.Command) (node.ProfileEdit, err
 	if fl.Changed("model") {
 		e.Model = &f.model
 	}
+	if fl.Changed("livery") {
+		e.Livery = &f.livery
+	}
 	return e, nil
 }
 
@@ -69,6 +74,7 @@ func agentError(handle string, err error) error {
 	var exit *ExitError
 	var invalid *node.InvalidError
 	var included *node.ProfileIncludedError
+	var taken *node.LiveryTakenError
 	switch {
 	case errors.As(err, &exit):
 		return err
@@ -78,6 +84,8 @@ func agentError(handle string, err error) error {
 		return exitUsagef("Agent Profile %q already exists; change it with `defios agent edit`", handle)
 	case errors.Is(err, node.ErrProfileUnchanged):
 		return exitUsagef("Agent Profile %q is unchanged: nothing to change", handle)
+	case errors.As(err, &taken):
+		return exitUsagef("%w", err)
 	case errors.As(err, &included):
 		return exitUsagef("Agent Profile %q is included in %s; exclude it there first", handle, strings.Join(placeNames(included.In), ", "))
 	case errors.As(err, &invalid), errors.Is(err, config.ErrNotWritten), errors.Is(err, config.ErrGrantRefused),
@@ -117,7 +125,8 @@ Provider of its alias. These commands need no serve.`,
 		Short: "Add an Agent Profile: write agents/<handle>/config.toml and scaffold its BRIEF.md",
 		Long: `Add an Agent Profile running on a Provider alias. Its Agent Brief, BRIEF.md, is written with a placeholder unless
 one is already there. It is not included anywhere until you include its Handle, and each Group that
-includes it must define its Provider.`,
+includes it must define its Provider. It is given --livery, or a random Livery no other party holds,
+none if all 64 are taken.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
@@ -152,9 +161,10 @@ includes it must define its Provider.`,
 	var edit agentFlags
 	editCmd := &cobra.Command{
 		Use:   "edit <handle>",
-		Short: "Change an Agent Profile's Provider, model, body or max_turns; unspecified fields keep their value",
+		Short: "Change an Agent Profile's Provider, model, body, max_turns or Livery; unspecified fields keep their value",
 		Long: `Change an Agent Profile's config.toml. --body replaces its body whole; --model sets only body.model, over
-the new body when both are given. A Handle cannot be renamed: add another and delete this one.`,
+the new body when both are given. --livery sets its Livery in liveries.toml, refusing one another party
+holds, or with none clears it. A Handle cannot be renamed: add another and delete this one.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
@@ -185,7 +195,7 @@ the new body when both are given. A Handle cannot be renamed: add another and de
 	var keyQuery string
 	listCmd := &cobra.Command{
 		Use:   "list",
-		Short: "List the Agent Profiles on this Node: Handle, Provider, model, and whether the Group includes it",
+		Short: "List the Agent Profiles on this Node: Handle, Provider, model, Livery, and whether the Group includes it",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runAgentList(cmd.Context(), g, keyQuery) },
 	}
@@ -474,11 +484,14 @@ func runAgentList(ctx context.Context, g *globals, keyQuery string) error {
 	}
 	out := g.out()
 	for _, v := range views {
-		model := v.Model
+		model, livery := v.Model, v.Livery
 		if model == "" {
 			model = "-"
 		}
-		fmt.Fprintf(g.app.Stdout, "%s  %s  %s", out.primary(v.Handle), v.Provider, model)
+		if livery == "" {
+			livery = "-"
+		}
+		fmt.Fprintf(g.app.Stdout, "%s  %s  %s  %s", out.primary(v.Handle), v.Provider, model, livery)
 		if v.Included {
 			fmt.Fprint(g.app.Stdout, "  [included]")
 		}
@@ -508,6 +521,11 @@ func runAgentShow(ctx context.Context, g *globals, handle string) error {
 	if v.MaxTurns != 0 {
 		fmt.Fprintf(g.app.Stdout, "max_turns %d\n", v.MaxTurns)
 	}
+	livery := g.out().caution("none")
+	if v.Livery != "" {
+		livery = v.Livery
+	}
+	fmt.Fprintf(g.app.Stdout, "livery %s\n", livery)
 	tools := g.out().caution("none")
 	if len(v.Tools) > 0 {
 		tools = strings.Join(v.Tools, ", ")
@@ -608,10 +626,11 @@ type agentView struct {
 	Skills   []string                `json:"skills"` // the Skills it is granted, <plugin>/<skill>
 	MCP      map[string]mcpGrantView `json:"mcp"`    // the MCP Servers it is granted, by <plugin>/<server>
 	Dir      string                  `json:"profile_dir"`
+	Livery   string                  `json:"livery,omitempty"` // <colour>-<brick>
 	Body     map[string]any          `json:"body,omitempty"`
 }
 
 func agentViewOf(a node.AgentProfile) agentView {
 	return agentView{Handle: a.Handle, Provider: a.Provider, Model: a.Model, MaxTurns: a.MaxTurns, Tools: a.Tools, Skills: a.Skills,
-		MCP: mcpView(a.MCP), Dir: a.Dir, Body: a.Body}
+		MCP: mcpView(a.MCP), Dir: a.Dir, Livery: a.Livery, Body: a.Body}
 }

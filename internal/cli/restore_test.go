@@ -77,7 +77,7 @@ func TestRestoreBringsBackTheSameNode(t *testing.T) {
 	// The Record, Workspaces and Agent Profiles are back, byte for byte.
 	for _, name := range []string{
 		"identity", "vault/shared", "group/default/roster.json", "group/default/config.toml",
-		"agents/scout/BRIEF.md", "agents/scout/config.toml", "display-name", "current-group",
+		"agents/scout/BRIEF.md", "agents/scout/config.toml", "display-name", "current-group", "liveries.toml",
 		"group/default/secp256k1-0202020202/config.toml",
 	} {
 		a, _ := os.ReadFile(filepath.Join(orig, name))

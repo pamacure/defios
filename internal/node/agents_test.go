@@ -28,6 +28,7 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 		Body:     map[string]any{"model": "a", "max_tokens": int64(1024)},
 		Model:    ptr("claude-opus-5-5"),
 		MaxTurns: ptr(4),
+		Livery:   ptr("blue-arch"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 		Handle: "auditor", Provider: "claude", Model: "claude-opus-5-5", MaxTurns: 4,
 		Tools: []string{"talk_write", "talk_read"}, Skills: []string{}, MCP: map[string]node.MCPGrant{},
 		Body: map[string]any{"model": "claude-opus-5-5", "max_tokens": int64(1024)},
-		Dir:  p.AgentProfileDir("auditor"), IncludedIn: []node.Place{},
+		Dir:  p.AgentProfileDir("auditor"), Livery: "blue-arch", IncludedIn: []node.Place{},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("added %#v\nwant %#v", got, want)

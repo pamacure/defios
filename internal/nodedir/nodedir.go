@@ -127,6 +127,10 @@ func (p Paths) AgentProfileFile(handle string) string {
 	return filepath.Join(p.AgentProfileDir(handle), "config.toml")
 }
 
+// LiveriesFile is every Livery this Node has given, by party, beside
+// agents/ under the config root (ADR 0037).
+func (p Paths) LiveriesFile() string { return filepath.Join(p.Config, "liveries.toml") }
+
 // PluginsDir holds one directory per installed Plugin, <data root>/plugins/
 // <plugin>/; built-in Plugins are never written here (ADR 0030).
 func (p Paths) PluginsDir() string { return filepath.Join(p.Data, "plugins") }
