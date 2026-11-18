@@ -251,7 +251,14 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .conv[aria-current="true"] { background: var(--accent-wash); }
 .conv .name { font-weight: 600; overflow-wrap: anywhere; }
 .conv .sub { color: var(--muted); font-size: 12px; }
-.conv .badge { position: absolute; right: 10px; top: 10px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-s); background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; }
+/* A row's marks sit beside its name, so a long name wraps short of them. */
+button.conv { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: start; }
+button.conv > .name { grid-column: 1; grid-row: 1; }
+button.conv > .sub { grid-column: 1 / -1; }
+.conv .marks { grid-column: 2; grid-row: 1; margin-block: -2px; display: flex; align-items: center; gap: 4px; }
+.conv .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-s); background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; }
+.conv .badge.unread { background: var(--text-soft); color: var(--surface); }
+.conv .dot-unread { width: 8px; height: 8px; margin: 0 2px; border-radius: 50%; background: var(--muted); }
 .conv.provisional { cursor: default; border: 1px dashed var(--line); margin-top: 4px; gap: 6px; }
 .conv.provisional:hover { background: transparent; }
 .conv .chip { flex: 0 1 auto; }

@@ -103,6 +103,7 @@ func (t *talk) openConversation(conv string) TalkState {
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.cards = map[string]node.SignRequestDetail{}
 	}
+	delete(t.unread, conv)
 	t.focus = ""
 	t.mu.Unlock()
 	t.emit()

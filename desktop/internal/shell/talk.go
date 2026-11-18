@@ -116,6 +116,12 @@ type Conversation struct {
 	T, N                   int
 	// OpenSignRequests counts its Sign Requests not yet settled.
 	OpenSignRequests int
+	// Unread counts what people on other devices said here since it was
+	// last open; UnreadAutomated is whether agents or Jobs said anything.
+	// Only what this app heard while running counts: it is a hint on the
+	// row, not a record, and the open Conversation never counts.
+	Unread          int
+	UnreadAutomated bool
 }
 
 // Keygen is a keygen Session in progress: a provisional row.
@@ -286,6 +292,9 @@ type talk struct {
 	// whole, so a read that overlapped one is read again, not applied.
 	signVer uint64
 	signed  map[string]string // each Sign Request's last status seen
+	// unread is what was said in each Conversation not open since it was
+	// last open, by Conversation.
+	unread map[string]unread
 	// failed is why each read last failed, by what it reads; while one
 	// has, the next status change reads everything again, as a Group just
 	// formed has no replica until Raft starts.
@@ -313,6 +322,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
 		t.reqs, t.cards, t.focus = nil, map[string]node.SignRequestDetail{}, ""
+		t.unread = map[string]unread{}
 		t.failed = map[string]*Problem{}
 	}
 	t.mu.Unlock()
@@ -647,7 +657,8 @@ func (t *talk) snapshot() TalkState {
 		}
 	}
 	for _, c := range t.convs.Talk {
-		row := Conversation{ID: c.ID, OpenSignRequests: c.OpenSignRequests}
+		u := t.unread[c.ID]
+		row := Conversation{ID: c.ID, OpenSignRequests: c.OpenSignRequests, Unread: u.people, UnreadAutomated: u.automated}
 		if k := c.Key; k != nil {
 			row.Alias, row.Curve, row.ShortKey, row.T, row.N = k.Alias, k.Curve, shortKey(k.PublicKey), k.T, k.N
 			if c.ID == t.open {
@@ -747,6 +758,28 @@ func (t *talk) item(m node.Message) Item {
 	return it
 }
 
+// unread is what was said in a Conversation while it was not open.
+type unread struct {
+	people    int
+	automated bool
+}
+
+// heard counts m as unread in conv, which is not open: a person's on
+// another device counts, an agent's or a Job's marks it, and this
+// person's own and one that does not read leave it be. t.mu is held.
+func (t *talk) heard(conv string, m node.Message) {
+	if m.Mine || !m.Readable() {
+		return
+	}
+	u := t.unread[conv]
+	if m.Handle == "" && m.Depth == 0 {
+		u.people++
+	} else {
+		u.automated = true
+	}
+	t.unread[conv] = u
+}
+
 // shortKey is a hex key or ID shortened for a label.
 func shortKey(h string) string {
 	if len(h) <= 12 {
@@ -772,6 +805,8 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 	case ev.Message != nil && ev.Message.Group == group:
 		if ev.Message.Conversation == open {
 			reload = t.loadMessages
+		} else {
+			t.heard(ev.Message.Conversation, ev.Message.Message)
 		}
 	case ev.Outbox != nil && ev.Outbox.Group == group:
 		reload = t.loadMessages

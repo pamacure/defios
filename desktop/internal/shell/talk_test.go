@@ -322,6 +322,57 @@ func withKey(t *testing.T, r *rig) node.Key {
 	return r.node.mint("k3y")
 }
 
+func TestAConversationNotOpenCountsWhatPeopleSaidAndMarksWhatAutomationSaid(t *testing.T) {
+	r := newRig(t, "alpha")
+	k := withKey(t, r)
+	s := served(t, r)
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Conversations) == 2 })
+	self := r.node.NodeID()
+	row := func(ts shell.TalkState, id string) shell.Conversation {
+		for _, c := range ts.Conversations {
+			if c.ID == id {
+				return c
+			}
+		}
+		t.Fatalf("no row %q: %+v", id, ts.Conversations)
+		return shell.Conversation{}
+	}
+
+	r.node.commit(k.ConversationID, node.Message{NodeID: self, Mine: true, Text: "mine, sent elsewhere"})
+	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "one"})
+	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "two"})
+	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", Unreadable: true})
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return row(ts, k.ConversationID).Unread == 2 })
+	if c := row(ts, k.ConversationID); c.UnreadAutomated {
+		t.Fatalf("people alone marked automated: %+v", c)
+	}
+
+	r.node.commit(k.ConversationID, node.Message{NodeID: self, Depth: 1, Text: "job output"})
+	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return row(ts, k.ConversationID).UnreadAutomated })
+	if c := row(ts, k.ConversationID); c.Unread != 2 {
+		t.Fatalf("a Job counted as a person: %+v", c)
+	}
+
+	// The open Conversation counts nothing: it is being read.
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "here"})
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", Handle: "scribe", Depth: 1, Text: "noted"})
+	ts = eventuallyTalk(t, s, items(2))
+	if c := row(ts, node.GroupTalk); c.Unread != 0 || c.UnreadAutomated {
+		t.Fatalf("open Conversation counted: %+v", c)
+	}
+
+	// Opening it reads it; leaving it starts counting it again.
+	ts = s.OpenConversation(k.ConversationID)
+	if c := row(ts, k.ConversationID); c.Unread != 0 || c.UnreadAutomated {
+		t.Fatalf("opened but still unread: %+v", c)
+	}
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", Handle: "scribe", Depth: 1, Text: "more"})
+	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return row(ts, node.GroupTalk).UnreadAutomated })
+	if c := row(ts, node.GroupTalk); c.Unread != 0 {
+		t.Fatalf("an agent counted as a person: %+v", c)
+	}
+}
+
 func TestAKeysConversationShowsItsKeyAndWhetherItCanSign(t *testing.T) {
 	r := newRig(t, "alpha")
 	k := withKey(t, r)

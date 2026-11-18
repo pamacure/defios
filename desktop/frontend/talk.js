@@ -183,10 +183,20 @@ function left() {
   h("span", { class: "name" }, convName(c)),
   c.ID === GROUP_TALK ? h("span", { class: "sub" }, "Everyone in the Group")
     : h("span", { class: "sub" }, `${curveName(c.Curve)} · ${c.T} of ${c.N}`),
-  c.OpenSignRequests > 0 && h("span", { class: "badge", title: "Open Sign Requests" }, String(c.OpenSignRequests))));
+  marks(c)));
   return h("nav", { class: "convs", "aria-label": "Conversations" },
     h("div", { class: "list" }, rows, ts.Keygens.map(keygenRow)),
     newKey());
+}
+
+// marks are a row's badges, side by side: its open Sign Requests, what
+// people said since it was last open, and a dot if agents or Jobs did.
+function marks(c) {
+  const signs = c.OpenSignRequests > 0 && h("span", { class: "badge sign", title: "Open Sign Requests" }, String(c.OpenSignRequests));
+  const people = c.Unread > 0 && h("span", { class: "badge unread", title: "Unread messages" }, String(c.Unread));
+  const auto = c.UnreadAutomated && h("span", { class: "dot-unread", title: "New from agents or Jobs", role: "img", "aria-label": "New from agents or Jobs" });
+  if (!signs && !people && !auto) return null;
+  return h("span", { class: "marks" }, signs, people, auto);
 }
 
 function keygenRow(k) {
