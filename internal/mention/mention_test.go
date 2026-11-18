@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"defios.com/internal/mention"
@@ -62,5 +63,31 @@ func TestValidHandle(t *testing.T) {
 		if mention.ValidHandle(h) {
 			t.Errorf("ValidHandle(%q) = true, want false", h)
 		}
+	}
+}
+
+// Spans finds the mentions Handles does, each where it is written.
+func TestSpansAreWhereEachMentionIsWritten(t *testing.T) {
+	for _, c := range readVectors(t).Mentions {
+		var got []string
+		for _, s := range mention.Spans(c.Text) {
+			if !slices.Contains(got, s.Handle) {
+				got = append(got, s.Handle)
+			}
+			if w := c.Text[s.Start:s.End]; "@"+s.Handle != strings.ToLower(w) {
+				t.Errorf("Spans(%q): %q at %d:%d, want @%s", c.Text, w, s.Start, s.End, s.Handle)
+			}
+		}
+		if got == nil {
+			got = []string{}
+		}
+		if !slices.Equal(got, c.Mentions) {
+			t.Errorf("Spans(%q) handles = %q, want %q (%s)", c.Text, got, c.Mentions, c.Why)
+		}
+	}
+	got := mention.Spans(`@Auditor, ask \@scribe and @auditor`)
+	want := []mention.Span{{Start: 0, End: 8, Handle: "auditor"}, {Start: 27, End: 35, Handle: "auditor"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Spans = %+v, want %+v", got, want)
 	}
 }

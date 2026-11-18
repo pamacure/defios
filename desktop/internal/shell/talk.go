@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"defios.com/internal/mention"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
@@ -39,6 +40,7 @@ type TalkNode interface {
 	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)
 	LiveTranscripts(ctx context.Context, group, conv string) ([]node.LiveTranscript, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
+	Liveries(ctx context.Context) (map[string]string, error)
 
 	// Sign Requests.
 	SignRequests(ctx context.Context, group string) ([]node.SignRequest, error)
@@ -83,7 +85,7 @@ type TalkState struct {
 	Focus string
 
 	// Handles are the agents' Handles a message here may mention.
-	Handles []string
+	Handles []Handle
 	// Transcripts are this device's agents with a live Transcript here,
 	// and how large each has grown, shown beside Clear: a Transcript only
 	// grows, so its size says when to clear it (ADR 0036).
@@ -181,6 +183,18 @@ type Item struct {
 	// Queued waits in this device's Outbox; Droppable can be dropped
 	// from it, being this person's.
 	Queued, Droppable bool
+	// Livery is the sender's, "" for none: on the left only, and never a
+	// Job's, which is no party (ADR 0037).
+	Livery string
+	// Parts are Text split at its mentions, each marked with the Livery
+	// of the agent it names on the device that sent it.
+	Parts []Part
+	// A run of left-side messages from one sender shows its author line
+	// on the first, Author, and its avatar on the last, Avatar. Another
+	// sender, a line that is no left-side message, or a gap of more than
+	// runGap ends a run.
+	Author, Avatar bool
+	sender         string // who wrote it, for runs; "" off the left
 	// Transcript: this device ran the chain that said it, and Transcript
 	// gives its run. On a system line about an agent's run, Chain and
 	// Handle name the run and RunTranscript gives it.
@@ -190,12 +204,24 @@ type Item struct {
 	Sign *SignCard
 }
 
+// Part is a run of a message's text: plain, or one mention as written,
+// with the Handle it names and that agent's Livery, "" for none.
+type Part struct {
+	Text, Handle, Livery string
+}
+
 // TranscriptSize is one agent's live Transcript in the open Conversation:
 // Tokens are the input tokens of the last model call it records, about
 // what its next run replays; 0 before its first.
 type TranscriptSize struct {
 	Handle string
 	Tokens int64
+}
+
+// Handle is one of this device's agents a message here may mention, and
+// its Livery, "" for none.
+type Handle struct {
+	Handle, Livery string
 }
 
 // LiveChain is a chain of agents running here now.
@@ -207,6 +233,7 @@ type LiveChain struct {
 // LiveAgent is one agent's output in a chain as it generates it.
 type LiveAgent struct {
 	Handle string
+	Livery string // "" for none
 	Depth  uint32
 	Blocks []LiveBlock
 }
@@ -278,14 +305,16 @@ type talk struct {
 	// is read again with the messages. Reading it expands every
 	// Transcript there, so it is not read on every message.
 	saidStale bool
-	handles   []string
-	sizes     []node.LiveTranscript
-	agents    []Agent
-	over      []Override
-	system    map[string][]Item // by Conversation
-	live      map[string][]*LiveChain
-	accepted  map[string]bool // keygen Sessions this device accepted
-	starting  int             // StartKeygen calls under way
+	// liveries are this Node's, by party key (ADR 0037).
+	liveries map[string]string
+	handles  []string
+	sizes    []node.LiveTranscript
+	agents   []Agent
+	over     []Override
+	system   map[string][]Item // by Conversation
+	live     map[string][]*LiveChain
+	accepted map[string]bool // keygen Sessions this device accepted
+	starting int             // StartKeygen calls under way
 	// reqs are the Group's Sign Requests, in log order; cards are the
 	// open Conversation's, decoded, by msg_id.
 	reqs  []node.SignRequest
@@ -317,7 +346,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 	if !same {
 		t.n, t.self, t.group, t.open = n, self, group, node.GroupTalk
 		t.gen++
-		t.convs, t.msgs, t.said, t.saidStale = node.Conversations{}, nil, nil, true
+		t.convs, t.msgs, t.said, t.saidStale, t.liveries = node.Conversations{}, nil, nil, true, nil
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
@@ -509,12 +538,16 @@ func (t *talk) loadMessages() {
 	if err == nil && withSaid {
 		chat, err = a.n.Chat(t.ctx, a.group, a.conv, 0, true)
 	}
+	// The Node gives another device's agent a Livery as its first
+	// message arrives, so they are read with the messages.
+	liveries, lerr := a.n.Liveries(t.ctx)
 	t.loadMu.Unlock()
 	t.mu.Lock()
 	if !t.still(a) {
 		t.mu.Unlock()
 		return
 	}
+	t.setLiveries(liveries, lerr)
 	if t.read("messages", err) {
 		t.msgs = msgs
 		if withSaid {
@@ -538,17 +571,29 @@ func (t *talk) loadSide() {
 	}
 	t.loadMu.Lock()
 	handles, agents, over, err := t.readSide(a)
+	// An agent added here was given a Livery.
+	liveries, lerr := a.n.Liveries(t.ctx)
 	t.loadMu.Unlock()
 	t.mu.Lock()
 	if !t.still(a) {
 		t.mu.Unlock()
 		return
 	}
+	t.setLiveries(liveries, lerr)
 	if t.read("side", err) {
 		t.handles, t.agents, t.over = handles, agents, over
 	}
 	t.mu.Unlock()
 	t.emit()
+}
+
+// setLiveries keeps the Liveries just read; t.mu is held. Liveries only
+// mark talk, so one that fails to read keeps those read before rather
+// than stop the page.
+func (t *talk) setLiveries(l map[string]string, err error) {
+	if err == nil {
+		t.liveries = l
+	}
 }
 
 func (t *talk) readSide(a at) ([]string, []Agent, []Override, error) {
@@ -629,7 +674,7 @@ func (t *talk) snapshot() TalkState {
 	st := TalkState{
 		Seq: t.seq, Group: t.group,
 		Conversations: []Conversation{}, Keygens: []Keygen{}, Roster: []RosterNode{},
-		Live: []LiveChain{}, Handles: []string{}, Transcripts: []TranscriptSize{}, Agents: []Agent{}, Overrides: []Override{},
+		Live: []LiveChain{}, Handles: []Handle{}, Transcripts: []TranscriptSize{}, Agents: []Agent{}, Overrides: []Override{},
 		SignRequests: []SignRow{},
 	}
 	if t.group == "" {
@@ -642,7 +687,9 @@ func (t *talk) snapshot() TalkState {
 			st.Unread = t.failed[what]
 		}
 	}
-	st.Handles = append(st.Handles, t.handles...)
+	for _, hd := range t.handles {
+		st.Handles = append(st.Handles, Handle{Handle: hd, Livery: t.liveries[node.AgentParty(hd)]})
+	}
 	for _, l := range t.sizes {
 		st.Transcripts = append(st.Transcripts, TranscriptSize{Handle: l.Handle, Tokens: l.Tokens})
 	}
@@ -678,7 +725,9 @@ func (t *talk) snapshot() TalkState {
 	for _, c := range t.live[t.open] {
 		lc := LiveChain{Chain: c.Chain, Agents: []LiveAgent{}}
 		for _, a := range c.Agents {
-			lc.Agents = append(lc.Agents, LiveAgent{Handle: a.Handle, Depth: a.Depth, Blocks: append([]LiveBlock{}, a.Blocks...)})
+			lc.Agents = append(lc.Agents, LiveAgent{
+				Handle: a.Handle, Livery: t.liveries[node.AgentParty(a.Handle)], Depth: a.Depth, Blocks: append([]LiveBlock{}, a.Blocks...),
+			})
 		}
 		st.Live = append(st.Live, lc)
 	}
@@ -732,7 +781,25 @@ func (t *talk) items() []Item {
 	for ; i < len(sys); i++ {
 		out = append(out, sys[i])
 	}
+	runs(out)
 	return out
+}
+
+// runGap is the longest pause within a run of one sender's messages.
+const runGap = 5 * time.Minute
+
+// runs marks where each run of one sender's messages in items starts and
+// ends.
+func runs(items []Item) {
+	joins := func(a, b *Item) bool { return a.sender == b.sender && b.At.Sub(a.At) <= runGap }
+	for i := range items {
+		it := &items[i]
+		if it.sender == "" {
+			continue
+		}
+		it.Author = i == 0 || !joins(&items[i-1], it)
+		it.Avatar = i == len(items)-1 || !joins(it, &items[i+1])
+	}
 }
 
 // item is m as the transcript shows it: on the right only if it is this
@@ -742,12 +809,18 @@ func (t *talk) item(m node.Message) Item {
 	it := Item{Kind: KindMessage, MsgID: m.MsgID, Seq: m.Seq, At: m.CreatedAt, Text: m.Text, Queued: m.Queued}
 	if !m.Readable() {
 		it.Kind = KindUnreadable
+	} else {
+		it.Parts = t.parts(m)
 	}
 	if m.Mine {
 		it.Side, it.Droppable = Right, m.Queued
 		return it
 	}
 	it.Side, it.Handle, it.Job = Left, m.Handle, m.Readable() && m.Handle == "" && m.Depth > 0
+	if !it.Job {
+		it.Livery = t.liveries[t.party(m.NodeID, m.Handle)]
+	}
+	it.sender = fmt.Sprintf("%s/%s/%v", m.NodeID, m.Handle, it.Job)
 	it.From = m.DisplayName
 	switch {
 	case m.NodeID == t.self:
@@ -757,6 +830,42 @@ func (t *talk) item(m node.Message) Item {
 	}
 	_, it.Transcript = t.said[m.MsgID]
 	return it
+}
+
+// party is the party key of nodeID's agent handle, or with no handle of
+// the Node nodeID: its person.
+func (t *talk) party(nodeID, handle string) string {
+	switch {
+	case nodeID == t.self && handle == "":
+		return "" // this person, who is no party
+	case nodeID == t.self:
+		return node.AgentParty(handle)
+	case handle == "":
+		return node.NodeParty(nodeID)
+	}
+	return node.NodeAgentParty(nodeID, handle)
+}
+
+// parts are m's text split at its mentions, each resolved against the
+// device that sent m; t.mu is held.
+func (t *talk) parts(m node.Message) []Part {
+	sender := m.NodeID
+	if m.Mine {
+		sender = t.self // queued, it may name none
+	}
+	var out []Part
+	at := 0
+	for _, sp := range mention.Spans(m.Text) {
+		if sp.Start > at {
+			out = append(out, Part{Text: m.Text[at:sp.Start]})
+		}
+		out = append(out, Part{Text: m.Text[sp.Start:sp.End], Handle: sp.Handle, Livery: t.liveries[t.party(sender, sp.Handle)]})
+		at = sp.End
+	}
+	if at < len(m.Text) || len(out) == 0 {
+		out = append(out, Part{Text: m.Text[at:]})
+	}
+	return out
 }
 
 // shortKey is a hex key or ID shortened for a label.

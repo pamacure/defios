@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -43,6 +44,8 @@ type fakeTalk struct {
 	liveTranscripts map[string][]node.LiveTranscript
 	// read is each Conversation's read mark.
 	read map[string]uint64
+	// liveries are the Liveries this Node has given, by party key.
+	liveries map[string]string
 }
 
 func (n *fakeNode) tk() *fakeTalk {
@@ -53,6 +56,7 @@ func (n *fakeNode) tk() *fakeTalk {
 			providers: map[string][]node.Provider{}, networks: map[string][]node.Network{},
 			liveTranscripts: map[string][]node.LiveTranscript{},
 			read:            map[string]uint64{},
+			liveries:        map[string]string{},
 		}
 	}
 	return n.talk
@@ -439,4 +443,10 @@ func (n *fakeNode) ClearTranscripts(_ context.Context, group, conv, handle strin
 	}
 	t.liveTranscripts[conv] = left
 	return cleared, nil
+}
+
+func (n *fakeNode) Liveries(context.Context) (map[string]string, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return maps.Clone(n.tk().liveries), nil
 }

@@ -5,6 +5,7 @@
 // it holds only what is being typed or is open on screen. UI text says
 // "device" for a Node.
 import { call, h, icon, put } from "./dom.js";
+import { mentionSpans } from "./mention.js";
 import { callFailed, problemBox, problemLine, showProblem } from "./notice.js";
 import { openSignForm, signCard, signForm, signInit, statusChip } from "./sign.js";
 
@@ -429,25 +430,55 @@ function item(it) {
         h("time", {}, time(it.At))),
       open && transcriptBlocks(open));
   }
-  const who = it.Side === "left" && h("span", { class: "who" },
+  const left = it.Side === "left";
+  // A run of one sender's messages names its author on the first only.
+  const who = left && it.Author && h("span", { class: "who" },
     h("strong", {}, it.From),
     it.Handle && h("span", { class: "handle" }, `@${it.Handle}`),
     it.Job && h("span", { class: "handle" }, "Job"));
   const meta = h("div", { class: "meta" }, who, h("time", {}, time(it.At)),
     it.Queued && h("span", { class: "chip warn" }, "Queued"));
   if (it.Kind === "unreadable") {
-    return h("div", { class: `msg ${it.Side} unreadable` }, meta, h("p", { class: "text" }, "This message can't be read."));
+    return beside(it, h("div", { class: `msg ${it.Side} unreadable` }, meta, h("p", { class: "text" }, "This message can't be read.")));
   }
   const open = tui.expanded.get(it.MsgID);
-  return h("div", { class: `msg ${it.Side}` },
+  return beside(it, h("div", { class: `msg ${it.Side}` },
     meta,
-    h("div", { class: "text" }, it.Text),
+    h("div", { class: "text" }, (it.Parts ?? [{ Text: it.Text }]).map(part)),
     (it.Droppable || it.Transcript) && h("div", { class: "actions" },
       it.Droppable && h("button", { class: "link", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop"),
       it.Transcript && h("button", {
         class: "link", type: "button", "aria-expanded": open ? "true" : "false", onclick: () => toggleTranscript(it.MsgID, () => call("Transcript", it.MsgID)),
       }, open ? "Hide transcript" : "Transcript")),
-    open && transcriptBlocks(open));
+    open && transcriptBlocks(open)));
+}
+
+// beside puts a left-side message beside its avatar column: the avatar on
+// the last message of a run, the column kept empty on the others.
+function beside(it, msg) {
+  if (it.Side !== "left") return msg;
+  return h("div", { class: `msgrow ${it.Author ? "" : "cont"}` }, avatar(it.Livery, it.Avatar), msg);
+}
+
+// part is a run of a sent message's text: a mention is a chip in the
+// Livery of the agent it names on the device that sent it.
+function part(p) {
+  if (!p.Handle) return p.Text;
+  return h("span", { class: `mention ${liveryClass(p.Livery)}` }, brick(p.Livery), p.Text);
+}
+
+// A Livery (ADR 0037) is <colour>-<brick>; "" is none.
+const liveryClass = (l) => (l ? `lv-${l.slice(0, l.indexOf("-"))}` : "");
+
+// brick is the Livery's brick in currentColor; null for none.
+function brick(l) {
+  return l ? h("span", { class: `brick brick-${l.slice(l.indexOf("-") + 1)}`, "aria-hidden": "true" }) : null;
+}
+
+// avatar is a party's square: its colour with its brick cut out, plain
+// gray for none; hidden, it only keeps the column.
+function avatar(l, shown = true) {
+  return h("span", { class: `avatar ${liveryClass(l)} ${shown ? "" : "blank"}`, "aria-hidden": "true" }, brick(l));
 }
 
 // toggleTranscript shows or hides the Transcript under key, read by fetch.
@@ -497,20 +528,24 @@ function liveChain(c) {
     h("div", { class: "live-head" },
       h("span", { class: "pulse", "aria-hidden": "true" }),
       h("span", {}, c.Chain ? "Agents are answering…" : "Running…")),
-    c.Agents.map((a) => h("div", { class: "msg left streaming" },
+    c.Agents.map((a) => h("div", { class: "msgrow" }, avatar(a.Livery), h("div", { class: "msg left streaming" },
       h("div", { class: "meta" }, h("span", { class: "who" }, h("strong", {}, "This Device"), h("span", { class: "handle" }, `@${a.Handle}`))),
       a.Blocks.length
         ? a.Blocks.map((b) => h("div", { class: `blk ${b.Kind}` },
           b.Kind !== "text" && h("span", { class: "kind" }, b.Kind === "thinking" ? "Thinking" : "Tool"),
           h("div", {}, b.Text)))
-        : h("p", { class: "placeholder" }, "Thinking…"))));
+        : h("p", { class: "placeholder" }, "Thinking…")))));
 }
 
 // The composer: @ autocompletes the Handles included here; \@ writes an @
-// that summons nobody. Enter sends, Shift+Enter is a new line.
+// that summons nobody. Enter sends, Shift+Enter is a new line. A mirror
+// behind the textarea, whose own text is transparent, marks each mention:
+// an included Handle in a wash of its colour, any other underlined in red,
+// as Send would refuse it.
 
 function makeComposer() {
   const textarea = h("textarea", { class: "field", rows: 2, placeholder: "Write a message — @ to summon an agent", "aria-label": "Message" });
+  const mirror = h("div", { class: "mirror", "aria-hidden": "true" });
   const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
   const refusal = h("div", { class: "refusal" });
   const plus = h("button", { class: "btn plus", type: "button", "aria-label": "New Sign Request", title: "New Sign Request", onclick: () => openSignForm() }, icon("plus"));
@@ -536,14 +571,41 @@ function makeComposer() {
   };
   const suggest = () => {
     const at = ts ? mentionAt() : null;
-    shown = at ? ts.Handles.filter((hd) => hd.startsWith(at.word)) : [];
+    shown = at ? ts.Handles.filter((hd) => hd.Handle.startsWith(at.word)) : [];
     if (pick >= shown.length) pick = 0;
     list.hidden = shown.length === 0;
     list.replaceChildren(...shown.map((hd, i) => h("li", {
-      role: "option", "aria-selected": i === pick ? "true" : "false",
-      onmousedown: (e) => { e.preventDefault(); choose(hd); },
-    }, `@${hd}`)));
+      role: "option", "aria-selected": i === pick ? "true" : "false", class: liveryClass(hd.Livery),
+      onmousedown: (e) => { e.preventDefault(); choose(hd.Handle); },
+    }, brick(hd.Livery) ?? h("span", { class: "brick none", "aria-hidden": "true" }), `@${hd.Handle}`)));
   };
+  // paint writes the textarea's text into the mirror, marking mentions.
+  const paint = () => {
+    const text = textarea.value;
+    const included = new Map((ts?.Handles ?? []).map((hd) => [hd.Handle, hd.Livery]));
+    const out = [];
+    let at = 0;
+    for (const sp of mentionSpans(text)) {
+      out.push(text.slice(at, sp.start));
+      const cls = included.has(sp.handle) ? `on ${liveryClass(included.get(sp.handle))}` : "off";
+      out.push(h("span", { class: cls }, text.slice(sp.start, sp.end)));
+      at = sp.end;
+    }
+    // A last empty line has height in a textarea, not in a div.
+    out.push(text.slice(at), text.endsWith("\n") ? " " : "");
+    mirror.replaceChildren(...out.filter((c) => c !== ""));
+    fit();
+  };
+  // fit lays the mirror exactly over the textarea's text: as wide as it
+  // less any scrollbar, as tall, and scrolled as far.
+  const fit = () => {
+    const cs = getComputedStyle(textarea);
+    mirror.style.width = `${textarea.clientWidth + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)}px`;
+    mirror.style.height = `${textarea.offsetHeight}px`;
+    mirror.scrollTop = textarea.scrollTop;
+  };
+  textarea.addEventListener("scroll", fit);
+  new ResizeObserver(fit).observe(textarea);
   const choose = (handle) => {
     const at = mentionAt();
     if (!at) return;
@@ -552,6 +614,7 @@ function makeComposer() {
     textarea.value = `${v.slice(0, at.start)}@${handle} ${v.slice(end)}`;
     const caret = at.start + handle.length + 2;
     textarea.setSelectionRange(caret, caret);
+    paint();
     suggest();
   };
   const submit = async () => {
@@ -559,6 +622,7 @@ function makeComposer() {
     if (!text || tui.busy) return;
     const conv = ts.Open;
     textarea.value = "";
+    paint();
     tui.drafts.delete(conv);
     list.hidden = true;
     tui.scroll.pinned = true;
@@ -579,6 +643,7 @@ function makeComposer() {
     draw();
   };
   const update = () => {
+    paint();
     put(refusal, problemLine(refused));
     refusal.hidden = !refused;
     textarea.setAttribute("aria-invalid", refused ? "true" : "false");
@@ -613,7 +678,7 @@ function makeComposer() {
     }
   });
   const el = h("form", { class: "composer", onsubmit: (e) => { e.preventDefault(); submit(); } },
-    list, refusal, h("div", { class: "row" }, plus, textarea, stop, send));
+    list, refusal, h("div", { class: "row" }, plus, h("div", { class: "compose" }, mirror, textarea), stop, send));
   return {
     el, input: textarea, update,
     closeSuggestions: () => { list.hidden = true; refused = null; update(); },

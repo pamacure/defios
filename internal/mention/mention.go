@@ -22,15 +22,32 @@ const maxHandle = 64
 // caller's to check.
 func Handles(text string) []string {
 	var out []string
+	for _, s := range Spans(text) {
+		if !slices.Contains(out, s.Handle) {
+			out = append(out, s.Handle)
+		}
+	}
+	return out
+}
+
+// Span is one mention in a text: text[Start:End] is its "@" and Handle,
+// as written; Handle is folded to lowercase.
+type Span struct {
+	Start, End int
+	Handle     string
+}
+
+// Spans returns every mention in text, in order, as Handles finds them,
+// including each repeat.
+func Spans(text string) []Span {
+	var out []Span
 	prev := rune(0) // what precedes text[i]; 0 at the start
 	for i := 0; i < len(text); {
 		r, size := utf8.DecodeRuneInString(text[i:])
 		if r == '@' && prev != '@' && prev != '\\' && !word(prev) {
 			if end := match(text, i+1); end > i+1 {
 				if next, _ := utf8.DecodeRuneInString(text[end:]); !word(next) {
-					if h := strings.ToLower(text[i+1 : end]); !slices.Contains(out, h) {
-						out = append(out, h)
-					}
+					out = append(out, Span{Start: i, End: end, Handle: strings.ToLower(text[i+1 : end])})
 				}
 				prev, i = rune(text[end-1]), end
 				continue

@@ -419,7 +419,7 @@ func TestIncludingAnAgentInAConversationKeepsTheGroupsAgents(t *testing.T) {
 	if ts := s.SetAgentIncluded("signer", true); ts.Problem != nil || included(ts) != "auditor,scribe,signer" {
 		t.Fatalf("include: %+v %s", ts.Problem, included(ts))
 	}
-	if ts := s.SetAgentIncluded("auditor", false); ts.Problem != nil || included(ts) != "scribe,signer" || strings.Join(ts.Handles, ",") != "scribe,signer" {
+	if ts := s.SetAgentIncluded("auditor", false); ts.Problem != nil || included(ts) != "scribe,signer" || !slices.Equal(ts.Handles, []shell.Handle{{Handle: "scribe"}, {Handle: "signer"}}) {
 		t.Fatalf("exclude: %+v %s", ts.Problem, included(ts))
 	}
 	// Group talk keeps its own.
@@ -597,5 +597,134 @@ func TestEveryDeviceOnlineButNoCommitIsNotCommittable(t *testing.T) {
 	st := eventually(t, s, func(st shell.State) bool { return st.RosterSize == 2 })
 	if st.MajorityReachable || st.Online != 2 {
 		t.Fatalf("app: online %d, majority %v", st.Online, st.MajorityReachable)
+	}
+}
+
+// A message is marked with its sender's Livery, and each mention in it
+// with the Livery of the agent it names on the device that sent it.
+func TestMessagesAndMentionsTakeTheLiveryOfThePartyTheyResolveTo(t *testing.T) {
+	r := newRig(t, "alpha")
+	self := r.node.NodeID()
+	r.node.tk().liveries = map[string]string{
+		node.AgentParty("auditor"):            "blue-stud",
+		node.NodeParty("b0b"):                 "orange-arch",
+		node.NodeAgentParty("b0b", "scribe"):  "cyan-round",
+		node.NodeAgentParty("b0b", "auditor"): "violet-tile",
+	}
+	for _, m := range []node.Message{
+		{NodeID: self, Mine: true, Text: "@Auditor and @scribe, not \\@auditor"},
+		{NodeID: self, Handle: "auditor", Depth: 1, Text: "done"},
+		{NodeID: self, Handle: "helper", Depth: 1, Text: "no livery"},
+		{NodeID: self, Depth: 1, Text: "a Job"},
+		{NodeID: "b0b", DisplayName: "bob", Text: "ask @auditor"},
+		{NodeID: "b0b", DisplayName: "bob", Handle: "scribe", Depth: 1, Text: "noted"},
+		{NodeID: "ca7", DisplayName: "cat", Text: "hi"},
+		{NodeID: "b0b", DisplayName: "bob", Depth: 1, Text: "bob's Job"},
+	} {
+		r.node.commit(node.GroupTalk, m)
+	}
+	ts := eventuallyTalk(t, served(t, r), items(8))
+
+	for i, want := range []string{"", "blue-stud", "", "", "orange-arch", "cyan-round", "", ""} {
+		if got := ts.Items[i].Livery; got != want {
+			t.Errorf("item %d %q: Livery %q, want %q", i, ts.Items[i].Text, got, want)
+		}
+	}
+	wantParts := [][]shell.Part{
+		{
+			{Text: "@Auditor", Handle: "auditor", Livery: "blue-stud"},
+			{Text: " and "},
+			{Text: "@scribe", Handle: "scribe"},
+			{Text: ", not \\@auditor"},
+		},
+		{{Text: "done"}},
+		{{Text: "no livery"}},
+		{{Text: "a Job"}},
+		{{Text: "ask "}, {Text: "@auditor", Handle: "auditor", Livery: "violet-tile"}},
+	}
+	for i, want := range wantParts {
+		if got := ts.Items[i].Parts; !slices.Equal(got, want) {
+			t.Errorf("item %d parts %+v, want %+v", i, got, want)
+		}
+	}
+}
+
+// A run of left-side messages from one sender shows its author line on
+// its first message and its avatar on its last; another sender, a message
+// of this person's, a system line or a gap of over 5 minutes starts anew.
+func TestARunOfOneSendersMessagesShowsTheAuthorFirstAndTheAvatarLast(t *testing.T) {
+	r := newRig(t, "alpha")
+	self := r.node.NodeID()
+	t0 := time.Now().Add(-time.Hour)
+	at := func(min float64) time.Time { return t0.Add(time.Duration(min * float64(time.Minute))) }
+	for _, m := range []node.Message{
+		{NodeID: "b0b", DisplayName: "bob", Text: "one", CreatedAt: at(0)},
+		{NodeID: "b0b", DisplayName: "bob", Text: "two", CreatedAt: at(4)},
+		{NodeID: "b0b", DisplayName: "bob", Text: "three", CreatedAt: at(8)},
+		{NodeID: "b0b", DisplayName: "bob", Text: "late", CreatedAt: at(14)},
+		{NodeID: "b0b", DisplayName: "bob", Handle: "scribe", Depth: 1, Text: "agent", CreatedAt: at(15)},
+		{NodeID: self, Mine: true, Text: "mine", CreatedAt: at(16)},
+		{NodeID: "b0b", DisplayName: "bob", Handle: "scribe", Depth: 1, Text: "again", CreatedAt: at(17)},
+		{NodeID: self, Handle: "scribe", Depth: 1, Text: "ours", CreatedAt: at(18)},
+		{NodeID: self, Depth: 1, Text: "job", CreatedAt: at(19)},
+		{NodeID: self, Depth: 1, Text: "job 2", CreatedAt: at(20)},
+	} {
+		r.node.commit(node.GroupTalk, m)
+	}
+	ts := eventuallyTalk(t, served(t, r), items(10))
+
+	want := []struct{ author, avatar bool }{
+		{true, false}, {false, false}, {false, true}, // within 5 minutes of each other
+		{true, true},                 // 6 minutes on
+		{true, true},                 // bob's agent
+		{false, false},               // this person's: no author line, no avatar
+		{true, true},                 // after this person's
+		{true, true},                 // this device's agent of the same Handle
+		{true, false}, {false, true}, // a Job's
+	}
+	for i, w := range want {
+		if it := ts.Items[i]; it.Author != w.author || it.Avatar != w.avatar {
+			t.Errorf("item %d %q: author %v avatar %v, want %+v", i, it.Text, it.Author, it.Avatar, w)
+		}
+	}
+}
+
+func TestASystemLineEndsARun(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := served(t, r)
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Conversations) == 1 })
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "one", CreatedAt: time.Now().Add(-time.Second)})
+	eventuallyTalk(t, s, items(1))
+	r.node.emit(node.Event{Chain: &node.ChainEventIn{Group: "alpha", Conversation: node.GroupTalk,
+		Event: serve.ChainEvent{Type: serve.EventChainEnd, Chain: "c", Cancelled: true}}})
+	eventuallyTalk(t, s, items(2))
+	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "two", CreatedAt: time.Now().Add(time.Second)})
+	ts := eventuallyTalk(t, s, items(3))
+	if a, b := ts.Items[0], ts.Items[2]; !a.Author || !a.Avatar || !b.Author || !b.Avatar || ts.Items[1].Kind != shell.KindSystem {
+		t.Fatalf("items: %+v", ts.Items)
+	}
+}
+
+// This device's agents answering, and the Handles the composer suggests,
+// carry the Liveries of this device's agents.
+func TestLiveAgentsAndHandlesTakeThisDevicesAgentsLiveries(t *testing.T) {
+	r := newRig(t, "alpha")
+	r.node.tk().included[node.GroupTalk] = []string{"auditor", "helper"}
+	r.node.tk().liveries = map[string]string{
+		node.AgentParty("auditor"):           "blue-stud",
+		node.NodeAgentParty("b0b", "helper"): "cyan-round", // another device's helper
+	}
+	s := served(t, r)
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Handles) == 2 })
+	want := []shell.Handle{{Handle: "auditor", Livery: "blue-stud"}, {Handle: "helper"}}
+	if !slices.Equal(ts.Handles, want) {
+		t.Errorf("Handles %+v, want %+v", ts.Handles, want)
+	}
+
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentStart, Chain: "c1", Handle: "auditor", Depth: 1})
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentStart, Chain: "c1", Handle: "helper", Depth: 2})
+	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 1 && len(ts.Live[0].Agents) == 2 })
+	if a := ts.Live[0].Agents; a[0].Livery != "blue-stud" || a[1].Livery != "" {
+		t.Errorf("live agents %+v", a)
 	}
 }

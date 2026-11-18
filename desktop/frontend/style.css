@@ -326,6 +326,39 @@ button.conv > .sub { grid-column: 1 / -1; }
 .msg.sending .text { opacity: 0.6; }
 .msg.unreadable .text { color: var(--muted); font-style: italic; background: transparent; border-style: dashed; }
 .msg .actions { display: flex; gap: 12px; }
+/* Liveries (ADR 0037): a .lv-<colour> sets the colour and its wash, a
+   .brick-<brick> the brick, drawn in currentColor through its SVG as a mask. */
+.lv-blue { --lv: var(--livery-blue); --lv-wash: var(--livery-blue-wash); }
+.lv-indigo { --lv: var(--livery-indigo); --lv-wash: var(--livery-indigo-wash); }
+.lv-violet { --lv: var(--livery-violet); --lv-wash: var(--livery-violet-wash); }
+.lv-magenta { --lv: var(--livery-magenta); --lv-wash: var(--livery-magenta-wash); }
+.lv-orange { --lv: var(--livery-orange); --lv-wash: var(--livery-orange-wash); }
+.lv-cyan { --lv: var(--livery-cyan); --lv-wash: var(--livery-cyan-wash); }
+.lv-slate { --lv: var(--livery-slate); --lv-wash: var(--livery-slate-wash); }
+.lv-brown { --lv: var(--livery-brown); --lv-wash: var(--livery-brown-wash); }
+.brick { display: inline-block; flex: none; width: 16px; height: 16px; background-color: currentColor; -webkit-mask: var(--brick) center / contain no-repeat; mask: var(--brick) center / contain no-repeat; }
+.brick-stud { --brick: url(bricks/stud.svg); }
+.brick-twin { --brick: url(bricks/twin.svg); }
+.brick-plate { --brick: url(bricks/plate.svg); }
+.brick-tile { --brick: url(bricks/tile.svg); }
+.brick-slope { --brick: url(bricks/slope.svg); }
+.brick-arch { --brick: url(bricks/arch.svg); }
+.brick-round { --brick: url(bricks/round.svg); }
+.brick-corner { --brick: url(bricks/corner.svg); }
+/* A left-side message sits beside its sender's avatar: the party's colour
+   with the brick cut out in --surface, or plain --line for none. Only a
+   run's last message shows it; the others keep its column. */
+.msgrow { align-self: flex-start; display: flex; align-items: flex-end; gap: 8px; max-width: min(676px, 85%); }
+.msgrow .msg { max-width: none; min-width: 0; }
+.msgrow.cont { margin-top: -6px; }
+.avatar { flex: none; width: 28px; height: 28px; border-radius: var(--radius-s); background: var(--lv, var(--line)); color: var(--surface); display: grid; place-items: center; }
+.avatar .brick { width: 18px; height: 18px; }
+.avatar.blank { visibility: hidden; }
+.live .msgrow { max-width: 100%; }
+/* A mention in a sent message: its brick and @handle on a wash of the
+   colour; neutral for none. */
+.mention { display: inline-flex; align-items: center; gap: 3px; padding: 0 5px; border-radius: 4px; background: var(--lv-wash, var(--bg)); color: var(--lv, var(--text-soft)); font-weight: 600; white-space: nowrap; vertical-align: baseline; }
+.mention .brick { width: 12px; height: 12px; }
 .msg .actions .link { font-size: 12px; }
 .sysline { align-self: center; display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 12px; text-align: center; max-width: 80%; }
 .sysline time { opacity: .8; }
@@ -350,7 +383,23 @@ button.conv > .sub { grid-column: 1 / -1; }
 
 .composer { position: relative; padding: 10px 16px 14px; border-top: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
 .composer .row { display: flex; gap: 8px; align-items: flex-end; }
-.composer textarea { height: auto; min-height: 40px; max-height: 160px; padding: 9px 12px; text-align: left; resize: vertical; line-height: 1.4; background: var(--field); font: inherit; }
+.composer textarea { height: auto; min-height: 40px; max-height: 160px; padding: 9px 12px; text-align: left; resize: vertical; background: var(--field); font: inherit; line-height: 1.4; }
+/* The composer's mirror: the text again, behind a textarea whose own text
+   is transparent, marking each mention. Its glyphs must sit exactly under
+   the textarea's, so nothing in it may change a character's width: no
+   weight, style, icon or padding. */
+.composer .compose { position: relative; flex: 1; min-width: 0; display: flex; border-radius: var(--radius); background: var(--field); }
+.composer .compose textarea { position: relative; z-index: 1; background: transparent; color: transparent; caret-color: var(--text); }
+.composer .compose textarea::placeholder { color: var(--muted); }
+.composer .mirror { position: absolute; top: 0; left: 0; box-sizing: border-box; padding: 9px 12px; border: 1px solid transparent; font: inherit; line-height: 1.4; text-align: left; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; overflow: hidden; pointer-events: none; color: var(--text); }
+/* A textarea scrolls through its bottom padding; a div may not, so the
+   mirror gets that much more to scroll through. */
+.composer .mirror::after { content: ""; display: block; height: 9px; }
+.composer .mirror .on { background: var(--lv-wash, var(--bg)); border-radius: 3px; }
+.composer .mirror .off { text-decoration: underline wavy var(--danger); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+.suggest li { display: flex; align-items: center; gap: 8px; }
+.suggest li .brick { color: var(--lv, var(--line)); }
+.brick.none { -webkit-mask: none; mask: none; border-radius: 3px; } /* a Handle with no Livery: a plain gray square */
 .composer .btn { flex: none; }
 .composer .plus { width: 38px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .composer .plus svg { display: block; width: 18px; height: 18px; stroke-width: 2; }
