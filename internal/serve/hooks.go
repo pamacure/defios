@@ -192,12 +192,7 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 	prefix := "serve: " + t.kind + " " + name + ": "
 	logf("%sfired %s", prefix, cause)
 	t.s.chains.publish(eventConversation(ev), ChainEvent{Type: EventTriggerFire, Trigger: name, Event: &ev})
-	// A Hook's firing on a Sign Request is remembered, so a front end can
-	// show who is on it.
-	var rec *hookRun
-	if t.kind == "hook" && ev.SignRequestID != "" {
-		rec = t.s.hookRuns.start(name, jobs, defs, ev)
-	}
+	rec := t.s.jobRuns.start(name, jobs, defs, ev)
 	current := 0
 	r := t.s.jobRunner(t.store, prefix, func(conv []byte, chain string) { rec.chain(current, conv, chain) })
 	for i, job := range jobs {
@@ -207,8 +202,8 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 		}
 		current = i
 		rec.running(i)
-		v := runJob(t.ctx, &t.s.chains, r, job, defs[job], ev)
-		rec.ended(i, v)
+		v, out := runJob(t.ctx, &t.s.chains, r, job, defs[job], ev)
+		rec.ended(i, v, out)
 		if !v.OK {
 			logf("%sjob %s failed: %s", prefix, job, v.Error)
 			return
@@ -218,14 +213,15 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 }
 
 // runJob runs Job name, j, on ev with r, shows its job.end on the stream
-// of ev's Conversation, and returns how it ended.
-func runJob(ctx context.Context, chains *chainHub, r trigger.Runner, name string, j config.Job, ev trigger.Event) JobView {
+// of ev's Conversation, and returns how it ended and what it produced.
+func runJob(ctx context.Context, chains *chainHub, r trigger.Runner, name string, j config.Job, ev trigger.Event) (JobView, trigger.Output) {
 	v := JobView{Job: name, OK: true}
-	if err := r.Run(ctx, name, j, ev); err != nil {
+	out, err := r.Run(ctx, name, j, ev)
+	if err != nil {
 		v.OK, v.Error = false, err.Error()
 	}
 	chains.publish(eventConversation(ev), ChainEvent{Type: EventJobEnd, Job: v.Job, OK: &v.OK, Error: v.Error})
-	return v
+	return v, out
 }
 
 // eventConversation is ev's Conversation ID, nil for Group-level talk or

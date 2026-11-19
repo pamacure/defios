@@ -59,7 +59,7 @@ func (p palette) dim(s string) string     { return p.wrap(sgrDim, s) }
 // wrong, plain when it is healthy.
 func (p palette) status(s string) string {
 	switch {
-	case s == "open", s == "waiting", s == "signing", s == "unaddressed", s == "pending", s == "unformed", s == "stale", s == "down", s == "cut off":
+	case s == "open", s == "waiting", s == "signing", s == "unaddressed", s == "pending", s == "running", s == "not_run", s == "unformed", s == "stale", s == "down", s == "cut off":
 		return p.caution(s)
 	case s == "aborted", s == "declined", s == "expired", s == "refused", s == "error", s == "failed", s == "cancelled", s == "session.abort", strings.HasPrefix(s, "unknown("):
 		return p.concern(s)

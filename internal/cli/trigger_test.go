@@ -10,8 +10,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"defios.com/internal/cli"
 	"defios.com/internal/group"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/nodedir"
 	"defios.com/internal/serve"
 	"defios.com/internal/trigger"
@@ -242,5 +245,100 @@ func TestConversationFollowShowsTriggersAndJobs(t *testing.T) {
 `
 	if r.stdout != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
+	}
+}
+
+// jobRunsNode is a Node keeping five Job Runs: Hook said's firing of say,
+// fail and after; Schedule daily's of summary, an agent Job; and Hook
+// said's of notify, a webhook.
+func jobRunsNode(t *testing.T) string {
+	t.Helper()
+	dir := triggerNode(t, "")
+	s, err := jobrun.Open(nodedir.Resolve(nodedir.Lookup{Dir: dir}).JobRunsDir(group.ImplicitAlias))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	said := trigger.Event{Type: "app.freeform", Trigger: "said", Seq: 7, Text: "hi"}
+	one, zero := 1, 0
+	firings := [][]jobrun.Run{
+		{
+			{Trigger: "said", Event: said, Fired: at, Job: "say", Kind: "exec", State: jobrun.OK, Started: at, Ended: at.Add(time.Second),
+				Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"sh", "-c", "echo said"}, ExitCode: &zero, Stdout: "said\n"}}},
+			{Trigger: "said", Event: said, Fired: at, Job: "fail", Kind: "exec", State: jobrun.Failed, Error: "exit status 1", Started: at, Ended: at,
+				Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"false"}, ExitCode: &one, Stderr: "no\n"}}},
+			{Trigger: "said", Event: said, Fired: at, Job: "after", Kind: "exec", State: jobrun.NotRun},
+		},
+		{{Trigger: "daily", Event: trigger.Event{Type: "schedule", Trigger: "daily", Time: "2026-11-19T11:00:00Z"}, Fired: at.Add(time.Hour),
+			Job: "summary", Kind: "agent", Handle: "auditor", Chain: "c0ffee", State: jobrun.OK, Started: at.Add(time.Hour), Ended: at.Add(time.Hour)}},
+		{{Trigger: "said", Event: said, Fired: at.Add(2 * time.Hour), Job: "notify", Kind: "webhook", State: jobrun.OK,
+			Output: trigger.Output{Webhook: &trigger.WebhookOutput{Method: "POST", URL: "$HOOK_URL",
+				Attempts: []trigger.Attempt{{Status: 503, Error: "webhook: 503 Service Unavailable"}, {Status: 200}}, Body: "thanks", ContentType: "text/plain"}}}},
+	}
+	for _, f := range firings {
+		if err := s.Add(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// trigger runs lists the Job Runs the Group keeps, newest first, with no
+// serve running: all, one Job's, or the last few.
+func TestTriggerRunsListsJobRuns(t *testing.T) {
+	dir := jobRunsNode(t)
+	r := run(t, nil, "", "--dir", dir, "trigger", "runs")
+	want := "5  2026-11-19T12:00:00Z  hook said  notify webhook  ok\n" +
+		"4  2026-11-19T11:00:00Z  schedule daily  summary agent @auditor  ok\n" +
+		"3  2026-11-19T10:00:00Z  hook said  after exec  not_run\n" +
+		"2  2026-11-19T10:00:00Z  hook said  fail exec  failed: exit status 1\n" +
+		"1  2026-11-19T10:00:00Z  hook said  say exec  ok\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("trigger runs exit %d:\n%s%s\nwant:\n%s", r.code, r.stdout, r.stderr, want)
+	}
+	r = run(t, nil, "", "--dir", dir, "trigger", "runs", "--job", "fail")
+	if r.code != 0 || r.stdout != "2  2026-11-19T10:00:00Z  hook said  fail exec  failed: exit status 1\n" {
+		t.Errorf("--job fail:\n%s%s", r.stdout, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "trigger", "runs", "--last", "2", "--json")
+	var runs []jobrun.Run
+	if err := json.Unmarshal([]byte(r.stdout), &runs); err != nil || len(runs) != 2 || runs[0].ID != 5 || runs[1].ID != 4 {
+		t.Errorf("--last 2 --json: %s%s (%v)", r.stdout, r.stderr, err)
+	}
+	if r = run(t, nil, "", "--dir", dir, "trigger", "runs", "--last", "-1"); r.code != cli.ExitUsage {
+		t.Errorf("--last -1 exit %d", r.code)
+	}
+}
+
+// trigger run shows one Job Run in full: what fired it, and what its Job
+// produced.
+func TestTriggerRunShowsAJobRun(t *testing.T) {
+	dir := jobRunsNode(t)
+	for id, wants := range map[string][]string{
+		"2": {"Job Run 2", "hook said on app.freeform at seq 7", "fail (exec)", "failed: exit status 1",
+			"started    2026-11-19T10:00:00Z", "command    false", "exit code  1", "stderr\n  no\n"},
+		"1": {"stdout\n  said\n", "ended      2026-11-19T10:00:01Z"},
+		"4": {"schedule daily for 2026-11-19T11:00:00Z", "summary (agent)", "agent      @auditor in Group-level talk", "chain      c0ffee"},
+		"5": {"request    POST $HOOK_URL", "attempts   503: webhook: 503 Service Unavailable, 200", "response   text/plain\n  thanks\n"},
+	} {
+		r := run(t, nil, "", "--dir", dir, "trigger", "run", id)
+		if r.code != 0 {
+			t.Fatalf("trigger run %s exit %d: %s", id, r.code, r.stderr)
+		}
+		for _, w := range wants {
+			if !strings.Contains(r.stdout, w) {
+				t.Errorf("trigger run %s lacks %q:\n%s", id, w, r.stdout)
+			}
+		}
+	}
+	r := run(t, nil, "", "--dir", dir, "trigger", "run", "5", "--json")
+	var got jobrun.Run
+	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil || got.Webhook == nil || got.Webhook.Body != "thanks" {
+		t.Errorf("--json: %s (%v)", r.stdout, err)
+	}
+	for _, id := range []string{"9", "x"} {
+		if r := run(t, nil, "", "--dir", dir, "trigger", "run", id); r.code != cli.ExitUsage {
+			t.Errorf("trigger run %s exit %d, want usage: %s", id, r.code, r.stderr)
+		}
 	}
 }

@@ -23,8 +23,8 @@ import (
 // SignRequest is one Sign Request as this Node holds it: its status, each
 // Node's stance with the Handle of the agent that took it (none for a
 // person), this Node's own Stance, and its Session and Broadcast Receipt
-// count. Hooks are this Node's Hooks' firings on it, as the process
-// serving the Group has seen them since it started.
+// count. Hooks are this Node's Hooks' firings on it whose Job Runs the
+// Group keeps.
 type SignRequest struct {
 	signreq.Summary
 	Hooks []HookRun
@@ -39,12 +39,13 @@ type SignRequestDetail struct {
 }
 
 // HookRun is one firing of a Hook of this Node's on a Sign Request: the
-// Hook, the event it fired on, and its Jobs. An agent Job names its Handle
-// and, once it starts, the Conversation and chain its run is marked with
-// in that agent's Transcript.
+// Hook, the event it fired on, and its Job Runs.
 type HookRun = serve.HookRun
 
-// JobRun is one Job of a HookRun, and its State.
+// JobRun is one Job Run (ADR 0040): one Job a Trigger's firing ran, or
+// was to run, its State, and what it produced. An agent Job names its
+// Handle and, once it starts, the Conversation and chain its run is marked
+// with in that agent's Transcript.
 type JobRun = serve.JobRun
 
 // States of a JobRun.

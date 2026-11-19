@@ -145,23 +145,90 @@ type Runner struct {
 // dropped connection.
 const webhookRetries = 3
 
-// Run runs j, named name, on ev. Its error is why the Job failed.
-func (r Runner) Run(ctx context.Context, name string, j config.Job, ev Event) error {
+// Output is what a Job's run produced, as its Job Run keeps it (ADR
+// 0040): an exec Job's or a webhook's, as far as it got. An agent Job's
+// run stays in its agent's Transcript.
+type Output struct {
+	Exec    *ExecOutput    `json:"exec,omitempty"`
+	Webhook *WebhookOutput `json:"webhook,omitempty"`
+}
+
+// ExecOutput is an exec Job's command, as run, its exit code, nil if it
+// never started, and the last OutputMax bytes of its stdout and stderr.
+type ExecOutput struct {
+	Command  []string `json:"command"`
+	ExitCode *int     `json:"exit_code,omitempty"`
+	Stdout   string   `json:"stdout"`
+	Stderr   string   `json:"stderr"`
+}
+
+// WebhookOutput is a webhook Job's request and responses. URL is as
+// configured, a Secret's $NAME unexpanded; no request header is kept, and
+// of the last response's headers only its Content-Type. Body is the last
+// OutputMax bytes of the last response's body.
+type WebhookOutput struct {
+	Method      string    `json:"method"`
+	URL         string    `json:"url"`
+	Attempts    []Attempt `json:"attempts"`
+	Body        string    `json:"body,omitempty"`
+	ContentType string    `json:"content_type,omitempty"`
+}
+
+// Attempt is one webhook attempt: its response's HTTP status, 0 for none,
+// and its error, if it failed.
+type Attempt struct {
+	Status int    `json:"status,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// OutputMax is how much of a Job's output, or a webhook's response body,
+// its Job Run keeps: the last of it, marked where it was cut.
+const OutputMax = 64 << 10
+
+// tail keeps the last max bytes written to it.
+type tail struct {
+	max int
+	buf []byte
+	cut int64 // bytes dropped from the front
+}
+
+func (t *tail) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if over := len(t.buf) - t.max; over > 0 {
+		t.cut += int64(over)
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	return len(p), nil
+}
+
+// String is what was kept, behind a marker if anything was cut.
+func (t *tail) String() string {
+	if t.cut == 0 {
+		return string(t.buf)
+	}
+	return fmt.Sprintf("[%d bytes cut]\n%s", t.cut, t.buf)
+}
+
+// Run runs j, named name, on ev, and returns what it produced. Its error
+// is why the Job failed.
+func (r Runner) Run(ctx context.Context, name string, j config.Job, ev Event) (Output, error) {
 	body, err := json.Marshal(ev)
 	if err != nil {
-		return err
+		return Output{}, err
 	}
 	switch j.Kind() {
 	case config.JobAgent:
 		if r.Agent != nil {
-			return r.Agent(ctx, name, j, ev)
+			return Output{}, r.Agent(ctx, name, j, ev)
 		}
 	case config.JobExec:
-		return r.exec(ctx, name, j, ev, body)
+		x := &ExecOutput{}
+		return Output{Exec: x}, r.exec(ctx, name, j, ev, body, x)
 	case config.JobWebhook:
-		return r.webhook(ctx, j, body)
+		w := &WebhookOutput{Method: http.MethodPost, URL: j.Webhook}
+		return Output{Webhook: w}, r.webhook(ctx, j, body, w)
 	}
-	return fmt.Errorf("%s Jobs do not run here", j.Kind())
+	return Output{}, fmt.Errorf("%s Jobs do not run here", j.Kind())
 }
 
 // Vars are the DEFIOS_* variables an exec Job is given for ev. DEFIOS_DEPTH
@@ -189,7 +256,7 @@ func Expand(arg string, vars map[string]string) string {
 	})
 }
 
-func (r Runner) exec(ctx context.Context, name string, j config.Job, ev Event, stdin []byte) error {
+func (r Runner) exec(ctx context.Context, name string, j config.Job, ev Event, stdin []byte, x *ExecOutput) error {
 	vars := Vars(ev)
 	for k, v := range r.Env {
 		vars[k] = v
@@ -212,15 +279,26 @@ func (r Runner) exec(ctx context.Context, name string, j config.Job, ev Event, s
 	for i, a := range j.Exec {
 		argv[i] = Expand(a, vars)
 	}
+	x.Command = argv
 	ctx, cancel := context.WithTimeout(ctx, j.ExecTimeout())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir, cmd.Env, cmd.Stdin = r.Dir, env, bytes.NewReader(stdin)
 	cmd.WaitDelay = time.Second // a child holding the output open does not outlast the timeout
-	out := &lineLog{logf: r.Logf, prefix: "job " + name + ": "}
-	cmd.Stdout, cmd.Stderr = out, out
+	// Each stream to the log on its own, so a line of one is never split
+	// by the other's.
+	outLog := &lineLog{logf: r.Logf, prefix: "job " + name + ": "}
+	errLog := &lineLog{logf: r.Logf, prefix: "job " + name + ": "}
+	stdout, stderr := &tail{max: OutputMax}, &tail{max: OutputMax}
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(outLog, stdout), io.MultiWriter(errLog, stderr)
 	err := cmd.Run()
-	out.flush()
+	outLog.flush()
+	errLog.flush()
+	x.Stdout, x.Stderr = stdout.String(), stderr.String()
+	if cmd.ProcessState != nil {
+		code := cmd.ProcessState.ExitCode()
+		x.ExitCode = &code
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("timed out after %s", j.ExecTimeout())
 	}
@@ -253,7 +331,7 @@ func (l *lineLog) flush() {
 	}
 }
 
-func (r Runner) webhook(ctx context.Context, j config.Job, body []byte) error {
+func (r Runner) webhook(ctx context.Context, j config.Job, body []byte, w *WebhookOutput) error {
 	res := r.Secrets()
 	url := j.Webhook
 	if strings.HasPrefix(url, "$") {
@@ -279,7 +357,9 @@ func (r Runner) webhook(ctx context.Context, j config.Job, body []byte) error {
 	var err error
 	for attempt := 0; ; attempt++ {
 		var retry bool
-		retry, err = r.post(ctx, url, headers, body, j.WebhookTimeout())
+		var a Attempt
+		retry, a, err = r.post(ctx, url, headers, body, j.WebhookTimeout(), w)
+		w.Attempts = append(w.Attempts, a)
 		if !retry || attempt == webhookRetries {
 			return err
 		}
@@ -292,14 +372,20 @@ func (r Runner) webhook(ctx context.Context, j config.Job, body []byte) error {
 	}
 }
 
-// post is one webhook attempt, and whether a failure is worth retrying.
-// A URL from a Secret is never echoed.
-func (r Runner) post(ctx context.Context, url string, headers http.Header, body []byte, timeout time.Duration) (retry bool, err error) {
+// post is one webhook attempt, as w keeps it, and whether a failure is
+// worth retrying. A response replaces w's body and Content-Type. A URL
+// from a Secret is never echoed.
+func (r Runner) post(ctx context.Context, url string, headers http.Header, body []byte, timeout time.Duration, w *WebhookOutput) (retry bool, a Attempt, err error) {
+	defer func() {
+		if err != nil {
+			a.Error = err.Error()
+		}
+	}()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return false, errors.New("webhook: the URL does not make a request")
+		return false, a, errors.New("webhook: the URL does not make a request")
 	}
 	req.Header = headers.Clone()
 	client := r.Client
@@ -310,19 +396,25 @@ func (r Runner) post(ctx context.Context, url string, headers http.Header, body 
 	if err != nil {
 		// Not err itself: it quotes the URL, which may be a Secret.
 		if ctx.Err() == context.DeadlineExceeded {
-			return true, fmt.Errorf("webhook: no response within %s", timeout)
+			return true, a, fmt.Errorf("webhook: no response within %s", timeout)
 		}
-		return true, errors.New("webhook: no response: the connection failed or was dropped")
+		return true, a, errors.New("webhook: no response: the connection failed or was dropped")
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	a.Status = resp.StatusCode
+	// The whole body, within the attempt's timeout, to keep its end.
+	kept := &tail{max: OutputMax}
+	if _, err := io.Copy(kept, resp.Body); err != nil {
+		kept.Write([]byte("\n[the response ended early]"))
+	}
+	w.Body, w.ContentType = kept.String(), resp.Header.Get("Content-Type")
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return false, nil
+		return false, a, nil
 	case resp.StatusCode >= 500:
-		return true, fmt.Errorf("webhook: %s", resp.Status)
+		return true, a, fmt.Errorf("webhook: %s", resp.Status)
 	}
-	return false, fmt.Errorf("webhook: %s", resp.Status)
+	return false, a, fmt.Errorf("webhook: %s", resp.Status)
 }
 
 // Firing is the names of the Hooks in hooks that fire on ev, in name

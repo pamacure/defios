@@ -69,7 +69,8 @@ func (s *server) jobRun(ctx context.Context, req jobRunRequest) (JobView, error)
 		ev.From = s.opts.Node.NodeID.String()
 	}
 	r := s.jobRunner(store, "serve: job run "+req.Job+": ", nil)
-	return runJob(ctx, &s.chains, r, req.Job, j, ev), nil
+	v, _ := runJob(ctx, &s.chains, r, req.Job, j, ev)
+	return v, nil
 }
 
 // JobRun is `job run`: run Job name on ev, nil for none, and wait for it

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"defios.com/internal/config"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/serve"
 	"defios.com/internal/trigger"
 )
@@ -77,6 +78,38 @@ type Schedule struct {
 
 // JobResult is how a Job run ended: OK, or the Error it failed on.
 type JobResult = serve.JobView
+
+// ErrNoJobRun: JobRun named no Job Run the Group keeps.
+var ErrNoJobRun = jobrun.ErrUnknown
+
+// JobRuns lists the Job Runs group keeps (ADR 0040), newest first: Job
+// job's alone if job is set, and the last last alone if last > 0. The
+// Group need not be served.
+func (h *Host) JobRuns(ctx context.Context, group, job string, last int) ([]JobRun, error) {
+	if err := h.knownGroup(group); err != nil {
+		return nil, err
+	}
+	runs, err := jobrun.List(h.p.JobRunsDir(group))
+	if err != nil {
+		return nil, err
+	}
+	if job != "" {
+		runs = slices.DeleteFunc(runs, func(r JobRun) bool { return r.Job != job })
+	}
+	if last > 0 && len(runs) > last {
+		runs = runs[:last]
+	}
+	return runs, nil
+}
+
+// JobRun is the Job Run group keeps by id, or ErrNoJobRun. The Group need
+// not be served.
+func (h *Host) JobRun(ctx context.Context, group string, id uint64) (JobRun, error) {
+	if err := h.knownGroup(group); err != nil {
+		return JobRun{}, err
+	}
+	return jobrun.Get(h.p.JobRunsDir(group), id)
+}
 
 // Jobs lists group's Jobs by name. The Group need not be served.
 func (h *Host) Jobs(ctx context.Context, group string) ([]Job, error) {

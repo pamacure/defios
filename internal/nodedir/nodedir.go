@@ -160,7 +160,7 @@ func (p Paths) GroupConfigFile(alias string) string {
 func (p Paths) GroupsDir() string { return filepath.Join(p.Data, "group") }
 
 // GroupDir is group/<alias>/: roster.json, cosl.sqlite, raft.db, raft-snap/,
-// tsnet/.
+// tsnet/, job-runs/.
 func (p Paths) GroupDir(alias string) string { return filepath.Join(p.GroupsDir(), alias) }
 
 // CoslFile is the COSL replica for the Group with this alias.
@@ -172,6 +172,12 @@ func (p Paths) CoslFile(alias string) string {
 // wrote while no leader was known, waiting to commit (ADR 0025).
 func (p Paths) OutboxFile(alias string) string {
 	return filepath.Join(p.GroupDir(alias), "outbox.json")
+}
+
+// JobRunsDir is a Group's job-runs/: this Node's Job Runs for it (ADR
+// 0040), never replicated nor in a Backup.
+func (p Paths) JobRunsDir(alias string) string {
+	return filepath.Join(p.GroupDir(alias), "job-runs")
 }
 
 // TsnetDir is a Group's tsnet state, per-Group so one device presents its

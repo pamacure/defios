@@ -102,6 +102,7 @@ func (a App) rootCommand(g *globals) *cobra.Command {
 	root.AddCommand(hookCommand(g))
 	root.AddCommand(scheduleCommand(g))
 	root.AddCommand(jobCommand(g))
+	root.AddCommand(triggerCommand(g))
 	root.AddCommand(pluginCommand(g))
 	root.AddCommand(mcpCommand())
 	root.AddCommand(secretCommand(g))

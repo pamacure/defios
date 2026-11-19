@@ -19,7 +19,7 @@ import (
 // backupNode is a Node under dir with one formed Group holding a Key share
 // and a Secret, an Agent Profile, a Conversation Workspace, and everything a
 // Backup must leave out: the COSL replica, Raft state, tsnet state, the
-// Outbox, a Recap and a Transcript. It returns the Group ID and the Key's
+// Outbox, a Recap, a Transcript and a Job Run. It returns the Group ID and the Key's
 // public key.
 func backupNode(t *testing.T, dir string) (gid group.ID, pub []byte) {
 	t.Helper()
@@ -51,6 +51,7 @@ func backupNode(t *testing.T, dir string) (gid group.ID, pub []byte) {
 		filepath.Join(gdir, "outbox.json"):                         "[]",
 		filepath.Join(conv, "RECAP.md"):                            "# Recap",
 		filepath.Join(conv, "transcripts", "ab.jsonl"):             "{}",
+		filepath.Join(gdir, "job-runs", "1.json"):                  "{}",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)

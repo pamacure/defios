@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -139,14 +138,7 @@ func runJobList(ctx context.Context, g *globals) error {
 				parts = append(parts, "in "+v.Target)
 			}
 		case config.JobExec:
-			args := make([]string, len(v.Exec))
-			for i, a := range v.Exec {
-				args[i] = a
-				if a == "" || strings.ContainsAny(a, " \t\n\"'") {
-					args[i] = strconv.Quote(a)
-				}
-			}
-			parts[1] += " " + strings.Join(args, " ")
+			parts[1] += " " + shellWords(v.Exec)
 			if len(v.Secrets) > 0 {
 				parts = append(parts, "secrets "+strings.Join(v.Secrets, ", "))
 			}

@@ -116,8 +116,9 @@ type Options struct {
 	// message marks). Stance is this Node's. A restore tells what it moved.
 	OnSignRequest func(signreq.Summary)
 	// OnHookRun hears a firing of this Node's Hooks on a Sign Request each
-	// time it changes: fired, then as each Job starts and ends. It is
-	// called under the runs' lock, so it must not block or call the serve.
+	// time its Job Runs change: fired, then as each Job starts and ends. It
+	// is called under the runs' lock, so it must not block or call the
+	// serve.
 	OnHookRun func(HookRun)
 	// MCPCallTimeout bounds an MCP Server's start and each call of its
 	// tools; zero is DefaultMCPCallTimeout (ADR 0030).
@@ -184,7 +185,7 @@ func Start(ctx context.Context, o Options) (*Running, error) {
 	s := &server{opts: o, self: self, slot: slot, ctx: ctx, started: time.Now(), chainCalls: make(chan chainCall), signNudge: make(chan struct{}, 1),
 		mcp: newMCPServers(o.Logf)}
 	s.chains.onEvent = o.OnChain
-	s.hookRuns.onChange = o.OnHookRun
+	s.jobRuns.onChange = o.OnHookRun
 	localSrv := &http.Server{Handler: s.localHandler()}
 	errc := make(chan error, 2)
 	go func() { errc <- localSrv.Serve(socket) }()
@@ -267,7 +268,7 @@ type server struct {
 	watchDone   chan struct{}
 
 	chains     chainHub       // this Node's chains of agents, and their watchers
-	hookRuns   hookRuns       // this Node's Hooks' firings on Sign Requests
+	jobRuns    jobRuns        // this Node's Triggers' Job Runs (ADR 0040)
 	signNudge  chan struct{}  // the Outbox changed, so this Node's stance may have moved
 	chainCalls chan chainCall // to the replica's chain runner
 

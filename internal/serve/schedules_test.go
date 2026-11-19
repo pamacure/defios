@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"defios.com/internal/group"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/serve"
 )
 
@@ -69,6 +70,15 @@ jobs = ["missed"]
 		}
 	}
 	waitLog(t, &logs, "schedule soon: job summary done")
+	// Each Job keeps a Job Run; the agent Job's names where its run is.
+	runs := waitJobRuns(t, a, func(runs []jobrun.Run) bool { return len(runs) == 2 && runs[0].State == jobrun.OK })
+	rec, sum := runs[1], runs[0]
+	if rec.Trigger != "soon" || rec.Event.Type != "schedule" || rec.Job != "record" || rec.State != jobrun.OK || rec.Exec == nil {
+		t.Errorf("record = %+v", rec)
+	}
+	if sum.Kind != "agent" || sum.Handle != "auditor" || sum.Chain == "" || sum.Conversation != "" || sum.Firing != rec.ID {
+		t.Errorf("summary = %+v", sum)
+	}
 	if _, err := os.Stat(missed); err == nil {
 		t.Error("a Schedule whose time had passed fired")
 	}

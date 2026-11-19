@@ -263,7 +263,7 @@ var configRoot = map[string]bool{"display-name": true, "current-group": true, "a
 // taken from the data tree, the rest is not taken at all.
 var groupData = map[string]bool{
 	"roster.json": true, "raft.db": true, "raft-snap": true, "tsnet": true,
-	"outbox.json": true, "conversations": true,
+	"outbox.json": true, "conversations": true, "job-runs": true,
 	"local-accept.json": true, "pending-shares.json": true,
 }
 

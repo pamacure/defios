@@ -117,7 +117,7 @@ func TestAnExecJobRunsItsArgvWithTheEventAndAClosedEnvironment(t *testing.T) {
 		Exec:    []string{"sh", "-c", `{ pwd; env | sort; cat; echo; echo "arg=$1"; } > "$0"; echo done; echo oops >&2`, out, "${DEFIOS_SIGN_REQUEST_ID}-$DEFIOS_EVENT $HOME"},
 		Secrets: []string{"TOKEN", "STORED"},
 	}
-	if err := r.Run(context.Background(), "archive", j, event); err != nil {
+	if _, err := r.Run(context.Background(), "archive", j, event); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(out)
@@ -165,18 +165,18 @@ func TestAnExecJobRunsItsArgvWithTheEventAndAClosedEnvironment(t *testing.T) {
 // that resolves nowhere, which it does not start without.
 func TestAnExecJobFails(t *testing.T) {
 	r := newRunner(t, map[string]string{"PATH": os.Getenv("PATH")}, nil)
-	if err := r.Run(context.Background(), "j", config.Job{Exec: []string{"false"}}, event); err == nil {
+	if _, err := r.Run(context.Background(), "j", config.Job{Exec: []string{"false"}}, event); err == nil {
 		t.Error("a non-zero exit succeeded")
 	}
 	start := time.Now()
-	if err := r.Run(context.Background(), "j", config.Job{Exec: []string{"sleep", "10"}, Timeout: config.Age(100 * time.Millisecond)}, event); err == nil {
+	if _, err := r.Run(context.Background(), "j", config.Job{Exec: []string{"sleep", "10"}, Timeout: config.Age(100 * time.Millisecond)}, event); err == nil {
 		t.Error("a run past its timeout succeeded")
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("the timed-out run took %v", d)
 	}
 	out := filepath.Join(t.TempDir(), "ran")
-	err := r.Run(context.Background(), "j", config.Job{Exec: []string{"touch", out}, Secrets: []string{"MISSING"}}, event)
+	_, err := r.Run(context.Background(), "j", config.Job{Exec: []string{"touch", out}, Secrets: []string{"MISSING"}}, event)
 	if !errors.Is(err, secret.ErrUnresolved) {
 		t.Errorf("unresolved Secret: %v, want ErrUnresolved", err)
 	}
@@ -200,7 +200,7 @@ func TestAWebhookJobPostsTheEvent(t *testing.T) {
 	defer srv.Close()
 	r := newRunner(t, map[string]string{"HOOK_URL": srv.URL + "/notify"}, map[string]string{"HOOK_TOKEN": "Bearer t"})
 	j := config.Job{Webhook: "$HOOK_URL", Headers: map[string]string{"Authorization": "$HOOK_TOKEN", "X-Title": "defios"}}
-	if err := r.Run(context.Background(), "notify", j, event); err != nil {
+	if _, err := r.Run(context.Background(), "notify", j, event); err != nil {
 		t.Fatal(err)
 	}
 	var ev trigger.Event
@@ -239,7 +239,7 @@ func TestAWebhookJobRetriesServerErrorsOnly(t *testing.T) {
 			w.WriteHeader(st)
 		}))
 		r := newRunner(t, nil, nil)
-		err := r.Run(context.Background(), "notify", config.Job{Webhook: srv.URL}, event)
+		_, err := r.Run(context.Background(), "notify", config.Job{Webhook: srv.URL}, event)
 		srv.Close()
 		if (err == nil) != tc.ok || n.Load() != tc.attempts {
 			t.Errorf("%s: err %v after %d attempts, want ok %v after %d", tc.name, err, n.Load(), tc.ok, tc.attempts)
@@ -260,7 +260,7 @@ func TestAWebhookAttemptTimesOut(t *testing.T) {
 	defer close(release)
 	r := newRunner(t, nil, nil)
 	start := time.Now()
-	err := r.Run(context.Background(), "notify", config.Job{Webhook: srv.URL, Timeout: config.Age(50 * time.Millisecond)}, event)
+	_, err := r.Run(context.Background(), "notify", config.Job{Webhook: srv.URL, Timeout: config.Age(50 * time.Millisecond)}, event)
 	if err == nil {
 		t.Fatal("a hung webhook succeeded")
 	}
@@ -319,5 +319,118 @@ func TestStatusChangesAreRequestEvents(t *testing.T) {
 	}
 	if cur["aa"] != signreq.Open || cur["bb"] != signreq.Expired || cur["cc"] != signreq.Open || len(cur) != 3 {
 		t.Errorf("statuses %v", cur)
+	}
+}
+
+// An exec Job's run keeps its command, as run, its exit code, and its
+// stdout and stderr apart, while each line still goes to the serve log.
+func TestAnExecJobKeepsItsCommandExitCodeAndOutput(t *testing.T) {
+	r := newRunner(t, map[string]string{"PATH": os.Getenv("PATH")}, nil)
+	j := config.Job{Exec: []string{"sh", "-c", "echo out; echo err >&2; exit 3", "$DEFIOS_EVENT"}}
+	out, err := r.Run(context.Background(), "j", j, event)
+	if err == nil {
+		t.Fatal("a non-zero exit succeeded")
+	}
+	x := out.Exec
+	if x == nil {
+		t.Fatal("no exec output kept")
+	}
+	if want := []string{"sh", "-c", "echo out; echo err >&2; exit 3", "sign.request"}; !slices.Equal(x.Command, want) {
+		t.Errorf("command %q, want %q", x.Command, want)
+	}
+	if x.ExitCode == nil || *x.ExitCode != 3 {
+		t.Errorf("exit code %v, want 3", x.ExitCode)
+	}
+	if x.Stdout != "out\n" || x.Stderr != "err\n" {
+		t.Errorf("stdout %q, stderr %q", x.Stdout, x.Stderr)
+	}
+	if out.Webhook != nil {
+		t.Error("an exec Job kept webhook output")
+	}
+	log := strings.Join(r.log(), "\n")
+	if !strings.Contains(log, "out") || !strings.Contains(log, "err") {
+		t.Errorf("log %q, want the Job's output too", log)
+	}
+}
+
+// A Job that never starts keeps no exit code.
+func TestAnExecJobThatNeverStartsKeepsNoExitCode(t *testing.T) {
+	r := newRunner(t, map[string]string{"PATH": os.Getenv("PATH")}, nil)
+	out, err := r.Run(context.Background(), "j", config.Job{Exec: []string{"no-such-command-defios"}}, event)
+	if err == nil || out.Exec == nil || out.Exec.ExitCode != nil {
+		t.Fatalf("err %v, output %+v: want a failure with no exit code", err, out.Exec)
+	}
+}
+
+// Output keeps its last 64 KiB, marked where it was cut.
+func TestAJobKeepsTheLast64KiBOfItsOutput(t *testing.T) {
+	r := newRunner(t, map[string]string{"PATH": os.Getenv("PATH")}, nil)
+	// 100000 a's, then END: 100003 bytes, of which the last 65536 stay.
+	j := config.Job{Exec: []string{"sh", "-c", `head -c 100000 /dev/zero | tr '\0' a; printf END`}}
+	out, err := r.Run(context.Background(), "j", j, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[34467 bytes cut]\n" + strings.Repeat("a", 65533) + "END"
+	if out.Exec.Stdout != want {
+		t.Errorf("stdout is %d bytes starting %q, want %d starting %q", len(out.Exec.Stdout), out.Exec.Stdout[:30], len(want), want[:30])
+	}
+}
+
+// A webhook Job's run keeps its method, its URL as configured, each
+// attempt's status, the last response's body and Content-Type, and no
+// Secret: not the URL's, not a header's.
+func TestAWebhookJobKeepsItsAttemptsAndNoSecret(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("X-Request-Echo", req.Header.Get("Authorization"))
+		if n.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(w, "busy")
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "thanks")
+	}))
+	defer srv.Close()
+	secretURL := srv.URL + "/hook-path-s3cr3t"
+	r := newRunner(t, map[string]string{"HOOK_URL": secretURL}, map[string]string{"HOOK_TOKEN": "Bearer tok-s3cr3t"})
+	j := config.Job{Webhook: "$HOOK_URL", Headers: map[string]string{"Authorization": "$HOOK_TOKEN"}}
+	out, err := r.Run(context.Background(), "notify", j, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := out.Webhook
+	if w == nil {
+		t.Fatal("no webhook output kept")
+	}
+	if w.Method != http.MethodPost || w.URL != "$HOOK_URL" {
+		t.Errorf("method %q URL %q, want POST $HOOK_URL", w.Method, w.URL)
+	}
+	if len(w.Attempts) != 2 || w.Attempts[0].Status != 503 || w.Attempts[1].Status != 200 {
+		t.Errorf("attempts %+v, want 503 then 200", w.Attempts)
+	}
+	if w.Body != "thanks" || w.ContentType != "text/plain" {
+		t.Errorf("body %q, Content-Type %q", w.Body, w.ContentType)
+	}
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "s3cr3t") {
+		t.Errorf("a Secret is kept: %s", b)
+	}
+}
+
+// A webhook response body keeps its last 64 KiB, marked where it was cut.
+func TestAWebhookKeepsTheLast64KiBOfItsBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		io.WriteString(w, strings.Repeat("b", 70000)+"END")
+	}))
+	defer srv.Close()
+	r := newRunner(t, nil, nil)
+	out, err := r.Run(context.Background(), "notify", config.Job{Webhook: srv.URL}, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[4467 bytes cut]\n" + strings.Repeat("b", 65533) + "END"; out.Webhook.Body != want {
+		t.Errorf("body is %d bytes starting %q", len(out.Webhook.Body), out.Webhook.Body[:30])
 	}
 }
