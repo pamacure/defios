@@ -35,14 +35,18 @@ const (
 // ErrUnknown: no Job Run is kept by that ID.
 var ErrUnknown = errors.New("jobrun: no such Job Run")
 
-// Run is one Job Run: one Job a Trigger's firing ran, or was to run.
+// Run is one Job Run: one Job a Trigger's firing ran, or was to run, or
+// one Job run by hand.
 type Run struct {
 	ID uint64 `json:"id"` // the Group's count of Job Runs, from 1
 	// Firing is the ID of its firing's first Job Run: the Job Runs of one
 	// firing share it.
-	Firing  uint64        `json:"firing"`
-	Trigger string        `json:"trigger"` // the Hook or Schedule that fired
-	Event   trigger.Event `json:"event"`   // what it fired on
+	Firing  uint64 `json:"firing"`
+	Trigger string `json:"trigger"` // the Hook or Schedule that fired; "" if run by hand
+	// ByHand: run by hand (job run, Run now), a firing of this one Job
+	// with no Trigger, on the event given, if any.
+	ByHand  bool          `json:"by_hand,omitempty"`
+	Event   trigger.Event `json:"event"` // what it fired on
 	Fired   time.Time     `json:"fired"`
 	Job     string        `json:"job"`
 	Kind    string        `json:"kind"` // agent, exec or webhook

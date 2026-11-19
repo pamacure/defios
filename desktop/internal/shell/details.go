@@ -78,11 +78,13 @@ type JobRunView struct {
 	ID uint64
 	// Trigger fired on Event, its type, with EventMsgID the message or
 	// Sign Request it is about, "" for none; a Schedule's is
-	// trigger.ScheduleEvent.
+	// trigger.ScheduleEvent. Trigger is "" for a Job run by hand.
 	Trigger, Event, EventMsgID string
-	Job, Kind                  string // Kind is agent, exec or webhook
-	State, Error               string // State is a node.Job* state
-	Fired, Started, Ended      time.Time
+	// ByHand: run by hand (Run now, job run), with no Trigger.
+	ByHand                bool
+	Job, Kind             string // Kind is agent, exec or webhook
+	State, Error          string // State is a node.Job* state
+	Fired, Started, Ended time.Time
 	// An exec Job's command, its exit code, nil if it never started or
 	// was cut off, and the last of its output.
 	Command        []string
@@ -107,7 +109,7 @@ type JobAttempt struct {
 // jobRunView is r as the panel shows it.
 func jobRunView(r node.JobRun) *JobRunView {
 	v := &JobRunView{
-		ID: r.ID, Trigger: r.Trigger, Event: r.Event.Type, EventMsgID: cmp.Or(r.Event.MsgID, r.Event.SignRequestID),
+		ID: r.ID, Trigger: r.Trigger, ByHand: r.ByHand, Event: r.Event.Type, EventMsgID: cmp.Or(r.Event.MsgID, r.Event.SignRequestID),
 		Job: r.Job, Kind: r.Kind, State: r.State, Error: r.Error, Fired: r.Fired, Started: r.Started, Ended: r.Ended,
 		Handle: r.Handle,
 	}

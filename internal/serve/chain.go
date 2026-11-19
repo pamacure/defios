@@ -55,8 +55,12 @@ const (
 	// event. It shows on the stream of its event's Conversation, Group-level
 	// talk for a Schedule.
 	EventTriggerFire = "trigger.fire"
+	// EventJobRun is a Job run by hand (job run) starting: job, event. It
+	// shows on the stream of its event's Conversation, Group-level talk
+	// for none.
+	EventJobRun = "job.run"
 	// EventJobEnd is a Job a Trigger or job run ran ending: job, ok, error.
-	// It shows where its trigger.fire does.
+	// It shows where its trigger.fire or job.run does.
 	EventJobEnd = "job.end"
 )
 
@@ -79,11 +83,12 @@ type ChainEvent struct {
 	// Error, on chain.end, means the serve stopped and the chain is lost.
 	Cancelled bool `json:"cancelled,omitempty"`
 	// Trigger and Event, on trigger.fire, are the Trigger that fired and
-	// what it fired on, as its Jobs are given it.
+	// what it fired on, as its Jobs are given it; Event, on job.run, is
+	// what the Job runs on, nil for nothing.
 	Trigger string         `json:"trigger,omitempty"`
 	Event   *trigger.Event `json:"event,omitempty"`
-	// Job and OK, on job.end, are the Job and whether it succeeded; Error
-	// then says why it failed.
+	// Job, on job.run and job.end, is the Job; OK, on job.end, whether it
+	// succeeded, and Error then says why it failed.
 	Job string `json:"job,omitempty"`
 	OK  *bool  `json:"ok,omitempty"`
 }

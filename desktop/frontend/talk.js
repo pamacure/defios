@@ -953,7 +953,7 @@ function jobFacts(job) {
     h("h3", {}, `Job ${job.Job}`),
     h("div", { class: "row" }, h("span", { class: `chip ${cls}` }, label), h("span", { class: "chip" }, job.Kind)),
     job.Error && h("pre", { class: "error-text" }, job.Error),
-    row("Trigger", job.Trigger),
+    row("Trigger", job.ByHand ? "None: run by hand" : job.Trigger),
     row("Event", on && h("span", {}, on, job.EventMsgID && h("code", {}, ` ${shortID(job.EventMsgID)}`))),
     row("Fired", utc(job.Fired)),
     row("Started", utc(job.Started)),

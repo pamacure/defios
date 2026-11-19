@@ -350,7 +350,7 @@ func runConversationFollow(cmd *cobra.Command, g *globals, keyQuery string) erro
 			continue
 		}
 		switch ev.Type {
-		case serve.EventTriggerFire, serve.EventJobEnd:
+		case serve.EventTriggerFire, serve.EventJobRun, serve.EventJobEnd:
 			fmt.Fprintln(g.app.Stdout, triggerLine(p, ev))
 		case serve.EventChainStart:
 			fmt.Fprintln(g.app.Stdout, p.dim(fmt.Sprintf("[agents answering msg_id %s]", shortChain(ev.Chain))))

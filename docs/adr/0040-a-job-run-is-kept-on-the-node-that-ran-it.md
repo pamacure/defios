@@ -13,10 +13,16 @@ like a Transcript.
 
 ## Decisions
 
-- **Every Trigger records one.** A Hook firing and a Schedule firing each
-  record a Job Run for every Job they run, including a Job never run because
-  one before it failed (`not_run`). A Job Run holds what fired it and on
-  what event, its state, and when it started and ended. It also holds:
+- **Every Trigger records one, and so does a Job run by hand.** A Hook
+  firing and a Schedule firing each record a Job Run for every Job they run,
+  including a Job never run because one before it failed (`not_run`). A Job
+  run by hand (`job run`, the Triggers page's Run now) records one too, as a
+  firing of that one Job with no Trigger, marked as run by hand, on the
+  event given, if any: running a Job by hand is how it is tested, when what
+  it did matters most. It counts towards the same bound, and is never one
+  of a Sign Request's Hook runs, even on that request's event. A Job Run
+  holds what fired it and on what event, its state, and when it started and
+  ended. It also holds:
   - **exec:** the command, its exit code, and its stdout and stderr.
   - **webhook:** the method and URL, each attempt's HTTP status, and the
     last response body.
@@ -37,7 +43,10 @@ like a Transcript.
   the COSL: the message itself is unchanged. An agent Job's messages are
   found through its chain.
 - **Readable from every front end.** `trigger runs [--job NAME] [--last N]`
-  lists Job Runs, and `trigger run <id>` shows one in full. The desktop
+  lists Job Runs, and `trigger run <id>` shows one in full, saying "run by
+  hand" where a Trigger's name would be. The stream shows a Job run by hand
+  starting as `job.run`, where its event's Conversation's `trigger.fire`
+  would show. The desktop
   app's Talk page draws its Job lines from Job Runs instead of live events,
   so they survive a restart. Selecting one, or a message a Job wrote,
   shows its Job Run.

@@ -21,7 +21,7 @@ import (
 func triggerCommand(g *globals) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "trigger",
-		Short: "What this Node's Hooks and Schedules ran: their Job Runs",
+		Short: "What this Node's Hooks and Schedules ran, and the Jobs run by hand: their Job Runs",
 	}
 	var job string
 	var last int
@@ -157,18 +157,26 @@ func runTriggerRun(ctx context.Context, g *globals, arg string) error {
 	return nil
 }
 
-// firedBy names the Trigger that ran r: "hook <name>" or "schedule <name>".
+// firedBy names the Trigger that ran r: "hook <name>" or "schedule
+// <name>", or "run by hand".
 func firedBy(r node.JobRun) string {
+	if r.ByHand {
+		return "run by hand"
+	}
 	if r.Event.Type == trigger.ScheduleEvent {
 		return "schedule " + r.Trigger
 	}
 	return "hook " + r.Trigger
 }
 
-// firedOn says what a Trigger fired on: a Schedule's time, a Hook's event.
+// firedOn says what a Trigger fired on: a Schedule's time, a Hook's
+// event; or what a Job run by hand ran on, if anything.
 func firedOn(ev trigger.Event) string {
 	if ev.Type == trigger.ScheduleEvent {
 		return " for " + ev.Time
+	}
+	if ev.Type == "" {
+		return ""
 	}
 	on := " on " + ev.Type
 	if ev.Seq != 0 {

@@ -3,6 +3,7 @@ package serve_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/jobrun"
 	"defios.com/internal/serve"
+	"defios.com/internal/trigger"
 )
 
 // waitJobRuns polls n's Job Runs until done says they are all there,
@@ -195,5 +197,67 @@ func TestAnExecJobsMessagesAreRecordedOnItsJobRun(t *testing.T) {
 	runs = waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && len(runs[0].Messages) == 4 })
 	if got, want := runs[0].Messages, []string{one.MsgID, two.MsgID, three.MsgID, four.MsgID}; !slices.Equal(got, want) {
 		t.Errorf("Job Run messages %v, want %v", got, want)
+	}
+}
+
+// A Job run by hand keeps a Job Run, marked so, with no Trigger: on the
+// event given, if any, with its output, and the talk messages it writes
+// with the DEFIOS_JOB_RUN it is given. It shows on its event's stream as
+// job.run once kept, then job.end. On a Sign Request's event it is not
+// among that request's Hook runs.
+func TestAJobRunByHandKeepsAJobRun(t *testing.T) {
+	tokFile := filepath.Join(t.TempDir(), "tok")
+	a, b := pairWith(t, func(n *node) {
+		if n.name == "bob" {
+			n.tune = func(o *serve.Options) { o.Getenv = os.Getenv }
+		}
+	})
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	writeConfig(t, b.paths.GroupConfigFile(group.ImplicitAlias), fmt.Sprintf(`
+[jobs.say]
+exec = ["sh", "-c", "echo said; echo \"$DEFIOS_JOB_RUN\" > \"$0\"", %q]
+`, tokFile))
+	s := watch(t, b)
+	ctx := context.Background()
+	ev := &trigger.Event{Type: "request.open", SignRequestID: "abcd", MsgID: "abcd"}
+	v, err := b.client().JobRun(ctx, "say", ev)
+	if err != nil || !v.OK {
+		t.Fatalf("job run say = %+v, %v", v, err)
+	}
+	runs := waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && runs[0].State == jobrun.OK })
+	r := runs[0]
+	if !r.ByHand || r.Trigger != "" || r.Job != "say" || r.Event.Type != "request.open" || r.Event.SignRequestID != "abcd" ||
+		r.Exec == nil || r.Exec.Stdout != "said\n" || r.Firing != r.ID {
+		t.Errorf("Job Run %+v, exec %+v", r, r.Exec)
+	}
+	if got := strings.TrimSpace(readFile(t, tokFile)); got != r.Token() {
+		t.Errorf("DEFIOS_JOB_RUN = %q, want %q", got, r.Token())
+	}
+	if run := nextOfTypes(t, s, serve.EventJobRun, serve.EventJobEnd); run.Type != serve.EventJobRun || run.Job != "say" || run.Event == nil || run.Event.Type != "request.open" {
+		t.Errorf("first = %+v, want say's job.run", run)
+	}
+	if end := nextOfTypes(t, s, serve.EventJobRun, serve.EventJobEnd); end.Type != serve.EventJobEnd || end.Job != "say" {
+		t.Errorf("second = %+v, want say's job.end", end)
+	}
+	sent, err := b.client().ConversationSendAs(ctx, "from the job", "", 1, r.Token(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs = waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && len(runs[0].Messages) == 1 })
+	if runs[0].Messages[0] != sent.MsgID {
+		t.Errorf("Job Run messages %v, want %s", runs[0].Messages, sent.MsgID)
+	}
+	if hr, err := b.client().HookRuns(ctx); err != nil || len(hr) != 0 {
+		t.Errorf("Hook runs = %+v, %v; want none", hr, err)
+	}
+
+	if v, err = b.client().JobRun(ctx, "say", nil); err != nil || !v.OK {
+		t.Fatalf("job run say with no event = %+v, %v", v, err)
+	}
+	runs = waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 2 && runs[0].State == jobrun.OK })
+	if r := runs[0]; !r.ByHand || r.Event.Type != "" || r.Event.ConversationID != "" {
+		t.Errorf("with no event, Job Run %+v", r)
 	}
 }

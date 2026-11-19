@@ -676,6 +676,42 @@ func TestJobLinesAreReadFromJobRuns(t *testing.T) {
 	}
 }
 
+// A Job run by hand shows "Job X run by hand." in its event's
+// Conversation, Group talk for none, then how it ended, read from its Job
+// Run; a job.run reads them again.
+func TestAJobRunByHandShowsInTalk(t *testing.T) {
+	r := newRig(t, "alpha")
+	k := withKey(t, r)
+	t0 := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "pay rent?", CreatedAt: t0})
+	ev := trigger.Event{Type: "sign_request.open", ConversationID: k.ConversationID}
+	fired := t0.Add(time.Minute)
+	r.node.addJobRuns(node.JobRun{ByHand: true, Event: ev, Fired: fired, Job: "check", Kind: "exec", State: node.JobOK, Started: fired, Ended: fired.Add(time.Second)})
+	s := served(t, r)
+	s.OpenConversation(k.ConversationID)
+	lines := func(ts shell.TalkState) string {
+		var got []string
+		for _, it := range ts.Items {
+			got = append(got, fmt.Sprintf("%s %d: %s", it.Kind, it.JobRun, it.Text))
+		}
+		return strings.Join(got, "\n")
+	}
+	ts := eventuallyTalk(t, s, items(3))
+	if got := lines(ts); got != "message 0: pay rent?\njob 1: Job check run by hand.\njob 1: Job check finished." {
+		t.Fatalf("lines:\n%s", got)
+	}
+
+	s.OpenConversation(node.GroupTalk)
+	eventuallyTalk(t, s, items(0))
+	now := time.Now()
+	r.node.addJobRuns(node.JobRun{ByHand: true, Fired: now, Job: "sweep", Kind: "exec", State: node.JobRunning, Started: now})
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventJobRun, Job: "sweep"})
+	ts = eventuallyTalk(t, s, items(1))
+	if got := lines(ts); got != "job 2: Job sweep run by hand." {
+		t.Fatalf("Group talk:\n%s", got)
+	}
+}
+
 func TestTalkReadsAgainOnceTheGroupsReplicaExists(t *testing.T) {
 	r := newRig(t, "alpha")
 	r.node.tk().noReplica = true

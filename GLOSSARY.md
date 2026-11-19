@@ -137,7 +137,7 @@ What a Trigger runs when it fires, defined once by name so any number of Hooks a
 _Avoid_: action (that is how a Tool is described), task, effect
 
 **Job Run**:
-One time one of this Node's Jobs ran because a Trigger fired: what fired it and on what event, how it ended, and what it produced — a command's output, a webhook's request and response, or the agent run it summoned — along with the talk messages it wrote. Kept on the Node that ran it, bounded to the most recent, and never replicated, so other Nodes see only what it wrote to talk. Left out of a Backup.
+One time one of this Node's Jobs ran, because a Trigger fired or because it was run by hand (`job run`, Run now): what fired it, or that it was run by hand, and on what event, how it ended, and what it produced — a command's output, a webhook's request and response, or the agent run it summoned — along with the talk messages it wrote. Kept on the Node that ran it, bounded to the most recent, and never replicated, so other Nodes see only what it wrote to talk. Left out of a Backup.
 _Avoid_: job log, execution, invocation
 
 **Key**:

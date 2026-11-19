@@ -187,8 +187,8 @@ const (
 	// stayed silent, failed or was cancelled. It shows as a message from
 	// that agent, faded, read from its Transcript.
 	KindRun ItemKind = "run"
-	// KindJob is a Trigger of this device's firing, or a Job it ran
-	// ending, read from its Job Run (ADR 0040).
+	// KindJob is a Trigger of this device's firing, a Job run by hand on
+	// it, or a Job it ran ending, read from its Job Run (ADR 0040).
 	KindJob ItemKind = "job"
 )
 
@@ -908,16 +908,20 @@ func (t *talk) items() []Item {
 
 // jobLines are the open Conversation's lines from this device's Job
 // Runs, those of a Trigger firing on what was said here, or for Group
-// talk on a Schedule too: each firing once, as its first Job Run, and
-// each Job that ended. A Job never run, or running still, has no line;
-// t.mu is held.
+// talk on a Schedule too, and of a Job run by hand on it, or for Group
+// talk on nothing: each firing once, as its first Job Run, each Job run
+// by hand once, and each Job that ended. A Job never run, or running
+// still, has no line of its ending; t.mu is held.
 func (t *talk) jobLines() []Item {
 	var out []Item
 	for _, r := range slices.Backward(t.jobRuns) {
 		if r.Event.ConversationID != t.open {
 			continue
 		}
-		if r.ID == r.Firing {
+		switch {
+		case r.ByHand:
+			out = append(out, Item{Kind: KindJob, JobRun: r.ID, At: r.Fired, Text: fmt.Sprintf("Job %s run by hand.", r.Job)})
+		case r.ID == r.Firing:
 			what := r.Event.Type
 			if what == "" || what == trigger.ScheduleEvent {
 				what = "its schedule"
@@ -1176,8 +1180,9 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 }
 
 // chain applies a chain event in conv, and reports whether a run or the
-// chain ended, or a Trigger fired or its Job ended, so what it said, its
-// Transcript and the Job Runs are to be read; t.mu is held.
+// chain ended, or a Trigger fired, a Job was run by hand or a Job ended,
+// so what it said, its Transcript and the Job Runs are to be read; t.mu
+// is held.
 func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 	find := func() *LiveChain {
 		for _, c := range t.live[conv] {
@@ -1243,7 +1248,7 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 			t.say(conv, "The agents stopped: "+ev.Error)
 		}
 		return true
-	case serve.EventTriggerFire, serve.EventJobEnd:
+	case serve.EventTriggerFire, serve.EventJobRun, serve.EventJobEnd:
 		// Its Job Run, kept before it was sent, is read again.
 		return true
 	}

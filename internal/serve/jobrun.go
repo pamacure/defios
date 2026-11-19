@@ -43,10 +43,11 @@ func (s *server) jobRoutes(mux *http.ServeMux) {
 }
 
 // jobRun runs the Job req names, as config.toml now defines it, on its
-// event, and waits for it to end (ADR 0032). It is no Trigger's firing:
-// the event's trigger is cleared, its group is this one, and its depth,
-// 0 if no event is given, is the one a Job's writes go one below. A Job
-// that fails is reported in the view, not as an error.
+// event, and waits for it to end (ADR 0032), keeping its Job Run (ADR
+// 0040), marked run by hand. It is no Trigger's firing: the event's
+// trigger is cleared, its group is this one, and its depth, 0 if no event
+// is given, is the one a Job's writes go one below. A Job that fails is
+// reported in the view, not as an error.
 func (s *server) jobRun(ctx context.Context, req jobRunRequest) (JobView, error) {
 	_, store, ok := s.current()
 	if !ok {
@@ -68,8 +69,18 @@ func (s *server) jobRun(ctx context.Context, req jobRunRequest) (JobView, error)
 	if ev.From == "" {
 		ev.From = s.opts.Node.NodeID.String()
 	}
-	r := s.jobRunner(store, "serve: job run "+req.Job+": ", nil)
-	v, _ := runJob(ctx, r, req.Job, j, ev)
+	// As a Trigger's, each event follows the Job Run it is about, kept.
+	rec := s.jobRuns.byHand(req.Job, j, ev)
+	var shown *trigger.Event
+	if req.Event != nil {
+		shown = &ev
+	}
+	s.chains.publish(eventConversation(ev), ChainEvent{Type: EventJobRun, Job: req.Job, Event: shown})
+	r := s.jobRunner(store, "serve: job run "+req.Job+": ", func(conv []byte, chain string) { rec.chain(0, conv, chain) })
+	r.JobRun = rec.token(0)
+	rec.running(0)
+	v, out := runJob(ctx, r, req.Job, j, ev)
+	rec.ended(0, v, out)
 	publishJobEnd(&s.chains, ev, v)
 	return v, nil
 }

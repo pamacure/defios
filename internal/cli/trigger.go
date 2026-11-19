@@ -297,9 +297,16 @@ func runJobRun(cmd *cobra.Command, g *globals, name, eventFile string) error {
 	return nil
 }
 
-// triggerLine is how follow shows a trigger.fire or job.end event.
+// triggerLine is how follow shows a trigger.fire, job.run or job.end
+// event.
 func triggerLine(p palette, ev serve.ChainEvent) string {
 	switch ev.Type {
+	case serve.EventJobRun:
+		on := ""
+		if ev.Event != nil {
+			on = firedOn(*ev.Event)
+		}
+		return p.dim(fmt.Sprintf("[job %s run by hand%s]", ev.Job, on))
 	case serve.EventTriggerFire:
 		if ev.Event != nil && ev.Event.Type == trigger.ScheduleEvent {
 			return p.dim(fmt.Sprintf("[schedule %s fired for %s]", ev.Trigger, ev.Event.Time))

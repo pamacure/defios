@@ -205,9 +205,10 @@ func TestARunsLineDetailsAreItsRunAndEarlierRunsTheLiveTranscript(t *testing.T) 
 	}
 }
 
-// A Job line's panel is its Job Run: what fired it on what, how it ended
-// and when, and what it produced: an exec Job's command, exit code and
-// output, a webhook's request, statuses and response.
+// A Job line's panel is its Job Run: what fired it on what, or that it
+// was run by hand, how it ended and when, and what it produced: an exec
+// Job's command, exit code and output, a webhook's request, statuses and
+// response.
 func TestAJobLinesDetailsAreItsJobRun(t *testing.T) {
 	r := newRig(t, "alpha")
 	ev := trigger.Event{Type: "app.freeform", MsgID: "e1"}
@@ -237,6 +238,10 @@ func TestAJobLinesDetailsAreItsJobRun(t *testing.T) {
 	if j == nil || j.Kind != "webhook" || j.Method != "POST" || j.URL != "$HOOK_URL" || j.Body != "got it" || j.ContentType != "text/plain" ||
 		!reflect.DeepEqual(j.Attempts, []shell.JobAttempt{{Status: 502, Error: "HTTP 502"}, {Status: 200}}) || j.ExitCode != nil {
 		t.Fatalf("webhook Job Run: %+v", j)
+	}
+	r.node.addJobRuns(node.JobRun{ByHand: true, Fired: fired, Job: "say", Kind: "exec", State: node.JobOK})
+	if j = s.JobRunDetails(4).Job; j == nil || !j.ByHand || j.Trigger != "" {
+		t.Fatalf("Job Run by hand: %+v", j)
 	}
 	if d := s.JobRunDetails(9); d.Problem == nil || d.Job != nil {
 		t.Fatalf("no such Job Run: %+v", d)

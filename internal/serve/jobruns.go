@@ -23,7 +23,7 @@ const (
 )
 
 // JobRun is one Job Run (ADR 0040): one Job a Trigger's firing ran, or
-// was to run, and how far it got.
+// was to run, or one run by hand, and how far it got.
 type JobRun = jobrun.Run
 
 // HookRun is one firing of one of this Node's Hooks on a Sign Request:
@@ -36,8 +36,9 @@ type HookRun struct {
 	Jobs    []JobRun      `json:"jobs"`
 }
 
-// jobRuns keeps the Job Runs of this Node's Triggers' firings in the
-// Group's job-runs/. Its zero value keeps none until open.
+// jobRuns keeps the Job Runs of this Node's Triggers' firings, and of
+// the Jobs run by hand, in the Group's job-runs/. Its zero value keeps
+// none until open.
 type jobRuns struct {
 	mu    sync.Mutex
 	dir   string
@@ -75,13 +76,32 @@ func (r *jobRuns) start(name string, jobs []string, defs map[string]config.Job, 
 	f := &firing{r: r, onSignRequest: ev.Type != trigger.ScheduleEvent && ev.SignRequestID != ""}
 	now := time.Now()
 	for _, job := range jobs {
-		j := defs[job]
-		run := JobRun{Trigger: name, Event: ev, Fired: now, Job: job, Kind: j.Kind(), State: JobPending}
-		if run.Kind == config.JobAgent {
-			run.Handle = j.Agent
-		}
-		f.runs = append(f.runs, run)
+		f.runs = append(f.runs, pendingRun(name, job, defs[job], ev, now))
 	}
+	return r.add(f)
+}
+
+// byHand records Job name, j, run by hand on ev, pending, and returns the
+// firing of it alone to move along as it runs. It is no Hook run, even on
+// a Sign Request's event.
+func (r *jobRuns) byHand(name string, j config.Job, ev trigger.Event) *firing {
+	run := pendingRun("", name, j, ev, time.Now())
+	run.ByHand = true
+	return r.add(&firing{r: r, runs: []JobRun{run}})
+}
+
+// pendingRun is Job name, j, to run on ev for Trigger trig, "" for none,
+// fired at now.
+func pendingRun(trig, name string, j config.Job, ev trigger.Event, now time.Time) JobRun {
+	run := JobRun{Trigger: trig, Event: ev, Fired: now, Job: name, Kind: j.Kind(), State: JobPending}
+	if run.Kind == config.JobAgent {
+		run.Handle = j.Agent
+	}
+	return run
+}
+
+// add keeps f's Job Runs, giving them their IDs, and returns f.
+func (r *jobRuns) add(f *firing) *firing {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.store != nil {
@@ -162,7 +182,7 @@ func (r *jobRuns) hookRuns() ([]HookRun, error) {
 	out := []HookRun{}
 	at := map[uint64]int{}
 	for _, run := range slices.Backward(runs) { // oldest first
-		if run.Event.Type == trigger.ScheduleEvent || run.Event.SignRequestID == "" {
+		if run.ByHand || run.Event.Type == trigger.ScheduleEvent || run.Event.SignRequestID == "" {
 			continue
 		}
 		i, ok := at[run.Firing]
