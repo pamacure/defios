@@ -926,8 +926,9 @@ function detailsPanel(it) {
 
   return h("aside", { class: "about details", "aria-label": "Message details" },
     h("article", { class: "dcard" },
-      head,
-      actions,
+      // Who wrote it, when, and what can be done with it stay in view
+      // as the rest scrolls under them.
+      h("div", { class: "dtop" }, head, actions),
       details,
       job && jobFacts(job),
       run && runFacts(run),

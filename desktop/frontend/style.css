@@ -485,7 +485,14 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
    Conversation content, in the style of the Sign Request card. */
 .msg.selected .text { box-shadow: 0 0 0 2px var(--accent); }
 .sysline.selected { color: var(--text); background: var(--accent-wash); border-radius: var(--radius-s); padding: 2px 8px; }
-.about.details { padding: 12px; }
+/* The top padding is the card's margin, so the pinned head meets the
+   column's top edge with nothing showing through above it. */
+.about.details { padding: 0 12px 12px; }
+.dcard { margin-top: 12px; }
+.dcard > .dtop { position: sticky; top: 0; z-index: 1; display: flex; flex-direction: column; gap: 12px;
+  margin: -12px -14px 0; padding: 12px 14px 10px; background: var(--surface); border-bottom: 1px solid var(--line);
+  border-radius: var(--radius-l) var(--radius-l) 0 0; }
+.dcard > .dtop + section { border-top: 0; padding-top: 0; }
 .dcard { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-l); font-size: 13px; min-width: 0; }
 .dcard .dhead { display: flex; align-items: flex-start; gap: 10px; }
 .dcard .dhead .who { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
