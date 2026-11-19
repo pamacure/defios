@@ -55,7 +55,7 @@ func (s *server) runAgentJob(ctx context.Context, store *cosl.Store, name string
 	if err != nil {
 		return err
 	}
-	c := &chain{id: id, conv: conv, handles: []string{j.Agent}, depth: ev.Depth, inc: inc, job: turn, done: make(chan struct{})}
+	c := &chain{id: id, conv: conv, handles: []string{j.Agent}, depth: ev.Depth, inc: inc, job: turn, jobName: name, done: make(chan struct{})}
 	queued := false
 	if !s.onChains(ctx, func(ctx context.Context, chains *sync.WaitGroup) {
 		queued = s.chains.enqueue(ctx, chains, c, s.runChain)

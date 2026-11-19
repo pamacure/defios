@@ -16,6 +16,8 @@ type Expanded struct {
 	// message, another Node's (Transcripts are never replicated), or one
 	// whose Transcript is gone.
 	Blocks []json.RawMessage
+	// Chain is the chain of the run that said it, "" with no run.
+	Chain string
 }
 
 // Expand is msgs, from conv's talk (nil for Group-level talk), each with
@@ -25,17 +27,18 @@ func (r Reader) Expand(conv []byte, msgs Messages) ([]Expanded, error) {
 	if err != nil {
 		return nil, err
 	}
-	said := map[string][]json.RawMessage{}
+	said := map[string]transcript.Run{}
 	for _, t := range ts {
 		for _, run := range transcript.Runs(t.Lines) {
 			if run.Outcome == transcript.OutcomeSaid {
-				said[run.MsgID] = run.Output()
+				said[run.MsgID] = run
 			}
 		}
 	}
 	out := make([]Expanded, len(msgs))
 	for i, m := range msgs {
-		out[i] = Expanded{Message: m, Blocks: said[m.MsgID()]}
+		run := said[m.MsgID()]
+		out[i] = Expanded{Message: m, Blocks: run.Output(), Chain: run.Chain}
 	}
 	return out, nil
 }

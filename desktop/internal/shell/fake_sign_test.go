@@ -28,12 +28,15 @@ type fakeSign struct {
 	transfers []node.Transfer
 	// runs are the Transcript runs of this Node's chains, by chain.
 	runs map[string][]transcript.Run
+	// cleared are the steps of each chain whose run is in a cleared
+	// Transcript.
+	cleared map[string][]int
 }
 
 func (n *fakeNode) sg() *fakeSign {
 	t := n.tk()
 	if t.sign == nil {
-		t.sign = &fakeSign{runs: map[string][]transcript.Run{}}
+		t.sign = &fakeSign{runs: map[string][]transcript.Run{}, cleared: map[string][]int{}}
 	}
 	return t.sign
 }
@@ -286,7 +289,7 @@ func (n *fakeNode) Transcript(_ context.Context, group, conv, chain string) (nod
 	defer n.mu.Unlock()
 	runs, ok := n.sg().runs[chain]
 	if !ok {
-		return node.Transcript{}, &node.InvalidError{Err: fmt.Errorf("no chain %s", chain)}
+		return node.Transcript{}, &node.ChainNotFoundError{Prefix: chain, Searched: node.ChainPlace{Group: group, Conversation: conv}}
 	}
-	return node.Transcript{Chain: chain, Runs: runs}, nil
+	return node.Transcript{Chain: chain, Runs: runs, Cleared: n.sg().cleared[chain]}, nil
 }

@@ -2,7 +2,6 @@ package shell
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
@@ -40,6 +39,7 @@ type TalkNode interface {
 	Networks(ctx context.Context, group, conv string) ([]node.Network, error)
 	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)
 	LiveTranscripts(ctx context.Context, group, conv string) ([]node.LiveTranscript, error)
+	LiveRuns(ctx context.Context, group, conv, handle string) ([]node.Run, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 	Liveries(ctx context.Context) (map[string]string, error)
 	SetLivery(ctx context.Context, party, livery string) error
@@ -223,11 +223,10 @@ type Item struct {
 	// runGap ends a run.
 	Author, Avatar bool
 	sender         string // who wrote it, for runs; "" off the left
-	// Transcript: this device ran the chain that said it, and Transcript
-	// gives its run. On a system line about an agent's run, Chain and
-	// Handle name the run and RunTranscript gives it.
-	Transcript bool
-	Chain      string
+	// Chain is the chain of this device's agent's run that said it; on a
+	// system line about an agent's run, Chain and Handle name the run.
+	// The panel's Details give the run (MessageDetails, RunDetails).
+	Chain string
 	// Sign is a Sign Request's card, for KindSign.
 	Sign *SignCard
 }
@@ -330,7 +329,7 @@ type talk struct {
 	convs  node.Conversations
 	status node.Status
 	msgs   []node.Message
-	said   map[string][]json.RawMessage // Transcript blocks by msg_id
+	said   map[string]string // by msg_id, the chain of this device's run that said it
 	// saidStale: a chain or Job ended, or a Conversation opened, so said
 	// is read again with the messages. Reading it expands every
 	// Transcript there, so it is not read on every message.
@@ -581,10 +580,10 @@ func (t *talk) loadMessages() {
 	if t.read("messages", err) {
 		t.msgs = msgs
 		if withSaid {
-			t.said, t.saidStale = map[string][]json.RawMessage{}, false
+			t.said, t.saidStale = map[string]string{}, false
 			for _, m := range chat {
-				if len(m.Blocks) > 0 {
-					t.said[m.MsgID] = m.Blocks
+				if m.Chain != "" {
+					t.said[m.MsgID] = m.Chain
 				}
 			}
 		}
@@ -916,7 +915,7 @@ func (t *talk) item(m node.Message) Item {
 	case it.From == "":
 		it.From = shortKey(m.NodeID)
 	}
-	_, it.Transcript = t.said[m.MsgID]
+	it.Chain = t.said[m.MsgID]
 	return it
 }
 
@@ -1081,12 +1080,15 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 		done()
 		// What it wrote was its own, but it went without a trace.
 		t.system[conv] = append(t.system[conv], Item{
-			Kind: KindSystem, At: time.Now(), Handle: ev.Handle, Chain: ev.Chain, Transcript: true,
+			Kind: KindSystem, At: time.Now(), Handle: ev.Handle, Chain: ev.Chain,
 			Text: fmt.Sprintf("@%s ended its turn without posting: it never called talk_write.", ev.Handle),
 		})
 	case serve.EventAgentError:
 		done()
-		t.say(conv, fmt.Sprintf("@%s failed: %s", ev.Handle, ev.Error))
+		t.system[conv] = append(t.system[conv], Item{
+			Kind: KindSystem, At: time.Now(), Handle: ev.Handle, Chain: ev.Chain,
+			Text: fmt.Sprintf("@%s failed: %s", ev.Handle, ev.Error),
+		})
 	case serve.EventAgentSkipped:
 		t.say(conv, fmt.Sprintf("@%s was skipped: %s", ev.Handle, ev.Reason))
 	case serve.EventAgentTranscript:

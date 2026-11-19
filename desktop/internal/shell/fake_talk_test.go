@@ -2,7 +2,6 @@ package shell_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,6 +13,7 @@ import (
 	"defios.com/internal/outbox"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
+	"defios.com/internal/transcript"
 )
 
 // The fake Node's talk: Conversations, their messages and Outbox, Keys and
@@ -22,7 +22,6 @@ import (
 type fakeTalk struct {
 	committed map[string][]node.Message // by Conversation ID
 	queued    map[string][]node.Message
-	blocks    map[string][]json.RawMessage // a message's Transcript blocks, by msg_id
 	keys      []node.Key
 	keygens   []node.Session
 	// included are the Handles included per Conversation; a Conversation
@@ -44,6 +43,9 @@ type fakeTalk struct {
 	// liveTranscripts are the Handles with a live Transcript, by
 	// Conversation ID.
 	liveTranscripts map[string][]node.LiveTranscript
+	// liveRuns are the runs of each live Transcript, by
+	// "<Conversation ID>/<Handle>".
+	liveRuns map[string][]node.Run
 	// read is each Conversation's read mark.
 	read map[string]uint64
 	// liveries are the Liveries this Node has given, by party key.
@@ -54,9 +56,10 @@ func (n *fakeNode) tk() *fakeTalk {
 	if n.talk == nil {
 		n.talk = &fakeTalk{
 			committed: map[string][]node.Message{}, queued: map[string][]node.Message{},
-			blocks: map[string][]json.RawMessage{}, included: map[string][]string{},
+			included:  map[string][]string{},
 			providers: map[string][]node.Provider{}, networks: map[string][]node.Network{},
 			liveTranscripts: map[string][]node.LiveTranscript{},
+			liveRuns:        map[string][]node.Run{},
 			read:            map[string]uint64{},
 			liveries:        map[string]string{},
 		}
@@ -171,7 +174,13 @@ func (n *fakeNode) Chat(_ context.Context, group, conv string, limit int, transc
 		}
 		cm := node.ChatMessage{Message: m}
 		if transcripts {
-			cm.Blocks = t.blocks[m.MsgID]
+			for chain, runs := range n.sg().runs {
+				for _, r := range runs {
+					if r.Outcome == transcript.OutcomeSaid && r.MsgID == m.MsgID {
+						cm.Chain = chain
+					}
+				}
+			}
 		}
 		out = append(out, cm)
 	}
@@ -413,6 +422,12 @@ func (n *fakeNode) LiveTranscripts(_ context.Context, group, conv string) ([]nod
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return slices.Clone(n.tk().liveTranscripts[conv]), nil
+}
+
+func (n *fakeNode) LiveRuns(_ context.Context, group, conv, handle string) ([]node.Run, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.tk().liveRuns[conv+"/"+handle]), nil
 }
 
 func (n *fakeNode) ClearTranscripts(_ context.Context, group, conv, handle string) ([]string, error) {

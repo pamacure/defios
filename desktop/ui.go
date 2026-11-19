@@ -175,7 +175,11 @@ func (u *UI) SetLivery(party, livery string) shell.TalkState {
 	return u.shell.SetLivery(party, livery)
 }
 
-func (u *UI) Transcript(msgID string) shell.TranscriptView { return u.shell.Transcript(msgID) }
+func (u *UI) MessageDetails(msgID string) shell.Details { return u.shell.MessageDetails(msgID) }
+func (u *UI) RunDetails(chain, handle string) shell.Details {
+	return u.shell.RunDetails(chain, handle)
+}
+func (u *UI) EarlierRuns(handle string) shell.EarlierView { return u.shell.EarlierRuns(handle) }
 
 func (u *UI) ClearCheck() shell.ClearView { return u.shell.ClearCheck() }
 func (u *UI) ClearAgents(conv, handle string) shell.TalkState {

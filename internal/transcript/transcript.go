@@ -68,10 +68,21 @@ type Line struct {
 	// granted to it, and its agent.Request's Binding. A later
 	// run tells its agent what changed since, or starts a new Transcript
 	// in another Shape (ADR 0036).
-	Shape   string          `json:"shape,omitempty"`
-	Tools   []string        `json:"tools,omitempty"`
-	Skills  []string        `json:"skills,omitempty"`
-	Binding string          `json:"binding,omitempty"`
+	Shape   string   `json:"shape,omitempty"`
+	Tools   []string `json:"tools,omitempty"`
+	Skills  []string `json:"skills,omitempty"`
+	Binding string   `json:"binding,omitempty"`
+	// Provider and ModelID, with KindTurn, are the Provider alias the run
+	// called and the Model ID its request named, "" for none.
+	Provider string `json:"provider,omitempty"`
+	ModelID  string `json:"model_id,omitempty"`
+	// By, Job and Summons, with KindTurn, are what summoned the run: the
+	// hex msg_id of the message that did, or the name of the Job, and that
+	// part of Turn as written, the summoning message's line or the Job's
+	// prompt and event.
+	By      string          `json:"by,omitempty"`
+	Job     string          `json:"job,omitempty"`
+	Summons string          `json:"summons,omitempty"`
 	Request json.RawMessage `json:"request,omitempty"`
 	Block   json.RawMessage `json:"block,omitempty"`
 	Usage   json.RawMessage `json:"usage,omitempty"`
@@ -332,6 +343,15 @@ type Transcript struct {
 	Handle string
 	// Lines are its lines as stored, in order.
 	Lines []Line
+	// Live: it is the Agent's live one, not one cleared and closed.
+	Live bool
+}
+
+// LiveLines are the lines of the live Transcript of the Agent handle in
+// conv (nil for Group-level talk), in order; nil if it has none. handle
+// must be a valid Handle: it names a directory.
+func LiveLines(p nodedir.Paths, alias string, conv []byte, handle string) ([]Line, error) {
+	return readFile(p.LiveTranscriptFile(alias, nodedir.ConversationName(conv), handle))
 }
 
 // ReadConversation is every Transcript in conv (nil for Group-level
@@ -373,7 +393,7 @@ func readDir(dir string) ([]Transcript, error) {
 				return nil, err
 			}
 			if lines != nil {
-				out = append(out, Transcript{Handle: a.Name(), Lines: lines})
+				out = append(out, Transcript{Handle: a.Name(), Lines: lines, Live: name == nodedir.LiveTranscript})
 			}
 		}
 	}
@@ -454,6 +474,11 @@ type Run struct {
 	Tools   []string
 	Skills  []string
 	Binding string
+	// Provider and ModelID are the Provider alias it called and the Model
+	// ID it named; By, Job and Summons what summoned it, as its turn line
+	// records them.
+	Provider, ModelID string
+	By, Job, Summons  string
 	// Requests are the request bodies of its model calls as sent, Blocks
 	// its output blocks and the results of its tool calls, and Usage each
 	// call's usage, in order.
@@ -510,6 +535,7 @@ func Runs(lines []Line) []Run {
 		case KindTurn:
 			r.Turn, r.TalkSeq, r.TalkUnapplied = l.Turn, l.Seq, l.Unapplied
 			r.Shape, r.Tools, r.Skills, r.Binding = l.Shape, l.Tools, l.Skills, l.Binding
+			r.Provider, r.ModelID, r.By, r.Job, r.Summons = l.Provider, l.ModelID, l.By, l.Job, l.Summons
 		case KindRequest:
 			r.Requests = append(r.Requests, l.Request)
 		case KindBlock:

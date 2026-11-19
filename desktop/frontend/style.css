@@ -395,10 +395,6 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .msg .actions .link { font-size: 12px; }
 .sysline { align-self: center; display: flex; gap: 8px; align-items: baseline; color: var(--muted); font-size: 12px; text-align: center; max-width: 80%; }
 .sysline time { opacity: .8; }
-.sysrun { align-self: center; display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 80%; }
-.sysrun .sysline { max-width: none; }
-.sysline .link { font-size: inherit; }
-.sysrun .blocks { align-self: stretch; text-align: left; }
 .blocks { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-left: 2px solid var(--line); margin-left: 4px; }
 .blk { font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .blk .kind { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
@@ -482,11 +478,48 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
   .msg { max-width: 92%; }
 }
 
+/* The selected line, and its details in place of the right column's
+   Conversation content, in the style of the Sign Request card. */
+.talk.detailing { grid-template-columns: 230px minmax(0, 1fr) 380px; }
+.msg.selected .text { box-shadow: 0 0 0 2px var(--accent); }
+.sysline.selected { color: var(--text); background: var(--accent-wash); border-radius: var(--radius-s); padding: 2px 8px; }
+.about.details { padding: 12px; }
+.dcard { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-l); font-size: 13px; min-width: 0; }
+.dcard .dhead { display: flex; align-items: flex-start; gap: 10px; }
+.dcard .dhead .who { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
+.dcard .dhead .who time { flex-basis: 100%; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dcard .handle { color: var(--lv, var(--accent-strong)); font-weight: 600; }
+.dcard .close { all: unset; cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: var(--radius-s); color: var(--muted); }
+.dcard .close:hover { color: var(--text); background: var(--bg); }
+.dcard .close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dcard .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.dcard section { border-top: 1px solid var(--line); padding-top: 10px; }
+.dcard .value .dot { align-self: center; }
+.dcard pre { margin: 0; padding: 6px 8px; background: var(--bg); border-radius: var(--radius-s); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dcard .error-text { color: var(--danger); }
+.dcard .summons { font-size: 13px; }
+.dcard .label { color: var(--muted); font-size: 12px; }
+.dcard details.fold-in > summary { cursor: pointer; color: var(--text-soft); font-size: 12px; }
+.dcard details.fold-in[open] > summary { margin-bottom: 6px; }
+.dcard details.fold-in p { margin: 4px 0 0; }
+.dcard details.earlier { border-top: 1px solid var(--line); padding-top: 6px; }
+.dcard .blocks { margin-left: 0; }
+.dcard .blk.call .nested { margin: 6px 0 0 8px; padding-left: 8px; border-left: 2px solid var(--line); }
+.dcard .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.dcard .step { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 6px; border-radius: var(--radius-s); }
+.dcard button.step { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 6px; border-radius: var(--radius-s); cursor: pointer; }
+.dcard button.step:hover { background: var(--bg); }
+.dcard button.step:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dcard .step .who { display: flex; gap: 6px; align-items: baseline; }
+.dcard .step .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+
 /* Below 1000px the right column leaves the grid; "About" opens it over
    the transcript. */
 .about-toggle { display: none; align-items: center; }
 @media (max-width: 999px) {
   .talk { position: relative; grid-template-columns: 180px minmax(0, 1fr); }
+  .talk.detailing { grid-template-columns: 180px minmax(0, 1fr); }
+  .talk.about-open.detailing > .about { width: min(380px, 92%); }
   .about-toggle { display: inline-flex; }
   .talk > .about { display: none; }
   .talk.about-open > .about {

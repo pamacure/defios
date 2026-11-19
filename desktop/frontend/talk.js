@@ -26,7 +26,13 @@ const tui = {
   aborting: "", // the keygen Session whose Abort reason is being written
   editAlias: false,
   busy: false,
-  expanded: new Map(), // msg_id, or run:chain/handle for a silent run -> its Transcript: { blocks } | { problem } | {} while loading
+  // The line selected, whose details replace the right column's: its
+  // lineKey. The selection outlives leaving the page.
+  selected: null,
+  aboutBefore: false, // whether About showed the right column before a selection opened it
+  details: null, // { key, view? }: the selected line's shell.Details, once read
+  detailsSig: "", // what the details were read against (detailsSig)
+  earlier: null, // { handle, runs? , problem? }: the selected run's agent's live Transcript, opened from "Earlier runs"
   drafts: new Map(), // Conversation ID -> what was typed there
   form: { curve: "ecdsa", t: "", alias: "", reason: "", keyAlias: "" },
   shownOpen: null, // the Conversation the composer's draft belongs to
@@ -62,7 +68,13 @@ export function talkUpdate(next) {
   if (!next || (ts && next.Seq < ts.Seq)) return;
   const streaming = ts && onlyLiveChanged(ts, next);
   ts = next;
-  if (!streaming || !patchLive()) draw();
+  if (streaming && patchLive()) return;
+  if (tui.selected !== null && ts.Open === tui.shownOpen) {
+    // A message dropped or pruned is no longer there to show.
+    if (!selectedItem()) deselect({ redraw: false });
+    else if (detailsSig() !== tui.detailsSig) loadDetails();
+  }
+  draw();
 }
 
 // onlyLiveChanged: next differs from shown only in what the agents
@@ -149,6 +161,7 @@ function draw() {
     tui.shownOpen = ts.Open;
     tui.editAlias = false;
     tui.clearing = null;
+    if (tui.selected !== null) deselect({ redraw: false });
     tui.scroll = { top: 0, pinned: true }; // a Conversation opens at its end
     composer.closeSuggestions();
   }
@@ -158,6 +171,7 @@ function draw() {
   const caret = field ? [active.selectionStart, active.selectionEnd] : null;
   const focused = active === composer.input;
   mount.classList.toggle("about-open", tui.about);
+  mount.classList.toggle("detailing", !!selectedItem());
   mount.replaceChildren(left(), center(), right(), signForm() ?? "", liveryPop() ?? "");
   const tr = mount.querySelector(".transcript");
   const scroll = () => { if (tr.isConnected) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top; };
@@ -440,19 +454,9 @@ function transcript() {
 
 function item(it) {
   if (it.Kind === "sign") return signCard(it, tui.busy);
+  const sel = selectable(it);
   if (it.Kind === "system") {
-    if (!it.Transcript) return h("div", { class: "sysline" }, h("span", {}, it.Text), h("time", {}, time(it.At)));
-    // An agent's run that posted nothing: what it wrote is in its Transcript.
-    const key = `run:${it.Chain}/${it.Handle}`;
-    const open = tui.expanded.get(key);
-    return h("div", { class: "sysrun" },
-      h("div", { class: "sysline" }, h("span", {}, it.Text),
-        h("button", {
-          class: "link", type: "button", "aria-expanded": open ? "true" : "false",
-          onclick: () => toggleTranscript(key, () => call("RunTranscript", tui.shownOpen, it.Chain, it.Handle)),
-        }, open ? "Hide transcript" : "Transcript"),
-        h("time", {}, time(it.At))),
-      open && transcriptBlocks(open));
+    return h("div", { ...sel, class: `sysline ${sel.class}` }, h("span", {}, it.Text), h("time", {}, time(it.At)));
   }
   const left = it.Side === "left";
   // A run of one sender's messages names its author on the first only.
@@ -464,23 +468,18 @@ function item(it) {
   const meta = h("div", { class: "meta" }, who, h("time", {}, time(it.At)),
     it.Queued && h("span", { class: "chip warn" }, "Queued"));
   if (it.Kind === "unreadable") {
-    return h("div", { class: `msg ${it.Side} unreadable ${run}` }, meta, beside(it, h("p", { class: "text" }, "This message can't be read.")));
+    return h("div", { ...sel, class: `msg ${it.Side} unreadable ${run} ${sel.class}` }, meta, beside(it, h("p", { class: "text" }, "This message can't be read.")));
   }
-  const open = tui.expanded.get(it.MsgID);
-  return h("div", { class: `msg ${it.Side} ${run}` },
+  return h("div", { ...sel, class: `msg ${it.Side} ${run} ${sel.class}` },
     meta,
     beside(it, h("div", { class: "text" }, (it.Parts ?? [{ Text: it.Text }]).map(part))),
-    (it.Droppable || it.Transcript) && h("div", { class: "actions" },
-      it.Droppable && h("button", { class: "link", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop"),
-      it.Transcript && h("button", {
-        class: "link", type: "button", "aria-expanded": open ? "true" : "false", onclick: () => toggleTranscript(it.MsgID, () => call("Transcript", it.MsgID)),
-      }, open ? "Hide transcript" : "Transcript")),
-    open && transcriptBlocks(open));
+    it.Droppable && h("div", { class: "actions" },
+      h("button", { class: "link", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop")));
 }
 
 // beside puts a left-side message's bubble beside its avatar column,
-// bottoms aligned, so what follows the bubble (its actions, a Transcript)
-// hangs below both: the avatar on the last message of a run, the column
+// bottoms aligned, so what follows the bubble (its actions) hangs below
+// both: the avatar on the last message of a run, the column
 // kept empty on the others.
 function beside(it, bubble) {
   if (it.Side !== "left") return bubble;
@@ -523,20 +522,6 @@ function liveryPop() {
       onPick: (v) => act("SetLivery", l.party, v || "none"),
     }),
     h("p", { class: "hint" }, "Only this device sees it."));
-}
-
-// toggleTranscript shows or hides the Transcript under key, read by fetch.
-async function toggleTranscript(key, fetch) {
-  if (tui.expanded.has(key)) {
-    tui.expanded.delete(key);
-    draw();
-    return;
-  }
-  tui.expanded.set(key, {});
-  draw();
-  const v = await fetch().catch((err) => ({ Problem: callFailed(err) }));
-  if (tui.expanded.has(key)) tui.expanded.set(key, v.Problem ? { problem: v.Problem } : { blocks: v.Blocks ?? [] });
-  draw();
 }
 
 function transcriptBlocks(t) {
@@ -714,6 +699,7 @@ function makeComposer() {
       }
       if (e.key === "Escape") {
         list.hidden = true;
+        e.stopPropagation(); // it closed the suggestions, nothing else
         return;
       }
     }
@@ -730,9 +716,301 @@ function makeComposer() {
   };
 }
 
+// Selecting a line: its details replace the right column's. Every line
+// but a Sign Request's card can be selected.
+
+// lineKey names a line across redraws: its msg_id, or a system line's
+// time and text.
+const lineKey = (it) => it.MsgID || `sys:${it.At}|${it.Text}`;
+
+// selectable is a line's attributes for selecting it: a click selects it,
+// or deselects it if it is the one selected, unless the click ends a text
+// selection or lands on something of its own to click.
+function selectable(it) {
+  const key = lineKey(it);
+  return {
+    "data-sel": key,
+    class: tui.selected === key ? "selected" : "",
+    onclick: (e) => {
+      if (e.target.closest("button, a, input, summary, .avatar")) return;
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.containsNode(e.currentTarget, true)) return;
+      if (tui.selected === key) deselect();
+      else select(it);
+    },
+  };
+}
+
+// selectedItem is the line selected in the open Conversation, if it is
+// still there.
+function selectedItem() {
+  if (tui.selected === null || !ts?.Items) return null;
+  return ts.Items.find((it) => it.Kind !== "sign" && lineKey(it) === tui.selected) ?? null;
+}
+
+// narrow: the window is too narrow for the right column, which About
+// opens over the transcript (style.css).
+const narrow = () => window.matchMedia("(max-width: 999px)").matches;
+
+// select selects it, opening the right column if About had hidden it.
+function select(it) {
+  if (tui.selected === null) tui.aboutBefore = tui.about;
+  if (narrow()) tui.about = true;
+  tui.selected = lineKey(it);
+  tui.details = null;
+  tui.earlier = null;
+  loadDetails();
+  draw();
+  queueMicrotask(() => mount?.querySelector("[data-sel].selected")?.scrollIntoView({ block: "nearest" }));
+}
+
+// deselect brings back the right column's Conversation content, as shown
+// or hidden before the selection.
+function deselect({ redraw = true } = {}) {
+  tui.selected = null;
+  tui.details = null;
+  tui.earlier = null;
+  tui.about = tui.aboutBefore;
+  if (redraw) draw();
+}
+
+// step moves the selection to the next selectable line by, 1 or -1.
+function step(by) {
+  const lines = ts.Items.filter((it) => it.Kind !== "sign");
+  const i = lines.findIndex((it) => lineKey(it) === tui.selected);
+  const next = lines[i + by];
+  if (i >= 0 && next) select(next);
+}
+
+// detailsSig is what the selected line's details depend on beyond the
+// line itself: the talk said, the chains running, and the live
+// Transcripts here. Details are read again when it changes.
+function detailsSig() {
+  return JSON.stringify([ts.Items.map((it) => [it.MsgID, it.Chain]), ts.Live.map((c) => c.Chain), ts.Transcripts.map((t) => t.Handle)]);
+}
+
+// loadDetails reads the selected line's details: a message's, or a system
+// line's run; a system line about no run has none to read.
+async function loadDetails() {
+  const it = selectedItem();
+  if (!it) return;
+  const key = tui.selected;
+  tui.detailsSig = detailsSig();
+  let read;
+  if (it.Kind !== "system") read = call("MessageDetails", it.MsgID);
+  else if (it.Chain && it.Handle) read = call("RunDetails", it.Chain, it.Handle);
+  else read = Promise.resolve({});
+  const view = await read.catch((err) => ({ Problem: callFailed(err) }));
+  if (tui.selected !== key) return;
+  tui.details = { key, view };
+  draw();
+}
+
+// loadEarlier reads the live Transcript of the selected run's agent.
+async function loadEarlier(handle) {
+  const key = tui.selected;
+  tui.earlier = { handle };
+  draw();
+  const v = await call("EarlierRuns", handle).catch((err) => ({ Problem: callFailed(err) }));
+  if (tui.selected !== key) return;
+  tui.earlier = v.Problem ? { handle, problem: v.Problem } : { handle, runs: v.Runs ?? [] };
+  draw();
+}
+
+// utc is the exact time at, in UTC.
+function utc(at) {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return "";
+  return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
+
+// copyText copies text, saying so on the button clicked for a moment.
+async function copyText(e, text) {
+  const el = e.currentTarget;
+  try {
+    await Clipboard.SetText(text);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "talk" });
+    return;
+  }
+  const was = el.textContent;
+  el.textContent = "Copied";
+  setTimeout(() => { if (el.isConnected) el.textContent = was; }, 900);
+}
+
+const OUTCOME = {
+  said: ["Posted", "ok"],
+  silent: ["Stayed silent", ""],
+  error: ["Failed", "bad"],
+  cancelled: ["Cancelled", "bad"],
+  skipped: ["Skipped", ""],
+  running: ["Running…", "warn"],
+  waiting: ["Not reached yet", ""],
+  "cut off": ["Cut off", "warn"],
+  "": ["Cut off", "warn"],
+};
+const outcomeChip = (o) => {
+  const [label, cls] = OUTCOME[o] ?? [o, ""];
+  return h("span", { class: `chip ${cls}` }, label);
+};
+const SIGN_TOOL = { sign_accept: "Accepted", sign_refuse: "Refused", sign_propose: "Proposed" };
+
+// detailsPanel is the right column showing the selected line: who wrote
+// it and when, what can be done with it, where it sits, the run that
+// wrote it or the chain it started, and that run's turn and output. A
+// section that does not apply is left out.
+function detailsPanel(it) {
+  const v = tui.details?.key === tui.selected ? tui.details.view : null;
+  const run = v?.Run ?? null;
+  const system = it.Kind === "system";
+  const name = system || it.From === "This Device" ? "This Device" : it.Side === "right" ? "You" : it.From;
+  const row = (label, value) => value !== null && value !== undefined && value !== false && value !== "" &&
+    h("div", { class: "kv" }, h("span", { class: "label" }, label), typeof value === "object" ? value : h("div", { class: "value" }, String(value)));
+
+  const head = h("header", { class: "dhead" },
+    avatar(it.Livery, { label: name }),
+    h("div", { class: "who" },
+      h("strong", {}, name),
+      it.Handle && h("span", { class: `handle ${liveryClass(it.Livery)}` }, `@${it.Handle}`),
+      it.Job && h("span", { class: "handle" }, "Job"),
+      h("time", { datetime: it.At }, utc(it.At))),
+    h("button", { class: "close", type: "button", "aria-label": "Close details", title: "Close (Esc)", onclick: () => deselect() }, "×"));
+
+  const clearable = run && !run.Cleared && ts.Transcripts.some((t) => t.Handle === run.Handle);
+  const actions = h("div", { class: "row" },
+    it.Kind === "message" && h("button", { class: "btn small", type: "button", onclick: (e) => copyText(e, it.Text) }, "Copy text"),
+    it.MsgID && h("button", { class: "btn small", type: "button", onclick: (e) => copyText(e, it.MsgID) }, "Copy msg_id"),
+    it.Droppable && h("button", { class: "btn small", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop"),
+    clearable && h("button", {
+      class: "btn small", type: "button", disabled: tui.busy || !!tui.clearing,
+      // The Clear above the transcript, for this agent alone.
+      onclick: () => { tui.clearing = { Conversation: ts.Open, Agents: [run.Handle] }; draw(); },
+    }, `Clear @${run.Handle}`));
+
+  const device = v && v.DeviceID && h("div", { class: "value" },
+    h("span", { class: `dot ${v.Online ? "on" : "off"}` }), v.Device, h("span", { class: "hint" }, v.Online ? "online" : "offline"));
+  const details = v && !v.Problem && h("section", {},
+    h("h3", {}, "Details"),
+    row("Seq", v.Seq || (it.Queued ? "Queued" : null)),
+    v.MsgID && row("msg_id", copyable(v.MsgID, "msg_id")),
+    v.Chain && row("Chain", copyable(v.Chain, "chain")),
+    row("Step", v.Step || null),
+    row("Depth", v.Depth || v.Step ? String(v.Depth) : null),
+    row("Device", device),
+    v.DeviceID && row("Device ID", copyable(v.DeviceID, "Device ID")),
+    it.Party && row("Livery", liveryPicker({
+      key: it.Party, current: ts.Liveries?.[it.Party] ?? "", held: ts.Liveries, disabled: tui.busy,
+      onPick: (l) => act("SetLivery", it.Party, l || "none"),
+    })));
+
+  let body = null;
+  if (!v) body = h("p", { class: "placeholder" }, "Loading…");
+  else if (v.Problem) body = problemBox(v.Problem);
+  else if (run) body = runBody(run);
+  else if (v.Steps?.length) body = chainSteps(v.Steps);
+
+  return h("aside", { class: "about details", "aria-label": "Message details" },
+    h("article", { class: "dcard" },
+      head,
+      actions,
+      details,
+      run && runFacts(run),
+      body,
+      run && !run.Cleared && earlier(run)));
+}
+
+// runFacts is a run's section: how it ended, what it cost and ran on, the
+// Sign Requests it acted on, and what was granted to it.
+function runFacts(run) {
+  const row = (label, value) => h("div", { class: "kv" }, h("span", { class: "label" }, label), value);
+  const grants = [...(run.Tools ?? []), ...(run.Skills ?? [])];
+  return h("section", {},
+    h("h3", {}, "Run"),
+    h("div", { class: "row" }, outcomeChip(run.Outcome), run.Cleared && h("span", { class: "chip" }, "From a cleared Transcript")),
+    run.Error && h("pre", { class: "error-text" }, run.Error),
+    row("Tokens", h("div", { class: "value" }, `${run.InputTokens.toLocaleString()} in · ${run.OutputTokens.toLocaleString()} out`)),
+    run.Provider && row("Provider", h("div", { class: "value" }, h("strong", {}, run.Provider), run.ModelID && h("code", {}, run.ModelID), run.Shape && h("span", { class: "hint" }, run.Shape))),
+    run.Signs?.length > 0 && row("Sign Requests", h("div", { class: "signrows" }, run.Signs.map((sg) => h("button", {
+      class: "signrow", type: "button",
+      onclick: () => { const el = mount.querySelector(`#card-${CSS.escape(sg.MsgID)}`); if (el) showCard(el); },
+    }, h("span", { class: "text" }, sg.Reason || "No reason"), h("span", { class: "chip" }, SIGN_TOOL[sg.Tool] ?? sg.Tool))))),
+    grants.length > 0 && h("details", { class: "fold-in" },
+      h("summary", {}, `Tools and Skills (${grants.length})`),
+      run.Tools?.length > 0 && h("p", {}, h("span", { class: "label" }, "Tools "), run.Tools.join(", ")),
+      run.Skills?.length > 0 && h("p", {}, h("span", { class: "label" }, "Skills "), run.Skills.join(", "))));
+}
+
+// runBody is only this run: its opening, headed by what summoned it, that
+// in full and the rest it was given folded; then what it generated,
+// headed by its Handle.
+function runBody(run) {
+  const o = run.Opening ?? {};
+  const also = (o.Also ?? "").trim();
+  return h("div", { class: "runbody" },
+    h("section", {},
+      h("h3", {}, o.Heading || "Its turn"),
+      o.Summons ? h("pre", { class: "summons" }, o.Summons) : h("p", { class: "hint" }, "Nothing recorded summoned it."),
+      also && h("details", { class: "fold-in" }, h("summary", {}, "Also given…"), h("pre", {}, also))),
+    h("section", {},
+      h("h3", {}, `@${run.Handle}`),
+      run.Output?.length ? h("div", { class: "blocks" }, outputBlocks(run.Output)) : h("p", { class: "hint" }, "It generated nothing.")));
+}
+
+// outputBlocks are what a run generated, each tool result nested under
+// its own call.
+function outputBlocks(raws) {
+  const parse = (raw) => {
+    if (typeof raw !== "string") return raw;
+    try { return JSON.parse(raw); } catch { return { type: "text", text: raw }; }
+  };
+  const bs = raws.map(parse);
+  const calls = new Set(bs.filter((b) => b?.type === "tool_use" && b.id).map((b) => b.id));
+  const results = new Map(bs.filter((b) => b?.type === "tool_result" && calls.has(b.tool_use_id)).map((b) => [b.tool_use_id, b]));
+  return bs.filter((b) => !(b?.type === "tool_result" && results.get(b.tool_use_id) === b)).map((b) => {
+    if (b?.type !== "tool_use") return block(b);
+    const res = results.get(b.id);
+    return h("div", { class: "blk tool call" },
+      h("span", { class: "kind" }, `Tool call · ${b.name ?? ""}`),
+      h("pre", {}, JSON.stringify(b.input ?? {}, null, 2)),
+      res ? h("div", { class: "nested" }, block(res)) : null);
+  });
+}
+
+// earlier is the "Earlier runs" link, and once followed, every run of the
+// agent's live Transcript, each folded.
+function earlier(run) {
+  const e = tui.earlier?.handle === run.Handle ? tui.earlier : null;
+  if (!e) return h("button", { class: "link", type: "button", onclick: () => loadEarlier(run.Handle) }, "Earlier runs");
+  if (e.problem) return problemBox(e.problem);
+  if (!e.runs) return h("p", { class: "placeholder" }, "Loading…");
+  return h("section", {},
+    h("h3", {}, `@${run.Handle}'s live Transcript here`),
+    e.runs.length ? e.runs.map((r) => h("details", { class: "fold-in earlier" },
+      h("summary", {}, `${r.Opening?.Heading || "Run"} · `, outcomeChip(r.Outcome)),
+      runBody(r))) : h("p", { class: "hint" }, "It has no live Transcript here."));
+}
+
+// chainSteps is the chain this person's message started, step by step;
+// each step that posted selects its message.
+function chainSteps(steps) {
+  return h("section", {},
+    h("h3", {}, "Its chain"),
+    h("ol", { class: "steps" }, steps.map((st) => {
+      const said = st.MsgID && ts.Items.find((it) => it.MsgID === st.MsgID);
+      const label = h("span", { class: "who" }, h("span", { class: "n" }, `${st.Step}.`), h("strong", {}, `@${st.Handle}`));
+      return h("li", { style: `padding-left: ${(st.Depth - 1) * 14}px` },
+        said
+          ? h("button", { class: "step", type: "button", title: "Show what it posted", onclick: () => select(said) }, label, outcomeChip(st.State))
+          : h("div", { class: "step" }, label, outcomeChip(st.State)),
+        st.Error && h("pre", { class: "error-text" }, st.Error));
+    })));
+}
+
 // The right column: what the open Conversation is about.
 
 function right() {
+  const it = selectedItem();
+  if (it) return detailsPanel(it);
   return h("aside", { class: "about", "aria-label": "About this conversation" },
     ts.Key ? keyDetails(ts.Key) : fold("Group talk",
       h("p", { class: "hint" }, "Talk with everyone in the Group. Each Key has a conversation of its own.")),
@@ -871,11 +1149,30 @@ signInit({ ts: () => ts, act, draw, blocks: transcriptBlocks, convName, curveNam
 document.addEventListener("click", (e) => {
   if (!e.target.isConnected) return; // a click that redrew the page
   if (tui.roster && !e.target.closest(".online-menu")) { tui.roster = false; draw(); }
-  if (tui.about && !e.target.closest(".about, .about-toggle, .livery-pop")) { tui.about = false; draw(); }
+  if (tui.about && !e.target.closest(".about, .about-toggle, .livery-pop, [data-sel]")) {
+    // A click away from the selection's details closes them.
+    if (tui.selected !== null) deselect();
+    else { tui.about = false; draw(); }
+  }
   if (tui.livery && !e.target.closest(".livery-pop")) closeLivery();
 });
+// Esc closes what is open, innermost first; ↑ and ↓ move the selection,
+// unless focus is in a field or the details, which scroll.
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && tui.livery) { closeLivery(); } else if (e.key === "Escape" && tui.roster) { tui.roster = false; draw(); } else if (e.key === "Escape" && tui.about) { tui.about = false; draw(); }
+  const here = mount?.isConnected;
+  if (e.key === "Escape") {
+    if (tui.livery) closeLivery();
+    else if (tui.roster) { tui.roster = false; draw(); }
+    else if (here && tui.clearing) { tui.clearing = null; draw(); }
+    else if (here && tui.selected !== null) deselect();
+    else if (tui.about) { tui.about = false; draw(); }
+    return;
+  }
+  if ((e.key === "ArrowUp" || e.key === "ArrowDown") && here && tui.selected !== null &&
+    !e.target.closest?.("input, textarea, select, [contenteditable], .about")) {
+    e.preventDefault();
+    step(e.key === "ArrowDown" ? 1 : -1);
+  }
 });
 // The picker sits where its avatar was as it opened: scrolling, which
 // moves the avatar, closes it.

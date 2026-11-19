@@ -34,6 +34,9 @@ func TestATurnStartsAfterWhatTheReplicaHeld(t *testing.T) {
 	if first.Seq != 7 || len(first.Unapplied) != 1 || first.Turn != "(You are summoned by:)\n[10 2026-11-19 09:10] alice: @bob?\n(facts)" {
 		t.Fatalf("first turn = %+v", first)
 	}
+	if first.By != summon.MsgID() || first.Job != "" || first.Summons != "[10 2026-11-19 09:10] alice: @bob?" {
+		t.Fatalf("first turn's summoner: by %q job %q summons %q", first.By, first.Job, first.Summons)
+	}
 	again := msg(12, alice, "", "@bob again")
 	said := talk.Messages{msg(7, alice, "", "old"), msg(8, sam, "", "eight"), msg(9, sam, "bob", "sam's bob"), summon, msg(11, alice, "bob", "bob's own"), again}
 	last := transcript.Run{Turn: first.Turn, TalkSeq: first.Seq, TalkUnapplied: first.Unapplied}
@@ -42,8 +45,12 @@ func TestATurnStartsAfterWhatTheReplicaHeld(t *testing.T) {
 	if second.Turn != want || second.Seq != 12 || second.Unapplied != nil {
 		t.Fatalf("second turn = %+v\nwant %s", second, want)
 	}
-	if job := runTurn(said, alice, "bob", summoner{msgID: "ffff", job: "(the Job's prompt)"}, &last, "(facts)"); !strings.HasSuffix(job.Turn, "[12 2026-11-19 09:12] alice: @bob again\n(the Job's prompt)\n(facts)") {
+	job := runTurn(said, alice, "bob", summoner{msgID: "ffff", job: "(the Job's prompt)", jobName: "nightly"}, &last, "(facts)")
+	if !strings.HasSuffix(job.Turn, "[12 2026-11-19 09:12] alice: @bob again\n(the Job's prompt)\n(facts)") {
 		t.Fatalf("a Job's turn = %s", job.Turn)
+	}
+	if job.By != "" || job.Job != "nightly" || job.Summons != "(the Job's prompt)" {
+		t.Fatalf("a Job's turn's summoner: by %q job %q summons %q", job.By, job.Job, job.Summons)
 	}
 }
 

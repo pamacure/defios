@@ -168,11 +168,12 @@ type chain struct {
 	// set, closes
 	// when the chain has ended, err then saying why it stopped short, or
 	// why the Job's agent did not answer, if it did not.
-	job    string
-	done   chan struct{}
-	err    error
-	ctx    context.Context
-	cancel context.CancelFunc
+	job     string
+	jobName string // the Job's name, with job
+	done    chan struct{}
+	err     error
+	ctx     context.Context
+	cancel  context.CancelFunc
 	// cancelled tells a cancel from the serve stopping; both end ctx.
 	cancelled atomic.Bool
 }
@@ -525,8 +526,9 @@ var errSkipped = errors.New("skipped")
 // summoner is what summons a run: with job set, a Job's prompt and event
 // (ADR 0032); otherwise the message with hex msg_id msgID.
 type summoner struct {
-	msgID string
-	job   string // the Job's turn, as jobTurn writes it
+	msgID   string
+	job     string // the Job's turn, as jobTurn writes it
+	jobName string // the Job's name, with job
 }
 
 // runAgent runs st's agent, as step st of c: replaying its live Transcript
@@ -551,7 +553,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 	// those a reply summons, by that reply.
 	by := summoner{msgID: st.Summoner}
 	if st.Summoner == "" {
-		by = summoner{msgID: c.id, job: c.job}
+		by = summoner{msgID: c.id, job: c.job, jobName: c.jobName}
 	}
 	req, turn, inc, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, by, tr, did, publish)
 	if errors.Is(err, errSkipped) {
@@ -725,6 +727,8 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	req.System = strings.TrimRight(briefing, "\n") + "\n\n" + strings.TrimRight(string(brief), "\n") + "\n\n" + stableFacts(handle, where, req.Tools, skills)
 	req.Turn = turn.Turn
 	turn.Shape, turn.Tools, turn.Skills, turn.Binding = req.Shape.Name, tools, refs, req.Binding()
+	turn.Provider = p.Provider
+	turn.ModelID, _ = p.Body["model"].(string)
 	return req, turn, inc, nil
 }
 
@@ -806,15 +810,34 @@ func runTurn(said talk.Messages, node identity.ID, handle string, by summoner, l
 	}
 	switch {
 	case by.job != "":
+		l.Job, l.Summons = by.jobName, by.job
 		b.WriteString(by.job + "\n")
 	case summons != nil && summons.Readable():
-		b.WriteString(turnSummonedBy + "\n" + summons.Line(displayName) + "\n")
+		l.By, l.Summons = by.msgID, summons.Line(displayName)
+		b.WriteString(turnSummonedBy + "\n" + l.Summons + "\n")
 	default:
+		l.By = by.msgID
 		b.WriteString(turnNoSummoner + "\n")
 	}
 	b.WriteString(facts)
 	l.Turn = b.String()
 	return l
+}
+
+// TurnBesides is a run's turn without what summoned it: summons, as its
+// turn line records it, and the line DeFiOS frames it with. It is what
+// else the run was given: what changed in its grants, the talk since its
+// last run, and the closing line about the run.
+func TurnBesides(turn, summons string) string {
+	if summons == "" {
+		return turn
+	}
+	for _, framed := range []string{turnSummonedBy + "\n" + summons + "\n", summons + "\n"} {
+		if before, after, ok := strings.Cut(turn, framed); ok {
+			return before + after
+		}
+	}
+	return turn
 }
 
 // whereSaid names where conv's talk is: a Key's Conversation by its curve

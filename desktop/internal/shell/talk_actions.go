@@ -34,10 +34,6 @@ func (s *Shell) DropQueued(msgID string) TalkState { return s.talk.dropQueued(ms
 // open Conversation.
 func (s *Shell) CancelChain(chain string) TalkState { return s.talk.cancelChain(chain) }
 
-// Transcript is the run of this device's agent that said msgID in the open
-// Conversation: its blocks of thinking, text, tool calls and their results.
-func (s *Shell) Transcript(msgID string) TranscriptView { return s.talk.transcript(msgID) }
-
 // RunTranscript is the run of this device's agent handle in chain of
 // conv, an agent Job's or one that stayed silent: its blocks of
 // thinking, text, tool calls and their results.
@@ -73,7 +69,7 @@ func (s *Shell) SetAgentIncluded(handle string, on bool) TalkState {
 // at once wherever the party is marked.
 func (s *Shell) SetLivery(party, livery string) TalkState { return s.talk.setLivery(party, livery) }
 
-// TranscriptView is a message's Transcript, or why there is none.
+// TranscriptView is a run's Transcript, or why there is none.
 type TranscriptView struct {
 	Blocks  []json.RawMessage
 	Problem *Problem
@@ -181,16 +177,6 @@ func (t *talk) cancelChain(chain string) TalkState {
 		_, err := a.n.Cancel(t.ctx, a.group, a.conv, chain)
 		return err
 	})
-}
-
-func (t *talk) transcript(msgID string) TranscriptView {
-	t.mu.Lock()
-	blocks, ok := t.said[msgID]
-	t.mu.Unlock()
-	if !ok {
-		return TranscriptView{Problem: &Problem{Code: "no-transcript", Message: "This device has no transcript of that message."}}
-	}
-	return TranscriptView{Blocks: blocks}
 }
 
 func (t *talk) newKey(curve string, threshold int, alias string) TalkState {

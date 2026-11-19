@@ -69,9 +69,9 @@ func TestEachAgentOfAChainWritesItsOwnTranscript(t *testing.T) {
 	want := chained(chainID, lines...)
 	got := read(t, p, nil)
 	if !reflect.DeepEqual(got, []transcript.Transcript{
-		{Handle: "auditor", Lines: want[:4]},
-		{Handle: "critic", Lines: want[5:]},
-		{Handle: "scribe", Lines: want[4:5]},
+		{Handle: "auditor", Lines: want[:4], Live: true},
+		{Handle: "critic", Lines: want[5:], Live: true},
+		{Handle: "scribe", Lines: want[4:5], Live: true},
 	}) {
 		t.Fatalf("transcripts = %+v", got)
 	}
@@ -179,8 +179,14 @@ func TestClosedTranscriptsAreReadBesideTheLiveOne(t *testing.T) {
 	}
 	write(t, p, nil, "ef56", lines[:4]...)
 	ts := read(t, p, nil)
-	if len(ts) != 2 || ts[0].Lines[0].Chain != "cd34" || ts[1].Lines[0].Chain != "ef56" {
+	if len(ts) != 2 || ts[0].Lines[0].Chain != "cd34" || ts[1].Lines[0].Chain != "ef56" || ts[0].Live || !ts[1].Live {
 		t.Fatalf("transcripts = %+v", ts)
+	}
+	if ls, err := transcript.LiveLines(p, group.ImplicitAlias, nil, "auditor"); err != nil || len(ls) != 4 || ls[0].Chain != "ef56" {
+		t.Fatalf("LiveLines = %+v, %v", ls, err)
+	}
+	if ls, err := transcript.LiveLines(p, group.ImplicitAlias, nil, "nobody"); err != nil || ls != nil {
+		t.Fatalf("LiveLines of an Agent with none = %+v, %v", ls, err)
 	}
 	all, err := transcript.ReadAll(p, group.ImplicitAlias)
 	if err != nil || len(all) != 2 {

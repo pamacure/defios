@@ -116,6 +116,8 @@ type Recap struct {
 type ChatMessage struct {
 	Message
 	Blocks []json.RawMessage
+	// Chain, with transcripts, is the chain of the run that said it.
+	Chain string
 }
 
 // Outgoing is a message to send. Handle "" is no agent's: this person's
@@ -155,6 +157,9 @@ type Transcript struct {
 	Chain string // the hex msg_id that started it
 	Lines []transcript.Line
 	Runs  []transcript.Run
+	// Cleared are the steps whose run is in a Transcript since cleared,
+	// in order.
+	Cleared []int
 }
 
 // replica opens groupAlias's COSL replica; the caller closes it.
@@ -425,7 +430,7 @@ func (h *Host) Chat(_ context.Context, groupAlias, conv string, limit int, trans
 	}
 	out := make([]ChatMessage, len(expanded))
 	for i, e := range expanded {
-		out[i] = ChatMessage{Message: h.message(e.Message), Blocks: e.Blocks}
+		out[i] = ChatMessage{Message: h.message(e.Message), Blocks: e.Blocks, Chain: e.Chain}
 	}
 	return out, nil
 }
@@ -562,7 +567,40 @@ func (h *Host) Transcript(_ context.Context, groupAlias, conv, chain string) (Tr
 		return Transcript{}, err
 	}
 	lines := transcript.ChainLines(ts, full)
-	return Transcript{Chain: full, Lines: lines, Runs: transcript.Runs(lines)}, nil
+	out := Transcript{Chain: full, Lines: lines, Runs: transcript.Runs(lines)}
+	for _, t := range ts {
+		for _, l := range t.Lines {
+			if !t.Live && l.Chain == full && !slices.Contains(out.Cleared, l.Step) {
+				out.Cleared = append(out.Cleared, l.Step)
+			}
+		}
+	}
+	slices.Sort(out.Cleared)
+	return out, nil
+}
+
+// Run is one run of one of this Node's Agents, as its Transcript shows it.
+type Run = transcript.Run
+
+// LiveRuns are the runs of the live Transcript of this Node's Agent
+// handle in conv, in the order it ran them: what it remembers of its work
+// there (ADR 0036); none if it has no live Transcript.
+func (h *Host) LiveRuns(_ context.Context, groupAlias, conv, handle string) ([]Run, error) {
+	id, err := conversationID(conv)
+	if err != nil {
+		return nil, err
+	}
+	if err := config.ValidateHandle(handle); err != nil {
+		return nil, &InvalidError{Err: err}
+	}
+	if err := h.knownGroup(groupAlias); err != nil {
+		return nil, err
+	}
+	lines, err := transcript.LiveLines(h.p, groupAlias, id, handle)
+	if err != nil {
+		return nil, err
+	}
+	return transcript.Runs(lines), nil
 }
 
 // ChainPlace is a Conversation of a Group on this Node: its alias, and

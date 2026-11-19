@@ -180,7 +180,8 @@ func TestAnAgentsChainStreamsLiveCancelsAndLeavesATranscript(t *testing.T) {
 	// It said its piece before the cancel landed.
 	said := fmt.Sprintf("%064x", 77)
 	r.node.mu.Lock()
-	r.node.tk().blocks[said] = []json.RawMessage{json.RawMessage(`{"type":"text","text":"Looks fine"}`)}
+	r.node.sg().runs[chain] = []transcript.Run{{Chain: chain, Step: 1, Handle: "auditor", Depth: 1, Outcome: transcript.OutcomeSaid, MsgID: said,
+		Blocks: []json.RawMessage{json.RawMessage(`{"type":"text","text":"Looks fine"}`)}}}
 	r.node.mu.Unlock()
 	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentCommit, Chain: chain, MsgID: said})
 	r.node.commit(node.GroupTalk, node.Message{MsgID: said, NodeID: r.node.NodeID(), Handle: "auditor", Depth: 1, Text: "Looks fine"})
@@ -188,11 +189,11 @@ func TestAnAgentsChainStreamsLiveCancelsAndLeavesATranscript(t *testing.T) {
 
 	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 0 && len(ts.Items) >= 2 })
 	reply := ts.Items[1]
-	if reply.MsgID != said || !reply.Transcript || reply.From != "This Device" || reply.Handle != "auditor" {
+	if reply.MsgID != said || reply.Chain != chain || reply.From != "This Device" || reply.Handle != "auditor" {
 		t.Fatalf("reply: %+v", reply)
 	}
-	if v := s.Transcript(said); v.Problem != nil || len(v.Blocks) != 1 {
-		t.Fatalf("transcript: %+v", v)
+	if d := s.MessageDetails(said); d.Problem != nil || d.Run == nil || len(d.Run.Output) != 1 {
+		t.Fatalf("details: %+v", d)
 	}
 }
 
@@ -219,12 +220,12 @@ func TestAnAgentThatStaysSilentLeavesALineWithItsTranscript(t *testing.T) {
 	}
 	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 0 && len(ts.Items) == 2 })
 	line := ts.Items[1]
-	if line.Kind != shell.KindSystem || line.Handle != "auditor" || line.Chain != chain || !line.Transcript ||
+	if line.Kind != shell.KindSystem || line.Handle != "auditor" || line.Chain != chain ||
 		!strings.Contains(line.Text, "@auditor") || !strings.Contains(line.Text, "without posting") {
 		t.Fatalf("silent line: %+v", line)
 	}
-	if v := s.RunTranscript(node.GroupTalk, chain, "auditor"); v.Problem != nil || len(v.Blocks) != 1 {
-		t.Fatalf("its transcript: %+v", v)
+	if d := s.RunDetails(chain, "auditor"); d.Problem != nil || d.Run == nil || len(d.Run.Output) != 1 || d.Run.Outcome != "" {
+		t.Fatalf("its run: %+v", d)
 	}
 }
 
@@ -817,7 +818,9 @@ func TestSettingAPartysLiveryShowsAtOnceAcrossTheTranscriptAndThePanel(t *testin
 		{NodeID: self, DisplayName: "laptop", Reachable: true}, {NodeID: "b0b", DisplayName: "bob"},
 	}})
 	r.node.mu.Unlock()
-	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Items) == 3 && len(ts.Devices) == 2 && len(ts.Agents) == 1 })
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool {
+		return len(ts.Items) == 3 && len(ts.Devices) == 2 && len(ts.Agents) == 1
+	})
 
 	scribe := node.NodeAgentParty("b0b", "scribe")
 	if p := []string{ts.Items[0].Party, ts.Items[1].Party, ts.Items[2].Party}; !slices.Equal(p, []string{scribe, node.AgentParty("auditor"), ""}) {
