@@ -23,7 +23,7 @@ import (
 // 0039): %[1]q and %[2]q are the agent's own Node's display name and its
 // Handle, so the description changes when that name does.
 const talkReadDescription = "Read this group chat's talk as your Node holds it. Returns the latest messages, oldest first, as JSON Lines: one object per line, " +
-	`{"seq":<seq>,"at":<Unix seconds>,"from":"<display name>","text":"<text>"}, with "handle":"<handle>" too for an agent's message. ` +
+	`{"seq":<seq>,"at":"<YYYY-MM-DD HH:MM, UTC>","from":"<display name>","text":"<text>"}, with "handle":"<handle>" too for an agent's message. ` +
 	`"queued":true in place of the seq is a message your Node has written that is not committed yet. at is when its sender wrote it, by the sender's clock. ` +
 	`Messages with "from":%[1]q and "handle":%[2]q are your own talk_write messages, those your Node wrote under your Handle; ` +
 	"the same Handle from another display name is another Node's agent. " +

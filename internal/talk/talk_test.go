@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -425,11 +424,11 @@ func TestAPagesLinesAreJSONWithTimestamps(t *testing.T) {
 	}
 	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("later"))}}
 	v := f.read(nil)
-	at := func(i int) string { return fmt.Sprint(time.Unix(0, v.Messages[i].Row.CreatedAt).Unix()) }
+	at := func(i int) string { return v.Messages[i].Written() }
 	want := []string{
 		`{"pruned_from":1,"pruned_to":1}`,
-		`{"seq":2,"at":` + at(1) + `,"from":"bob","handle":"auditor","text":"a <b>\nc"}`,
-		`{"queued":true,"at":` + at(2) + `,"from":"alice","text":"later"}`,
+		`{"seq":2,"at":"` + at(1) + `","from":"bob","handle":"auditor","text":"a <b>\nc"}`,
+		`{"queued":true,"at":"` + at(2) + `","from":"alice","text":"later"}`,
 	}
 	if got := v.Messages.Page(0, 0, func(m talk.Message) string { return m.Sender }).Lines; !slices.Equal(got, want) {
 		t.Errorf("lines =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -501,7 +500,7 @@ func TestLinesAreTheWholeTalkAsATurnReadsIt(t *testing.T) {
 	}
 	f.mine = []outbox.Entry{{Signed: f.sign(f.bob, nil, said("later"))}}
 	v := f.read(nil)
-	at := func(i int) string { return time.Unix(0, v.Messages[i].Row.CreatedAt).UTC().Format("2006-01-02 15:04") }
+	at := func(i int) string { return v.Messages[i].Written() }
 	lines := v.Messages.Lines(nil, func(m talk.Message) string { return m.Sender })
 	n := len(lines)
 	if n != talk.MaxPage+3 || lines[0] != "[1–2 pruned on this Node]" || lines[1] != "[3 "+at(2)+"] alice: m2" || lines[n-1] != "[queued "+at(len(v.Messages)-1)+"] bob: later" {

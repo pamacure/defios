@@ -14,8 +14,8 @@ no cache miss: only new turns carry the time.
 
 **`talk_read`** returns JSON Lines, one object per line:
 
-- A message is `{"seq", "at", "from", "handle", "text"}`. `at` is Unix
-  seconds, `from` the sender's display name, and `handle` is present only
+- A message is `{"seq", "at", "from", "handle", "text"}`. `at` is the
+  turn's `YYYY-MM-DD HH:MM` in UTC, `from` the sender's display name, and `handle` is present only
   for an agent's message. A message with no seq yet has `"queued": true` in
   place of `seq`.
 - A stretch this Node has pruned is one `{"pruned_from", "pruned_to"}` line.
@@ -31,8 +31,11 @@ An empty result is still a plain note, `(No talk yet.)` or
 - **The keys of `conversation log --json`** (`created_at`,
   `sender_display_name`) and an RFC 3339 time. These cost roughly 25–35
   tokens a message over the text line, against about half that for the short
-  keys and Unix seconds. A `talk_read` result stays in the Transcript and is
-  replayed on every later run.
+  keys. A `talk_read` result stays in the Transcript and is replayed on every
+  later run.
+- **Unix seconds for `at`.** This saves about 6 tokens a message, but models
+  often get the conversion to a date wrong. It would also differ from the
+  turn's lines, which an agent may need to match against `talk_read`.
 - **Text lines for `talk_read` too, with the turn's time added.** These are
   the cheapest, but an agent that passes fields on to other Tools reads JSON
   more reliably.

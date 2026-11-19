@@ -95,7 +95,7 @@ func talkRead(t *testing.T, c providerCall) string {
 	for _, l := range strings.Split(blocks[0].Content, "\n") {
 		var e struct {
 			Seq     uint64 `json:"seq"`
-			At      int64  `json:"at"`
+			At      string `json:"at"`
 			Sender  string `json:"from"`
 			Text    string `json:"text"`
 			Earlier uint64 `json:"earlier_before_seq"`
@@ -107,8 +107,8 @@ func talkRead(t *testing.T, c providerCall) string {
 			out = append(out, fmt.Sprint("earlier ", e.Earlier))
 			continue
 		}
-		if d := time.Since(time.Unix(e.At, 0)).Abs(); d > 2*time.Minute {
-			t.Errorf("line %q: at is %s from now", l, d)
+		if at, err := time.Parse("2006-01-02 15:04", e.At); err != nil || time.Since(at).Abs() > 2*time.Minute {
+			t.Errorf("line %q: at is not this minute in UTC: %v", l, err)
 		}
 		out = append(out, fmt.Sprintf("%d %s: %s", e.Seq, e.Sender, e.Text))
 	}

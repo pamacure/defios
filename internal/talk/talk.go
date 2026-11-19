@@ -264,13 +264,13 @@ type Page struct {
 }
 
 // Entry is one line of a Page, its keys kept short to spend few tokens: a
-// message, with its seq or queued, when its sender wrote it (Unix
-// seconds, by the sender's clock), who and what; or a stretch this Node
+// message, with its seq or queued, when its sender wrote it (as a turn's
+// line gives it, see Written), who and what; or a stretch this Node
 // has pruned, by its first and last seq.
 type Entry struct {
 	Seq        uint64  `json:"seq,omitempty"`
 	Queued     bool    `json:"queued,omitempty"`
-	At         int64   `json:"at,omitempty"`
+	At         string  `json:"at,omitempty"`
 	From       string  `json:"from,omitempty"` // the sender's display name
 	Handle     string  `json:"handle,omitempty"`
 	Text       *string `json:"text,omitempty"`
@@ -281,7 +281,7 @@ type Entry struct {
 // entry is m, which is readable, as a Page's Entry.
 func (m Message) entry(name func(Message) string) Entry {
 	text := m.Text
-	return Entry{Seq: m.Row.Seq, Queued: m.Row.Queued(), At: time.Unix(0, m.Row.CreatedAt).Unix(), From: name(m), Handle: m.Handle, Text: &text}
+	return Entry{Seq: m.Row.Seq, Queued: m.Row.Queued(), At: m.Written(), From: name(m), Handle: m.Handle, Text: &text}
 }
 
 // jsonLine is v as one line of JSON, its <, > and & as written.
@@ -397,6 +397,12 @@ func (m Message) Line(name func(Message) string) string {
 	if !m.Row.Queued() {
 		at = fmt.Sprint(m.Row.Seq)
 	}
-	when := time.Unix(0, m.Row.CreatedAt).UTC().Format("2006-01-02 15:04")
-	return "[" + at + " " + when + "] " + LeanLine(name(m), m.Handle, m.Text)
+	return "[" + at + " " + m.Written() + "] " + LeanLine(name(m), m.Handle, m.Text)
+}
+
+// Written is when m's sender wrote it, by the sender's clock, as an agent
+// reads it: `YYYY-MM-DD HH:MM` in UTC, readable without converting a
+// timestamp (ADR 0039).
+func (m Message) Written() string {
+	return time.Unix(0, m.Row.CreatedAt).UTC().Format("2006-01-02 15:04")
 }
