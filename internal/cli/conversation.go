@@ -224,7 +224,7 @@ func runConversationSend(cmd *cobra.Command, g *globals, keyQuery string, as sen
 		}
 		defer stream.Close()
 	}
-	sent, err := h.Send(ctx, node.ServedGroup, conv, node.Outgoing{Text: text, Handle: handle, Depth: depth})
+	sent, err := h.Send(ctx, node.ServedGroup, conv, node.Outgoing{Text: text, Handle: handle, Depth: depth, JobRun: g.app.Getenv("DEFIOS_JOB_RUN")})
 	if err != nil {
 		return sendError(err)
 	}

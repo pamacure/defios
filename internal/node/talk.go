@@ -126,6 +126,10 @@ type Outgoing struct {
 	Text   string
 	Handle string // without its "@"
 	Depth  uint32
+	// JobRun is DEFIOS_JOB_RUN when an exec Job writes it: the token naming
+	// its Job Run, on which serve records the message (ADR 0040). It never
+	// reaches the COSL.
+	JobRun string
 }
 
 // Sent is a message after Send: committed at Seq, or Queued.
@@ -489,7 +493,7 @@ func (h *Host) Send(ctx context.Context, groupAlias, conv string, m Outgoing) (S
 	if err != nil {
 		return Sent{}, err
 	}
-	v, err := api.ConversationSendAs(ctx, m.Text, m.Handle, m.Depth, id)
+	v, err := api.ConversationSendAs(ctx, m.Text, m.Handle, m.Depth, m.JobRun, id)
 	if err != nil {
 		return Sent{}, wrapServed(err)
 	}

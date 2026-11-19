@@ -40,7 +40,7 @@ func triggerCommand(g *globals) *cobra.Command {
 	runs.Flags().IntVar(&last, "last", 0, "only the last N runs (0 for all)")
 	show := &cobra.Command{
 		Use:   "run <id>",
-		Short: "Show one Job Run in full: what fired it and what its Job produced",
+		Short: "Show one Job Run in full: what fired it, what its Job produced, and the msg_ids of the talk messages an exec Job wrote",
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(cmd *cobra.Command, args []string) error { return runTriggerRun(cmd.Context(), g, args[0]) },
 	}
@@ -152,6 +152,7 @@ func runTriggerRun(ctx context.Context, g *globals, arg string) error {
 		}
 		block(label, w.Body)
 	}
+	block("messages", strings.Join(r.Messages, "\n"))
 	fmt.Fprint(g.app.Stdout, b.String())
 	return nil
 }

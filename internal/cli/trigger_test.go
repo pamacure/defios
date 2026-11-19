@@ -264,7 +264,8 @@ func jobRunsNode(t *testing.T) string {
 	firings := [][]jobrun.Run{
 		{
 			{Trigger: "said", Event: said, Fired: at, Job: "say", Kind: "exec", State: jobrun.OK, Started: at, Ended: at.Add(time.Second),
-				Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"sh", "-c", "echo said"}, ExitCode: &zero, Stdout: "said\n"}}},
+				Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"sh", "-c", "echo said"}, ExitCode: &zero, Stdout: "said\n"}},
+				Messages: []string{"ab12", "cd34"}},
 			{Trigger: "said", Event: said, Fired: at, Job: "fail", Kind: "exec", State: jobrun.Failed, Error: "exit status 1", Started: at, Ended: at,
 				Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"false"}, ExitCode: &one, Stderr: "no\n"}}},
 			{Trigger: "said", Event: said, Fired: at, Job: "after", Kind: "exec", State: jobrun.NotRun},
@@ -317,7 +318,7 @@ func TestTriggerRunShowsAJobRun(t *testing.T) {
 	for id, wants := range map[string][]string{
 		"2": {"Job Run 2", "hook said on app.freeform at seq 7", "fail (exec)", "failed: exit status 1",
 			"started    2026-11-19T10:00:00Z", "command    false", "exit code  1", "stderr\n  no\n"},
-		"1": {"stdout\n  said\n", "ended      2026-11-19T10:00:01Z"},
+		"1": {"stdout\n  said\n", "ended      2026-11-19T10:00:01Z", "messages\n  ab12\n  cd34\n"},
 		"4": {"schedule daily for 2026-11-19T11:00:00Z", "summary (agent)", "agent      @auditor in Group-level talk", "chain      c0ffee"},
 		"5": {"request    POST $HOOK_URL", "attempts   503: webhook: 503 Service Unavailable, 200", "response   text/plain\n  thanks\n"},
 	} {

@@ -51,6 +51,10 @@ type sendRequest struct {
 	// place in a chain.
 	Handle string `json:"handle,omitempty"`
 	Depth  uint32 `json:"depth,omitempty"`
+	// JobRun is the token naming the Job Run of the exec Job that wrote
+	// it, if one did: the message is recorded on it, and the token goes no
+	// further.
+	JobRun string `json:"job_run,omitempty"`
 }
 
 // requestConversation is a request's Conversation ID, nil for Group-level
@@ -73,7 +77,7 @@ func requestConversation(hexID string) ([]byte, error) {
 // written: a person's at depth 0, or an exec Job's at its DEFIOS_DEPTH,
 // whose chain starts one deeper (ADR 0032). Otherwise it is that agent's at
 // depth, and this Node's config must include the Handle there (ADR 0015).
-func (s *server) conversationSend(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
+func (s *server) conversationSend(ctx context.Context, text, handle string, depth uint32, jobRun string, conversationID []byte) (SendView, error) {
 	payload, err := cosl.AgentFreeform(text, handle, depth)
 	if err != nil {
 		return SendView{}, err
@@ -86,6 +90,9 @@ func (s *server) conversationSend(ctx context.Context, text, handle string, dept
 	})
 	if err != nil {
 		return v, err
+	}
+	if jobRun != "" {
+		s.jobRuns.message(jobRun, v.MsgID)
 	}
 	m := talk.Message{Row: cosl.Row{Sender: s.opts.Node.NodeID}, Handle: handle, Text: text}
 	if handles := plan.Summons(m, s.opts.Node.NodeID); len(handles) > 0 {
@@ -222,7 +229,7 @@ func (s *server) conversationRoutes(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		v, err := s.conversationSend(r.Context(), req.Text, req.Handle, req.Depth, conv)
+		v, err := s.conversationSend(r.Context(), req.Text, req.Handle, req.Depth, req.JobRun, conv)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -257,16 +264,16 @@ func (c Client) Snapshot(ctx context.Context) error {
 // ConversationSend is `conversation send`. A nil conversationID appends
 // Group-level app.freeform; otherwise the row is that Conversation.
 func (c Client) ConversationSend(ctx context.Context, text string, conversationID []byte) (SendView, error) {
-	return c.ConversationSendAs(ctx, text, "", 0, conversationID)
+	return c.ConversationSendAs(ctx, text, "", 0, "", conversationID)
 }
 
 // ConversationSendAs is `conversation send --handle`: as ConversationSend,
 // written by the agent with this Handle at depth in its chain. An empty
 // handle is no agent's: a person's message at depth 0, or an exec Job's at
 // its DEFIOS_DEPTH (ADR 0032).
-func (c Client) ConversationSendAs(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
+func (c Client) ConversationSendAs(ctx context.Context, text, handle string, depth uint32, jobRun string, conversationID []byte) (SendView, error) {
 	var v SendView
-	req := sendRequest{Text: text, Handle: handle, Depth: depth}
+	req := sendRequest{Text: text, Handle: handle, Depth: depth, JobRun: jobRun}
 	if conversationID != nil {
 		req.ConversationID = hex.EncodeToString(conversationID)
 	}
@@ -275,9 +282,9 @@ func (c Client) ConversationSendAs(ctx context.Context, text, handle string, dep
 }
 
 // ConversationSendAs is Client.ConversationSendAs in this process.
-func (r *Running) ConversationSendAs(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (SendView, error) {
+func (r *Running) ConversationSendAs(ctx context.Context, text, handle string, depth uint32, jobRun string, conversationID []byte) (SendView, error) {
 	if err := r.tailnet(); err != nil {
 		return SendView{}, err
 	}
-	return r.s.conversationSend(ctx, text, handle, depth, conversationID)
+	return r.s.conversationSend(ctx, text, handle, depth, jobRun, conversationID)
 }

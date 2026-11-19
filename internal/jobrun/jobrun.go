@@ -58,6 +58,28 @@ type Run struct {
 	Chain        string `json:"chain,omitempty"`
 	// Output is an exec or webhook Job's, as far as it got.
 	trigger.Output
+	// Messages are the hex msg_ids of the talk messages an exec Job wrote
+	// with the token naming this Job Run, in the order written, queued
+	// ones included. An agent Job's are found through its Chain.
+	Messages []string `json:"messages,omitempty"`
+}
+
+// Token names r to the exec Job it runs, as DEFIOS_JOB_RUN: its ID and
+// when it fired, so that a token outliving its Job Run, whose ID came to
+// name another, names none.
+func (r Run) Token() string {
+	return strconv.FormatUint(r.ID, 10) + "-" + strconv.FormatInt(r.Fired.UnixNano(), 10)
+}
+
+// TokenID is the ID in token, if it holds one. The Job Run of that ID is
+// the one token names only if its Token equals token.
+func TokenID(token string) (uint64, bool) {
+	id, _, ok := strings.Cut(token, "-")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(id, 10, 64)
+	return n, err == nil
 }
 
 // Store writes one Group's Job Runs. Only the serve serving the Group

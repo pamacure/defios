@@ -136,6 +136,11 @@ type Runner struct {
 	// Agent runs agent Job name, j, on ev, and returns once its chain has
 	// ended; nil runs none.
 	Agent func(ctx context.Context, name string, j config.Job, ev Event) error
+	// JobRun is the token naming the Job Run of the Job it runs, given an
+	// exec Job as DEFIOS_JOB_RUN: the CLI hands it to serve with each talk
+	// message the Job writes, and serve records the message on that Job Run
+	// (ADR 0040). Empty outside a Trigger's firing.
+	JobRun string
 	// Backoff is the wait before a webhook's first retry, doubling after
 	// each; zero is a second.
 	Backoff time.Duration
@@ -231,9 +236,10 @@ func (r Runner) Run(ctx context.Context, name string, j config.Job, ev Event) (O
 	return Output{}, fmt.Errorf("%s Jobs do not run here", j.Kind())
 }
 
-// Vars are the DEFIOS_* variables an exec Job is given for ev. DEFIOS_DEPTH
-// is the depth a message the Job writes takes: one below the event's.
-func Vars(ev Event) map[string]string {
+// Vars are the DEFIOS_* variables an exec Job is given for ev, run as Job
+// Run jobRun. DEFIOS_DEPTH is the depth a message the Job writes takes: one
+// below the event's.
+func Vars(ev Event, jobRun string) map[string]string {
 	return map[string]string{
 		"DEFIOS_GROUP":           ev.Group,
 		"DEFIOS_TRIGGER":         ev.Trigger,
@@ -242,6 +248,7 @@ func Vars(ev Event) map[string]string {
 		"DEFIOS_SIGN_REQUEST_ID": ev.SignRequestID,
 		"DEFIOS_CONVERSATION":    ev.Conversation,
 		"DEFIOS_DEPTH":           strconv.FormatUint(uint64(ev.Depth)+1, 10),
+		"DEFIOS_JOB_RUN":         jobRun,
 	}
 }
 
@@ -257,7 +264,7 @@ func Expand(arg string, vars map[string]string) string {
 }
 
 func (r Runner) exec(ctx context.Context, name string, j config.Job, ev Event, stdin []byte, x *ExecOutput) error {
-	vars := Vars(ev)
+	vars := Vars(ev, r.JobRun)
 	for k, v := range r.Env {
 		vars[k] = v
 	}

@@ -42,7 +42,11 @@ type jobRuns struct {
 	mu    sync.Mutex
 	dir   string
 	store *jobrun.Store // nil until open, or if it failed to
-	logf  func(string, ...any)
+	// live are the Job Runs of firings under way, by ID, until they end:
+	// a message recorded on one must reach the firing's copy, which it
+	// keeps whole each time it changes.
+	live map[uint64]liveRun
+	logf func(string, ...any)
 	// onChange, if set, hears a Hook's firing on a Sign Request each time
 	// it changes, under mu: it must not block or call back.
 	onChange func(HookRun)
@@ -81,10 +85,59 @@ func (r *jobRuns) start(name string, jobs []string, defs map[string]config.Job, 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.store != nil {
-		r.logErr(r.store.Add(f.runs))
+		err := r.store.Add(f.runs)
+		r.logErr(err)
+		if err == nil {
+			if r.live == nil {
+				r.live = map[uint64]liveRun{}
+			}
+			for i, run := range f.runs {
+				r.live[run.ID] = liveRun{f, i}
+			}
+		}
 	}
 	f.tell()
 	return f
+}
+
+// liveRun is Job Run i of firing f.
+type liveRun struct {
+	f *firing
+	i int
+}
+
+// message records msgID, a talk message written with token, on the Job
+// Run token names. A token naming no Job Run kept is passed over: the
+// message is written all the same.
+func (r *jobRuns) message(token, msgID string) {
+	id, ok := jobrun.TokenID(token)
+	if !ok {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.store == nil {
+		return
+	}
+	l, live := r.live[id]
+	var run *JobRun
+	if live {
+		run = &l.f.runs[l.i] // the firing's own copy, which it keeps whole
+	} else {
+		kept, err := jobrun.Get(r.dir, id)
+		if err != nil {
+			return
+		}
+		run = &kept
+	}
+	if run.Token() != token {
+		return
+	}
+	run.Messages = append(run.Messages, msgID)
+	r.logErr(r.store.Put(*run))
+	if live {
+		l.f.tell()
+	}
 }
 
 // logErr logs a Job Run that could not be kept; r.mu is held.
@@ -148,6 +201,9 @@ func (f *firing) update(i int, change, rest func(*JobRun)) {
 		if f.r.store != nil && !jobRunEqual(before, f.runs[j]) {
 			f.r.logErr(f.r.store.Put(f.runs[j]))
 		}
+		if s := f.runs[j].State; s != JobPending && s != JobRunning {
+			delete(f.r.live, f.runs[j].ID) // ended: changed no more but by message
+		}
 	}
 	f.tell()
 }
@@ -178,6 +234,17 @@ func hookRun(runs []JobRun) HookRun {
 }
 
 func notRun(run *JobRun) { run.State = JobNotRun }
+
+// token is the token naming Job i's Job Run, "" if none is kept: a
+// message written with it could not be recorded.
+func (f *firing) token(i int) string {
+	f.r.mu.Lock()
+	defer f.r.mu.Unlock()
+	if l, ok := f.r.live[f.runs[i].ID]; !ok || l.f != f {
+		return ""
+	}
+	return f.runs[i].Token()
+}
 
 // running marks Job i running.
 func (f *firing) running(i int) {

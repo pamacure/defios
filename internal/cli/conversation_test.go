@@ -1052,6 +1052,33 @@ func TestDefiosDepthIsTheDepthAJobWritesAt(t *testing.T) {
 	}
 }
 
+// Under an exec Job, conversation send hands serve DEFIOS_JOB_RUN, the
+// token naming the Job's Job Run, so serve records the message on it; a
+// person's send hands none.
+func TestConversationSendHandsServeTheJobRun(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	body := fakeConversationSend(t, dir)
+	for _, c := range []struct {
+		env  map[string]string
+		want any
+	}{
+		{map[string]string{"DEFIOS_JOB_RUN": "7-123"}, "7-123"},
+		{nil, nil},
+	} {
+		if r := run(t, c.env, "", "--dir", dir, "conversation", "send", "hi"); r.code != 0 {
+			t.Fatalf("exit %d: %s", r.code, r.stderr)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(body.Load().(string)), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["job_run"] != c.want {
+			t.Errorf("with %v, posted %v; want job_run %v", c.env, m, c.want)
+		}
+	}
+}
+
 // The serve refusing a Handle, as the agent writing or in a person's
 // mention, is the caller's error.
 func TestConversationSendBadHandleFromServeExitsUsage(t *testing.T) {

@@ -74,7 +74,7 @@ type servedAPI interface {
 	GroupAccept(ctx context.Context, gid group.ID) (serve.GroupView, error)
 	GroupDecline(ctx context.Context, gid group.ID, reason string) (serve.GroupView, error)
 
-	ConversationSendAs(ctx context.Context, text, handle string, depth uint32, conversationID []byte) (serve.SendView, error)
+	ConversationSendAs(ctx context.Context, text, handle string, depth uint32, jobRun string, conversationID []byte) (serve.SendView, error)
 	ConversationCancel(ctx context.Context, conversationID []byte, chain string) (serve.CancelView, error)
 	ConversationStream(ctx context.Context, conversationID []byte) (*serve.ChainStream, error)
 	OutboxDrop(ctx context.Context, msgID string) (serve.DropView, error)

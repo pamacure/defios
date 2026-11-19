@@ -117,6 +117,7 @@ func TestAnExecJobRunsItsArgvWithTheEventAndAClosedEnvironment(t *testing.T) {
 		Exec:    []string{"sh", "-c", `{ pwd; env | sort; cat; echo; echo "arg=$1"; } > "$0"; echo done; echo oops >&2`, out, "${DEFIOS_SIGN_REQUEST_ID}-$DEFIOS_EVENT $HOME"},
 		Secrets: []string{"TOKEN", "STORED"},
 	}
+	r.JobRun = "12-345"
 	if _, err := r.Run(context.Background(), "archive", j, event); err != nil {
 		t.Fatal(err)
 	}
@@ -144,11 +145,12 @@ func TestAnExecJobRunsItsArgvWithTheEventAndAClosedEnvironment(t *testing.T) {
 	}
 	// sh sets PWD, SHLVL and _ itself.
 	env = slices.DeleteFunc(env, func(k string) bool { return k == "PWD" || k == "SHLVL" || k == "_" })
-	want := []string{"DEFIOS_CONVERSATION", "DEFIOS_DATA_DIR", "DEFIOS_DEPTH", "DEFIOS_EVENT", "DEFIOS_GROUP", "DEFIOS_MSG_ID", "DEFIOS_SIGN_REQUEST_ID", "DEFIOS_TRIGGER", "PATH", "STORED", "TOKEN"}
+	want := []string{"DEFIOS_CONVERSATION", "DEFIOS_DATA_DIR", "DEFIOS_DEPTH", "DEFIOS_EVENT", "DEFIOS_GROUP", "DEFIOS_JOB_RUN", "DEFIOS_MSG_ID", "DEFIOS_SIGN_REQUEST_ID", "DEFIOS_TRIGGER", "PATH", "STORED", "TOKEN"}
 	if !slices.Equal(env, want) {
 		t.Errorf("environment %v, want %v", env, want)
 	}
-	if !strings.Contains(string(b), "STORED=from-vault") || !strings.Contains(string(b), "TOKEN=from-env") || !strings.Contains(string(b), "DEFIOS_DEPTH=1") {
+	if !strings.Contains(string(b), "STORED=from-vault") || !strings.Contains(string(b), "TOKEN=from-env") || !strings.Contains(string(b), "DEFIOS_DEPTH=1") ||
+		!strings.Contains(string(b), "DEFIOS_JOB_RUN=12-345") {
 		t.Errorf("environment values wrong:\n%s", b)
 	}
 	var ev trigger.Event

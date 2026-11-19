@@ -204,7 +204,7 @@ jobs = ["ready"]
 	}
 	waitLines(t, out, []string{"sign.request:2", "request.open:2", "sign.refuse:2", "request.refused:2"})
 
-	if _, err := b.client().ConversationSendAs(ctx, "from a Job", "", 2, nil); err != nil {
+	if _, err := b.client().ConversationSendAs(ctx, "from a Job", "", 2, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitLines(t, out, []string{"sign.request:2", "request.open:2", "sign.refuse:2", "request.refused:2", "app.freeform:3"})

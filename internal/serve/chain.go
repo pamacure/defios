@@ -604,7 +604,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 	// Once a talk_write is accepted, a cancel no longer cuts it: an append in
 	// flight could land anyway, and agent.commit must report it if it does.
 	commit := context.WithoutCancel(c.ctx)
-	v, err := s.conversationSend(commit, res.Said, handle, depth, c.conv)
+	v, err := s.conversationSend(commit, res.Said, handle, depth, "", c.conv)
 	if err != nil {
 		return res, said, inc, err
 	}

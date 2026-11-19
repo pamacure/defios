@@ -201,6 +201,7 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 			return
 		}
 		current = i
+		r.JobRun = rec.token(i)
 		rec.running(i)
 		v, out := runJob(t.ctx, &t.s.chains, r, job, defs[job], ev)
 		rec.ended(i, v, out)

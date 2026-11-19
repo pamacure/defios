@@ -191,7 +191,7 @@ jobs = ["here", "there"]
 	}
 	defer inKey.Close()
 	groupLevel := watch(t, a)
-	if _, err := b.client().ConversationSendAs(ctx, "check", "", 1, id[:]); err != nil {
+	if _, err := b.client().ConversationSendAs(ctx, "check", "", 1, "", id[:]); err != nil {
 		t.Fatal(err)
 	}
 	for where, s := range map[string]*serve.ChainStream{"the Key's Conversation": inKey, "Group-level talk": groupLevel} {
