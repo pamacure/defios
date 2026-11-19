@@ -75,6 +75,7 @@ func agentError(handle string, err error) error {
 	var invalid *node.InvalidError
 	var included *node.ProfileIncludedError
 	var taken *node.LiveryTakenError
+	var answers *node.AnswersError
 	switch {
 	case errors.As(err, &exit):
 		return err
@@ -88,11 +89,25 @@ func agentError(handle string, err error) error {
 		return exitUsagef("%w", err)
 	case errors.As(err, &included):
 		return exitUsagef("Agent Profile %q is included in %s; exclude it there first", handle, strings.Join(placeNames(included.In), ", "))
+	case errors.As(err, &answers):
+		jobs := make([]string, len(answers.Jobs))
+		for i, j := range answers.Jobs {
+			jobs[i] = fmt.Sprintf("@%s answers in %s for Job %s", j.Handle, jobTarget(j.Target), j.Job)
+		}
+		return exitUsagef("%s; change the Job's target in config.toml first", strings.Join(jobs, ", "))
 	case errors.As(err, &invalid), errors.Is(err, config.ErrNotWritten), errors.Is(err, config.ErrGrantRefused),
 		errors.Is(err, key.ErrUnknown), errors.Is(err, key.ErrAmbiguous):
 		return exitUsagef("%w", err)
 	}
 	return talkError(err)
+}
+
+// jobTarget names an agent Job's target as the CLI prints it.
+func jobTarget(t string) string {
+	if t == config.ConversationGroup {
+		return "Group-level talk"
+	}
+	return t
 }
 
 // placeNames names each place as the CLI prints it: a Group by its alias,

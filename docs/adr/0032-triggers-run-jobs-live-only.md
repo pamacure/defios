@@ -106,6 +106,8 @@ made up later.
   status change has no message. The Handle must be in the target's
   profiles: checked as the config is read for `target = "group"`, and as
   the Job runs elsewhere, where a Conversation's Workspace may replace them.
+  ADR 0038 also checks it when a Job is saved and when an agent is included
+  or excluded.
 - **`exec` Jobs** take an argument list, not a shell string, with the event
   as JSON on stdin. Their environment holds `PATH`, the `DEFIOS_*` variables
   (Group alias, Trigger, event type, msg id, Sign Request id, Conversation,

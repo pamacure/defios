@@ -132,17 +132,23 @@ func (h *Host) groupConfig(group string) (config.Config, error) {
 	return c, err
 }
 
-// AddJob defines Job name in group's config.toml. An agent Job's Handle
-// is checked as the config loader checks it: one answering in Group-level
-// talk must be in the Group's [agent] profiles. That it names an Agent
+// AddJob defines Job name in group's config.toml. An agent Job that
+// answers in Group-level talk or a Key's Conversation must have its agent
+// included there, or it is a JobNotIncludedError. That it names an Agent
 // Profile of this Node's is a front end's to offer, as the loader checks
 // it only where the Job runs.
 func (h *Host) AddJob(ctx context.Context, group, name string, j config.Job) error {
+	if err := h.checkJob(group, j); err != nil {
+		return err
+	}
 	return h.setEntry(group, config.TableJobs, name, j, false)
 }
 
-// EditJob replaces Job name's definition with j.
+// EditJob replaces Job name's definition with j, checked as AddJob does.
 func (h *Host) EditJob(ctx context.Context, group, name string, j config.Job) error {
+	if err := h.checkJob(group, j); err != nil {
+		return err
+	}
 	return h.setEntry(group, config.TableJobs, name, j, true)
 }
 

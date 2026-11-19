@@ -93,8 +93,11 @@ func (u *UI) SaveSchedule(d shell.ScheduleDraft) shell.TriggersView {
 }
 func (u *UI) DeleteSchedule(name string) shell.TriggersView { return u.shell.DeleteSchedule(name) }
 func (u *UI) RunJob(name string) shell.TriggersView         { return u.shell.RunJob(name) }
-func (u *UI) TriggersTOML() shell.TOMLView                  { return u.shell.TriggersTOML() }
-func (u *UI) SaveTriggersTOML(text string) shell.TOMLView   { return u.shell.SaveTriggersTOML(text) }
+func (u *UI) IncludeForJob(where, handle, target string) shell.TriggersView {
+	return u.shell.IncludeForJob(where, handle, target)
+}
+func (u *UI) TriggersTOML() shell.TOMLView                { return u.shell.TriggersTOML() }
+func (u *UI) SaveTriggersTOML(text string) shell.TOMLView { return u.shell.SaveTriggersTOML(text) }
 
 // Plugins: this device's Plugins, each install or update staged for its
 // preview before CommitPlugins.

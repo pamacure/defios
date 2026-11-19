@@ -133,7 +133,7 @@ A Trigger that fires at a set time, once or on a repeat. A firing that falls whi
 _Avoid_: cron job, timer, routine
 
 **Job**:
-What a Trigger runs when it fires, defined once by name so any number of Hooks and Schedules can name it: summoning one of this Node's agents, running a local command, or calling a webhook.
+What a Trigger runs when it fires, defined once by name so any number of Hooks and Schedules can name it: summoning one of this Node's agents, running a local command, or calling a webhook. An agent Job that names where it answers, Group-level talk or a Key's Conversation, needs its agent included there for as long as it names it.
 _Avoid_: action (that is how a Tool is described), task, effect
 
 **Key**:

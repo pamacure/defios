@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/node"
 )
 
 func triggersOK(t *testing.T, what string, v shell.TriggersView) shell.TriggersView {
@@ -193,4 +194,42 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// An agent Job's agent must be included where it answers: the form
+// refuses it naming that field, says who is included where, and includes
+// it there without saving the Job; once a Job answers there, Talk refuses
+// to exclude its agent, naming the Job.
+func TestAnAgentJobsAgentIsIncludedWhereItAnswers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("forms a Group")
+	}
+	alice, _ := formed(t)
+	agentsOK(t, "add provider", alice.SaveProvider(shell.ProviderDraft{New: true, Alias: "anthropic", Preset: "anthropic"}))
+	agentsOK(t, "add profile", alice.SaveAgentProfile(shell.ProfileDraft{New: true, Handle: "auditor", Provider: "anthropic"}))
+
+	d := shell.JobDraft{New: true, Name: "review", Kind: "agent", Agent: "auditor", Prompt: "Review it.", Target: "group"}
+	v := alice.SaveJob(d)
+	if v.Problem == nil || v.Problem.Code != "job-not-included" || v.Field != "target" || v.Where != "new-job" ||
+		!strings.Contains(v.Problem.Message, "Group talk") {
+		t.Fatalf("not included: %+v field %q where %q", v.Problem, v.Field, v.Where)
+	}
+	if got := v.Included["group"]; len(got) != 0 {
+		t.Fatalf("included in Group talk: %v", got)
+	}
+
+	v = alice.IncludeForJob("new-job", "auditor", "group")
+	if v.Problem != nil || v.Saved || v.Where != "new-job" || !reflect.DeepEqual(v.Included["group"], []string{"auditor"}) {
+		t.Fatalf("include for the Job: %+v saved %v included %v", v.Problem, v.Saved, v.Included)
+	}
+	if jobNamed(v, "review") != nil {
+		t.Fatalf("including saved the Job: %+v", v.Jobs)
+	}
+	triggersOK(t, "add the Job once included", alice.SaveJob(d))
+
+	alice.OpenConversation(node.GroupTalk)
+	ts := alice.SetAgentIncluded("auditor", false)
+	if ts.Problem == nil || ts.Problem.Code != "job-answers" || !strings.Contains(ts.Problem.Message, "for Job review") {
+		t.Fatalf("exclude: %+v", ts.Problem)
+	}
 }

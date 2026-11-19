@@ -225,6 +225,10 @@ const RequestEventPrefix = "request."
 // hex prefix of its public key (key.WorkspaceNames).
 var workspaceName = regexp.MustCompile(`^[a-z0-9]+-[0-9a-f]+$`)
 
+// IsWorkspaceName reports whether s has the form of a Conversation
+// Workspace's name, as an agent Job's target may.
+func IsWorkspaceName(s string) bool { return workspaceName.MatchString(s) }
+
 // validateTriggers checks c's Jobs, Hooks and Schedules.
 func (c Config) validateTriggers(md toml.MetaData) error {
 	for name, j := range c.Jobs {

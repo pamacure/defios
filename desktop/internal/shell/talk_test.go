@@ -443,6 +443,30 @@ func TestExcludingFromAConversationThatFollowsTheGroupKeepsTheOthers(t *testing.
 	}
 }
 
+// Excluding an agent a Job answers with names the Job, and the Key it
+// answers in as the page names it.
+func TestExcludingAnAgentAJobAnswersWithNamesTheJob(t *testing.T) {
+	r := newRig(t, "alpha")
+	k := withKey(t, r)
+	r.node.tk().profiles = []string{"auditor"}
+	r.node.tk().included[node.GroupTalk] = []string{"auditor"}
+	r.node.tk().refuseInclusion = &node.AnswersError{Jobs: []node.JobAnswer{
+		{Job: "review", Handle: "auditor", Target: "group"},
+		{Job: "watch", Handle: "auditor", Target: k.Workspace},
+	}}
+	s := served(t, r)
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Conversations) == 2 })
+	s.OpenConversation(node.GroupTalk)
+	ts := s.SetAgentIncluded("auditor", false)
+	want := "@auditor answers in Group talk for Job review; @auditor answers in vault for Job watch. Change where review and watch answer on Triggers first."
+	if ts.Problem == nil || ts.Problem.Code != "job-answers" || ts.Problem.Message != want {
+		t.Fatalf("refused: %+v", ts.Problem)
+	}
+	if included(ts) != "auditor" {
+		t.Fatalf("still included: %s", included(ts))
+	}
+}
+
 func included(ts shell.TalkState) string {
 	var hs []string
 	for _, a := range ts.Agents {

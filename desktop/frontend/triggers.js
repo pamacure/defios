@@ -61,8 +61,8 @@ export function triggersLoad(s) {
 
 // triggersRefresh reads the view again, as when the page is opened anew,
 // and redraws only if it changed. While something is being edited it takes
-// only the device's agents and the Group's Keys, so one made meanwhile can
-// be chosen, and keeps what is typed.
+// only the device's agents, the Group's Keys and who is included where, so
+// one made or included meanwhile can be chosen, and keeps what is typed.
 export async function triggersRefresh() {
   if (!tv || loading || busy) return;
   const g = group;
@@ -70,9 +70,9 @@ export async function triggersRefresh() {
   if (!next || next.Group !== g || g !== group || busy) return;
   if (mount.contains(document.activeElement)) return;
   if (open.size || toml || deleting) {
-    const choices = (v) => JSON.stringify([v.Handles, v.Keys]);
+    const choices = (v) => JSON.stringify([v.Handles, v.Keys, v.Included]);
     if (choices(next) === choices(tv)) return;
-    tv = { ...tv, Handles: next.Handles, Keys: next.Keys };
+    tv = { ...tv, Handles: next.Handles, Keys: next.Keys, Included: next.Included };
     redraw();
     return;
   }
@@ -391,6 +391,28 @@ async function runNow(name) {
   redraw();
 }
 
+// includeFor includes handle where the agent Job form where says it
+// answers, target, leaving the form open as typed: its Job is saved only
+// by its Save.
+async function includeFor(where, handle, target) {
+  if (busy) return;
+  busy = true;
+  redraw();
+  let next;
+  try {
+    next = await call("IncludeForJob", where, handle, target);
+  } catch (err) {
+    showProblem(callFailed(err), { scope: "triggers" });
+  } finally {
+    busy = false;
+  }
+  if (next?.Group === group) {
+    refused(next);
+    tv = { ...next, Problem: null };
+  }
+  redraw();
+}
+
 function jobForm(j) {
   const where = j ? `job:${j.Name}` : "new-job";
   const d = drafts.get(where) ?? (j
@@ -407,20 +429,41 @@ function jobForm(j) {
       { none: tv.Handles?.length ? "Choose an agent" : "No agents on this device yet" });
     const prompt = area(d.Prompt, { rows: 3, placeholder: "Review the Sign Request and accept it if it matches policy." });
     // A Key is shown by its alias but written as its Workspace name, which
-    // never changes.
+    // never changes. Each place the agent is not included in says so, as
+    // the Job would fail there; one chosen offers to include it.
     const keys = tv.Keys ?? [];
     const known = d.Target === "" || d.Target === "group" || keys.some((k) => k.Workspace === d.Target);
+    const place = (value, label) => h("option", { value, selected: value === d.Target, "data-label": label }, label);
     const target = h("select", { class: "field left" },
       h("option", { value: "", selected: d.Target === "" }, "The event's conversation"),
-      h("option", { value: "group", selected: d.Target === "group" }, "Group talk"),
-      keys.length > 0 && h("optgroup", { label: "A Key's conversation" },
-        keys.map((k) => h("option", { value: k.Workspace, selected: k.Workspace === d.Target }, k.Label))),
+      place("group", "Group talk"),
+      keys.length > 0 && h("optgroup", { label: "A Key's conversation" }, keys.map((k) => place(k.Workspace, k.Label))),
       !known && h("option", { value: d.Target, selected: true }, `${d.Target} (no such Key in ${group})`));
+    const note = h("p", { class: "hint", role: "status" });
+    const answers = () => {
+      const handle = agent.value;
+      for (const o of target.querySelectorAll("option[data-label]")) {
+        const out = handle && !(tv.Included?.[o.value] ?? []).includes(handle);
+        o.textContent = out ? `${o.dataset.label} (@${handle} not included)` : o.dataset.label;
+      }
+      const chosen = target.selectedOptions[0];
+      const out = handle && chosen?.dataset.label && !(tv.Included?.[chosen.value] ?? []).includes(handle);
+      note.hidden = !out;
+      if (out) {
+        put(note, `@${handle} isn't included in ${chosen.dataset.label}, so it can't answer there. `,
+          h("button", { class: "link", type: "button", disabled: busy, onclick: () => includeFor(where, handle, chosen.value) },
+            `Include @${handle} there`));
+      }
+    };
+    agent.addEventListener("change", answers);
+    target.addEventListener("change", answers);
+    answers();
     fields = [
       row(where, "agent", "Agent", agent, "It runs here, on this device.", agentEl),
       row(where, "prompt", "Prompt", prompt, "Its instruction, with the event that fired."),
       row(where, "target", "Answers in", target,
-        "A Schedule has no event, so a Job it runs must name Group talk or a Key. In Group talk the agent must be included there."),
+        "The agent must be included where it answers. A Schedule has no event, so a Job it runs must name Group talk or a Key.",
+        h("div", { class: "stack" }, target, note)),
     ];
     readKind = () => ({ Agent: agent.value, Prompt: prompt.value, Target: target.value });
   } else if (d.Kind === "exec") {

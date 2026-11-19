@@ -206,3 +206,88 @@ func TestExcludeFromAConversationFollowingTheGroupIsRefused(t *testing.T) {
 		t.Fatalf("exclude: %v; want ErrFollowsGroup", err)
 	}
 }
+
+// An agent Job that answers in Group-level talk or a Key's Conversation
+// needs its agent included there, and an include, exclude or new list
+// that would take a Job's agent out of where it answers is refused,
+// naming the Job: in Group-level talk, for the Conversations that follow
+// it too. A Job answering in the event's Conversation names no place.
+func TestAJobsAgentStaysIncludedWhereItAnswers(t *testing.T) {
+	alice, _, k := keyed(t, "", "")
+	ctx := context.Background()
+	h := alice.h
+	conv, err := h.ResolveConversation(ctx, "alpha", k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	convs, err := h.Conversations(ctx, "alpha")
+	if err != nil || len(convs.Talk) != 2 || convs.Talk[1].Key == nil {
+		t.Fatalf("conversations: %+v, %v", convs, err)
+	}
+	ws := convs.Talk[1].Key.Workspace
+	for _, handle := range []string{"auditor", "scribe"} {
+		if _, err := h.AddAgentProfile(ctx, handle, node.ProfileEdit{Provider: ptr("claude")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	job := func(target string) config.Job { return config.Job{Agent: "auditor", Prompt: "check", Target: target} }
+
+	for _, target := range []string{config.ConversationGroup, ws} {
+		var not *node.JobNotIncludedError
+		if err := h.AddJob(ctx, "alpha", "early", job(target)); !errors.As(err, &not) || *not != (node.JobNotIncludedError{Handle: "auditor", Target: target}) {
+			t.Fatalf("a Job answering in %s, not included: %v; want JobNotIncludedError", target, err)
+		}
+	}
+	if err := h.AddJob(ctx, "alpha", "anywhere", job("")); err != nil {
+		t.Fatalf("a Job answering in the event's Conversation: %v", err)
+	}
+
+	if _, err := h.IncludeAgent(ctx, "alpha", node.GroupTalk, "auditor"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.AddJob(ctx, "alpha", "ingroup", job(config.ConversationGroup)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.AddJob(ctx, "alpha", "inkey", job(ws)); err != nil {
+		t.Fatalf("a Job answering in a Conversation following the Group: %v", err)
+	}
+
+	answers := func(err error, want ...node.JobAnswer) {
+		t.Helper()
+		var got *node.AnswersError
+		if !errors.As(err, &got) || !reflect.DeepEqual(got.Jobs, want) {
+			t.Fatalf("%v; want AnswersError naming %+v", err, want)
+		}
+	}
+	inGroup := node.JobAnswer{Job: "ingroup", Handle: "auditor", Target: config.ConversationGroup}
+	inKey := node.JobAnswer{Job: "inkey", Handle: "auditor", Target: ws}
+	_, err = h.ExcludeAgent(ctx, "alpha", node.GroupTalk, "auditor")
+	answers(err, inGroup, inKey)
+	// Its own list of scribe alone would leave auditor out.
+	_, err = h.IncludeAgent(ctx, "alpha", conv, "scribe")
+	answers(err, inKey)
+
+	got, err := h.SetIncludedAgents(ctx, "alpha", conv, []string{"auditor", "scribe", "auditor"})
+	if err != nil || !reflect.DeepEqual(got, node.Inclusion{Handles: []string{"auditor", "scribe"}, OwnList: true}) {
+		t.Fatalf("set the Conversation's list: %#v, %v", got, err)
+	}
+	_, err = h.ExcludeAgent(ctx, "alpha", node.GroupTalk, "auditor")
+	answers(err, inGroup)
+	_, err = h.ExcludeAgent(ctx, "alpha", conv, "auditor")
+	answers(err, inKey)
+	_, err = h.SetIncludedAgents(ctx, "alpha", conv, nil)
+	answers(err, inKey)
+	if _, err := h.ExcludeAgent(ctx, "alpha", conv, "scribe"); err != nil {
+		t.Fatalf("exclude an agent no Job answers with: %v", err)
+	}
+	if _, err := h.SetIncludedAgents(ctx, "alpha", conv, []string{"ghost"}); !errors.Is(err, node.ErrUnknownProfile) {
+		t.Fatalf("set a ghost: %v; want ErrUnknownProfile", err)
+	}
+
+	if err := h.DeleteJob(ctx, "alpha", "inkey"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ExcludeAgent(ctx, "alpha", conv, "auditor"); err != nil {
+		t.Fatalf("exclude once no Job answers there: %v", err)
+	}
+}

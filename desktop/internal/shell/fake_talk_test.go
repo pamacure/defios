@@ -27,18 +27,20 @@ type fakeTalk struct {
 	keygens   []node.Session
 	// included are the Handles included per Conversation; a Conversation
 	// with none of its own follows GroupTalk's.
-	included  map[string][]string
-	profiles  []string
-	providers map[string][]node.Provider
-	networks  map[string][]node.Network
-	noLeader  bool // Send queues
-	noReplica bool // the Group has no replica here yet
-	seq       uint64
-	sent      []node.Outgoing
-	cancelled []string // chains
-	accepted  []string // Session IDs
-	aborted   []string
-	sign      *fakeSign
+	included map[string][]string
+	// refuseInclusion, set, is what SetIncludedAgents fails with.
+	refuseInclusion error
+	profiles        []string
+	providers       map[string][]node.Provider
+	networks        map[string][]node.Network
+	noLeader        bool // Send queues
+	noReplica       bool // the Group has no replica here yet
+	seq             uint64
+	sent            []node.Outgoing
+	cancelled       []string // chains
+	accepted        []string // Session IDs
+	aborted         []string
+	sign            *fakeSign
 	// liveTranscripts are the Handles with a live Transcript, by
 	// Conversation ID.
 	liveTranscripts map[string][]node.LiveTranscript
@@ -291,7 +293,7 @@ func (n *fakeNode) mint(id string) node.Key {
 		return false
 	})
 	pub := fmt.Sprintf("02%064x", len(t.keys)+1)
-	k := node.Key{Key: s.Curve + ":" + pub, Alias: s.ProposedAlias, Curve: s.Curve, PublicKey: pub,
+	k := node.Key{Key: s.Curve + ":" + pub, Alias: s.ProposedAlias, Curve: s.Curve, PublicKey: pub, Workspace: s.Curve + "-" + pub[:12],
 		ConversationID: fmt.Sprintf("c0%062x", len(t.keys)+1), SessionID: id, T: int(s.T), N: int(s.N), Share: true}
 	t.keys = append(t.keys, k)
 	s.Status = session.Complete
@@ -342,31 +344,16 @@ func (n *fakeNode) IncludedAgents(_ context.Context, group, conv string) ([]stri
 	return n.Handles(context.Background(), group, conv)
 }
 
-func (n *fakeNode) IncludeAgent(_ context.Context, group, conv, handle string) (node.Inclusion, error) {
+func (n *fakeNode) SetIncludedAgents(_ context.Context, group, conv string, handles []string) (node.Inclusion, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	t := n.tk()
-	l, own := t.included[conv]
-	if !own {
-		t.included[conv] = []string{handle}
-		return node.Inclusion{Handles: []string{handle}, OwnList: conv != node.GroupTalk}, nil
+	if t.refuseInclusion != nil {
+		return node.Inclusion{}, t.refuseInclusion
 	}
-	if !slices.Contains(l, handle) {
-		t.included[conv] = append(l, handle)
-	}
-	return node.Inclusion{Handles: slices.Clone(t.included[conv])}, nil
-}
-
-func (n *fakeNode) ExcludeAgent(_ context.Context, group, conv, handle string) (node.Inclusion, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	t := n.tk()
-	l, own := t.included[conv]
-	if !own && conv != node.GroupTalk {
-		return node.Inclusion{}, node.ErrFollowsGroup
-	}
-	t.included[conv] = slices.DeleteFunc(slices.Clone(l), func(x string) bool { return x == handle })
-	return node.Inclusion{Handles: slices.Clone(t.included[conv])}, nil
+	_, own := t.included[conv]
+	t.included[conv] = slices.Clone(handles)
+	return node.Inclusion{Handles: slices.Clone(handles), OwnList: !own && conv != node.GroupTalk}, nil
 }
 
 func (n *fakeNode) Providers(_ context.Context, group, conv string) ([]node.Provider, error) {

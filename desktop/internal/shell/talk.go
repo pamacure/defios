@@ -35,8 +35,7 @@ type TalkNode interface {
 	AbortSession(ctx context.Context, group, id, reason string) error
 	AgentProfiles(ctx context.Context) ([]node.AgentProfile, error)
 	IncludedAgents(ctx context.Context, group, conv string) ([]string, error)
-	IncludeAgent(ctx context.Context, group, conv, handle string) (node.Inclusion, error)
-	ExcludeAgent(ctx context.Context, group, conv, handle string) (node.Inclusion, error)
+	SetIncludedAgents(ctx context.Context, group, conv string, handles []string) (node.Inclusion, error)
 	Providers(ctx context.Context, group, conv string) ([]node.Provider, error)
 	Networks(ctx context.Context, group, conv string) ([]node.Network, error)
 	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)

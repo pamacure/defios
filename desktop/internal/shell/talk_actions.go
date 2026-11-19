@@ -2,7 +2,6 @@ package shell
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 
@@ -252,47 +251,35 @@ func (t *talk) setKeyAlias(alias string) TalkState {
 // setAgentIncluded includes or excludes handle in the open Conversation.
 // A Key's Conversation that follows Group talk's agents gets a list of its
 // own, starting from the Group's, so toggling one agent keeps the others.
+// One refused because a Job answers there with that agent names the Job
+// and its Key as the page does.
 func (t *talk) setAgentIncluded(handle string, on bool) TalkState {
 	return t.act(func(a at) error {
 		before, err := a.n.IncludedAgents(t.ctx, a.group, a.conv)
 		if err != nil || slices.Contains(before, handle) == on {
 			return err
 		}
-		include := func(hs ...string) error {
-			for _, h := range hs {
-				if _, err := a.n.IncludeAgent(t.ctx, a.group, a.conv, h); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
+		list := slices.DeleteFunc(slices.Clone(before), func(h string) bool { return h == handle })
 		if on {
-			inc, err := a.n.IncludeAgent(t.ctx, a.group, a.conv, handle)
-			if err != nil || !inc.OwnList {
-				return err
-			}
-			// It followed the Group's list, and now holds handle alone:
-			// put the Group's back first, in order.
-			if _, err := a.n.ExcludeAgent(t.ctx, a.group, a.conv, handle); err != nil {
-				return err
-			}
-			return include(append(slices.Clone(before), handle)...)
+			list = append(list, handle)
 		}
-		_, err = a.n.ExcludeAgent(t.ctx, a.group, a.conv, handle)
-		if !errors.Is(err, node.ErrFollowsGroup) {
-			return err
-		}
-		rest := slices.DeleteFunc(slices.Clone(before), func(h string) bool { return h == handle })
-		if len(rest) > 0 {
-			return include(rest...)
-		}
-		// None left: an own list that is empty.
-		if err := include(handle); err != nil {
-			return err
-		}
-		_, err = a.n.ExcludeAgent(t.ctx, a.group, a.conv, handle)
-		return err
+		_, err = a.n.SetIncludedAgents(t.ctx, a.group, a.conv, list)
+		return withKeyLabels(err, t.keyLabels())
 	}, t.loadSide)
+}
+
+// keyLabels names each Key's Conversation the Talk page lists by its
+// Workspace name, as the page names the Key.
+func (t *talk) keyLabels() map[string]string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := map[string]string{}
+	for _, c := range t.convs.Talk {
+		if c.Key != nil && c.Key.Workspace != "" {
+			out[c.Key.Workspace] = keyLabel(*c.Key)
+		}
+	}
+	return out
 }
 
 func (t *talk) runTranscript(conv, chain, handle string) TranscriptView {

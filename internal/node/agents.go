@@ -397,7 +397,8 @@ type Inclusion struct {
 // profiles of group's Group-level talk, or of Conversation conv. A
 // Conversation with no list of its own follows the Group's; including one
 // there gives it a list of that Handle alone. The Group need not be
-// served.
+// served. One that would leave a Job's agent no longer included where it
+// answers is an AnswersError, and writes nothing.
 func (h *Host) IncludeAgent(ctx context.Context, group, conv, handle string) (Inclusion, error) {
 	if _, err := h.readProfile(handle); err != nil {
 		return Inclusion{}, err
@@ -413,7 +414,9 @@ func (h *Host) IncludeAgent(ctx context.Context, group, conv, handle string) (In
 // ExcludeAgent takes handle out of the [agent] profiles of group's
 // Group-level talk, or of Conversation conv. Excluding the last leaves an
 // empty list, so no agent answers there. A Conversation with no list of
-// its own is ErrFollowsGroup.
+// its own is ErrFollowsGroup. One that would take a Job's agent out of
+// where it answers is an AnswersError, and writes nothing: excluding from
+// Group-level talk takes it out of the Conversations that follow it too.
 func (h *Host) ExcludeAgent(ctx context.Context, group, conv, handle string) (Inclusion, error) {
 	if err := validHandle(handle); err != nil {
 		return Inclusion{}, err
@@ -430,6 +433,25 @@ func (h *Host) ExcludeAgent(ctx context.Context, group, conv, handle string) (In
 		}
 		return out, nil
 	})
+}
+
+// SetIncludedAgents replaces the [agent] profiles of group's Group-level
+// talk, or of Conversation conv, with handles, each an Agent Profile on
+// this Node, in their order; none leaves an empty list, so no agent
+// answers there. A Conversation that followed the Group's list has its own
+// from then on. It is refused as ExcludeAgent's is when it would take a
+// Job's agent out of where it answers.
+func (h *Host) SetIncludedAgents(ctx context.Context, group, conv string, handles []string) (Inclusion, error) {
+	list := []string{}
+	for _, x := range handles {
+		if _, err := h.readProfile(x); err != nil {
+			return Inclusion{}, err
+		}
+		if !slices.Contains(list, x) {
+			list = append(list, x)
+		}
+	}
+	return h.editInclusion(group, conv, func([]string, bool) ([]string, error) { return list, nil })
 }
 
 // IncludedAgents is the list of Handles in force in group's Group-level
@@ -450,12 +472,17 @@ func (h *Host) IncludedAgents(ctx context.Context, group, conv string) ([]string
 // Group-level talk or Conversation conv and writes it back, keeping the
 // file's other sections and never merging the Conversation's over the
 // Group's. edit is told whether a Conversation follows the Group's list.
+// A list that would take a Job's agent out of where it answers is an
+// AnswersError.
 func (h *Host) editInclusion(group, conv string, edit func(list []string, following bool) ([]string, error)) (Inclusion, error) {
 	if conv == GroupTalk {
 		var list []string
 		err := h.writeGroupConfig(group, func(c *config.Config) error {
 			l, err := edit(c.Agent.Profiles, false)
 			if err != nil {
+				return err
+			}
+			if err := h.checkAnswers(group, *c, config.ConversationGroup, l); err != nil {
 				return err
 			}
 			c.Agent.Profiles, list = l, l
@@ -469,10 +496,11 @@ func (h *Host) editInclusion(group, conv string, edit func(list []string, follow
 		}
 		return Inclusion{Handles: list}, nil
 	}
-	path, err := h.conversationConfigFile(group, conv)
+	name, _, err := h.workspace(group, conv)
 	if err != nil {
 		return Inclusion{}, err
 	}
+	path := h.p.ConversationConfigFile(group, name)
 	w, err := config.ReadWorkspace(path)
 	if err != nil {
 		return Inclusion{}, err
@@ -480,6 +508,13 @@ func (h *Host) editInclusion(group, conv string, edit func(list []string, follow
 	following := w.Agent.Profiles == nil
 	l, err := edit(w.Agent.Profiles, following)
 	if err != nil {
+		return Inclusion{}, err
+	}
+	c, err := h.groupConfig(group)
+	if err != nil {
+		return Inclusion{}, err
+	}
+	if err := h.checkAnswers(group, c, name, l); err != nil {
 		return Inclusion{}, err
 	}
 	w.Agent.Profiles = l
@@ -673,16 +708,6 @@ func (h *Host) workspace(group, conv string) (name string, keys []key.Key, err e
 		return "", nil, fmt.Errorf("%w: no Key's Conversation is %s", key.ErrUnknown, conv)
 	}
 	return name, keys, nil
-}
-
-// conversationConfigFile is the path of the config.toml of group's
-// Conversation conv, there or not.
-func (h *Host) conversationConfigFile(group, conv string) (string, error) {
-	name, _, err := h.workspace(group, conv)
-	if err != nil {
-		return "", err
-	}
-	return h.p.ConversationConfigFile(group, name), nil
 }
 
 // loadConfig is the config in force in group's Group-level talk or

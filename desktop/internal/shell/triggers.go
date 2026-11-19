@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"defios.com/internal/config"
+	"defios.com/internal/key"
 	"defios.com/internal/node"
 	"defios.com/internal/trigger"
 )
@@ -46,6 +47,7 @@ const (
 	FieldExec    = "exec"
 	FieldWebhook = "webhook"
 	FieldTimeout = "timeout"
+	FieldTarget  = "target"
 )
 
 // TriggersView is the Triggers page.
@@ -66,6 +68,10 @@ type TriggersView struct {
 	// Keys are the Group's Keys, for an agent Job to answer in one's
 	// Conversation, in mint order.
 	Keys []KeyChoice
+	// Included are the agents included where an agent Job may answer, by
+	// its target: "group", or a Key's Conversation's Workspace name. A
+	// Job's agent must be included where it answers.
+	Included map[string][]string
 	// Events are what a Hook may fire on.
 	Events []string
 
@@ -183,7 +189,8 @@ func (s *Shell) Triggers() TriggersView {
 	return v
 }
 
-// SaveJob adds or edits the Job d is.
+// SaveJob adds or edits the Job d is. An agent Job whose agent is not
+// included where it answers is refused, naming that field.
 func (s *Shell) SaveJob(d JobDraft) TriggersView {
 	return s.triggerChange("job", d.New, d.Name, func(n Node, group string) error {
 		j, err := jobOf(d)
@@ -191,10 +198,73 @@ func (s *Shell) SaveJob(d JobDraft) TriggersView {
 			return err
 		}
 		if d.New {
-			return n.AddJob(s.ctx, group, d.Name, j)
+			err = n.AddJob(s.ctx, group, d.Name, j)
+		} else {
+			err = n.EditJob(s.ctx, group, d.Name, j)
 		}
-		return n.EditJob(s.ctx, group, d.Name, j)
+		return withKeyLabels(err, s.keyLabels(n, group))
 	})
+}
+
+// IncludeForJob includes this device's agent handle where the agent Job
+// form where says it answers, target: "group" or a Key's Conversation's
+// Workspace name. A Key's Conversation that follows Group talk's agents
+// gets a list of its own, starting from the Group's, as Talk gives it.
+// The form stays open as typed: its Job is not saved.
+func (s *Shell) IncludeForJob(where, handle, target string) TriggersView {
+	s.op.Lock()
+	defer s.op.Unlock()
+	v, ok := s.triggersTarget()
+	if !ok {
+		return v
+	}
+	n := s.node()
+	v.Where = where
+	if err := s.includeIn(n, v.Group, handle, target); err != nil {
+		v.Problem = problemOf(err)
+	} else {
+		s.talk.loadSide() // Talk lists who is included
+	}
+	s.fillTriggers(n, &v)
+	return v
+}
+
+// includeIn includes handle in group's place target.
+func (s *Shell) includeIn(n Node, group, handle, target string) error {
+	conv := node.GroupTalk
+	if target != config.ConversationGroup {
+		conv = ""
+		if convs, err := n.Conversations(s.ctx, group); err == nil {
+			for _, c := range convs.Talk {
+				if c.Key != nil && c.Key.Workspace == target {
+					conv = c.ID
+				}
+			}
+		}
+		if conv == "" {
+			return fmt.Errorf("%w: no Key's Conversation is %s", key.ErrUnknown, target)
+		}
+	}
+	before, err := n.IncludedAgents(s.ctx, group, conv)
+	if err != nil || slices.Contains(before, handle) {
+		return err
+	}
+	_, err = n.SetIncludedAgents(s.ctx, group, conv, append(slices.Clone(before), handle))
+	return withKeyLabels(err, s.keyLabels(n, group))
+}
+
+// keyLabels names each of group's Key's Conversations by its Workspace
+// name, as the pages name its Key.
+func (s *Shell) keyLabels(n Node, group string) map[string]string {
+	out := map[string]string{}
+	if convs, err := n.Conversations(s.ctx, group); err == nil {
+		for _, c := range convs.Talk {
+			if c.Key != nil && c.Key.Workspace != "" {
+				out[c.Key.Workspace] = keyLabel(*c.Key)
+			}
+		}
+	}
+	return out
 }
 
 // DeleteJob deletes Job name; refused, naming them, while Triggers run it.
@@ -335,10 +405,19 @@ func (s *Shell) fillTriggers(n Node, v *TriggersView) {
 		}
 	}
 	v.Keys = []KeyChoice{}
+	v.Included = map[string][]string{}
 	if convs, err := n.Conversations(s.ctx, v.Group); err == nil {
 		for _, c := range convs.Talk {
-			if c.Key != nil && c.Key.Workspace != "" {
+			target := config.ConversationGroup
+			if c.Key != nil {
+				if c.Key.Workspace == "" {
+					continue
+				}
+				target = c.Key.Workspace
 				v.Keys = append(v.Keys, KeyChoice{Workspace: c.Key.Workspace, Label: keyLabel(*c.Key)})
+			}
+			if list, err := n.IncludedAgents(s.ctx, v.Group, c.ID); err == nil {
+				v.Included[target] = list
 			}
 		}
 	}
@@ -490,13 +569,68 @@ func triggerField(err error) string {
 	if errors.Is(err, node.ErrAlreadyDefined) {
 		return FieldName
 	}
+	if errors.As(err, new(*node.JobNotIncludedError)) {
+		return FieldTarget
+	}
 	return fieldOf(err)
+}
+
+// keyLabelled is an error whose Problem may name a Key's Conversation by
+// its Workspace name: labels names each as the page names its Key.
+type keyLabelled struct {
+	err    error
+	labels map[string]string
+}
+
+func (e *keyLabelled) Error() string { return e.err.Error() }
+func (e *keyLabelled) Unwrap() error { return e.err }
+
+// withKeyLabels is err with labels for its Problem to name Keys by; nil
+// for nil.
+func withKeyLabels(err error, labels map[string]string) error {
+	if err == nil {
+		return nil
+	}
+	return &keyLabelled{err: err, labels: labels}
+}
+
+// targetText names an agent Job's target, Group talk or a Key's
+// Conversation, by the label err carries for it, else its Workspace name.
+func targetText(err error, target string) string {
+	if target == config.ConversationGroup {
+		return "Group talk"
+	}
+	var kl *keyLabelled
+	if errors.As(err, &kl) && kl.labels[target] != "" {
+		return kl.labels[target]
+	}
+	return target
 }
 
 // triggersProblem maps the Triggers page's errors; nil for another.
 func triggersProblem(err error) *Problem {
-	var inUse *node.JobInUseError
+	var (
+		inUse   *node.JobInUseError
+		not     *node.JobNotIncludedError
+		answers *node.AnswersError
+	)
 	switch {
+	case errors.As(err, &not):
+		where := targetText(err, not.Target)
+		return &Problem{Code: "job-not-included", Message: fmt.Sprintf("@%s isn't included in %s, so it can't answer there. Include it there first.", not.Handle, where)}
+	case errors.As(err, &answers):
+		parts := make([]string, len(answers.Jobs))
+		jobs := make([]string, len(answers.Jobs))
+		for i, j := range answers.Jobs {
+			parts[i] = fmt.Sprintf("@%s answers in %s for Job %s", j.Handle, targetText(err, j.Target), j.Job)
+			jobs[i] = j.Job
+		}
+		verb := "answers"
+		if len(jobs) > 1 {
+			verb = "answer"
+		}
+		return &Problem{Code: "job-answers", Message: fmt.Sprintf("%s. Change where %s %s on Triggers first.",
+			strings.Join(parts, "; "), strings.Join(jobs, " and "), verb)}
 	case errors.As(err, &inUse):
 		by := inUse.Triggers()
 		verb := "run"

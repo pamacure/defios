@@ -162,7 +162,9 @@ func TestTriggerWritesAreValidated(t *testing.T) {
 	invalid("a Job of two kinds", h.AddJob(ctx, "alpha", "x", config.Job{Exec: []string{"true"}, Webhook: "https://x.example"}))
 	invalid("a bad name", h.AddJob(ctx, "alpha", "Bad Name", config.Job{Exec: []string{"true"}}))
 	invalid("an agent Job with a malformed Handle", h.AddJob(ctx, "alpha", "x", config.Job{Agent: "Not A Handle"}))
-	invalid("an agent Job in Group-level talk not in [agent] profiles", h.AddJob(ctx, "alpha", "x", config.Job{Agent: "auditor", Target: "group"}))
+	if err := h.AddJob(ctx, "alpha", "x", config.Job{Agent: "auditor", Target: "group"}); !errors.As(err, new(*node.JobNotIncludedError)) {
+		t.Errorf("an agent Job in Group-level talk not in [agent] profiles: %v; want JobNotIncludedError", err)
+	}
 
 	if err := h.AddJob(ctx, "alpha", "ping", config.Job{Exec: []string{"true"}}); !errors.Is(err, node.ErrAlreadyDefined) {
 		t.Errorf("adding ping again: %v; want ErrAlreadyDefined", err)
