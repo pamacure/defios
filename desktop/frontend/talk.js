@@ -107,10 +107,28 @@ const curveName = (c) => ({ ecdsa: "ECDSA", eddsa: "EdDSA" }[c] ?? c);
 const convName = (c) => (c.ID === GROUP_TALK ? "Group" : c.Alias || `${curveName(c.Curve)} ${c.ShortKey}`);
 const shortID = (id) => (id.length > 16 ? `${id.slice(0, 16)}…` : id);
 
+// time says when a message was written: the time alone today, "Yesterday"
+// or the weekday within the last week, and the date further back (with the
+// year once it is not this year's).
 function time(at) {
   const d = new Date(at);
   if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return "";
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const clock = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const now = new Date();
+  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const days = Math.round((midnight(now) - midnight(d)) / 86400000);
+  if (days <= 0) return clock;
+  if (days === 1) {
+    const y = new Intl.RelativeTimeFormat([], { numeric: "auto" }).format(-1, "day");
+    return `${y.charAt(0).toUpperCase()}${y.slice(1)} ${clock}`;
+  }
+  if (days < 7) return `${d.toLocaleDateString([], { weekday: "short" })} ${clock}`;
+  const date = d.toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
+  return `${date} ${clock}`;
 }
 
 // The composer is made once and kept across redraws, so a redraw never

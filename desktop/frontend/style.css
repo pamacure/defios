@@ -317,6 +317,7 @@ button.conv > .sub { grid-column: 1 / -1; }
 .msg.left { align-self: flex-start; }
 .msg.right { align-self: flex-end; align-items: flex-end; }
 .msg .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.msg time, .sysline time { white-space: nowrap; }
 .msg .who { display: flex; gap: 6px; align-items: baseline; }
 .msg .who strong { color: var(--text-soft); font-weight: 600; }
 .msg .handle { color: var(--lv, var(--accent-strong)); font-weight: 600; } /* an agent's in its Livery's colour */
