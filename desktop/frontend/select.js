@@ -4,7 +4,8 @@
 // in its place, for every single-choice <select> wherever it is, and
 // leaves the <select> holding the value: a pick sets it and fires input
 // and change as the native list would, so the pages that build them need
-// nothing of this.
+// nothing of this. An option's class carries over to its row, and its
+// data-brick, a Livery's brick class, draws that brick before its text.
 import { h } from "./dom.js";
 
 let open = null; // { select, menu, items, active, frame }
@@ -42,10 +43,10 @@ function show(sel) {
   const items = [];
   const row = (opt) => {
     const li = h("li", {
-      role: "option", class: "opt",
+      role: "option", class: `opt ${opt.className}`.trim(), // a class of the option, as a colour, carries over
       "aria-selected": opt.selected ? "true" : "false",
       "aria-disabled": opt.disabled || opt.parentElement?.disabled ? "true" : false,
-    }, opt.label || opt.text);
+    }, opt.dataset.brick && h("span", { class: opt.dataset.brick, "aria-hidden": "true" }), opt.label || opt.text);
     li.addEventListener("mousemove", () => { if (!disabled(li)) activate(items.indexOf(item)); });
     li.addEventListener("click", () => { if (!disabled(li)) choose(item); });
     const item = { opt, li };

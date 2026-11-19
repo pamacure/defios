@@ -8,6 +8,7 @@
 import { call, h, put } from "./dom.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { secretField } from "./secretfield.js";
+import { brickClass, liveryClass } from "./livery.js";
 
 let tv = null; // the TriggersView shown
 let group = ""; // the Group it is for
@@ -176,12 +177,14 @@ const fieldId = (where, field) => `tg-${where.replace(/[^\w-]/g, "_")}-${field}`
 
 // row is a labelled form row with its hint, outlined while it is the
 // field the last refusal named (the refusal itself is a toast).
-function row(where, field, label, input, hint) {
+// row is a form's field input, labelled, shown as box: input itself, or
+// what holds it.
+function row(where, field, label, input, hint, box = input) {
   if (invalid?.where === where && invalid.field === field) markInvalid(input, () => { invalid = null; });
   if (!input.id) input.id = fieldId(where, field);
   return h("div", { class: "frow" },
     h("label", { for: input.id }, label),
-    h("div", { class: "fcell" }, input, hint && h("p", { class: "hint" }, hint)));
+    h("div", { class: "fcell" }, box, hint && h("p", { class: "hint" }, hint)));
 }
 
 const text = (value, attrs = {}) => h("input", { class: "field left", autocomplete: "off", spellcheck: "false", value: value ?? "", ...attrs });
@@ -289,9 +292,57 @@ function keyLabel(ws) {
   return (tv.Keys ?? []).find((k) => k.Workspace === ws)?.Label ?? ws;
 }
 
+// An agent is named as Talk completes its Handle: its Livery's brick, a
+// gray square for none, and @handle in its colour. agentLivery is its
+// Livery, "" for none and undefined for an agent not on this device,
+// named plainly.
+const agentLivery = (handle) => (tv.Handles ?? []).find((a) => a.Handle === handle)?.Livery;
+const agentClass = (handle) => {
+  const l = agentLivery(handle);
+  return l === undefined ? "" : `agent-name ${liveryClass(l)}`.trim();
+};
+const agentBrick = (handle) => {
+  const l = agentLivery(handle);
+  return l === undefined ? "" : `brick ${brickClass(l)}`;
+};
+
+function agentTag(handle) {
+  const b = agentBrick(handle);
+  return h("span", { class: `agent-tag ${agentClass(handle)}` }, b && h("span", { class: b, "aria-hidden": "true" }), `@${handle}`);
+}
+
+const answersIn = (j) => (j.Target === "group" ? " in Group talk" : j.Target ? ` in ${keyLabel(j.Target)}` : "");
+
+// A Hook's handles entry for a person's message (config.HandleUser).
+const USER = "user";
+
+// agentSelect is a <select> of this device's agents, each named with its
+// Livery in the list and once chosen, first offering none, then with
+// person "A person". A <select> holds only text, so el is it with the
+// chosen one's brick lying over it.
+function agentSelect(value, { none, person = false, label = "" }) {
+  const handles = (tv.Handles ?? []).map((a) => a.Handle);
+  const known = !value || handles.includes(value) || (person && value === USER);
+  const sel = h("select", { class: "field left", "aria-label": label || false },
+    h("option", { value: "", selected: !value }, none),
+    person && h("option", { value: USER, selected: value === USER }, "A person"),
+    handles.map((x) => h("option", { value: x, selected: x === value, class: agentClass(x), "data-brick": agentBrick(x) }, `@${x}`)),
+    !known && h("option", { value, selected: true }, `@${value} (not on this device)`));
+  const shown = h("span", { "aria-hidden": "true" });
+  const tint = () => {
+    sel.className = `field left ${agentClass(sel.value)}`.trim();
+    shown.className = `${agentBrick(sel.value)} ${liveryClass(agentLivery(sel.value))}`.trim();
+    shown.hidden = !shown.className;
+    sel.classList.toggle("with-brick", !shown.hidden);
+  };
+  sel.addEventListener("change", tint);
+  tint();
+  return { sel, el: h("div", { class: "agentpick" }, sel, shown) };
+}
+
 function jobSummary(j) {
   switch (j.Kind) {
-    case "agent": return `@${j.Agent}${j.Target === "group" ? " in Group talk" : j.Target ? ` in ${keyLabel(j.Target)}` : ""}`;
+    case "agent": return `@${j.Agent}${answersIn(j)}`;
     case "exec": return j.Exec.join(" ");
     case "webhook": return j.WebhookSecret ? `$${j.WebhookSecret}` : "a URL";
   }
@@ -302,7 +353,9 @@ function jobRow(j) {
   const isRunning = running.has(j.Name);
   return h("div", {},
     itemRow(`job:${j.Name}`, j.Name,
-      h("div", { class: "who" }, h("strong", {}, j.Name), h("code", { title: jobSummary(j) }, jobSummary(j))),
+      h("div", { class: "who" }, h("strong", {}, j.Name), h("code", { title: jobSummary(j) }, j.Kind === "agent"
+        ? [agentTag(j.Agent), answersIn(j)]
+        : jobSummary(j))),
       h("span", { class: "chip" }, KINDS[j.Kind] ?? j.Kind),
       h("span", { class: `chip ${j.UsedBy.length ? "ok" : ""}` }, j.UsedBy.length ? `Run by ${j.UsedBy.join(", ")}` : "No Trigger runs it"),
       h("button", {
@@ -350,11 +403,8 @@ function jobForm(j) {
   let readKind = () => ({});
 
   if (d.Kind === "agent") {
-    const handles = tv.Handles ?? [];
-    const agent = h("select", { class: "field left" },
-      h("option", { value: "", selected: !d.Agent }, handles.length ? "Choose an agent" : "No agents on this device yet"),
-      handles.map((x) => h("option", { value: x, selected: x === d.Agent }, `@${x}`)),
-      d.Agent && !handles.includes(d.Agent) && h("option", { value: d.Agent, selected: true }, `@${d.Agent} (not on this device)`));
+    const { sel: agent, el: agentEl } = agentSelect(d.Agent,
+      { none: tv.Handles?.length ? "Choose an agent" : "No agents on this device yet" });
     const prompt = area(d.Prompt, { rows: 3, placeholder: "Review the Sign Request and accept it if it matches policy." });
     // A Key is shown by its alias but written as its Workspace name, which
     // never changes.
@@ -367,7 +417,7 @@ function jobForm(j) {
         keys.map((k) => h("option", { value: k.Workspace, selected: k.Workspace === d.Target }, k.Label))),
       !known && h("option", { value: d.Target, selected: true }, `${d.Target} (no such Key in ${group})`));
     fields = [
-      row(where, "agent", "Agent", agent, "It runs here, on this device."),
+      row(where, "agent", "Agent", agent, "It runs here, on this device.", agentEl),
       row(where, "prompt", "Prompt", prompt, "Its instruction, with the event that fired."),
       row(where, "target", "Answers in", target,
         "A Schedule has no event, so a Job it runs must name Group talk or a Key. In Group talk the agent must be included there."),
@@ -455,6 +505,20 @@ function jobsPicker(chosen, redraw) {
   return { el: h("div", { class: "stack" }, selects.map((s) => s.el), add), value: () => picked().filter(Boolean) };
 }
 
+// handlesPicker chooses who wrote what a Hook fires on: any of this
+// device's agents and a person, a dropdown each, none chosen for anyone.
+function handlesPicker(chosen, redraw) {
+  const picks = chosen.length ? [...chosen] : [""];
+  const selects = picks.map((value, i) => {
+    const { sel, el } = agentSelect(value, { none: picks.length > 1 ? "Choose an agent or a person" : "Anyone", person: true, label: `Handle ${i + 1}` });
+    const remove = picks.length > 1 && h("button", { class: "link", type: "button", "aria-label": `Remove Handle ${i + 1}`, onclick: () => { const v = picked(); v.splice(i, 1); redraw(v); } }, "Remove");
+    return { sel, el: h("div", { class: "jobpick" }, el, remove) };
+  });
+  const picked = () => selects.map((s) => s.sel.value);
+  const add = h("button", { class: "link", type: "button", onclick: () => redraw([...picked(), ""]) }, "+ Or another");
+  return { el: h("div", { class: "stack" }, selects.map((s) => s.el), add), value: () => [...new Set(picked().filter(Boolean))] };
+}
+
 // ---- Hooks ----
 
 function hooksSection() {
@@ -483,14 +547,14 @@ function hookForm(hk) {
   const from = h("select", { class: "field left" },
     Object.entries(FROM).map(([k, label]) => h("option", { value: k, selected: k === fromKey }, label)),
     fromKey === NODE_IDS && h("option", { value: NODE_IDS, selected: true }, `These devices: ${d.From.join(", ")}`));
-  const handles = text(d.Handles.join(", "), { placeholder: "user, auditor" });
   const conv = text(d.Conversation.join(", "), { placeholder: "group" });
   const re = text(d.Text, { placeholder: "^approve" });
   const readAll = () => ({
     ...d, Name: hk ? hk.Name : name.value.trim(), Events: (tv.Events ?? []).filter((ev) => chosen.has(ev)),
     From: from.value === "" ? [] : from.value === NODE_IDS ? d.From : [from.value],
-    Handles: list(handles.value), Conversation: list(conv.value), Text: re.value, Jobs: jobs.value(),
+    Handles: handles.value(), Conversation: list(conv.value), Text: re.value, Jobs: jobs.value(),
   });
+  const handles = handlesPicker(d.Handles, (next) => redrawWith(where, { ...readAll(), Handles: next }));
   const jobs = jobsPicker(d.Jobs, (next) => redrawWith(where, { ...readAll(), Jobs: next }));
   readers.set(where, readAll);
   return h("form", {
@@ -501,7 +565,7 @@ function hookForm(hk) {
   !hk && row(where, "name", "Name", name, "Lowercase letters, digits, - and _."),
   row(where, "events", "Fires on", events, "None chosen fires on every event. request.<status> is a Sign Request reaching that status."),
   row(where, "from", "Written by", from),
-  row(where, "handles", "Handles", handles, "Agents' Handles, or user for a person, separated by commas. Empty matches all."),
+  row(where, "handles", "Handles", handles.el, "Written by any of these: an agent of this device, or a person. None chosen matches all."),
   row(where, "conversation", "In", conv, "group for Group talk, or Workspace names, separated by commas. Empty matches all."),
   row(where, "text", "Text matches", re, "A regular expression a message's text must match. Empty matches all."),
   row(where, "jobs", "Runs", jobs.el, "In order, until one fails."),

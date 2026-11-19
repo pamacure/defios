@@ -13,9 +13,13 @@ const split = (l) => (l ? [l.slice(0, l.indexOf("-")), l.slice(l.indexOf("-") + 
 
 export const liveryClass = (l) => (l ? `lv-${split(l)[0]}` : "");
 
+// brickClass is the class that draws the Livery's brick, "none" for a
+// plain square where it has none.
+export const brickClass = (l) => (l ? `brick-${split(l)[1]}` : "none");
+
 // brick is the Livery's brick in currentColor; null for none.
 export function brick(l) {
-  return l ? h("span", { class: `brick brick-${split(l)[1]}`, "aria-hidden": "true" }) : null;
+  return l ? h("span", { class: `brick ${brickClass(l)}`, "aria-hidden": "true" }) : null;
 }
 
 // avatar is a party's square: its colour with its brick cut out, plain

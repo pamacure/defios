@@ -669,6 +669,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .triggers .header .secretfield { grid-column: 1 / -1; }
 .triggers .jobpick { display: flex; align-items: center; gap: 8px; }
 .triggers .jobpick .hint { flex: none; width: 18px; }
+.triggers .jobpick > .agentpick { flex: 1; min-width: 0; }
 .triggers .events { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 12px; }
 .triggers .events .check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
 .triggers .events input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
@@ -989,6 +990,18 @@ select:not([multiple]):not([size]):disabled { color: var(--muted); cursor: defau
 }
 .selectmenu .opt[aria-selected="true"].active { filter: brightness(0.97); }
 .selectmenu .opt[aria-disabled="true"] { color: var(--muted); cursor: default; background: none; }
+/* An agent named with its Livery (Triggers), as Talk completes a Handle:
+   its brick, a gray square for none, and @handle in its colour, in a list
+   and in a <select> showing it, over the accent of the one chosen. */
+.agent-name, .selectmenu .opt.agent-name, select.field.agent-name { color: var(--lv); font-weight: 600; }
+.agent-tag { display: inline-flex; align-items: center; gap: 5px; vertical-align: bottom; }
+.agent-tag .brick { width: 12px; height: 12px; }
+.agent-tag .brick, .selectmenu .opt .brick, .agentpick .brick { color: var(--lv, var(--line)); }
+.selectmenu .opt .brick { width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px; }
+.agentpick { position: relative; }
+.agentpick .brick { position: absolute; left: 12px; top: 50%; width: 16px; height: 16px; margin-top: -8px; pointer-events: none; }
+.agentpick .brick[hidden] { display: none; }
+.agentpick select.with-brick { padding-left: 36px; }
 .selectmenu .group {
   padding: 8px 10px 4px; color: var(--muted); font-size: 11px;
   font-family: var(--display); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;

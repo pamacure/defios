@@ -60,8 +60,9 @@ type TriggersView struct {
 	Schedules []ScheduleView
 	// ListProblem is why config.toml could not be read.
 	ListProblem *Problem
-	// Handles are this device's agents, for an agent Job to summon.
-	Handles []string
+	// Handles are this device's agents, for an agent Job to summon, each
+	// with its Livery, so the page names it in its colour.
+	Handles []AgentChoice
 	// Keys are the Group's Keys, for an agent Job to answer in one's
 	// Conversation, in mint order.
 	Keys []KeyChoice
@@ -105,6 +106,12 @@ type JobView struct {
 // one.
 type KeyChoice struct {
 	Workspace, Label string
+}
+
+// AgentChoice is one of this device's agents an agent Job may summon:
+// its Handle and Livery, <colour>-<brick> or "" for none.
+type AgentChoice struct {
+	Handle, Livery string
 }
 
 // Header is a webhook Job's header: its Value literal, or the Secret of
@@ -321,10 +328,10 @@ func (s *Shell) triggersTarget() (TriggersView, bool) {
 // offer.
 func (s *Shell) fillTriggers(n Node, v *TriggersView) {
 	v.Events = config.Events()
-	v.Handles = []string{}
+	v.Handles = []AgentChoice{}
 	if list, err := n.AgentProfiles(s.ctx); err == nil {
 		for _, p := range list {
-			v.Handles = append(v.Handles, p.Handle)
+			v.Handles = append(v.Handles, AgentChoice{Handle: p.Handle, Livery: p.Livery})
 		}
 	}
 	v.Keys = []KeyChoice{}
