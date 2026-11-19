@@ -460,9 +460,9 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .about .copyable { all: unset; position: relative; display: block; cursor: copy; border-radius: 3px; }
 .about .copyable:hover code { color: var(--text); }
 .about .copyable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.about .copyable .copied { position: absolute; left: 50%; bottom: 100%; margin-bottom: 4px; transform: translateX(-50%); padding: 2px 8px; border-radius: var(--radius-s); background: var(--text); color: var(--surface); font-size: 11px; font-weight: 600; white-space: nowrap; pointer-events: none; animation: copied .9s ease-out forwards; }
+.about .copyable .copied, .dcard .copy .copied { position: absolute; left: 50%; bottom: 100%; margin-bottom: 4px; transform: translateX(-50%); padding: 2px 8px; border-radius: var(--radius-s); background: var(--text); color: var(--surface); font-size: 11px; font-weight: 600; white-space: nowrap; pointer-events: none; animation: copied .9s ease-out forwards; }
 @keyframes copied { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .about .copyable .copied { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .about .copyable .copied, .dcard .copy .copied { animation: none; } }
 /* An agent row opens the agent's Profile from anywhere but its checkbox and
    avatar; a handle too long for the column fades off to the right. */
 .about .agentrow { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 8px; margin: 0 -8px; border-radius: var(--radius); cursor: pointer; }
@@ -489,9 +489,11 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .dcard .dhead .who { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
 .dcard .dhead .who time { flex-basis: 100%; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .dcard .handle { color: var(--lv, var(--accent-strong)); font-weight: 600; }
-.dcard .close { all: unset; cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: var(--radius-s); color: var(--muted); }
-.dcard .close:hover { color: var(--text); background: var(--bg); }
-.dcard .close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dcard .icon-btn { all: unset; position: relative; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; cursor: pointer; font-size: 18px; line-height: 1; border-radius: var(--radius-s); color: var(--muted); }
+.dcard .icon-btn:hover { color: var(--text); background: var(--bg); }
+.dcard .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dcard .icon-btn svg { width: 16px; height: 16px; display: block; }
+.dcard .dhead .copy + .close { margin-left: -6px; }
 .dcard .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .dcard section { border-top: 1px solid var(--line); padding-top: 10px; }
 .dcard .value .dot { align-self: center; }
@@ -504,6 +506,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .dcard details.fold-in p { margin: 4px 0 0; }
 .dcard details.earlier { border-top: 1px solid var(--line); padding-top: 6px; }
 .dcard .blocks { margin-left: 0; }
+.dcard .runbody { display: flex; flex-direction: column; gap: 12px; }
 .dcard .blk.call .nested { margin: 6px 0 0 8px; padding-left: 8px; border-left: 2px solid var(--line); }
 .dcard .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .dcard .step { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 6px; border-radius: var(--radius-s); }

@@ -824,7 +824,8 @@ function utc(at) {
   return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
 }
 
-// copyText copies text, saying so on the button clicked for a moment.
+// copyText copies text, saying so for a moment in a small label over
+// the button clicked, as copyable does.
 async function copyText(e, text) {
   const el = e.currentTarget;
   try {
@@ -833,9 +834,10 @@ async function copyText(e, text) {
     showProblem(callFailed(err), { scope: "talk" });
     return;
   }
-  const was = el.textContent;
-  el.textContent = "Copied";
-  setTimeout(() => { if (el.isConnected) el.textContent = was; }, 900);
+  el.querySelector(".copied")?.remove();
+  const label = h("span", { class: "copied", role: "status" }, "Copied");
+  el.append(label);
+  setTimeout(() => label.remove(), 900);
 }
 
 const OUTCOME = {
@@ -874,12 +876,13 @@ function detailsPanel(it) {
       it.Handle && h("span", { class: `handle ${liveryClass(it.Livery)}` }, `@${it.Handle}`),
       it.Job && h("span", { class: "handle" }, "Job"),
       h("time", { datetime: it.At }, utc(it.At))),
-    h("button", { class: "close", type: "button", "aria-label": "Close details", title: "Close (Esc)", onclick: () => deselect() }, "×"));
+    it.Kind === "message" && h("button", {
+      class: "icon-btn copy", type: "button", "aria-label": "Copy text", title: "Copy text", onclick: (e) => copyText(e, it.Text),
+    }, icon("copy")),
+    h("button", { class: "icon-btn close", type: "button", "aria-label": "Close details", title: "Close (Esc)", onclick: () => deselect() }, "×"));
 
   const clearable = run && !run.Cleared && ts.Transcripts.some((t) => t.Handle === run.Handle);
-  const actions = h("div", { class: "row" },
-    it.Kind === "message" && h("button", { class: "btn small", type: "button", onclick: (e) => copyText(e, it.Text) }, "Copy text"),
-    it.MsgID && h("button", { class: "btn small", type: "button", onclick: (e) => copyText(e, it.MsgID) }, "Copy msg_id"),
+  const actions = (it.Droppable || clearable) && h("div", { class: "row" },
     it.Droppable && h("button", { class: "btn small", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop"),
     clearable && h("button", {
       class: "btn small", type: "button", disabled: tui.busy || !!tui.clearing,
@@ -892,16 +895,12 @@ function detailsPanel(it) {
   const details = v && !v.Problem && h("section", {},
     h("h3", {}, "Details"),
     row("Seq", v.Seq || (it.Queued ? "Queued" : null)),
-    v.MsgID && row("msg_id", copyable(v.MsgID, "msg_id")),
+    v.MsgID && row("Message ID", copyable(v.MsgID, "Message ID")),
     v.Chain && row("Chain", copyable(v.Chain, "chain")),
     row("Step", v.Step || null),
     row("Depth", v.Depth || v.Step ? String(v.Depth) : null),
     row("Device", device),
-    v.DeviceID && row("Device ID", copyable(v.DeviceID, "Device ID")),
-    it.Party && row("Livery", liveryPicker({
-      key: it.Party, current: ts.Liveries?.[it.Party] ?? "", held: ts.Liveries, disabled: tui.busy,
-      onPick: (l) => act("SetLivery", it.Party, l || "none"),
-    })));
+    v.DeviceID && row("Device ID", copyable(v.DeviceID, "Device ID")));
 
   let body = null;
   if (!v) body = h("p", { class: "placeholder" }, "Loading…");
