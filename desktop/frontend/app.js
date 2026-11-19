@@ -5,6 +5,7 @@ import { Events } from "/wails/runtime.js";
 import { agentsDevicePart, agentsGroupPart, agentsLoad, agentsOpen, agentsReady, agentsRefresh } from "./agents.js";
 import { call, h, icon } from "./dom.js";
 import "./motion.js";
+import "./select.js";
 import { callFailed, dismissScope, leavePage, problemLine, showProblem } from "./notice.js";
 import { networksGroupPart, networksLoad, networksReady, networksRefresh } from "./networks.js";
 import { pluginsDevicePart, pluginsLoad, pluginsReady, pluginsRefresh } from "./plugins.js";

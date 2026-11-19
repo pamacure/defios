@@ -951,3 +951,46 @@ main.center:not(.page)::before, main.onboard::before {
 .btn.bright:disabled { color: rgba(21, 26, 31, 0.45); }
 .toggle input:disabled + .text { opacity: 1; }
 .toggle input:disabled + .text, .toggle input:disabled + .text strong { color: var(--muted); }
+
+/* A <select>: the same well as a field, with a chevron in --muted, and its
+   list drawn by select.js in place of the OS's: a surface that lifts, as
+   the menus do, with the current choice in the accent's wash. */
+:root { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%236D7E8D' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E"); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238EA4B7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E"); }
+}
+:root[data-theme="dark"] { --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238EA4B7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E"); }
+
+select:not([multiple]):not([size]) {
+  -webkit-appearance: none; appearance: none;
+  min-height: 32px; padding-left: 12px; padding-right: 32px;
+  background-color: var(--field); background-image: var(--chevron);
+  background-repeat: no-repeat; background-position: right 10px center; background-size: 12px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--text); cursor: pointer;
+}
+select:not([multiple]):not([size]):hover:not(:disabled) { border-color: var(--muted); }
+select:not([multiple]):not([size]):focus,
+select:not([multiple]):not([size])[aria-expanded="true"] { outline: 0; border-color: var(--live); box-shadow: 0 0 0 3px var(--glow); }
+select:not([multiple]):not([size]):disabled { color: var(--muted); cursor: default; }
+
+.selectmenu {
+  position: fixed; z-index: 100; margin: 0; padding: 4px; list-style: none; overflow-y: auto;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 var(--depth) 0 var(--edge), var(--float);
+}
+.selectmenu .opt { position: relative; padding: 7px 28px 7px 10px; border-radius: var(--radius-s); cursor: pointer; white-space: nowrap; }
+.selectmenu .opt.active { background: var(--bg); }
+.selectmenu .opt[aria-selected="true"] { background: var(--accent-wash); color: var(--accent-strong); font-weight: 600; }
+.selectmenu .opt[aria-selected="true"]::after {
+  content: ""; position: absolute; right: 10px; top: 50%; width: 8px; height: 4px; margin-top: -4px;
+  border: solid currentColor; border-width: 0 0 2px 2px; transform: rotate(-45deg);
+}
+.selectmenu .opt[aria-selected="true"].active { filter: brightness(0.97); }
+.selectmenu .opt[aria-disabled="true"] { color: var(--muted); cursor: default; background: none; }
+.selectmenu .group {
+  padding: 8px 10px 4px; color: var(--muted); font-size: 11px;
+  font-family: var(--display); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+}
+.selectmenu .group:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--line); }
