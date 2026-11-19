@@ -33,16 +33,17 @@ to.
   4. its depth and the Handles it may summon
 
   Lines are `[seq] <display name>[/@handle]: <text>`, with `[queued]` for a
-  message that has no seq yet. A new Transcript's first run carries the
+  message that has no seq yet. ([ADR 0039](0039-an-agents-talk-says-when-each-message-was-written.md)
+  adds the time each was written.) A new Transcript's first run carries the
   summoning message alone, with no talk before it.
 - **Earlier runs are replayed in full**: thinking, tool calls and tool
   results, as recorded. Replaying only the final text would make the prefix
   differ from what was cached.
 - **`say` becomes `talk_write`, and `talk_read` is added.** Both are granted
   by default. `talk_read` takes `last` (default 50) and `before_seq`, returns
-  lines in the same form (JSON Lines with timestamps since
-  [ADR 0039](0039-talk-read-returns-json-lines.md)), marks a pruned stretch as one gap line, and says
-  that lines from its own Node under its Handle are its own `talk_write`
+  lines in the same form (JSON Lines since
+  [ADR 0039](0039-an-agents-talk-says-when-each-message-was-written.md)),
+  marks a pruned stretch as one gap line, and says that lines from its own Node under its Handle are its own `talk_write`
   messages. `sign_list` takes an optional `status`.
 - **Clear closes the live Transcript and starts a new one at the next run.**
   Nothing is deleted: a cleared Transcript is kept, which leaves room to

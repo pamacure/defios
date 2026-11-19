@@ -263,28 +263,25 @@ type Page struct {
 	Earlier uint64
 }
 
-// Entry is one line of a Page: a message, with its seq or queued, when
-// its sender wrote it (RFC 3339, UTC, by the sender's clock), who and
-// what; or a stretch this Node has pruned, by its first and last seq.
+// Entry is one line of a Page, its keys kept short to spend few tokens: a
+// message, with its seq or queued, when its sender wrote it (Unix
+// seconds, by the sender's clock), who and what; or a stretch this Node
+// has pruned, by its first and last seq.
 type Entry struct {
-	Seq               uint64  `json:"seq,omitempty"`
-	Queued            bool    `json:"queued,omitempty"`
-	CreatedAt         string  `json:"created_at,omitempty"`
-	SenderDisplayName string  `json:"sender_display_name,omitempty"`
-	Handle            string  `json:"handle,omitempty"`
-	Text              *string `json:"text,omitempty"`
-	PrunedFrom        uint64  `json:"pruned_from,omitempty"`
-	PrunedTo          uint64  `json:"pruned_to,omitempty"`
+	Seq        uint64  `json:"seq,omitempty"`
+	Queued     bool    `json:"queued,omitempty"`
+	At         int64   `json:"at,omitempty"`
+	From       string  `json:"from,omitempty"` // the sender's display name
+	Handle     string  `json:"handle,omitempty"`
+	Text       *string `json:"text,omitempty"`
+	PrunedFrom uint64  `json:"pruned_from,omitempty"`
+	PrunedTo   uint64  `json:"pruned_to,omitempty"`
 }
 
 // entry is m, which is readable, as a Page's Entry.
 func (m Message) entry(name func(Message) string) Entry {
 	text := m.Text
-	e := Entry{Seq: m.Row.Seq, Queued: m.Row.Queued(), SenderDisplayName: name(m), Handle: m.Handle, Text: &text}
-	if m.Row.CreatedAt != 0 {
-		e.CreatedAt = time.Unix(0, m.Row.CreatedAt).UTC().Format(time.RFC3339)
-	}
-	return e
+	return Entry{Seq: m.Row.Seq, Queued: m.Row.Queued(), At: time.Unix(0, m.Row.CreatedAt).Unix(), From: name(m), Handle: m.Handle, Text: &text}
 }
 
 // jsonLine is v as one line of JSON, its <, > and & as written.
@@ -391,12 +388,15 @@ func (ms Messages) lines(before uint64, leftOut func(Message) bool) (committed [
 	return committed, queued
 }
 
-// Line is m, which is readable, as an agent reads it: `[<seq>] <speaker>:
-// <text>`, with `[queued]` for one that has no seq yet (ADR 0036).
+// Line is m, which is readable, as an agent's turn reads it: `[<seq>
+// <time>] <speaker>: <text>`, with `queued` in place of the seq for one
+// that has no seq yet (ADR 0036). The time is when its sender wrote it,
+// by the sender's clock, in UTC to the minute (ADR 0039).
 func (m Message) Line(name func(Message) string) string {
-	at := "[queued]"
+	at := "queued"
 	if !m.Row.Queued() {
-		at = fmt.Sprintf("[%d]", m.Row.Seq)
+		at = fmt.Sprint(m.Row.Seq)
 	}
-	return at + " " + LeanLine(name(m), m.Handle, m.Text)
+	when := time.Unix(0, m.Row.CreatedAt).UTC().Format("2006-01-02 15:04")
+	return "[" + at + " " + when + "] " + LeanLine(name(m), m.Handle, m.Text)
 }

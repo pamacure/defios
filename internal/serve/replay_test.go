@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/internal/group"
 	"defios.com/internal/serve"
@@ -42,8 +43,13 @@ func TestASecondSummonReplaysTheFirstRun(t *testing.T) {
 	}
 	const facts = "(You are at depth 1 of at most 2. Agents you may summon: @sam.)"
 	one, two := calls[0], calls[1]
-	if want := summonedBy(first.Seq, "alice: @bob hello") + "\n" + facts; one.Messages != 1 || one.Turn != want {
+	if want := summonedBy(first.Seq, "alice: @bob hello") + "\n" + facts; one.Messages != 1 || untimed(one.Turn) != want {
 		t.Fatalf("the first run's turn, of %d messages =\n%s\nwant\n%s", one.Messages, one.Turn, want)
+	}
+	// Each talk line says when it was written, in UTC to the minute.
+	at := lineTime.FindString(one.Turn)
+	if written, err := time.Parse("2006-01-02 15:04]", strings.TrimPrefix(at, " ")); err != nil || time.Since(written).Abs() > 2*time.Minute {
+		t.Errorf("the first run's line time %q: %v", at, err)
 	}
 	if two.Messages != 3 || unmarked(two.Raw[0]) != unmarked(one.Raw[0]) {
 		t.Fatalf("the second run's %d messages do not begin with the first run's:\n%s\n%s", two.Messages, one.Raw, two.Raw)
@@ -56,7 +62,7 @@ func TestASecondSummonReplaysTheFirstRun(t *testing.T) {
 	}
 	want := fmt.Sprintf("(Talk since your last run:)\n[%d] alice: the fees look high\n[%d] bob: agreed, I'd wait\n(You are summoned by:)\n[%d] alice: @bob what do you think?\n%s",
 		fees[0], wait.Seq, second.Seq, facts)
-	if two.Turn != want {
+	if untimed(two.Turn) != want {
 		t.Fatalf("the second run's turn =\n%s\nwant\n%s", two.Turn, want)
 	}
 	for _, c := range calls {

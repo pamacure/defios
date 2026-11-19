@@ -12,8 +12,9 @@ import (
 
 // talk_read is granted with talk_write unless a profile says otherwise
 // (ADR 0036). An agent calling it reads the latest talk as JSON Lines,
-// each message with its seq and when it was written (ADR 0039); last bounds the page, which then says how to page back, and
-// before_seq pages back; an input of any other shape is a tool error. Its
+// each message with its seq and when it was written (ADR 0039); last
+// bounds the page, which then says how to page back, and before_seq pages
+// back; an input of any other shape is a tool error. Its
 // description names the agent's own lines as the talk shows them.
 func TestAnAgentReadsTheTalkWithTalkRead(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
@@ -57,7 +58,7 @@ func TestAnAgentReadsTheTalkWithTalkRead(t *testing.T) {
 	if len(calls) != 6 || calls[0].Tools != "talk_write talk_read" {
 		t.Fatalf("calls = %+v", calls)
 	}
-	if got, want := calls[0].Descriptions["talk_read"], `Messages with "sender_display_name":"alice" and "handle":"auditor" are your own talk_write messages`; !strings.Contains(got, want) {
+	if got, want := calls[0].Descriptions["talk_read"], `Messages with "from":"alice" and "handle":"auditor" are your own talk_write messages`; !strings.Contains(got, want) {
 		t.Errorf("description %q lacks %q", got, want)
 	}
 	summon := fmt.Sprintf(`%d alice: @auditor read the talk`, v.Seq)
@@ -94,8 +95,8 @@ func talkRead(t *testing.T, c providerCall) string {
 	for _, l := range strings.Split(blocks[0].Content, "\n") {
 		var e struct {
 			Seq     uint64 `json:"seq"`
-			At      string `json:"created_at"`
-			Sender  string `json:"sender_display_name"`
+			At      int64  `json:"at"`
+			Sender  string `json:"from"`
 			Text    string `json:"text"`
 			Earlier uint64 `json:"earlier_before_seq"`
 		}
@@ -106,8 +107,8 @@ func talkRead(t *testing.T, c providerCall) string {
 			out = append(out, fmt.Sprint("earlier ", e.Earlier))
 			continue
 		}
-		if _, err := time.Parse(time.RFC3339, e.At); err != nil {
-			t.Errorf("line %q: created_at: %v", l, err)
+		if d := time.Since(time.Unix(e.At, 0)).Abs(); d > 2*time.Minute {
+			t.Errorf("line %q: at is %s from now", l, d)
 		}
 		out = append(out, fmt.Sprintf("%d %s: %s", e.Seq, e.Sender, e.Text))
 	}

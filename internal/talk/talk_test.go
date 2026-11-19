@@ -376,9 +376,9 @@ func pageOf(ms talk.Messages, last int, before uint64) string {
 		case e.Text == nil:
 			lines = append(lines, fmt.Sprintf("[%d–%d pruned on this Node]", e.PrunedFrom, e.PrunedTo))
 		case e.Queued:
-			lines = append(lines, "[queued] "+talk.LeanLine(e.SenderDisplayName, e.Handle, *e.Text))
+			lines = append(lines, "[queued] "+talk.LeanLine(e.From, e.Handle, *e.Text))
 		default:
-			lines = append(lines, fmt.Sprintf("[%d] ", e.Seq)+talk.LeanLine(e.SenderDisplayName, e.Handle, *e.Text))
+			lines = append(lines, fmt.Sprintf("[%d] ", e.Seq)+talk.LeanLine(e.From, e.Handle, *e.Text))
 		}
 	}
 	out := strings.Join(lines, " | ")
@@ -425,11 +425,11 @@ func TestAPagesLinesAreJSONWithTimestamps(t *testing.T) {
 	}
 	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("later"))}}
 	v := f.read(nil)
-	at := func(i int) string { return time.Unix(0, v.Messages[i].Row.CreatedAt).UTC().Format(time.RFC3339) }
+	at := func(i int) string { return fmt.Sprint(time.Unix(0, v.Messages[i].Row.CreatedAt).Unix()) }
 	want := []string{
 		`{"pruned_from":1,"pruned_to":1}`,
-		`{"seq":2,"created_at":"` + at(1) + `","sender_display_name":"bob","handle":"auditor","text":"a <b>\nc"}`,
-		`{"queued":true,"created_at":"` + at(2) + `","sender_display_name":"alice","text":"later"}`,
+		`{"seq":2,"at":` + at(1) + `,"from":"bob","handle":"auditor","text":"a <b>\nc"}`,
+		`{"queued":true,"at":` + at(2) + `,"from":"alice","text":"later"}`,
 	}
 	if got := v.Messages.Page(0, 0, func(m talk.Message) string { return m.Sender }).Lines; !slices.Equal(got, want) {
 		t.Errorf("lines =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -487,10 +487,11 @@ func TestAPageShowsAPrunedStretchAsOneGapLine(t *testing.T) {
 	}
 }
 
-// Lines is all of the talk as a page's lines, however many there are: no
-// page bounds it, a pruned stretch is one gap line, and queued messages
-// come last.
-func TestLinesAreTheWholeTalkAsAPagesLines(t *testing.T) {
+// Lines is all of the talk as an agent's turn reads it, however many
+// lines there are: no page bounds it, a message says when it was written,
+// in UTC to the minute, a pruned stretch is one gap line, and queued
+// messages come last.
+func TestLinesAreTheWholeTalkAsATurnReadsIt(t *testing.T) {
 	f := newFixture(t)
 	for i := range talk.MaxPage + 3 {
 		f.say(f.alice, fmt.Sprint("m", i))
@@ -499,8 +500,11 @@ func TestLinesAreTheWholeTalkAsAPagesLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.mine = []outbox.Entry{{Signed: f.sign(f.bob, nil, said("later"))}}
-	lines := f.read(nil).Messages.Lines(nil, func(m talk.Message) string { return m.Sender })
-	if n := len(lines); n != talk.MaxPage+3 || lines[0] != "[1–2 pruned on this Node]" || lines[1] != "[3] alice: m2" || lines[n-1] != "[queued] bob: later" {
+	v := f.read(nil)
+	at := func(i int) string { return time.Unix(0, v.Messages[i].Row.CreatedAt).UTC().Format("2006-01-02 15:04") }
+	lines := v.Messages.Lines(nil, func(m talk.Message) string { return m.Sender })
+	n := len(lines)
+	if n != talk.MaxPage+3 || lines[0] != "[1–2 pruned on this Node]" || lines[1] != "[3 "+at(2)+"] alice: m2" || lines[n-1] != "[queued "+at(len(v.Messages)-1)+"] bob: later" {
 		t.Fatalf("%d lines, from %q and %q to %q", n, lines[0], lines[1], lines[n-1])
 	}
 }

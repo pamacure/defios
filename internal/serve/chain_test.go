@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ type providerCall struct {
 	// that carries any, which the answers to the run's tool calls do not.
 	// RunFacts is its closing line, about this run, and Prompt what comes
 	// before that: the talk since the agent's last run and what summons
-	// it.
+	// it, each line's time left out (see untimed).
 	Turn string
 	// Opening is whether the call opens its run: its last message is the
 	// run's turn, not the answers to its tool calls.
@@ -113,6 +114,7 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 			call.Marked = append(call.Marked, bytes.Contains(m.Content, []byte(`"cache_control"`)))
 		}
 		call.Prompt, call.RunFacts = splitRun(call.Turn)
+		call.Prompt = untimed(call.Prompt)
 		p.mu.Lock()
 		p.calls = append(p.calls, call)
 		n, reply := len(p.calls), p.reply
@@ -152,6 +154,13 @@ func turnText(raw json.RawMessage) string {
 
 // summonedBy is the Prompt of a new Transcript's first run, summoned by
 // the message at seq, which reads line.
+// lineTime is the time a turn's talk line gives after its seq or queued.
+var lineTime = regexp.MustCompile(` \d{4}-\d{2}-\d{2} \d{2}:\d{2}\]`)
+
+// untimed is s with each talk line's time left out, `[<seq> <time>]` as
+// `[<seq>]`, so a test can say what a line says whenever it was written.
+func untimed(s string) string { return lineTime.ReplaceAllString(s, "]") }
+
 func summonedBy(seq uint64, line string) string {
 	return fmt.Sprintf("(You are summoned by:)\n[%d] %s", seq, line)
 }
