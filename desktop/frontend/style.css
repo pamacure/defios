@@ -375,7 +375,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
    the colour chosen. What another party holds is greyed out; a colour
    whose bricks are all held is struck through. */
 .picker { display: flex; flex-direction: column; gap: 6px; }
-.picker .prow { display: grid; grid-template-columns: repeat(8, 28px); gap: 6px; }
+.picker .prow { display: grid; grid-template-columns: repeat(8, 28px); gap: 6px; padding: 0; } /* not the list rows' .prow padding */
 .picker .swatch, .picker .bpick { width: 28px; height: 28px; padding: 0; border-radius: var(--radius-s); cursor: pointer; display: grid; place-items: center; position: relative; }
 .picker .swatch { background: var(--lv); border: 0; }
 .picker .bpick { background: var(--surface); border: 1px solid var(--line); color: var(--lv, var(--muted)); }
@@ -577,7 +577,19 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .gform > .phead { margin-bottom: 4px; }
 .fgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; }
 .fgrid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* The Livery picker takes a column of its own after the fields, as wide as
+   its swatches; beside the four fields of a new agent it spans both rows.
+   Below 1140px the pane is too narrow for the fields beside it, so all of
+   them stack (see the media query below). */
+.fgrid.lv { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+.fgrid.four.lv { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
+.fgrid.lv > .livery { grid-column: -2; grid-row: 1; width: min-content; }
+.fgrid.four.lv > .livery { grid-row: 1 / span 2; }
 @media (max-width: 640px) { .fgrid, .fgrid.four { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1139px) {
+  .fgrid.lv, .fgrid.four.lv { grid-template-columns: minmax(0, 1fr); }
+  .fgrid.lv > .livery, .fgrid.four.lv > .livery { grid-column: auto; grid-row: auto; width: auto; }
+}
 .ffield { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .ffield > label, .ffield > .label { color: var(--text); font-weight: 500; }
 .ffield > .label { display: flex; align-items: center; }

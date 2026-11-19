@@ -177,7 +177,8 @@ function drawDevice() {
   const list = h("nav", { class: "plist", "aria-label": "Agent Profiles" },
     (av.Profiles ?? []).map((p) => h("button", {
       class: "pitem", "aria-current": !creating && p.Handle === open ? "true" : false, disabled: busy,
-      onclick: () => openProfile(p.Handle),
+      // The open profile's own tab closes it, back to none open.
+      onclick: () => openProfile(!creating && p.Handle === open ? "" : p.Handle),
     }, h("strong", {}, avatar(p.Livery), `@${p.Handle}`), h("span", {}, [p.Provider, p.Model].filter(Boolean).join(" · ")))),
     h("button", { class: "pitem add", "aria-current": creating ? "true" : false, disabled: busy, onclick: () => {
       creating = true; deleting = false; profDraft = null; invalid = null; picked = null; forgetPicks(); draw();
@@ -193,6 +194,7 @@ function drawDevice() {
     h("div", { class: "pgrid" }, list, h("div", { class: "pdetail" }, detail)));
 }
 
+// openProfile opens the profile handle, or with "" closes the one open.
 async function openProfile(handle) {
   creating = deleting = false;
   profDraft = null;
@@ -259,7 +261,7 @@ function profileForm(o) {
   },
   !o && h("div", { class: "phead" }, h("div", { class: "ptitle" }, h("h3", {}, "New agent"))),
   o?.BriefProblem && problemBox({ ...o.BriefProblem, Message: `Its Agent Brief, BRIEF.md, could not be read, so it shows empty below. ${o.BriefProblem.Message}` }),
-  h("div", { class: o ? "fgrid" : "fgrid four" },
+  h("div", { class: o ? "fgrid lv" : "fgrid four lv" },
     !o && cell(where, "handle", "Handle", inputs.Handle, "How talk mentions it, as @handle: lowercase letters and digits, joined by - or _."),
     cell(where, "provider", "Provider", inputs.Provider, providers.length
       ? `A Provider of ${group}, called by this name in each Group it answers in.`
@@ -267,8 +269,8 @@ function profileForm(o) {
     cell(where, "model", "Model ID", inputs.Model, "The model its Provider runs, sent as the body's model."),
     cell(where, "max_turns", "Max turns", inputs.MaxTurns, o?.MaxTurns
       ? "How many turns one run may take. Once set, it can be changed but not cleared."
-      : "How many turns one run may take. Leave empty for the default.")),
-  liveryCell(where, swatch, picker),
+      : "How many turns one run may take. Leave empty for the default."),
+    liveryCell(where, swatch, picker)),
   cell(where, "brief", "Agent Brief", inputs.Brief, "Its Agent Brief, BRIEF.md: what this agent is and how it works. Each run reads it afresh, so a change applies to the next."),
   cell(where, "body", "Request body", inputs.Body, "Other request options, as a JSON object. Leave empty for none."),
   h("div", { class: "factions" }, saved,
@@ -283,7 +285,7 @@ function liveryCell(where, now, picker) {
   if (invalid?.where === where && invalid.field === "livery") picker.setAttribute("aria-invalid", "true");
   picker.id = fieldID(where, "livery");
   picker.tabIndex = -1;
-  return h("div", { class: "ffield" },
+  return h("div", { class: "ffield livery" },
     h("span", { class: "label" }, "Livery ", now),
     picker,
     h("p", { class: "hint" }, "The colour and brick Talk marks it with, wherever it writes or is mentioned. Only this device sees it."));
