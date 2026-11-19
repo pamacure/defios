@@ -11,7 +11,10 @@ package talk
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
@@ -248,15 +251,51 @@ const (
 	MaxPage     = 200
 )
 
-// Page is one page of talk as an agent reads it with talk_read (ADR 0036).
+// Page is one page of talk as an agent reads it with talk_read (ADR 0036
+// and ADR 0039).
 type Page struct {
-	// Lines are the page, oldest first: `[<seq>] <speaker>: <text>` for a
-	// message, one gap line for a stretch this Node has pruned, then
-	// `[queued]` for each message with no seq yet.
+	// Lines are the page, oldest first, one JSON object each: a message,
+	// one gap for a stretch this Node has pruned, then each message with
+	// no seq yet (see Entry).
 	Lines []string
 	// Earlier is the before that gives the page before this one, 0 when
 	// this page reaches the start of the talk.
 	Earlier uint64
+}
+
+// Entry is one line of a Page: a message, with its seq or queued, when
+// its sender wrote it (RFC 3339, UTC, by the sender's clock), who and
+// what; or a stretch this Node has pruned, by its first and last seq.
+type Entry struct {
+	Seq               uint64  `json:"seq,omitempty"`
+	Queued            bool    `json:"queued,omitempty"`
+	CreatedAt         string  `json:"created_at,omitempty"`
+	SenderDisplayName string  `json:"sender_display_name,omitempty"`
+	Handle            string  `json:"handle,omitempty"`
+	Text              *string `json:"text,omitempty"`
+	PrunedFrom        uint64  `json:"pruned_from,omitempty"`
+	PrunedTo          uint64  `json:"pruned_to,omitempty"`
+}
+
+// entry is m, which is readable, as a Page's Entry.
+func (m Message) entry(name func(Message) string) Entry {
+	text := m.Text
+	e := Entry{Seq: m.Row.Seq, Queued: m.Row.Queued(), SenderDisplayName: name(m), Handle: m.Handle, Text: &text}
+	if m.Row.CreatedAt != 0 {
+		e.CreatedAt = time.Unix(0, m.Row.CreatedAt).UTC().Format(time.RFC3339)
+	}
+	return e
+}
+
+// jsonLine is v as one line of JSON, its <, > and & as written.
+func jsonLine(v any) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		panic(err) // an Entry always encodes
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // Page is the last committed lines of ms, at most last of them
@@ -270,46 +309,63 @@ func (ms Messages) Page(last int, before uint64, name func(Message) string) Page
 		last = DefaultPage
 	}
 	last = min(last, MaxPage)
-	lines, queued := ms.lines(before, nil, name)
+	lines, queued := ms.lines(before, nil)
 	var p Page
 	if cut := len(lines) - last; cut > 0 {
 		p.Earlier = lines[cut-1].to + 1
 		lines = lines[cut:]
 	}
 	for _, l := range lines {
-		p.Lines = append(p.Lines, l.text)
+		e := Entry{PrunedFrom: l.from, PrunedTo: l.to}
+		if l.m != nil {
+			e = l.m.entry(name)
+		}
+		p.Lines = append(p.Lines, jsonLine(e))
 	}
-	p.Lines = append(p.Lines, queued...)
+	for _, m := range queued {
+		p.Lines = append(p.Lines, jsonLine(m.entry(name)))
+	}
 	return p
 }
 
-// Lines is all of ms as an agent reads it, oldest first: as Page's lines,
-// however many there are, less each message leftOut reports (none with
-// nil leftOut). A message left out ends a pruned stretch, as an unreadable
-// one does: no gap line covers it.
+// Lines is all of ms as an agent's turn reads it, oldest first: a
+// message's Line, a gap line for a stretch this Node has pruned, then the
+// queued messages, however many there are, less each message leftOut
+// reports (none with nil leftOut). A message left out ends a pruned
+// stretch, as an unreadable one does: no gap line covers it.
 func (ms Messages) Lines(leftOut func(Message) bool, name func(Message) string) []string {
-	committed, queued := ms.lines(0, leftOut, name)
-	text := make([]string, len(committed))
-	for i, l := range committed {
-		text[i] = l.text
+	committed, queued := ms.lines(0, leftOut)
+	text := make([]string, 0, len(committed)+len(queued))
+	for _, l := range committed {
+		switch {
+		case l.m != nil:
+			text = append(text, l.m.Line(name))
+		case l.from == l.to:
+			text = append(text, fmt.Sprintf("[%d pruned on this Node]", l.from))
+		default:
+			text = append(text, fmt.Sprintf("[%d–%d pruned on this Node]", l.from, l.to))
+		}
 	}
-	return append(text, queued...)
+	for _, m := range queued {
+		text = append(text, m.Line(name))
+	}
+	return text
 }
 
 // line is one committed line of talk as an agent reads it: a message, or
 // a pruned stretch, from its first seq to its last.
 type line struct {
-	text     string
+	m        *Message // nil for a pruned stretch
 	from, to uint64
 }
 
 // lines are ms as an agent reads them: the committed lines, a message or
-// a pruned stretch each, then the queued ones; with before, only the talk
-// before that seq, which no queued message is. A message leftOut reports
-// is on no line, and ends a pruned stretch.
-func (ms Messages) lines(before uint64, leftOut func(Message) bool, name func(Message) string) (committed []line, queued []string) {
+// a pruned stretch each, then the queued messages; with before, only the
+// talk before that seq, which no queued message is. A message leftOut
+// reports is on no line, and ends a pruned stretch.
+func (ms Messages) lines(before uint64, leftOut func(Message) bool) (committed []line, queued Messages) {
 	inGap := false // whether the message before was pruned
-	for _, m := range ms {
+	for i, m := range ms {
 		seq := m.Row.Seq
 		if before > 0 && (m.Row.Queued() || seq >= before) {
 			continue
@@ -322,15 +378,14 @@ func (ms Messages) lines(before uint64, leftOut func(Message) bool, name func(Me
 		inGap = m.Pruned
 		switch {
 		case m.Pruned && wasGap:
-			gap := &committed[len(committed)-1]
-			gap.to, gap.text = seq, fmt.Sprintf("[%d–%d pruned on this Node]", gap.from, seq)
+			committed[len(committed)-1].to = seq
 		case m.Pruned:
-			committed = append(committed, line{text: fmt.Sprintf("[%d pruned on this Node]", seq), from: seq, to: seq})
+			committed = append(committed, line{from: seq, to: seq})
 		case m.Unreadable:
 		case m.Row.Queued():
-			queued = append(queued, m.Line(name))
+			queued = append(queued, m)
 		default:
-			committed = append(committed, line{text: m.Line(name), from: seq, to: seq})
+			committed = append(committed, line{m: &ms[i], from: seq, to: seq})
 		}
 	}
 	return committed, queued

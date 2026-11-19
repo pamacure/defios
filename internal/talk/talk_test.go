@@ -1,11 +1,14 @@
 package talk_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -353,8 +356,32 @@ func TestAMalformedRecapFailsOnlyTheLeanView(t *testing.T) {
 // page is one page of v's talk, its lines joined by " | ", then "<" and the
 // before_seq that pages back when there is earlier talk.
 func page(v talk.View, last int, before uint64) string {
-	p := v.Messages.Page(last, before, func(m talk.Message) string { return m.Sender })
-	out := strings.Join(p.Lines, " | ")
+	return pageOf(v.Messages, last, before)
+}
+
+// pageOf is ms's page as page shows it: each line, which is JSON, as
+// [<seq>] <speaker>: <text>, [queued] in place of a seq, or a gap as
+// [<from>–<to> pruned].
+func pageOf(ms talk.Messages, last int, before uint64) string {
+	p := ms.Page(last, before, func(m talk.Message) string { return m.Sender })
+	var lines []string
+	for _, l := range p.Lines {
+		var e talk.Entry
+		if err := json.Unmarshal([]byte(l), &e); err != nil {
+			return "not JSON: " + l
+		}
+		switch {
+		case e.Text == nil && e.PrunedFrom == e.PrunedTo:
+			lines = append(lines, fmt.Sprintf("[%d pruned on this Node]", e.PrunedFrom))
+		case e.Text == nil:
+			lines = append(lines, fmt.Sprintf("[%d–%d pruned on this Node]", e.PrunedFrom, e.PrunedTo))
+		case e.Queued:
+			lines = append(lines, "[queued] "+talk.LeanLine(e.SenderDisplayName, e.Handle, *e.Text))
+		default:
+			lines = append(lines, fmt.Sprintf("[%d] ", e.Seq)+talk.LeanLine(e.SenderDisplayName, e.Handle, *e.Text))
+		}
+	}
+	out := strings.Join(lines, " | ")
 	if p.Earlier > 0 {
 		out += fmt.Sprint(" <", p.Earlier)
 	}
@@ -383,6 +410,29 @@ func TestAPageIsTheLatestLinesAndPagesBack(t *testing.T) {
 	}
 	if got := page(v, 50, 1); got != "" {
 		t.Errorf("before the first = %s", got)
+	}
+}
+
+// Each line of a page is one JSON object: a message with its seq, when
+// its sender wrote it, who and what, newlines and all; a queued one with
+// queued in place of a seq; a pruned stretch by its first and last seq.
+func TestAPagesLinesAreJSONWithTimestamps(t *testing.T) {
+	f := newFixture(t)
+	f.say(f.alice, "gone")
+	f.commit(f.sign(f.bob, nil, &coslv1.AppFreeform{Text: "a <b>\nc", ContentType: "text/plain", Handle: "auditor", Depth: 1}))
+	if _, err := f.store.Prune(nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("later"))}}
+	v := f.read(nil)
+	at := func(i int) string { return time.Unix(0, v.Messages[i].Row.CreatedAt).UTC().Format(time.RFC3339) }
+	want := []string{
+		`{"pruned_from":1,"pruned_to":1}`,
+		`{"seq":2,"created_at":"` + at(1) + `","sender_display_name":"bob","handle":"auditor","text":"a <b>\nc"}`,
+		`{"queued":true,"created_at":"` + at(2) + `","sender_display_name":"alice","text":"later"}`,
+	}
+	if got := v.Messages.Page(0, 0, func(m talk.Message) string { return m.Sender }).Lines; !slices.Equal(got, want) {
+		t.Errorf("lines =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -420,7 +470,7 @@ func TestAPageShowsAPrunedStretchAsOneGapLine(t *testing.T) {
 	v := f.read(nil)
 	pruned := func(m talk.Message) talk.Message { m.Pruned = true; return m }
 	split := talk.Messages{pruned(v.Messages[0]), v.Messages[3], pruned(v.Messages[4])}
-	if got := strings.Join(split.Page(50, 0, nil).Lines, " | "); got != "[1 pruned on this Node] | [5 pruned on this Node]" {
+	if got := pageOf(split, 50, 0); got != "[1 pruned on this Node] | [5 pruned on this Node]" {
 		t.Errorf("around an unreadable message = %s", got)
 	}
 	if got := page(v, 50, 0); got != "[1–3 pruned on this Node] | [5] alice: e" {

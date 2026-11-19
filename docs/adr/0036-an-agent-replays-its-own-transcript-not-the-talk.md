@@ -40,7 +40,8 @@ to.
   differ from what was cached.
 - **`say` becomes `talk_write`, and `talk_read` is added.** Both are granted
   by default. `talk_read` takes `last` (default 50) and `before_seq`, returns
-  lines in the same form, marks a pruned stretch as one gap line, and says
+  lines in the same form (JSON Lines with timestamps since
+  [ADR 0039](0039-talk-read-returns-json-lines.md)), marks a pruned stretch as one gap line, and says
   that lines from its own Node under its Handle are its own `talk_write`
   messages. `sign_list` takes an optional `status`.
 - **Clear closes the live Transcript and starts a new one at the next run.**
