@@ -171,7 +171,6 @@ function draw() {
   const caret = field ? [active.selectionStart, active.selectionEnd] : null;
   const focused = active === composer.input;
   mount.classList.toggle("about-open", tui.about);
-  mount.classList.toggle("detailing", !!selectedItem());
   mount.replaceChildren(left(), center(), right(), signForm() ?? "", liveryPop() ?? "");
   const tr = mount.querySelector(".transcript");
   const scroll = () => { if (tr.isConnected) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top; };
