@@ -469,6 +469,10 @@ function item(it) {
   if (it.Kind === "unreadable") {
     return h("div", { ...sel, class: `msg ${it.Side} unreadable ${run} ${sel.class}` }, meta, beside(it, h("p", { class: "text" }, "This message can't be read.")));
   }
+  // A run of this device's agent that posted nothing: its outcome, faded.
+  if (it.Kind === "run") {
+    return h("div", { ...sel, class: `msg ${it.Side} unposted ${run} ${sel.class}` }, meta, beside(it, h("p", { class: "text" }, it.Text)));
+  }
   return h("div", { ...sel, class: `msg ${it.Side} ${run} ${sel.class}` },
     meta,
     beside(it, h("div", { class: "text" }, (it.Parts ?? [{ Text: it.Text }]).map(part))),
@@ -718,9 +722,9 @@ function makeComposer() {
 // Selecting a line: its details replace the right column's. Every line
 // but a Sign Request's card can be selected.
 
-// lineKey names a line across redraws: its msg_id, or a system line's
-// time and text.
-const lineKey = (it) => it.MsgID || `sys:${it.At}|${it.Text}`;
+// lineKey names a line across redraws: its msg_id, a run's chain and
+// step, or a system line's time and text.
+const lineKey = (it) => it.MsgID || (it.Kind === "run" ? `run:${it.Chain}/${it.Step}` : `sys:${it.At}|${it.Text}`);
 
 // selectable is a line's attributes for selecting it: a click selects it,
 // or deselects it if it is the one selected, unless the click ends a text
@@ -785,19 +789,19 @@ function step(by) {
 // line itself: the talk said, the chains running, and the live
 // Transcripts here. Details are read again when it changes.
 function detailsSig() {
-  return JSON.stringify([ts.Items.map((it) => [it.MsgID, it.Chain]), ts.Live.map((c) => c.Chain), ts.Transcripts.map((t) => t.Handle)]);
+  return JSON.stringify([ts.Items.map((it) => [it.MsgID, it.Chain, it.Step]), ts.Live.map((c) => c.Chain), ts.Transcripts.map((t) => t.Handle)]);
 }
 
-// loadDetails reads the selected line's details: a message's, or a system
-// line's run; a system line about no run has none to read.
+// loadDetails reads the selected line's details: a message's, or the run
+// of a run that posted nothing; a system line has none to read.
 async function loadDetails() {
   const it = selectedItem();
   if (!it) return;
   const key = tui.selected;
   tui.detailsSig = detailsSig();
   let read;
-  if (it.Kind !== "system") read = call("MessageDetails", it.MsgID);
-  else if (it.Chain && it.Handle) read = call("RunDetails", it.Chain, it.Handle);
+  if (it.Kind === "run") read = call("RunDetails", it.Chain, it.Step);
+  else if (it.Kind !== "system") read = call("MessageDetails", it.MsgID);
   else read = Promise.resolve({});
   const view = await read.catch((err) => ({ Problem: callFailed(err) }));
   if (tui.selected !== key) return;
@@ -905,7 +909,7 @@ function detailsPanel(it) {
   if (!v) body = h("p", { class: "placeholder" }, "Loading…");
   else if (v.Problem) body = problemBox(v.Problem);
   else if (run) body = runBody(run);
-  else if (v.Steps?.length) body = chainSteps(v.Steps);
+  else if (v.Steps?.length) body = chainSteps(v.Steps, v.Chain);
 
   return h("aside", { class: "about details", "aria-label": "Message details" },
     h("article", { class: "dcard" },
@@ -989,16 +993,19 @@ function earlier(run) {
 }
 
 // chainSteps is the chain this person's message started, step by step;
-// each step that posted selects its message.
-function chainSteps(steps) {
+// each step that posted selects its message, and each that posted nothing
+// its run.
+function chainSteps(steps, chain) {
   return h("section", {},
     h("h3", {}, "Its chain"),
     h("ol", { class: "steps" }, steps.map((st) => {
-      const said = st.MsgID && ts.Items.find((it) => it.MsgID === st.MsgID);
+      const said = st.MsgID
+        ? ts.Items.find((it) => it.MsgID === st.MsgID)
+        : ts.Items.find((it) => it.Kind === "run" && it.Chain === chain && it.Step === st.Step);
       const label = h("span", { class: "who" }, h("span", { class: "n" }, `${st.Step}.`), h("strong", {}, `@${st.Handle}`));
       return h("li", { style: `padding-left: ${(st.Depth - 1) * 14}px` },
         said
-          ? h("button", { class: "step", type: "button", title: "Show what it posted", onclick: () => select(said) }, label, outcomeChip(st.State))
+          ? h("button", { class: "step", type: "button", title: said.Kind === "run" ? "Show its run" : "Show what it posted", onclick: () => select(said) }, label, outcomeChip(st.State))
           : h("div", { class: "step" }, label, outcomeChip(st.State)),
         st.Error && h("pre", { class: "error-text" }, st.Error));
     })));

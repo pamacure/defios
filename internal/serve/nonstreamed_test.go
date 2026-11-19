@@ -140,6 +140,7 @@ func runLines(t *testing.T, a *node, chain string) string {
 		delete(l, "summons")   // the summoner's line, with its seq
 		delete(l, "unapplied") // the msg_ids of messages the replica had yet to apply
 		delete(l, "binding")   // its system block names its Handle
+		delete(l, "at")        // when it ended
 		if l["kind"] == serve.KindRequest {
 			delete(l, "request")
 		}

@@ -39,7 +39,7 @@ const (
 	KindBlock   = agent.RecordBlock   // block: one output block, or a tool call's result
 	KindUsage   = agent.RecordUsage   // usage: a model call's usage
 	KindActed   = "acted"             // tool and msg_id: a sign Tool acted on that Sign Request
-	KindOutcome = "outcome"           // outcome, and msg_id and seq or error with it
+	KindOutcome = "outcome"           // outcome and at, and msg_id and seq or error with it
 )
 
 // Line is one line of a Transcript. Every line names the run it belongs
@@ -91,15 +91,18 @@ type Line struct {
 	MsgID   string          `json:"msg_id,omitempty"`
 	Seq     uint64          `json:"seq,omitempty"`
 	Error   string          `json:"error,omitempty"`
+	// At, with KindOutcome, is when the run ended, UTC; zero on an
+	// outcome line written before it was recorded.
+	At time.Time `json:"at,omitzero"`
 }
 
 // Outcome is the closing line of a run that said msgID, hex, at seq
-// (msgID "" if nothing), and ended with err; a run that commits nothing
+// (msgID "" if nothing), and ended with err, recording when, now, UTC; a run that commits nothing
 // and ends without an error is silent. Once a talk_write has committed it is
 // `said`, whatever failed after. A run cut off by the serve stopping
 // before that has none: ok is false.
 func Outcome(msgID string, seq uint64, err error, cancelled, stopped bool) (l Line, ok bool) {
-	l.Kind = KindOutcome
+	l.Kind, l.At = KindOutcome, time.Now().UTC()
 	switch {
 	case msgID != "":
 		l.Outcome, l.MsgID, l.Seq = OutcomeSaid, msgID, seq
@@ -491,6 +494,9 @@ type Run struct {
 	MsgID   string // with OutcomeSaid: what it said, hex
 	Seq     uint64 // with OutcomeSaid, once it has a row
 	Error   string // with OutcomeError: why
+	// Ended is when it ended, as its outcome line records it: zero for a
+	// run with no outcome, or one recorded before outcome lines had a time.
+	Ended time.Time
 }
 
 // Acted is one successful call of a sign Tool: the Tool, and the Sign
@@ -545,10 +551,27 @@ func Runs(lines []Line) []Run {
 		case KindActed:
 			r.Acted = append(r.Acted, Acted{Tool: l.Tool, MsgID: l.MsgID})
 		case KindOutcome:
-			r.Outcome, r.MsgID, r.Seq, r.Error = l.Outcome, l.MsgID, l.Seq, l.Error
+			r.Outcome, r.MsgID, r.Seq, r.Error, r.Ended = l.Outcome, l.MsgID, l.Seq, l.Error, l.At
 		}
 	}
 	return runs
+}
+
+// Unposted are the runs in ts, a Conversation's Transcripts, that posted
+// nothing: those that stayed silent, failed or were cancelled, in
+// Transcript order, each's in the order its Agent ran them. A run cut off
+// with no outcome is not among them.
+func Unposted(ts []Transcript) []Run {
+	var out []Run
+	for _, t := range ts {
+		for _, r := range Runs(t.Lines) {
+			switch r.Outcome {
+			case OutcomeSilent, OutcomeError, OutcomeCancelled:
+				out = append(out, r)
+			}
+		}
+	}
+	return out
 }
 
 // Tokens are the input and output tokens a usage line bills, whichever

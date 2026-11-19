@@ -197,35 +197,104 @@ func TestAnAgentsChainStreamsLiveCancelsAndLeavesATranscript(t *testing.T) {
 	}
 }
 
-// An agent that ends its turn without talk_write leaves a line saying so, with
-// what it wrote in its Transcript, not nothing.
-func TestAnAgentThatStaysSilentLeavesALineWithItsTranscript(t *testing.T) {
+// An agent that ends its turn without talk_write shows as a faded message
+// from it once its run ends, with what it wrote in its Transcript, not
+// nothing.
+func TestAnAgentThatStaysSilentLeavesAMessageWithItsTranscript(t *testing.T) {
 	r := newRig(t, "alpha")
 	r.node.tk().included[node.GroupTalk] = []string{"auditor"}
 	s := served(t, r)
 	s.SendMessage("@auditor state your purpose")
 	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
-	r.node.mu.Lock()
-	r.node.sg().runs[chain] = []transcript.Run{{Handle: "auditor", Depth: 1, Blocks: []json.RawMessage{json.RawMessage(`{"type":"text","text":"I audit."}`)}}}
-	r.node.mu.Unlock()
 
 	for _, ev := range []node.ChainEvent{
 		{Type: serve.EventChainStart, Chain: chain},
 		{Type: serve.EventAgentStart, Chain: chain, Handle: "auditor", Depth: 1},
 		{Type: serve.EventAgentDelta, Chain: chain, Kind: "text", Text: "I audit."},
-		{Type: serve.EventAgentSilent, Chain: chain, Handle: "auditor"},
-		{Type: serve.EventChainEnd, Chain: chain},
 	} {
 		chainEvent(r.node, node.GroupTalk, ev)
 	}
-	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 0 && len(ts.Items) == 2 })
-	line := ts.Items[1]
-	if line.Kind != shell.KindSystem || line.Handle != "auditor" || line.Chain != chain ||
-		!strings.Contains(line.Text, "@auditor") || !strings.Contains(line.Text, "without posting") {
-		t.Fatalf("silent line: %+v", line)
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 1 })
+	r.node.mu.Lock()
+	r.node.sg().runs[chain] = []transcript.Run{{Chain: chain, Step: 1, Handle: "auditor", Depth: 1, Outcome: transcript.OutcomeSilent, Ended: time.Now(),
+		Blocks: []json.RawMessage{json.RawMessage(`{"type":"text","text":"I audit."}`)}}}
+	r.node.mu.Unlock()
+	// The chain has yet to end: the run's end shows it.
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentSilent, Chain: chain, Handle: "auditor"})
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Items) == 2 })
+	if line := ts.Items[1]; line.Kind != shell.KindRun || line.Handle != "auditor" || line.Chain != chain || line.Text != "Finished without replying." {
+		t.Fatalf("silent run: %+v", line)
 	}
-	if d := s.RunDetails(chain, "auditor"); d.Problem != nil || d.Run == nil || len(d.Run.Output) != 1 || d.Run.Outcome != "" {
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventChainEnd, Chain: chain})
+	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 0 })
+	if len(ts.Items) != 2 {
+		t.Fatalf("items: %+v", ts.Items)
+	}
+	if d := s.RunDetails(chain, 1); d.Problem != nil || d.Run == nil || len(d.Run.Output) != 1 || d.Run.Outcome != transcript.OutcomeSilent {
 		t.Fatalf("its run: %+v", d)
+	}
+}
+
+// This device's agents' runs that posted nothing show as faded messages
+// from that agent, read from their Transcripts, live or cleared, so they
+// are there as the page opens: each placed by when it ended, or with no
+// time recorded, right after the talk its turn accounted for, and grouped
+// with that agent's own messages. A failure's error is only in its
+// details.
+func TestRunsThatPostedNothingAreFadedMessagesFromTheirAgent(t *testing.T) {
+	r := newRig(t, "alpha")
+	t0 := time.Now().Add(-time.Hour).UTC()
+	long := strings.Repeat("the Provider refused the request ", 20)
+	r.node.mu.Lock()
+	r.node.sg().runs["a1"] = []transcript.Run{{Chain: "a1", Step: 1, Handle: "auditor", Depth: 1, Outcome: transcript.OutcomeSilent, Ended: t0.Add(15 * time.Minute)}}
+	r.node.sg().runs["b2"] = []transcript.Run{{Chain: "b2", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeError, Error: long, TalkSeq: 1}}
+	r.node.sg().runs["c3"] = []transcript.Run{
+		{Chain: "c3", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeSaid, MsgID: "ab", Ended: t0.Add(24 * time.Minute)},
+		{Chain: "c3", Step: 2, Handle: "auditor", Depth: 2, Outcome: transcript.OutcomeCancelled, Ended: t0.Add(25 * time.Minute)},
+	}
+	r.node.sg().cleared["c3"] = []int{1, 2}
+	r.node.mu.Unlock()
+	bob := func(text string, at time.Duration) {
+		r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: text, CreatedAt: t0.Add(at)})
+	}
+	bob("one", 0)
+	bob("two", 10*time.Minute)
+	r.node.commit(node.GroupTalk, node.Message{NodeID: r.node.NodeID(), Handle: "auditor", Depth: 1, Text: "three", CreatedAt: t0.Add(16 * time.Minute)})
+	s := served(t, r)
+
+	ts := eventuallyTalk(t, s, items(6))
+	var got []string
+	for _, it := range ts.Items {
+		got = append(got, fmt.Sprintf("%s %s @%s %s", it.Kind, it.Side, it.Handle, it.Text))
+	}
+	want := []string{
+		"message left @ one",
+		"run left @scribe Failed.",
+		"message left @ two",
+		"run left @auditor Finished without replying.",
+		"message left @auditor three",
+		"run left @auditor Cancelled.",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("items:\n%s", strings.Join(got, "\n"))
+	}
+	failed, silent, three, cancelled := ts.Items[1], ts.Items[3], ts.Items[4], ts.Items[5]
+	if failed.From != "This Device" || failed.Chain != "b2" || failed.Step != 1 || failed.Outcome != transcript.OutcomeError || failed.At.IsZero() {
+		t.Fatalf("failed: %+v", failed)
+	}
+	if !silent.At.Equal(t0.Add(15*time.Minute)) || cancelled.Chain != "c3" || cancelled.Step != 2 {
+		t.Fatalf("silent %+v, cancelled %+v", silent, cancelled)
+	}
+	if !silent.Author || silent.Avatar || three.Author || !three.Avatar {
+		t.Fatalf("one run of @auditor's: %+v, %+v", silent, three)
+	}
+
+	d := s.RunDetails("b2", 1)
+	if d.Problem != nil || d.Run == nil || d.Run.Outcome != transcript.OutcomeError || d.Run.Error != long || d.Run.Handle != "scribe" {
+		t.Fatalf("details: %+v", d)
+	}
+	if d := s.RunDetails("c3", 2); d.Problem != nil || d.Run == nil || d.Run.Handle != "auditor" || !d.Run.Cleared {
+		t.Fatalf("cleared run's details: %+v", d)
 	}
 }
 
@@ -721,7 +790,7 @@ func TestASystemLineEndsARun(t *testing.T) {
 	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "one", CreatedAt: time.Now().Add(-time.Second)})
 	eventuallyTalk(t, s, items(1))
 	r.node.emit(node.Event{Chain: &node.ChainEventIn{Group: "alpha", Conversation: node.GroupTalk,
-		Event: serve.ChainEvent{Type: serve.EventChainEnd, Chain: "c", Cancelled: true}}})
+		Event: serve.ChainEvent{Type: serve.EventAgentSkipped, Chain: "c", Handle: "auditor", Reason: "gone"}}})
 	eventuallyTalk(t, s, items(2))
 	r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "two", CreatedAt: time.Now().Add(time.Second)})
 	ts := eventuallyTalk(t, s, items(3))

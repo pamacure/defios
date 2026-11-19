@@ -99,6 +99,7 @@ type Node interface {
 	Transcript(ctx context.Context, group, conv, chain string) (Transcript, error)
 	LiveTranscripts(ctx context.Context, group, conv string) ([]LiveTranscript, error)
 	LiveRuns(ctx context.Context, group, conv, handle string) ([]Run, error)
+	UnpostedRuns(ctx context.Context, group, conv string) ([]Run, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 	Outbox(ctx context.Context, group string) ([]Queued, error)
 	DropQueued(ctx context.Context, group, msgID string) (string, error)

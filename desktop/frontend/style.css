@@ -326,6 +326,7 @@ button.conv > .sub { grid-column: 1 / -1; }
 .msg.left .text { border-bottom-left-radius: 0; }
 .msg.sending .text { opacity: 0.6; }
 .msg.unreadable .text { color: var(--muted); font-style: italic; background: transparent; border-style: dashed; }
+.msg.unposted .text { color: var(--muted); font-style: italic; opacity: .75; }
 .msg .actions { display: flex; gap: 12px; }
 /* Liveries (ADR 0037): a .lv-<colour> sets the colour and its wash, a
    .brick-<brick> the brick, drawn in currentColor through its SVG as a mask. */

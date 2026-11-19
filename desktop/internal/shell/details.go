@@ -109,9 +109,9 @@ type EarlierView struct {
 // Conversation.
 func (s *Shell) MessageDetails(msgID string) Details { return s.talk.messageDetails(msgID) }
 
-// RunDetails are the details of the run of this device's agent handle in
-// chain of the open Conversation, as a system line about it names it.
-func (s *Shell) RunDetails(chain, handle string) Details { return s.talk.runDetails(chain, handle) }
+// RunDetails are the details of the run of this device's agent at step of
+// chain in the open Conversation, as a run that posted nothing names it.
+func (s *Shell) RunDetails(chain string, step int) Details { return s.talk.runDetails(chain, step) }
 
 // EarlierRuns are the runs of this device's agent handle's live Transcript
 // in the open Conversation: what it remembers of its work there.
@@ -160,7 +160,7 @@ func (t *talk) messageDetails(msgID string) Details {
 	return d
 }
 
-func (t *talk) runDetails(chain, handle string) Details {
+func (t *talk) runDetails(chain string, step int) Details {
 	a, ok := t.now()
 	if !ok {
 		return Details{Problem: problemOf(node.ErrNotServed)}
@@ -172,10 +172,8 @@ func (t *talk) runDetails(chain, handle string) Details {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	d := Details{Chain: chain, DeviceID: t.self, Device: t.device(t.self), Online: true}
-	// The last of the agent's runs in the chain: a line about a run
-	// follows it.
-	for _, r := range slices.Backward(tr.Runs) {
-		if r.Handle != handle {
+	for _, r := range tr.Runs {
+		if r.Step != step {
 			continue
 		}
 		v := t.runView(r, slices.Contains(tr.Cleared, r.Step))

@@ -563,6 +563,11 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 	defer func() {
 		if l, ok := runOutcome(said, err, c.cancelled.Load(), c.ctx.Err() != nil); ok {
 			line(l)
+			if l.Outcome == OutcomeSilent {
+				// After its outcome line, so a reader the event sends to
+				// the Transcript finds the run ended.
+				publish(ChainEvent{Type: EventAgentSilent, Handle: handle})
+			}
 		}
 	}()
 	if err != nil {
@@ -598,8 +603,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 		return res, said, inc, err
 	}
 	if res.Silent {
-		publish(ChainEvent{Type: EventAgentSilent, Handle: handle})
-		return res, said, inc, nil
+		return res, said, inc, nil // its outcome line publishes it
 	}
 	// Once a talk_write is accepted, a cancel no longer cuts it: an append in
 	// flight could land anyway, and agent.commit must report it if it does.

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/internal/group"
 	"defios.com/internal/nodedir"
@@ -427,5 +428,53 @@ func TestSizesAreEachLiveTranscriptsLastInputTokens(t *testing.T) {
 	}
 	if got, err := transcript.Sizes(p, group.ImplicitAlias, []byte{0xab}); err != nil || got != nil {
 		t.Fatalf("Sizes where none is live = %+v, %v", got, err)
+	}
+}
+
+// A run's outcome line records when it ended, UTC, and its run carries
+// that time; an outcome line written before it did still reads, with
+// none.
+func TestAnOutcomeRecordsWhenTheRunEnded(t *testing.T) {
+	before := time.Now()
+	l, ok := transcript.Outcome("", 0, nil, false, false)
+	if !ok || l.At.Location() != time.UTC || l.At.Before(before.Truncate(time.Second)) || l.At.After(time.Now()) {
+		t.Fatalf("outcome = %+v", l)
+	}
+	l.Step, l.Handle, l.Depth = 1, "scribe", 1
+	p := paths(t)
+	write(t, p, nil, chainID, l)
+	f, err := os.OpenFile(p.LiveTranscriptFile(group.ImplicitAlias, "group", "scribe"), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"chain":"abab","step":2,"handle":"scribe","depth":1,"kind":"outcome","outcome":"cancelled"}` + "\n")
+	f.Close()
+
+	runs := transcript.Runs(read(t, p, nil)[0].Lines)
+	if len(runs) != 2 || !runs[0].Ended.Equal(l.At) || runs[0].Outcome != transcript.OutcomeSilent ||
+		!runs[1].Ended.IsZero() || runs[1].Outcome != transcript.OutcomeCancelled {
+		t.Fatalf("runs = %+v", runs)
+	}
+}
+
+// The runs that posted nothing are those that stayed silent, failed or
+// were cancelled, in live and cleared Transcripts alike; not one that
+// said something, nor one cut off with no outcome.
+func TestUnpostedRunsAreTheSilentFailedAndCancelledOnes(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "cd34", lines...) // said, silent, failed
+	if _, err := transcript.Clear(p, group.ImplicitAlias, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	write(t, p, nil, "ef56",
+		transcript.Line{Step: 1, Handle: "scribe", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeCancelled},
+		transcript.Line{Step: 2, Handle: "scribe", Depth: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{}`)})
+
+	var got []string
+	for _, r := range transcript.Unposted(read(t, p, nil)) {
+		got = append(got, fmt.Sprintf("%s/%d @%s %s", r.Chain, r.Step, r.Handle, r.Outcome))
+	}
+	if want := []string{"cd34/3 @critic error", "cd34/2 @scribe silent", "ef56/1 @scribe cancelled"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unposted = %q", got)
 	}
 }

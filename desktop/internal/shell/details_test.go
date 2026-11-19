@@ -186,14 +186,14 @@ func TestARunsLineDetailsAreItsRunAndEarlierRunsTheLiveTranscript(t *testing.T) 
 	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentSilent, Chain: chain, Handle: "auditor"})
 	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Items) == 1 })
 
-	d := s.RunDetails(chain, "auditor")
+	d := s.RunDetails(chain, 1)
 	if d.Problem != nil || d.Run == nil || d.Chain != chain || d.Step != 1 || d.Device != "This Device" || !d.Online {
 		t.Fatalf("details: %+v", d)
 	}
 	if o := d.Run.Opening; o != (shell.Opening{Heading: "Job nightly-check", Summons: "(the Job's prompt)", Also: "(facts)"}) || !d.Run.Cleared {
 		t.Fatalf("run: %+v", d.Run)
 	}
-	if d := s.RunDetails(chain, "scribe"); d.Problem == nil {
+	if d := s.RunDetails(chain, 2); d.Problem == nil {
 		t.Fatalf("details of no run: %+v", d)
 	}
 

@@ -430,6 +430,23 @@ func (n *fakeNode) LiveRuns(_ context.Context, group, conv, handle string) ([]no
 	return slices.Clone(n.tk().liveRuns[conv+"/"+handle]), nil
 }
 
+// UnpostedRuns are the runs that posted nothing among this Node's chains'
+// runs, cleared or not, by chain.
+func (n *fakeNode) UnpostedRuns(_ context.Context, group, conv string) ([]node.Run, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []node.Run
+	for _, chain := range slices.Sorted(maps.Keys(n.sg().runs)) {
+		for _, r := range n.sg().runs[chain] {
+			switch r.Outcome {
+			case transcript.OutcomeSilent, transcript.OutcomeError, transcript.OutcomeCancelled:
+				out = append(out, r)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (n *fakeNode) ClearTranscripts(_ context.Context, group, conv, handle string) ([]string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

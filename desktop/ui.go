@@ -176,8 +176,8 @@ func (u *UI) SetLivery(party, livery string) shell.TalkState {
 }
 
 func (u *UI) MessageDetails(msgID string) shell.Details { return u.shell.MessageDetails(msgID) }
-func (u *UI) RunDetails(chain, handle string) shell.Details {
-	return u.shell.RunDetails(chain, handle)
+func (u *UI) RunDetails(chain string, step int) shell.Details {
+	return u.shell.RunDetails(chain, step)
 }
 func (u *UI) EarlierRuns(handle string) shell.EarlierView { return u.shell.EarlierRuns(handle) }
 

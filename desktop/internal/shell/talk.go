@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -15,6 +16,7 @@ import (
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
+	"defios.com/internal/transcript"
 )
 
 // TalkNode is what the Talk page needs of a Node; *node.Host is one. Every
@@ -40,6 +42,7 @@ type TalkNode interface {
 	Transcript(ctx context.Context, group, conv, chain string) (node.Transcript, error)
 	LiveTranscripts(ctx context.Context, group, conv string) ([]node.LiveTranscript, error)
 	LiveRuns(ctx context.Context, group, conv, handle string) ([]node.Run, error)
+	UnpostedRuns(ctx context.Context, group, conv string) ([]node.Run, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 	Liveries(ctx context.Context) (map[string]string, error)
 	SetLivery(ctx context.Context, party, livery string) error
@@ -177,6 +180,10 @@ const (
 	// not read. A pruned message is left out.
 	KindUnreadable ItemKind = "unreadable"
 	KindSystem     ItemKind = "system"
+	// KindRun is a run of this device's agent that posted nothing: it
+	// stayed silent, failed or was cancelled. It shows as a message from
+	// that agent, faded, read from its Transcript.
+	KindRun ItemKind = "run"
 )
 
 // Side is where a message sits in the transcript.
@@ -223,10 +230,12 @@ type Item struct {
 	// runGap ends a run.
 	Author, Avatar bool
 	sender         string // who wrote it, for runs; "" off the left
-	// Chain is the chain of this device's agent's run that said it; on a
-	// system line about an agent's run, Chain and Handle name the run.
-	// The panel's Details give the run (MessageDetails, RunDetails).
-	Chain string
+	// Chain is the chain of this device's agent's run that said it, or
+	// with KindRun, of that run, which Step and Outcome name in it. The
+	// panel's Details give the run (MessageDetails, RunDetails).
+	Chain   string
+	Step    int
+	Outcome string
 	// Sign is a Sign Request's card, for KindSign.
 	Sign *SignCard
 }
@@ -330,9 +339,12 @@ type talk struct {
 	status node.Status
 	msgs   []node.Message
 	said   map[string]string // by msg_id, the chain of this device's run that said it
-	// saidStale: a chain or Job ended, or a Conversation opened, so said
-	// is read again with the messages. Reading it expands every
-	// Transcript there, so it is not read on every message.
+	// unposted are this device's runs here that posted nothing.
+	unposted []node.Run
+	// saidStale: a run, chain or Job ended, or a Conversation opened, so
+	// said and unposted are read again with the messages. Reading them
+	// reads every Transcript there, so they are not read on every
+	// message.
 	saidStale bool
 	// liveries are this Node's, by party key (ADR 0037).
 	liveries map[string]string
@@ -375,7 +387,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 	if !same {
 		t.n, t.self, t.group, t.open = n, self, group, node.GroupTalk
 		t.gen++
-		t.convs, t.msgs, t.said, t.saidStale, t.liveries = node.Conversations{}, nil, nil, true, nil
+		t.convs, t.msgs, t.said, t.unposted, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, true, nil
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
@@ -564,8 +576,12 @@ func (t *talk) loadMessages() {
 	t.loadMu.Lock()
 	msgs, err := a.n.Messages(t.ctx, a.group, a.conv)
 	var chat []node.ChatMessage
+	var unposted []node.Run
 	if err == nil && withSaid {
 		chat, err = a.n.Chat(t.ctx, a.group, a.conv, 0, true)
+		if err == nil {
+			unposted, err = a.n.UnpostedRuns(t.ctx, a.group, a.conv)
+		}
 	}
 	// The Node gives another device's agent a Livery as its first
 	// message arrives, so they are read with the messages.
@@ -580,7 +596,7 @@ func (t *talk) loadMessages() {
 	if t.read("messages", err) {
 		t.msgs = msgs
 		if withSaid {
-			t.said, t.saidStale = map[string]string{}, false
+			t.said, t.unposted, t.saidStale = map[string]string{}, unposted, false
 			for _, m := range chat {
 				if m.Chain != "" {
 					t.said[m.MsgID] = m.Chain
@@ -831,8 +847,9 @@ func (t *talk) keyDetail(k node.Key) *KeyDetail {
 }
 
 // items are the open Conversation's messages and Sign Requests in log
-// order, queued messages last, with its system lines merged in by time;
-// t.mu is held.
+// order, queued messages last, with this device's runs that posted
+// nothing placed among them (placeRuns) and its system lines merged in
+// by time; t.mu is held.
 func (t *talk) items() []Item {
 	sys := t.system[t.open]
 	var cards []node.SignRequestDetail
@@ -855,6 +872,7 @@ func (t *talk) items() []Item {
 	for _, d := range cards {
 		logged = append(logged, t.signItem(d))
 	}
+	logged = t.placeRuns(logged)
 	out := make([]Item, 0, len(logged)+len(sys))
 	i := 0
 	for _, it := range logged {
@@ -869,6 +887,89 @@ func (t *talk) items() []Item {
 	}
 	runs(out)
 	return out
+}
+
+// unpostedText is what a run that posted nothing shows, by its outcome:
+// a failure's error is only in its details.
+var unpostedText = map[string]string{
+	transcript.OutcomeSilent:    "Finished without replying.",
+	transcript.OutcomeError:     "Failed.",
+	transcript.OutcomeCancelled: "Cancelled.",
+}
+
+// placeRuns is logged, a Conversation's items, with the open
+// Conversation's runs of this device's agents that posted nothing placed
+// among them: each before the first item
+// after it ended, or, with no end recorded, right after the last
+// committed item its turn's talk reached, TalkSeq, taking that item's
+// time; t.mu is held.
+func (t *talk) placeRuns(logged []Item) []Item {
+	if len(t.unposted) == 0 {
+		return logged
+	}
+	type placed struct {
+		at  int // how many logged items come before it
+		run Item
+	}
+	var runs []placed
+	for _, r := range t.unposted {
+		it := t.runItem(r)
+		at := 0
+		if r.Ended.IsZero() {
+			for i, l := range logged {
+				if l.Seq != 0 && l.Seq <= r.TalkSeq {
+					at = i + 1
+				}
+			}
+			switch {
+			case at > 0:
+				it.At = logged[at-1].At
+			case len(logged) > 0:
+				it.At = logged[0].At
+			}
+		} else {
+			at = len(logged)
+			if i := slices.IndexFunc(logged, func(l Item) bool { return r.Ended.Before(l.At) }); i >= 0 {
+				at = i
+			}
+		}
+		runs = append(runs, placed{at, it})
+	}
+	slices.SortStableFunc(runs, func(a, b placed) int {
+		if c := cmp.Compare(a.at, b.at); c != 0 {
+			return c
+		}
+		return a.run.At.Compare(b.run.At)
+	})
+	out := make([]Item, 0, len(logged)+len(runs))
+	for i, l := range logged {
+		for len(runs) > 0 && runs[0].at == i {
+			out = append(out, runs[0].run)
+			runs = runs[1:]
+		}
+		out = append(out, l)
+	}
+	for _, p := range runs {
+		out = append(out, p.run)
+	}
+	return out
+}
+
+// runItem is r, a run of this device's agent that posted nothing, as a
+// message from that agent; t.mu is held.
+func (t *talk) runItem(r node.Run) Item {
+	party := t.party(t.self, r.Handle)
+	return Item{
+		Kind: KindRun, At: r.Ended, Side: Left, From: "This Device", Handle: r.Handle,
+		Text: unpostedText[r.Outcome], Party: party, Livery: t.liveries[party],
+		sender: sender(t.self, r.Handle, false),
+		Chain:  r.Chain, Step: r.Step, Outcome: r.Outcome,
+	}
+}
+
+// sender names who wrote a left-side line, for runs of one sender's.
+func sender(nodeID, handle string, job bool) string {
+	return fmt.Sprintf("%s/%s/%v", nodeID, handle, job)
 }
 
 // runGap is the longest pause within a run of one sender's messages.
@@ -907,7 +1008,7 @@ func (t *talk) item(m node.Message) Item {
 		it.Party = t.party(m.NodeID, m.Handle)
 		it.Livery = t.liveries[it.Party]
 	}
-	it.sender = fmt.Sprintf("%s/%s/%v", m.NodeID, m.Handle, it.Job)
+	it.sender = sender(m.NodeID, m.Handle, it.Job)
 	it.From = m.DisplayName
 	switch {
 	case m.NodeID == t.self:
@@ -1025,8 +1126,9 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 	}
 }
 
-// chain applies a chain event in conv, and reports whether the chain
-// ended, so what it said and its Transcript are to be read; t.mu is held.
+// chain applies a chain event in conv, and reports whether a run or the
+// chain ended, so what it said and its Transcript are to be read; t.mu is
+// held.
 func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 	find := func() *LiveChain {
 		for _, c := range t.live[conv] {
@@ -1076,30 +1178,20 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 		agent().Blocks = nil
 	case serve.EventAgentCommit:
 		done()
-	case serve.EventAgentSilent:
+	case serve.EventAgentSilent, serve.EventAgentError:
 		done()
-		// What it wrote was its own, but it went without a trace.
-		t.system[conv] = append(t.system[conv], Item{
-			Kind: KindSystem, At: time.Now(), Handle: ev.Handle, Chain: ev.Chain,
-			Text: fmt.Sprintf("@%s ended its turn without posting: it never called talk_write.", ev.Handle),
-		})
-	case serve.EventAgentError:
-		done()
-		t.system[conv] = append(t.system[conv], Item{
-			Kind: KindSystem, At: time.Now(), Handle: ev.Handle, Chain: ev.Chain,
-			Text: fmt.Sprintf("@%s failed: %s", ev.Handle, ev.Error),
-		})
+		// Its run posted nothing: its Transcript, read again, shows it
+		// as a message from it.
+		return true
 	case serve.EventAgentSkipped:
 		t.say(conv, fmt.Sprintf("@%s was skipped: %s", ev.Handle, ev.Reason))
 	case serve.EventAgentTranscript:
 		t.say(conv, fmt.Sprintf("@%s starts a new Transcript: %s.", ev.Handle, ev.Reason))
 	case serve.EventChainEnd:
 		t.live[conv] = slices.DeleteFunc(t.live[conv], func(c *LiveChain) bool { return c.Chain == ev.Chain })
-		switch {
-		case ev.Error != "":
+		// A cancelled run shows from its Transcript, read again.
+		if ev.Error != "" {
 			t.say(conv, "The agents stopped: "+ev.Error)
-		case ev.Cancelled:
-			t.say(conv, "The agents were cancelled.")
 		}
 		return true
 	case serve.EventTriggerFire:
