@@ -17,6 +17,7 @@ import (
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
 	"defios.com/internal/transcript"
+	"defios.com/internal/trigger"
 )
 
 // TalkNode is what the Talk page needs of a Node; *node.Host is one. Every
@@ -43,6 +44,8 @@ type TalkNode interface {
 	LiveTranscripts(ctx context.Context, group, conv string) ([]node.LiveTranscript, error)
 	LiveRuns(ctx context.Context, group, conv, handle string) ([]node.Run, error)
 	UnpostedRuns(ctx context.Context, group, conv string) ([]node.Run, error)
+	JobRuns(ctx context.Context, group, job string, last int) ([]node.JobRun, error)
+	JobRun(ctx context.Context, group string, id uint64) (node.JobRun, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
 	Liveries(ctx context.Context) (map[string]string, error)
 	SetLivery(ctx context.Context, party, livery string) error
@@ -184,6 +187,9 @@ const (
 	// stayed silent, failed or was cancelled. It shows as a message from
 	// that agent, faded, read from its Transcript.
 	KindRun ItemKind = "run"
+	// KindJob is a Trigger of this device's firing, or a Job it ran
+	// ending, read from its Job Run (ADR 0040).
+	KindJob ItemKind = "job"
 )
 
 // Side is where a message sits in the transcript.
@@ -236,6 +242,9 @@ type Item struct {
 	Chain   string
 	Step    int
 	Outcome string
+	// JobRun is the ID of the Job Run a KindJob line is about: for a
+	// firing, its first Job's.
+	JobRun uint64
 	// Sign is a Sign Request's card, for KindSign.
 	Sign *SignCard
 }
@@ -341,10 +350,12 @@ type talk struct {
 	said   map[string]string // by msg_id, the chain of this device's run that said it
 	// unposted are this device's runs here that posted nothing.
 	unposted []node.Run
-	// saidStale: a run, chain or Job ended, or a Conversation opened, so
-	// said and unposted are read again with the messages. Reading them
-	// reads every Transcript there, so they are not read on every
-	// message.
+	// jobRuns are this device's Job Runs in the Group, newest first.
+	jobRuns []node.JobRun
+	// saidStale: a run, chain or Job ended, a Trigger fired, or a
+	// Conversation opened, so said, unposted and jobRuns are read again
+	// with the messages. Reading them reads every Transcript there and
+	// every Job Run, so they are not read on every message.
 	saidStale bool
 	// liveries are this Node's, by party key (ADR 0037).
 	liveries map[string]string
@@ -387,7 +398,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 	if !same {
 		t.n, t.self, t.group, t.open = n, self, group, node.GroupTalk
 		t.gen++
-		t.convs, t.msgs, t.said, t.unposted, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, true, nil
+		t.convs, t.msgs, t.said, t.unposted, t.jobRuns, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, nil, true, nil
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.signed = map[string]bool{}, map[string]string{}
@@ -577,10 +588,14 @@ func (t *talk) loadMessages() {
 	msgs, err := a.n.Messages(t.ctx, a.group, a.conv)
 	var chat []node.ChatMessage
 	var unposted []node.Run
+	var jobRuns []node.JobRun
 	if err == nil && withSaid {
 		chat, err = a.n.Chat(t.ctx, a.group, a.conv, 0, true)
 		if err == nil {
 			unposted, err = a.n.UnpostedRuns(t.ctx, a.group, a.conv)
+		}
+		if err == nil {
+			jobRuns, err = a.n.JobRuns(t.ctx, a.group, "", 0)
 		}
 	}
 	// The Node gives another device's agent a Livery as its first
@@ -596,7 +611,7 @@ func (t *talk) loadMessages() {
 	if t.read("messages", err) {
 		t.msgs = msgs
 		if withSaid {
-			t.said, t.unposted, t.saidStale = map[string]string{}, unposted, false
+			t.said, t.unposted, t.jobRuns, t.saidStale = map[string]string{}, unposted, jobRuns, false
 			for _, m := range chat {
 				if m.Chain != "" {
 					t.said[m.MsgID] = m.Chain
@@ -848,10 +863,12 @@ func (t *talk) keyDetail(k node.Key) *KeyDetail {
 
 // items are the open Conversation's messages and Sign Requests in log
 // order, queued messages last, with this device's runs that posted
-// nothing placed among them (placeRuns) and its system lines merged in
-// by time; t.mu is held.
+// nothing placed among them (placeRuns) and its system and Job lines
+// merged in by time; t.mu is held.
 func (t *talk) items() []Item {
-	sys := t.system[t.open]
+	// The lines of no message, by time.
+	timed := append(t.jobLines(), t.system[t.open]...)
+	slices.SortStableFunc(timed, func(a, b Item) int { return a.At.Compare(b.At) })
 	var cards []node.SignRequestDetail
 	for _, r := range t.reqs {
 		if d, ok := t.cards[r.MsgID]; ok && r.Conversation == t.open {
@@ -873,19 +890,51 @@ func (t *talk) items() []Item {
 		logged = append(logged, t.signItem(d))
 	}
 	logged = t.placeRuns(logged)
-	out := make([]Item, 0, len(logged)+len(sys))
+	out := make([]Item, 0, len(logged)+len(timed))
 	i := 0
 	for _, it := range logged {
-		for i < len(sys) && sys[i].At.Before(it.At) {
-			out = append(out, sys[i])
+		for i < len(timed) && timed[i].At.Before(it.At) {
+			out = append(out, timed[i])
 			i++
 		}
 		out = append(out, it)
 	}
-	for ; i < len(sys); i++ {
-		out = append(out, sys[i])
+	for ; i < len(timed); i++ {
+		out = append(out, timed[i])
 	}
 	runs(out)
+	return out
+}
+
+// jobLines are the open Conversation's lines from this device's Job
+// Runs, those of a Trigger firing on what was said here, or for Group
+// talk on a Schedule too: each firing once, as its first Job Run, and
+// each Job that ended. A Job never run, or running still, has no line;
+// t.mu is held.
+func (t *talk) jobLines() []Item {
+	var out []Item
+	for _, r := range slices.Backward(t.jobRuns) {
+		if r.Event.ConversationID != t.open {
+			continue
+		}
+		if r.ID == r.Firing {
+			what := r.Event.Type
+			if what == "" || what == trigger.ScheduleEvent {
+				what = "its schedule"
+			}
+			out = append(out, Item{Kind: KindJob, JobRun: r.ID, At: r.Fired, Text: fmt.Sprintf("Trigger %s fired on %s.", r.Trigger, what)})
+		}
+		at := r.Ended
+		if at.IsZero() {
+			at = r.Started // ended by a serve stopping first
+		}
+		switch r.State {
+		case node.JobOK:
+			out = append(out, Item{Kind: KindJob, JobRun: r.ID, At: at, Text: fmt.Sprintf("Job %s finished.", r.Job)})
+		case node.JobFailed:
+			out = append(out, Item{Kind: KindJob, JobRun: r.ID, At: at, Text: fmt.Sprintf("Job %s failed: %s", r.Job, r.Error)})
+		}
+	}
 	return out
 }
 
@@ -1127,8 +1176,8 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 }
 
 // chain applies a chain event in conv, and reports whether a run or the
-// chain ended, so what it said and its Transcript are to be read; t.mu is
-// held.
+// chain ended, or a Trigger fired or its Job ended, so what it said, its
+// Transcript and the Job Runs are to be read; t.mu is held.
 func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 	find := func() *LiveChain {
 		for _, c := range t.live[conv] {
@@ -1194,18 +1243,8 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 			t.say(conv, "The agents stopped: "+ev.Error)
 		}
 		return true
-	case serve.EventTriggerFire:
-		what := "its schedule"
-		if ev.Event != nil && ev.Event.Type != "" {
-			what = ev.Event.Type
-		}
-		t.say(conv, fmt.Sprintf("Trigger %s fired on %s.", ev.Trigger, what))
-	case serve.EventJobEnd:
-		if ev.OK != nil && *ev.OK {
-			t.say(conv, fmt.Sprintf("Job %s finished.", ev.Job))
-		} else {
-			t.say(conv, fmt.Sprintf("Job %s failed: %s", ev.Job, ev.Error))
-		}
+	case serve.EventTriggerFire, serve.EventJobEnd:
+		// Its Job Run, kept before it was sent, is read again.
 		return true
 	}
 	return false

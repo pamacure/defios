@@ -10,6 +10,7 @@ import (
 
 	"defios.com/internal/config"
 	"defios.com/internal/group"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/serve"
 	"defios.com/internal/trigger"
 )
@@ -32,8 +33,10 @@ func nextOfTypes(t *testing.T, s *serve.ChainStream, types ...string) serve.Chai
 
 // A Trigger's firing shows on its event's Conversation's stream as
 // trigger.fire, with the event, and each Job it runs as job.end, ok or
-// with the error it failed on. job run runs a Job, not a Trigger, on the
-// event given or none, at its depth, and reports how it ended.
+// with the error it failed on. Each is sent only once its Job Run is
+// kept as it says, so whoever reads the Job Runs on hearing it finds
+// them. job run runs a Job, not a Trigger, on the event given or none,
+// at its depth, and reports how it ended.
 func TestTriggersAndJobsShowOnTheStream(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	a, b := pairWith(t, func(n *node) {
@@ -63,11 +66,28 @@ func TestTriggersAndJobsShowOnTheStream(t *testing.T) {
 	if fire.Type != serve.EventTriggerFire || fire.Trigger != "said" || fire.Event == nil || fire.Event.Type != "app.freeform" || fire.Event.Text != "hi" {
 		t.Fatalf("first = %+v, want said's trigger.fire on the message", fire)
 	}
+	runs := func() []jobrun.Run {
+		t.Helper()
+		runs, err := jobrun.List(b.paths.JobRunsDir(group.ImplicitAlias))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runs
+	}
+	if got := runs(); len(got) != 2 || got[1].Job != "ok" || got[1].Trigger != "said" {
+		t.Fatalf("Job Runs at trigger.fire: %+v", got)
+	}
 	if ev := nextOfTypes(t, s, serve.EventTriggerFire, serve.EventJobEnd); ev.Type != serve.EventJobEnd || ev.Job != "ok" || ev.OK == nil || !*ev.OK || ev.Error != "" {
 		t.Fatalf("second = %+v, want ok's job.end", ev)
 	}
+	if got := runs(); got[1].State != jobrun.OK {
+		t.Fatalf("ok's Job Run at its job.end: %+v", got[1])
+	}
 	if ev := nextOfTypes(t, s, serve.EventTriggerFire, serve.EventJobEnd); ev.Type != serve.EventJobEnd || ev.Job != "fail" || ev.OK == nil || *ev.OK || !strings.Contains(ev.Error, "exit status 1") {
 		t.Fatalf("third = %+v, want fail's job.end with its error", ev)
+	}
+	if got := runs(); got[0].State != jobrun.Failed {
+		t.Fatalf("fail's Job Run at its job.end: %+v", got[0])
 	}
 
 	// job run reads the Jobs config.toml now holds, and runs one there, no

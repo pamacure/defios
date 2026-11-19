@@ -1,10 +1,13 @@
 package shell
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
+	"defios.com/internal/config"
 	"defios.com/internal/mention"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
@@ -15,7 +18,8 @@ import (
 // open Conversation, beyond what its Item says: where it sits in the log
 // and in a chain, the device that wrote it, and, for this device's agent,
 // the run that wrote it, or for this person's message, the chain it
-// started. What does not apply is left zero.
+// started; for a Job line, or a message this device's Job wrote, its Job
+// Run. What does not apply is left zero.
 type Details struct {
 	MsgID string
 	Seq   uint64 // 0 while queued, and for a system line
@@ -32,6 +36,9 @@ type Details struct {
 	Run *RunView
 	// Steps are the chain this person's message started, step by step.
 	Steps []ChainStep
+	// Job is the Job Run of a Job line, or of this device's Job that
+	// wrote the message; an agent Job's run is Run.
+	Job *JobRunView
 	// Problem is why the details could not be read.
 	Problem *Problem
 }
@@ -63,6 +70,57 @@ type RunView struct {
 	// Cleared: the run is in a Transcript since cleared, which its agent
 	// no longer replays (ADR 0036).
 	Cleared bool
+}
+
+// JobRunView is a Job Run of this device's (ADR 0040) as the panel shows
+// it: what fired it, how it ended, and what it produced.
+type JobRunView struct {
+	ID uint64
+	// Trigger fired on Event, its type, with EventMsgID the message or
+	// Sign Request it is about, "" for none; a Schedule's is
+	// trigger.ScheduleEvent.
+	Trigger, Event, EventMsgID string
+	Job, Kind                  string // Kind is agent, exec or webhook
+	State, Error               string // State is a node.Job* state
+	Fired, Started, Ended      time.Time
+	// An exec Job's command, its exit code, nil if it never started or
+	// was cut off, and the last of its output.
+	Command        []string
+	ExitCode       *int
+	Stdout, Stderr string
+	// A webhook's method and URL as configured, each attempt, and the
+	// last response's body and Content-Type.
+	Method, URL       string
+	Attempts          []JobAttempt
+	Body, ContentType string
+	// Handle is an agent Job's agent.
+	Handle string
+}
+
+// JobAttempt is one webhook attempt: its HTTP status, 0 for none, and its
+// error, if it failed.
+type JobAttempt struct {
+	Status int
+	Error  string
+}
+
+// jobRunView is r as the panel shows it.
+func jobRunView(r node.JobRun) *JobRunView {
+	v := &JobRunView{
+		ID: r.ID, Trigger: r.Trigger, Event: r.Event.Type, EventMsgID: cmp.Or(r.Event.MsgID, r.Event.SignRequestID),
+		Job: r.Job, Kind: r.Kind, State: r.State, Error: r.Error, Fired: r.Fired, Started: r.Started, Ended: r.Ended,
+		Handle: r.Handle,
+	}
+	if e := r.Exec; e != nil {
+		v.Command, v.ExitCode, v.Stdout, v.Stderr = e.Command, e.ExitCode, e.Stdout, e.Stderr
+	}
+	if w := r.Webhook; w != nil {
+		v.Method, v.URL, v.Body, v.ContentType = w.Method, w.URL, w.Body, w.ContentType
+		for _, a := range w.Attempts {
+			v.Attempts = append(v.Attempts, JobAttempt{Status: a.Status, Error: a.Error})
+		}
+	}
+	return v
 }
 
 // RunSign is a Sign Request a run's sign Tool acted on, and its reason.
@@ -113,11 +171,18 @@ func (s *Shell) MessageDetails(msgID string) Details { return s.talk.messageDeta
 // chain in the open Conversation, as a run that posted nothing names it.
 func (s *Shell) RunDetails(chain string, step int) Details { return s.talk.runDetails(chain, step) }
 
+// JobRunDetails are the details of this device's Job Run id, as a Job
+// line names it.
+func (s *Shell) JobRunDetails(id uint64) Details { return s.talk.jobRunDetails(id) }
+
 // EarlierRuns are the runs of this device's agent handle's live Transcript
 // in the open Conversation: what it remembers of its work there.
 func (s *Shell) EarlierRuns(handle string) EarlierView { return s.talk.earlierRuns(handle) }
 
-var errNoMessage = &Problem{Code: "no-message", Message: "That message is no longer here."}
+var (
+	errNoMessage = &Problem{Code: "no-message", Message: "That message is no longer here."}
+	errNoJobRun  = &Problem{Code: "no-job-run", Message: "This device no longer keeps that Job Run."}
+)
 
 func (t *talk) messageDetails(msgID string) Details {
 	a, ok := t.now()
@@ -131,6 +196,7 @@ func (t *talk) messageDetails(msgID string) Details {
 		return Details{Problem: errNoMessage}
 	}
 	chain := t.said[msgID]
+	job := m.NodeID == t.self && m.Depth > 0 && (m.Handle == "" || chain != "")
 	d := Details{MsgID: m.MsgID, Seq: m.Seq, Depth: m.Depth, DeviceID: m.NodeID, Device: t.device(m.NodeID), Online: t.online(m.NodeID)}
 	t.mu.Unlock()
 	switch {
@@ -156,6 +222,65 @@ func (t *talk) messageDetails(msgID string) Details {
 				break
 			}
 		}
+	}
+	if job && d.Problem == nil {
+		d.Job = t.jobRunOf(a, m, chain)
+	}
+	return d
+}
+
+// jobRunOf is the Job Run of this device's Job that wrote m: an exec
+// Job's, recording it, or an agent Job's whose agent said it, running as
+// chain; nil for none kept, or if they do not read, as the rest of m's
+// details stand without it. They are read afresh: a Job Run records a
+// message as it is written.
+func (t *talk) jobRunOf(a at, m node.Message, chain string) *JobRunView {
+	runs, err := a.n.JobRuns(t.ctx, a.group, "", 0)
+	if err != nil {
+		return nil
+	}
+	for _, r := range runs {
+		agent := chain != "" && r.Kind == config.JobAgent && r.Chain == chain && r.Handle == m.Handle
+		if agent || slices.Contains(r.Messages, m.MsgID) {
+			return jobRunView(r)
+		}
+	}
+	return nil
+}
+
+func (t *talk) jobRunDetails(id uint64) Details {
+	a, ok := t.now()
+	if !ok {
+		return Details{Problem: problemOf(node.ErrNotServed)}
+	}
+	r, err := a.n.JobRun(t.ctx, a.group, id)
+	if errors.Is(err, node.ErrNoJobRun) {
+		return Details{Problem: errNoJobRun}
+	}
+	if err != nil {
+		return Details{Problem: problemOf(err)}
+	}
+	t.mu.Lock()
+	d := Details{DeviceID: t.self, Device: t.device(t.self), Online: true, Job: jobRunView(r)}
+	t.mu.Unlock()
+	if r.Kind != config.JobAgent || r.Chain == "" {
+		return d
+	}
+	// An agent Job: its agent's run, the first of its chain.
+	tr, err := a.n.Transcript(t.ctx, a.group, r.Conversation, r.Chain)
+	if err != nil {
+		d.Problem = problemOf(err)
+		return d
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, run := range tr.Runs {
+		if run.Handle != r.Handle {
+			continue
+		}
+		v := t.runView(run, slices.Contains(tr.Cleared, run.Step))
+		d.Run, d.Chain, d.Step, d.Depth, d.MsgID = &v, r.Chain, run.Step, run.Depth, run.MsgID
+		break
 	}
 	return d
 }

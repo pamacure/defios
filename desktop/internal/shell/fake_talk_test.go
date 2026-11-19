@@ -50,6 +50,8 @@ type fakeTalk struct {
 	read map[string]uint64
 	// liveries are the Liveries this Node has given, by party key.
 	liveries map[string]string
+	// jobRuns are this Node's Job Runs, oldest first: ID i at i-1.
+	jobRuns []node.JobRun
 }
 
 func (n *fakeNode) tk() *fakeTalk {

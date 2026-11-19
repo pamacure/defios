@@ -454,7 +454,7 @@ function transcript() {
 function item(it) {
   if (it.Kind === "sign") return signCard(it, tui.busy);
   const sel = selectable(it);
-  if (it.Kind === "system") {
+  if (it.Kind === "system" || it.Kind === "job") {
     return h("div", { ...sel, class: `sysline ${sel.class}` }, h("span", {}, it.Text), h("time", {}, time(it.At)));
   }
   const left = it.Side === "left";
@@ -723,8 +723,13 @@ function makeComposer() {
 // but a Sign Request's card can be selected.
 
 // lineKey names a line across redraws: its msg_id, a run's chain and
-// step, or a system line's time and text.
-const lineKey = (it) => it.MsgID || (it.Kind === "run" ? `run:${it.Chain}/${it.Step}` : `sys:${it.At}|${it.Text}`);
+// step, a Job line's Job Run and text, or a system line's time and text.
+const lineKey = (it) => {
+  if (it.MsgID) return it.MsgID;
+  if (it.Kind === "run") return `run:${it.Chain}/${it.Step}`;
+  if (it.Kind === "job") return `job:${it.JobRun}|${it.Text}`;
+  return `sys:${it.At}|${it.Text}`;
+};
 
 // selectable is a line's attributes for selecting it: a click selects it,
 // or deselects it if it is the one selected, unless the click ends a text
@@ -789,11 +794,12 @@ function step(by) {
 // line itself: the talk said, the chains running, and the live
 // Transcripts here. Details are read again when it changes.
 function detailsSig() {
-  return JSON.stringify([ts.Items.map((it) => [it.MsgID, it.Chain, it.Step]), ts.Live.map((c) => c.Chain), ts.Transcripts.map((t) => t.Handle)]);
+  return JSON.stringify([ts.Items.map((it) => [it.MsgID, it.Chain, it.Step, it.JobRun]), ts.Live.map((c) => c.Chain), ts.Transcripts.map((t) => t.Handle)]);
 }
 
-// loadDetails reads the selected line's details: a message's, or the run
-// of a run that posted nothing; a system line has none to read.
+// loadDetails reads the selected line's details: a message's, the run of
+// a run that posted nothing, or a Job line's Job Run; a system line has
+// none to read.
 async function loadDetails() {
   const it = selectedItem();
   if (!it) return;
@@ -801,6 +807,7 @@ async function loadDetails() {
   tui.detailsSig = detailsSig();
   let read;
   if (it.Kind === "run") read = call("RunDetails", it.Chain, it.Step);
+  else if (it.Kind === "job") read = call("JobRunDetails", it.JobRun);
   else if (it.Kind !== "system") read = call("MessageDetails", it.MsgID);
   else read = Promise.resolve({});
   const view = await read.catch((err) => ({ Problem: callFailed(err) }));
@@ -867,7 +874,8 @@ const SIGN_TOOL = { sign_accept: "Accepted", sign_refuse: "Refused", sign_propos
 function detailsPanel(it) {
   const v = tui.details?.key === tui.selected ? tui.details.view : null;
   const run = v?.Run ?? null;
-  const system = it.Kind === "system";
+  const job = v?.Job ?? null;
+  const system = it.Kind === "system" || it.Kind === "job";
   const name = system || it.From === "This Device" ? "This Device" : it.Side === "right" ? "You" : it.From;
   const row = (label, value) => value !== null && value !== undefined && value !== false && value !== "" &&
     h("div", { class: "kv" }, h("span", { class: "label" }, label), typeof value === "object" ? value : h("div", { class: "value" }, String(value)));
@@ -885,7 +893,9 @@ function detailsPanel(it) {
     h("button", { class: "icon-btn close", type: "button", "aria-label": "Close details", title: "Close (Esc)", onclick: () => deselect() }, "×"));
 
   const clearable = run && !run.Cleared && ts.Transcripts.some((t) => t.Handle === run.Handle);
-  const actions = (it.Droppable || clearable) && h("div", { class: "row" },
+  const copyJob = job && (job.Kind === "exec" ? ["Copy output", jobOutput(job)] : job.Kind === "webhook" ? ["Copy request/response", jobExchange(job)] : null);
+  const actions = (it.Droppable || clearable || copyJob) && h("div", { class: "row" },
+    copyJob && h("button", { class: "btn small", type: "button", onclick: (e) => copyText(e, copyJob[1]) }, copyJob[0]),
     it.Droppable && h("button", { class: "btn small", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop"),
     clearable && h("button", {
       class: "btn small", type: "button", disabled: tui.busy || !!tui.clearing,
@@ -909,16 +919,83 @@ function detailsPanel(it) {
   if (!v) body = h("p", { class: "placeholder" }, "Loading…");
   else if (v.Problem) body = problemBox(v.Problem);
   else if (run) body = runBody(run);
+  else if (job) body = jobBody(job);
   else if (v.Steps?.length) body = chainSteps(v.Steps, v.Chain);
+  else if (it.Job && it.From !== "This Device") body = h("p", { class: "hint" }, `Job, on ${it.From}`);
+  else if (it.Job) body = h("p", { class: "hint" }, "This device no longer keeps the Job Run that wrote it.");
 
   return h("aside", { class: "about details", "aria-label": "Message details" },
     h("article", { class: "dcard" },
       head,
       actions,
       details,
+      job && jobFacts(job),
       run && runFacts(run),
       body,
       run && !run.Cleared && earlier(run)));
+}
+
+const JOB_STATE = {
+  ok: ["Finished", "ok"],
+  failed: ["Failed", "bad"],
+  running: ["Running…", "warn"],
+  pending: ["Waiting", ""],
+  not_run: ["Not run", ""],
+};
+
+// jobFacts is a Job Run's section: what fired it on what, how it ended
+// and when, and its exit code or HTTP statuses.
+function jobFacts(job) {
+  const row = (label, value) => value && h("div", { class: "kv" }, h("span", { class: "label" }, label), h("div", { class: "value" }, value));
+  const [label, cls] = JOB_STATE[job.State] ?? [job.State, ""];
+  const on = job.Event === "schedule" ? "Its schedule" : job.Event;
+  return h("section", {},
+    h("h3", {}, `Job ${job.Job}`),
+    h("div", { class: "row" }, h("span", { class: `chip ${cls}` }, label), h("span", { class: "chip" }, job.Kind)),
+    job.Error && h("pre", { class: "error-text" }, job.Error),
+    row("Trigger", job.Trigger),
+    row("Event", on && h("span", {}, on, job.EventMsgID && h("code", {}, ` ${shortID(job.EventMsgID)}`))),
+    row("Fired", utc(job.Fired)),
+    row("Started", utc(job.Started)),
+    row("Ended", utc(job.Ended)),
+    job.ExitCode !== null && job.ExitCode !== undefined && row("Exit code", String(job.ExitCode)),
+    job.Attempts?.length > 0 && row("HTTP status", job.Attempts.map((a) => a.Status || "none").join(", ")));
+}
+
+// jobBody is what a Job Run produced: an exec Job's command and output,
+// or a webhook's request and last response. An agent Job's is its run.
+function jobBody(job) {
+  if (job.Kind === "exec") {
+    return h("section", {},
+      h("h3", {}, "Output"),
+      job.Command?.length > 0 && h("pre", {}, job.Command.join(" ")),
+      job.Stdout && h("pre", {}, job.Stdout),
+      job.Stderr && h("pre", { class: "error-text" }, job.Stderr),
+      !job.Stdout && !job.Stderr && h("p", { class: "hint" }, "It printed nothing."));
+  }
+  if (job.Kind === "webhook") {
+    return h("section", {},
+      h("h3", {}, "Request"),
+      job.Method && h("pre", {}, `${job.Method} ${job.URL}`),
+      (job.Attempts ?? []).map((a, i) => a.Error && h("pre", { class: "error-text" }, `Attempt ${i + 1}: ${a.Error}`)),
+      h("h3", {}, "Response"),
+      job.ContentType && h("p", { class: "hint" }, job.ContentType),
+      job.Body ? h("pre", {}, job.Body) : h("p", { class: "hint" }, "No response body."));
+  }
+  return null;
+}
+
+// jobOutput is an exec Job Run's output, to copy: its stdout, then its
+// stderr.
+const jobOutput = (job) => [job.Stdout, job.Stderr].filter(Boolean).join(job.Stdout?.endsWith("\n") ? "" : "\n");
+
+// jobExchange is a webhook Job Run's request and last response, to copy.
+function jobExchange(job) {
+  const statuses = (job.Attempts ?? []).map((a) => a.Status ? `HTTP ${a.Status}` : a.Error || "no response").join(", ");
+  const lines = [`${job.Method} ${job.URL}`, "", statuses];
+  if (job.ContentType) lines.push(`Content-Type: ${job.ContentType}`);
+  lines.push("", job.Body ?? "");
+  return lines.join("\n");
 }
 
 // runFacts is a run's section: how it ended, what it cost and ran on, the

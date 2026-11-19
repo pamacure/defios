@@ -585,7 +585,7 @@ func TestPrunedMessagesAreLeftOutAndUnreadableOnesArePlaceholders(t *testing.T) 
 	}
 }
 
-func TestSignRequestStatusAndTriggerFiringsAreSystemLines(t *testing.T) {
+func TestSignRequestStatusIsASystemLine(t *testing.T) {
 	r := newRig(t, "alpha")
 	k := withKey(t, r)
 	s := served(t, r)
@@ -597,10 +597,7 @@ func TestSignRequestStatusAndTriggerFiringsAreSystemLines(t *testing.T) {
 	req("open")
 	req("open") // a stance, no status change
 	req("signed")
-	ok := true
-	chainEvent(r.node, k.ConversationID, node.ChainEvent{Type: serve.EventTriggerFire, Trigger: "review", Event: &trigger.Event{Type: "sign_request.open"}})
-	chainEvent(r.node, k.ConversationID, node.ChainEvent{Type: serve.EventJobEnd, Job: "check", OK: &ok})
-	ts := eventuallyTalk(t, s, items(4))
+	ts := eventuallyTalk(t, s, items(2))
 	var got []string
 	for _, it := range ts.Items {
 		got = append(got, string(it.Kind)+": "+it.Text)
@@ -608,11 +605,74 @@ func TestSignRequestStatusAndTriggerFiringsAreSystemLines(t *testing.T) {
 	want := []string{
 		"system: Sign Request “pay rent” is open.",
 		"system: Sign Request “pay rent” is signed.",
-		"system: Trigger review fired on sign_request.open.",
-		"system: Job check finished.",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// A Trigger's firing and each Job it ran show in the Conversation of
+// what it fired on, read from this device's Job Runs, so they are there
+// as the page opens, placed by when each happened: the firing once, each
+// Job once it ended, none for a Job never run. A trigger.fire or job.end
+// reads them again.
+func TestJobLinesAreReadFromJobRuns(t *testing.T) {
+	r := newRig(t, "alpha")
+	k := withKey(t, r)
+	t0 := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "pay rent?", CreatedAt: t0})
+	r.node.commit(k.ConversationID, node.Message{NodeID: "b0b", DisplayName: "bob", Text: "thanks", CreatedAt: t0.Add(time.Hour)})
+	ev := trigger.Event{Type: "sign_request.open", ConversationID: k.ConversationID}
+	fired := t0.Add(time.Minute)
+	r.node.addJobRuns(
+		node.JobRun{Trigger: "review", Event: ev, Fired: fired, Job: "check", Kind: "exec", State: node.JobOK, Started: fired, Ended: fired.Add(time.Second)},
+		node.JobRun{Trigger: "review", Event: ev, Fired: fired, Job: "notify", Kind: "webhook", State: node.JobFailed, Started: fired.Add(time.Second), Ended: fired.Add(2 * time.Second), Error: "HTTP 500"},
+		node.JobRun{Trigger: "review", Event: ev, Fired: fired, Job: "after", Kind: "exec", State: node.JobNotRun},
+	)
+	r.node.addJobRuns(node.JobRun{Trigger: "nightly", Event: trigger.Event{Type: trigger.ScheduleEvent}, Fired: fired, Job: "sweep", Kind: "exec", State: node.JobOK, Ended: fired})
+	s := served(t, r)
+	s.OpenConversation(k.ConversationID)
+
+	lines := func(ts shell.TalkState) string {
+		var got []string
+		for _, it := range ts.Items {
+			got = append(got, fmt.Sprintf("%s %d: %s", it.Kind, it.JobRun, it.Text))
+		}
+		return strings.Join(got, "\n")
+	}
+	want := strings.Join([]string{
+		"message 0: pay rent?",
+		"job 1: Trigger review fired on sign_request.open.",
+		"job 1: Job check finished.",
+		"job 2: Job notify failed: HTTP 500",
+		"message 0: thanks",
+	}, "\n")
+	ts := eventuallyTalk(t, s, items(5))
+	if got := lines(ts); got != want {
+		t.Fatalf("lines:\n%s", got)
+	}
+
+	// A firing under way: its line now, its Job's once it ended.
+	now := time.Now()
+	r.node.addJobRuns(node.JobRun{Trigger: "again", Event: ev, Fired: now, Job: "check", Kind: "exec", State: node.JobRunning, Started: now})
+	chainEvent(r.node, k.ConversationID, node.ChainEvent{Type: serve.EventTriggerFire, Trigger: "again", Event: &ev})
+	ts = eventuallyTalk(t, s, items(6))
+	if it := ts.Items[5]; it.Kind != shell.KindJob || it.JobRun != 5 || it.Text != "Trigger again fired on sign_request.open." {
+		t.Fatalf("firing: %+v", it)
+	}
+	r.node.endJobRun(5, node.JobOK, "")
+	ok := true
+	chainEvent(r.node, k.ConversationID, node.ChainEvent{Type: serve.EventJobEnd, Job: "check", OK: &ok})
+	ts = eventuallyTalk(t, s, items(7))
+	if it := ts.Items[6]; it.JobRun != 5 || it.Text != "Job check finished." {
+		t.Fatalf("job end: %+v", it)
+	}
+
+	// Group talk has the Schedule's.
+	s.OpenConversation(node.GroupTalk)
+	ts = eventuallyTalk(t, s, items(2))
+	if got := lines(ts); got != "job 4: Trigger nightly fired on its schedule.\njob 4: Job sweep finished." {
+		t.Fatalf("Group talk:\n%s", got)
 	}
 }
 

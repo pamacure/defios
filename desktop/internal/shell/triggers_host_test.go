@@ -41,7 +41,7 @@ func named(list []map[string]any, name string) map[string]any {
 
 // A Job, a Hook on Sign Requests running it and a Schedule, made through
 // the forms, are what the CLI lists; the comments of config.toml stay,
-// and Run now runs the Job, its outcome a system line in Talk.
+// and Run now runs the Job and reports how it ended.
 func TestTriggersMadeInTheAppAreWhatTheCLIListsAndRun(t *testing.T) {
 	if testing.Short() {
 		t.Skip("forms a Group")
@@ -111,7 +111,6 @@ func TestTriggersMadeInTheAppAreWhatTheCLIListsAndRun(t *testing.T) {
 	if ran.Problem != nil || ran.Ran == nil || !ran.Ran.OK {
 		t.Fatalf("run: %+v %+v", ran.Problem, ran.Ran)
 	}
-	talkWithin(t, alice, 10*time.Second, hasText("Job ping finished."))
 }
 
 // A form refuses what only a text edit can change, a Job a Trigger runs,

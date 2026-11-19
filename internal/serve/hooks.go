@@ -191,8 +191,10 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 	logf := t.s.opts.Logf
 	prefix := "serve: " + t.kind + " " + name + ": "
 	logf("%sfired %s", prefix, cause)
-	t.s.chains.publish(eventConversation(ev), ChainEvent{Type: EventTriggerFire, Trigger: name, Event: &ev})
+	// Each event follows the Job Run it is about, kept: Talk reads it on
+	// hearing it.
 	rec := t.s.jobRuns.start(name, jobs, defs, ev)
+	t.s.chains.publish(eventConversation(ev), ChainEvent{Type: EventTriggerFire, Trigger: name, Event: &ev})
 	current := 0
 	r := t.s.jobRunner(t.store, prefix, func(conv []byte, chain string) { rec.chain(current, conv, chain) })
 	for i, job := range jobs {
@@ -203,8 +205,9 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 		current = i
 		r.JobRun = rec.token(i)
 		rec.running(i)
-		v, out := runJob(t.ctx, &t.s.chains, r, job, defs[job], ev)
+		v, out := runJob(t.ctx, r, job, defs[job], ev)
 		rec.ended(i, v, out)
+		publishJobEnd(&t.s.chains, ev, v)
 		if !v.OK {
 			logf("%sjob %s failed: %s", prefix, job, v.Error)
 			return
@@ -213,16 +216,21 @@ func (t *triggers) run(name, cause string, jobs []string, defs map[string]config
 	}
 }
 
-// runJob runs Job name, j, on ev with r, shows its job.end on the stream
-// of ev's Conversation, and returns how it ended and what it produced.
-func runJob(ctx context.Context, chains *chainHub, r trigger.Runner, name string, j config.Job, ev trigger.Event) (JobView, trigger.Output) {
+// runJob runs Job name, j, on ev with r, and returns how it ended and what
+// it produced.
+func runJob(ctx context.Context, r trigger.Runner, name string, j config.Job, ev trigger.Event) (JobView, trigger.Output) {
 	v := JobView{Job: name, OK: true}
 	out, err := r.Run(ctx, name, j, ev)
 	if err != nil {
 		v.OK, v.Error = false, err.Error()
 	}
-	chains.publish(eventConversation(ev), ChainEvent{Type: EventJobEnd, Job: v.Job, OK: &v.OK, Error: v.Error})
 	return v, out
+}
+
+// publishJobEnd shows a Job run on ev ending as v says, as job.end on the
+// stream of ev's Conversation.
+func publishJobEnd(chains *chainHub, ev trigger.Event, v JobView) {
+	chains.publish(eventConversation(ev), ChainEvent{Type: EventJobEnd, Job: v.Job, OK: &v.OK, Error: v.Error})
 }
 
 // eventConversation is ev's Conversation ID, nil for Group-level talk or

@@ -6,11 +6,13 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"defios.com/desktop/internal/shell"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/transcript"
+	"defios.com/internal/trigger"
 )
 
 // raws is each of js as a raw JSON value.
@@ -200,5 +202,84 @@ func TestARunsLineDetailsAreItsRunAndEarlierRunsTheLiveTranscript(t *testing.T) 
 	e := s.EarlierRuns("auditor")
 	if e.Problem != nil || len(e.Runs) != 1 || e.Runs[0].Chain != "c0ffee" || e.Runs[0].Cleared {
 		t.Fatalf("earlier runs: %+v", e)
+	}
+}
+
+// A Job line's panel is its Job Run: what fired it on what, how it ended
+// and when, and what it produced: an exec Job's command, exit code and
+// output, a webhook's request, statuses and response.
+func TestAJobLinesDetailsAreItsJobRun(t *testing.T) {
+	r := newRig(t, "alpha")
+	ev := trigger.Event{Type: "app.freeform", MsgID: "e1"}
+	fired := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	exit := 3
+	r.node.addJobRuns(
+		node.JobRun{Trigger: "said", Event: ev, Fired: fired, Job: "say", Kind: "exec", State: node.JobFailed, Started: fired, Ended: fired.Add(time.Second), Error: "exit status 3",
+			Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"sh", "-c", "echo hi"}, ExitCode: &exit, Stdout: "hi\n", Stderr: "oops\n"}}},
+		node.JobRun{Trigger: "said", Event: ev, Fired: fired, Job: "web", Kind: "webhook", State: node.JobNotRun},
+	)
+	r.node.addJobRuns(node.JobRun{Trigger: "said", Event: ev, Fired: fired, Job: "web", Kind: "webhook", State: node.JobOK, Started: fired, Ended: fired,
+		Output: trigger.Output{Webhook: &trigger.WebhookOutput{Method: "POST", URL: "$HOOK_URL", Attempts: []trigger.Attempt{{Status: 502, Error: "HTTP 502"}, {Status: 200}}, Body: "got it", ContentType: "text/plain"}}})
+	s := served(t, r)
+	eventuallyTalk(t, s, items(4))
+
+	d := s.JobRunDetails(1)
+	j := d.Job
+	if d.Problem != nil || j == nil || d.Device != "This Device" || d.DeviceID != r.node.NodeID() || !d.Online || d.Run != nil {
+		t.Fatalf("exec details: %+v", d)
+	}
+	if j.ID != 1 || j.Trigger != "said" || j.Event != "app.freeform" || j.EventMsgID != "e1" || j.Job != "say" || j.Kind != "exec" ||
+		j.State != node.JobFailed || j.Error != "exit status 3" || !j.Fired.Equal(fired) || !j.Started.Equal(fired) || !j.Ended.Equal(fired.Add(time.Second)) ||
+		!slices.Equal(j.Command, []string{"sh", "-c", "echo hi"}) || j.ExitCode == nil || *j.ExitCode != 3 || j.Stdout != "hi\n" || j.Stderr != "oops\n" || j.Method != "" {
+		t.Fatalf("exec Job Run: %+v", j)
+	}
+	j = s.JobRunDetails(3).Job
+	if j == nil || j.Kind != "webhook" || j.Method != "POST" || j.URL != "$HOOK_URL" || j.Body != "got it" || j.ContentType != "text/plain" ||
+		!reflect.DeepEqual(j.Attempts, []shell.JobAttempt{{Status: 502, Error: "HTTP 502"}, {Status: 200}}) || j.ExitCode != nil {
+		t.Fatalf("webhook Job Run: %+v", j)
+	}
+	if d := s.JobRunDetails(9); d.Problem == nil || d.Job != nil {
+		t.Fatalf("no such Job Run: %+v", d)
+	}
+}
+
+// An agent Job's Job Run gives its agent's run, as that agent's message
+// does; and that message gives its Job Run, as one an exec Job wrote with
+// its token does. Another agent's reply in its chain, and another
+// device's Job's message, have none.
+func TestAJobsMessageGivesItsJobRun(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := served(t, r)
+	chain := fmt.Sprintf("c4%062x", 1)
+	said := sayAs(r, node.GroupTalk, chain, "scout", 1, transcript.Run{Step: 1, Job: "nightly", Summons: "(the prompt)", Turn: "(the prompt)"}, "All quiet")
+	reply := sayAs(r, node.GroupTalk, chain, "auditor", 2, transcript.Run{Step: 2}, "Agreed")
+	wrote := r.node.commit(node.GroupTalk, node.Message{NodeID: r.node.NodeID(), DisplayName: "laptop", Depth: 1, Text: "checked"})
+	other := r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Depth: 1, Text: "theirs"})
+	now := time.Now()
+	r.node.addJobRuns(node.JobRun{Trigger: "night", Event: trigger.Event{Type: trigger.ScheduleEvent}, Fired: now, Job: "nightly", Kind: "agent", State: node.JobOK,
+		Started: now, Ended: now, Handle: "scout", Chain: chain})
+	r.node.addJobRuns(node.JobRun{Trigger: "said", Event: trigger.Event{Type: "app.freeform"}, Fired: now, Job: "check", Kind: "exec", State: node.JobOK,
+		Started: now, Ended: now, Messages: []string{wrote.MsgID}})
+	ended(r, s, node.GroupTalk, chain, said.MsgID)
+
+	d := s.JobRunDetails(1)
+	if d.Problem != nil || d.Job == nil || d.Job.Handle != "scout" || d.Run == nil || d.Run.MsgID != said.MsgID || d.Chain != chain || d.Step != 1 {
+		t.Fatalf("agent Job Run: %+v", d)
+	}
+	d = s.MessageDetails(said.MsgID)
+	if d.Problem != nil || d.Job == nil || d.Job.ID != 1 || d.Run == nil || d.Run.Opening.Heading != "Job nightly" {
+		t.Fatalf("agent Job's message: %+v", d)
+	}
+	d = s.MessageDetails(reply.MsgID)
+	if d.Problem != nil || d.Job != nil || d.Run == nil {
+		t.Fatalf("a reply in an agent Job's chain, by another agent: %+v", d)
+	}
+	d = s.MessageDetails(wrote.MsgID)
+	if d.Problem != nil || d.Job == nil || d.Job.ID != 2 || d.Job.Job != "check" {
+		t.Fatalf("exec Job's message: %+v", d)
+	}
+	d = s.MessageDetails(other.MsgID)
+	if d.Problem != nil || d.Job != nil || d.DeviceID != "b0b" {
+		t.Fatalf("another device's Job's message: %+v", d)
 	}
 }

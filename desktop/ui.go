@@ -180,6 +180,7 @@ func (u *UI) RunDetails(chain string, step int) shell.Details {
 	return u.shell.RunDetails(chain, step)
 }
 func (u *UI) EarlierRuns(handle string) shell.EarlierView { return u.shell.EarlierRuns(handle) }
+func (u *UI) JobRunDetails(id uint64) shell.Details       { return u.shell.JobRunDetails(id) }
 
 func (u *UI) ClearCheck() shell.ClearView { return u.shell.ClearCheck() }
 func (u *UI) ClearAgents(conv, handle string) shell.TalkState {
