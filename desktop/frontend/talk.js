@@ -4,6 +4,7 @@
 // and the talk:state event), which it keeps current from the Node's events;
 // it holds only what is being typed or is open on screen. UI text says
 // "device" for a Node.
+import { Clipboard } from "/wails/runtime.js";
 import { call, h, icon, put } from "./dom.js";
 import { avatar, brick, forgetPicks, liveryClass, liveryPicker } from "./livery.js";
 import { mentionSpans } from "./mention.js";
@@ -39,6 +40,9 @@ const tui = {
   readTo: new Map(), // Group/Conversation -> the seq last marked read there
   clearing: null, // the shell.ClearView Clear chooses from; with done, what it then cleared
   livery: null, // the Livery picker open from an avatar: { party, label, x, y }
+  // The right column's sections folded into their headings: what is
+  // about the Key starts open, the rest folded.
+  folded: new Set(["Agents here", "Devices here", "Overrides"]),
 };
 
 // talkPage is the page, drawn into a new element; go opens another page.
@@ -712,8 +716,7 @@ function makeComposer() {
 
 function right() {
   return h("aside", { class: "about", "aria-label": "About this conversation" },
-    ts.Key ? keyDetails(ts.Key) : h("section", {},
-      h("h3", {}, "Group talk"),
+    ts.Key ? keyDetails(ts.Key) : fold("Group talk",
       h("p", { class: "hint" }, "Talk with everyone in the Group. Each Key has a conversation of its own.")),
     ts.Key && signRequests(),
     agents(),
@@ -739,22 +742,54 @@ function keyDetails(k) {
     : h("div", { class: "value" }, k.Alias || h("span", { class: "placeholder" }, "No name"),
       h("button", { class: "link", type: "button", onclick: () => { tui.form.keyAlias = k.Alias; tui.editAlias = true; draw(); } }, "Rename"));
   const row = (label, value) => h("div", { class: "kv" }, h("span", { class: "label" }, label), value);
-  return h("section", {},
-    h("h3", {}, "Key"),
+  return fold("Key",
     row("Name", alias),
     row("Curve", h("div", { class: "value" }, curveName(k.Curve))),
     row("Signers", h("div", { class: "value" }, `${k.T} of ${k.N} devices`)),
-    row("Public key", h("code", { class: "full" }, k.PublicKey)),
-    k.Address && row("Address", h("code", { class: "full" }, k.Address)),
+    row("Public key", copyable(k.PublicKey, "Public key")),
+    k.Address && row("Address", copyable(k.Address, "Address")),
     row("This device", h("div", { class: "value" }, k.Share ? "Holds a share" : "Holds no share")));
+}
+
+// copyable is text shown whole that a click copies, saying so for a
+// moment in a small label over it. The label is put in place, not drawn,
+// so a redraw meanwhile only ends it early.
+function copyable(text, what) {
+  return h("button", {
+    class: "copyable", type: "button", title: `Copy ${what}`,
+    onclick: async (e) => {
+      const el = e.currentTarget;
+      try {
+        await Clipboard.SetText(text);
+      } catch (err) {
+        showProblem(callFailed(err), { scope: "talk" });
+        return;
+      }
+      el.querySelector(".copied")?.remove();
+      const label = h("span", { class: "copied", role: "status" }, "Copied");
+      el.append(label);
+      setTimeout(() => label.remove(), 900);
+    },
+  }, h("code", { class: "full" }, text));
+}
+
+// fold is a right-column section headed title, which its heading folds
+// away to only the heading, and back.
+function fold(title, ...body) {
+  const folded = tui.folded.has(title);
+  return h("section", { class: folded ? "folded" : "" },
+    h("h3", {}, h("button", {
+      class: "fold", type: "button", "aria-expanded": String(!folded),
+      onclick: () => { if (folded) tui.folded.delete(title); else tui.folded.add(title); draw(); },
+    }, title)),
+    !folded && body);
 }
 
 // signRequests lists this Key's Sign Requests, newest first; each scrolls
 // to its card.
 function signRequests() {
   const rows = [...ts.SignRequests].reverse();
-  return h("section", {},
-    h("h3", {}, "Sign Requests"),
+  return fold("Sign Requests",
     rows.length
       ? h("div", { class: "signrows" }, rows.map((r) => h("button", {
         class: "signrow", type: "button",
@@ -770,14 +805,20 @@ function signRequests() {
 
 function agents() {
   const list = ts.Agents.length
-    ? ts.Agents.map((a) => h("label", { class: "toggle" },
-      h("input", { type: "checkbox", checked: a.Included, disabled: tui.busy, onchange: (e) => act("SetAgentIncluded", a.Handle, e.target.checked) }),
-      avatar(a.Livery, { open: openLivery(a.Party, `@${a.Handle}`), label: `@${a.Handle}` }),
-      h("span", { class: "text" }, h("strong", {}, `@${a.Handle}`)),
-      h("button", { class: "link", type: "button", onclick: () => nav("agents", { profile: a.Handle }) }, "Profile")))
+    ? ts.Agents.map((a) => h("div", {
+      class: "agentrow",
+      // The whole row opens the agent's Profile, but for its checkbox and
+      // its avatar, which act on their own.
+      onclick: (e) => { if (!e.target.closest("input, .avatar")) nav("agents", { profile: a.Handle }); },
+    },
+    h("input", {
+      type: "checkbox", checked: a.Included, disabled: tui.busy, "aria-label": `@${a.Handle} answers here`,
+      onchange: (e) => act("SetAgentIncluded", a.Handle, e.target.checked),
+    }),
+    avatar(a.Livery, { open: openLivery(a.Party, `@${a.Handle}`), label: `@${a.Handle}` }),
+    h("button", { class: "handle", type: "button", title: `Open the Profile of @${a.Handle}` }, `@${a.Handle}`)))
     : h("p", { class: "hint" }, "This device has no agents yet. Make one on the Agents page.");
-  return h("section", {},
-    h("h3", {}, "Agents here"),
+  return fold("Agents here",
     h("p", { class: "hint" }, "The agents of this device that answer when mentioned here."),
     list);
 }
@@ -787,8 +828,7 @@ function agents() {
 function devices() {
   const party = (p, label, ...rest) => h("div", { class: "party" },
     p.Party ? avatar(p.Livery, { open: openLivery(p.Party, label), label }) : avatar(""), ...rest);
-  return h("section", {},
-    h("h3", {}, "Devices here"),
+  return fold("Devices here",
     ts.Devices.length
       ? h("div", { class: "parties" }, ts.Devices.map((d) => h("div", { class: "device" },
         party(d, d.Name, h("strong", {}, d.Name)),
@@ -799,8 +839,7 @@ function devices() {
 
 function overrides() {
   if (ts.Open === GROUP_TALK) return null;
-  return h("section", {},
-    h("h3", {}, "Overrides"),
+  return fold("Overrides",
     ts.Overrides.length
       ? ts.Overrides.map((o) => h("div", { class: "kv" },
         h("span", { class: "label" }, o.Kind === "provider" ? "Provider" : "Network"),

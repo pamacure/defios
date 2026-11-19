@@ -443,16 +443,38 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .suggest li { padding: 6px 10px; border-radius: var(--radius-s); cursor: pointer; }
 .suggest li[aria-selected="true"] { background: var(--accent-wash); color: var(--accent-strong); }
 
-.about { background: var(--surface); border-left: 1px solid var(--line); overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+.about { background: var(--surface); border-left: 1px solid var(--line); overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 .about section { display: flex; flex-direction: column; gap: 8px; }
+.about section + section { border-top: 1px solid var(--line); padding-top: 12px; }
 .about h3 { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-soft); }
+/* A heading folds its section away: the whole heading is the button, its
+   chevron turned to point at the heading while folded. */
+.about h3 .fold { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; cursor: pointer; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
+.about h3 .fold::after { content: ""; width: 12px; height: 12px; margin-left: auto; background: var(--chevron) center / 12px no-repeat; transition: transform .15s; }
+.about .folded h3 .fold::after { transform: rotate(-90deg); }
+.about h3 .fold:hover { color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .about h3 .fold::after { transition: none; } }
+.about h3 .fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 .about .kv { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .about .kv .label { color: var(--muted); font-size: 12px; }
 .about .value { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.about code.full { overflow-wrap: anywhere; user-select: all; font-size: 12px; }
-.about .toggle { padding: 6px 0; align-items: center; }
-.about .toggle .link { margin-left: auto; align-self: center; }
-.about .toggle input { margin-top: 0; }
+.about code.full { overflow-wrap: anywhere; font-size: 12px; }
+/* Text a click copies, and the label over it that says it was copied. */
+.about .copyable { all: unset; position: relative; display: block; cursor: copy; border-radius: 3px; }
+.about .copyable:hover code { color: var(--text); }
+.about .copyable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.about .copyable .copied { position: absolute; left: 50%; bottom: 100%; margin-bottom: 4px; transform: translateX(-50%); padding: 2px 8px; border-radius: var(--radius-s); background: var(--text); color: var(--surface); font-size: 11px; font-weight: 600; white-space: nowrap; pointer-events: none; animation: copied .9s ease-out forwards; }
+@keyframes copied { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .about .copyable .copied { animation: none; } }
+/* An agent row opens the agent's Profile from anywhere but its checkbox and
+   avatar; a handle too long for the column fades off to the right. */
+.about .agentrow { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 8px; margin: 0 -8px; border-radius: var(--radius); cursor: pointer; }
+.about .agentrow:hover { background: var(--bg); }
+.about .agentrow input { flex: none; margin: 0; width: 16px; height: 16px; accent-color: var(--accent); cursor: default; }
+.about .agentrow .avatar { flex: none; }
+.about .agentrow .handle { all: unset; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; color: var(--text); cursor: pointer;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.about .agentrow .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
 @media (max-width: 1100px) {
   .talk { grid-template-columns: 180px minmax(0, 1fr) 220px; }
