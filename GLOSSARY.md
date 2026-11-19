@@ -57,7 +57,7 @@ The one secret that unlocks every part of a Node's Vault, and any Backup taken w
 _Avoid_: password, PIN, master key
 
 **Backup**:
-One Node sealed into a single file under its Vault passphrase: its Identity, its Vault, each Group's Record, and its Workspaces, Agent Profiles and other local config — everything needed to bring the same Node back on another machine. It leaves out what the Node's peers give back (the COSL replica) and what belongs to one machine or one run alone (tailnet state, the Outbox, Recaps, Transcripts, read marks). Restoring a Backup brings back the same Node, not a new one, so the original must never run again.
+One Node sealed into a single file under its Vault passphrase: its Identity, its Vault, each Group's Record, and its Workspaces, Agent Profiles and other local config — everything needed to bring the same Node back on another machine. It leaves out what the Node's peers give back (the COSL replica) and what belongs to one machine or one run alone (tailnet state, the Outbox, Recaps, Transcripts, Job Runs, read marks). Restoring a Backup brings back the same Node, not a new one, so the original must never run again.
 _Avoid_: export, archive, snapshot (that is Raft's)
 
 **Secret**:
@@ -135,6 +135,10 @@ _Avoid_: cron job, timer, routine
 **Job**:
 What a Trigger runs when it fires, defined once by name so any number of Hooks and Schedules can name it: summoning one of this Node's agents, running a local command, or calling a webhook. An agent Job that names where it answers, Group-level talk or a Key's Conversation, needs its agent included there for as long as it names it.
 _Avoid_: action (that is how a Tool is described), task, effect
+
+**Job Run**:
+One time one of this Node's Jobs ran because a Trigger fired: what fired it and on what event, how it ended, and what it produced — a command's output, a webhook's request and response, or the agent run it summoned — along with the talk messages it wrote. Kept on the Node that ran it, bounded to the most recent, and never replicated, so other Nodes see only what it wrote to talk. Left out of a Backup.
+_Avoid_: job log, execution, invocation
 
 **Key**:
 One threshold public key held jointly by a Group, together with the per-Node shares of it. Identified by its curve and that public key, not by the Session that minted it; exists for ECDSA or Ed25519 signing.
