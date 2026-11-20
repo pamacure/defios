@@ -1,5 +1,5 @@
 // Sign Requests on the Talk page: the card each shows as in the transcript,
-// and the "+" form that proposes one. The card renders a shell.SignCard; the
+// the parts of its details, and the "+" form that proposes one. The card renders a shell.SignCard; the
 // form keeps only what is being typed, and every step goes through the Go
 // side (main.UI.SignForm, FillSign, ProposeSign). UI text says "device" for
 // a Node.
@@ -7,8 +7,9 @@ import { call, h } from "./dom.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 
 // ctx is the Talk page's: { ts() the TalkState, act(method, ...args),
-// draw(), blocks(view) rendering a Transcript view, convName(c) and
-// curveName(curve) as the Conversations list words them }.
+// draw(), select(it) selecting a line, opening its details, blocks(view)
+// rendering a Transcript view, convName(c) and curveName(curve) as the
+// Conversations list words them }.
 let ctx = null;
 export function signInit(c) { ctx = c; }
 
@@ -41,44 +42,112 @@ export function statusChip(status) {
   return h("span", { class: `chip ${cls}` }, label);
 }
 
-// signCard is the transcript line for it, a KindSign Item.
-export function signCard(it, busy) {
+// signCard is the transcript line for it, a KindSign Item, selectable by
+// sel: what it asks, how far it got and what can be done with it. What
+// it signs, and the rest, are in its details (signHead, signSections).
+export function signCard(it, busy, sel) {
   const c = it.Sign;
   const who = it.Side === "left" && h("span", { class: "who" },
     h("strong", {}, it.From),
     it.Handle && h("span", { class: "handle" }, `@${it.Handle}`),
     it.Job && h("span", { class: "handle" }, "Job"));
-  const accepted = c.Stances.filter((s) => s.Stance === "accepted" && !s.Queued).length;
-  return h("div", { class: `msg ${it.Side} signmsg`, id: `card-${c.MsgID}` },
+  return h("div", { ...sel, class: `msg ${it.Side} signmsg ${sel.class}`, id: `card-${c.MsgID}` },
     h("div", { class: "meta" }, who, h("time", {}, hhmm(it.At))),
     h("article", { class: "signcard", "aria-label": "Sign Request" },
-      h("header", {}, h("strong", {}, "Sign Request"), statusChip(c.Status)),
+      h("header", {}, h("strong", {}, "Sign Request"), chips(c)),
       h("p", { class: "reason" }, c.Reason),
-      h("div", { class: "txs" }, c.Transactions.map((tx, i) => h("div", { class: "tx" },
-        h("span", { class: "label" }, `${c.Transactions.length > 1 ? `${i + 1}. ` : ""}${tx.Chain}`),
-        h("ul", {}, tx.Lines.map((l) => h("li", {}, l)))))),
-      h("div", { class: "stances" },
-        c.Needed ? quorum(c, accepted) : h("span", { class: "label" }, "Devices"),
-        c.Stances.map(stanceRow)),
-      c.Status === "open" && c.Deadline && h("p", { class: "hint" }, `Lapses at ${hhmm(c.Deadline)} unless enough devices accept.`),
-      c.Queued && h("p", { class: "hint queued" }, "This device's stance waits here and is sent once enough devices are online."),
-      actions(c, busy),
-      c.Receipts.length > 0 && h("div", { class: "receipts" },
-        h("span", { class: "label" }, "Broadcast"),
-        c.Receipts.map((r) => h("div", { class: "receipt" },
-          h("span", {}, `${r.Device} · ${hhmm(r.At)}`),
-          r.Transactions.map((tx) => h("code", { title: tx.TxHash }, `${tx.Chain}: ${tx.TxHash}`))))),
-      c.Runs.length > 0 && h("div", { class: "runs" },
-        h("span", { class: "label" }, "This device's Hooks"),
-        c.Runs.map(runRow))));
+      c.Summary && h("p", { class: "summary" }, c.Summary),
+      stances(c, c.MsgID),
+      hints(c),
+      cardActions(it, busy)));
 }
 
-// quorum is the card's meter: one segment per device needed, filled as
-// they accept. motion.js animates the ones just filled, by its data.
-function quorum(c, accepted) {
+// signHead is what its details keep in view: the request, its reason,
+// and cause, the run that proposed it, if this device keeps it.
+export function signHead(c, cause) {
+  return h("div", { class: "signhead" },
+    h("div", { class: "row spread" }, h("strong", {}, "Sign Request"), chips(c)),
+    h("p", { class: "reason" }, c.Reason),
+    cause);
+}
+
+// signActions are its details' actions: accept or refuse it, with the
+// reason refusing needs, or broadcast it; and when it lapses.
+export function signActions(c, busy) {
+  const row = actions(c, busy);
+  const hint = hints(c);
+  return (row || hint) && h("div", { class: "signactions" }, hint, row);
+}
+
+// signSections are the rest of its details: what it signs, each device's
+// stance, its Broadcast Receipts, this device's Hooks on it, and its
+// History.
+export function signSections(c) {
+  return [
+    h("section", {},
+      h("h3", {}, c.Transactions.length > 1 ? `Transactions (${c.Transactions.length})` : "Transaction"),
+      h("div", { class: "txs" }, c.Transactions.map((tx, i) => h("div", { class: "tx" },
+        h("span", { class: "label" }, `${c.Transactions.length > 1 ? `${i + 1}. ` : ""}${tx.Chain}`),
+        h("ul", {}, tx.Lines.map((l) => h("li", {}, l))))))),
+    h("section", {}, h("h3", {}, "Devices"), stances(c, `details:${c.MsgID}`)),
+    c.Receipts.length > 0 && h("section", {},
+      h("h3", {}, "Broadcasts"),
+      h("div", { class: "receipts" }, c.Receipts.map((r) => h("div", { class: "receipt" },
+        h("span", {}, `${r.Device} · ${hhmm(r.At)}`),
+        r.Transactions.map((tx) => h("code", { title: tx.TxHash }, `${tx.Chain}: ${tx.TxHash}`)))))),
+    c.Runs.length > 0 && h("section", {},
+      h("h3", {}, "This device's Hooks"),
+      h("div", { class: "runs" }, c.Runs.map(runRow))),
+    h("section", {},
+      h("h3", {}, "History"),
+      h("ol", { class: "history" }, c.History.map((ev) => h("li", { class: `ev ${ev.Kind}` },
+        h("time", { datetime: ev.At }, hhmm(ev.At)), h("span", {}, ev.Text))))),
+  ];
+}
+
+// chips are its status, and whether it was broadcast.
+function chips(c) {
+  return h("span", { class: "chips" },
+    c.Receipts.length > 0 && h("span", { class: "chip ok" }, "Broadcast"),
+    statusChip(c.Status));
+}
+
+// stances are its meter and each device's stance; key names the meter
+// for motion.js, the card's and the details' apart.
+function stances(c, key) {
+  const accepted = c.Stances.filter((s) => s.Stance === "accepted" && !s.Queued).length;
+  return h("div", { class: "stances" },
+    c.Needed ? quorum(c, accepted, key) : h("span", { class: "label" }, "Devices"),
+    c.Stances.map(stanceRow));
+}
+
+function hints(c) {
+  const lapses = c.Status === "open" && c.Deadline && h("p", { class: "hint" }, `Lapses at ${hhmm(c.Deadline)} unless enough devices accept.`);
+  const queued = c.Queued && h("p", { class: "hint queued" }, "This device's stance waits here and is sent once enough devices are online.");
+  return (lapses || queued) && h("div", { class: "hints" }, lapses, queued);
+}
+
+// cardActions are the card's: Review, which opens its details, where it
+// is accepted or refused under what it signs; or Broadcast.
+function cardActions(it, busy) {
+  const c = it.Sign;
+  const row = [];
+  if (c.CanAnswer) {
+    row.push(h("button", { class: "btn small bright", type: "button", onclick: () => ctx.select(it) }, "Review"));
+  }
+  if (c.CanBroadcast) {
+    row.push(h("button", { class: "btn small bright", type: "button", disabled: busy, onclick: () => ctx.act("BroadcastSign", c.MsgID) },
+      c.Receipts.length ? "Broadcast again" : "Broadcast"));
+  }
+  return row.length > 0 && h("div", { class: "row" }, row);
+}
+
+// quorum is the meter: one segment per device needed, filled as they
+// accept. motion.js animates the ones just filled, by its data.
+function quorum(c, accepted, key) {
   const filled = Math.min(accepted, c.Needed);
   const state = filled >= c.Needed ? "met" : DEAD.has(c.Status) ? "dead" : "";
-  return h("div", { class: `quorum ${state}`, "data-key": c.MsgID, "data-n": filled, "data-needed": c.Needed },
+  return h("div", { class: `quorum ${state}`, "data-key": key, "data-n": filled, "data-needed": c.Needed },
     h("span", { class: "segs", "aria-hidden": "true" },
       Array.from({ length: c.Needed }, (_, i) => h("span", { class: i < filled ? "seg on" : "seg" }))),
     h("span", { class: "label" }, h("strong", { class: "count" }, `${accepted} of ${c.Needed}`), " needed have accepted"));

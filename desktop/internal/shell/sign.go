@@ -1,7 +1,9 @@
 package shell
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"defios.com/internal/node"
@@ -17,8 +19,10 @@ type SignCard struct {
 	// Status is open, waiting, signing, signed, refused, aborted or
 	// expired.
 	Status string
-	// Transactions are decoded, each by the chain it names.
+	// Transactions are decoded, each by the chain it names; Summary
+	// counts them and names their chains, for the card.
 	Transactions []SignTx
+	Summary      string
 	// Needed is the Key's t; 0 when the Key is not known here.
 	Needed int
 	// Stances are each device's: those that answered in log order, the
@@ -37,6 +41,27 @@ type SignCard struct {
 	Runs []SignRun
 	// Deadline is when it lapses unless signing started.
 	Deadline time.Time
+	// Cause is the run of this device's agent that proposed it; nil for
+	// none, or none this device keeps.
+	Cause *SignCause
+	// History is what happened to it, in log order.
+	History []SignEvent
+}
+
+// SignCause is a run of this device's agent that proposed a Sign Request:
+// its chain and step, and what it said, "" for nothing.
+type SignCause struct {
+	Chain string
+	Step  int
+	MsgID string
+}
+
+// SignEvent is one moment of a Sign Request's History: its Kind, a
+// signreq.Event*, or the status it brought about, and Text saying it.
+type SignEvent struct {
+	At   time.Time
+	Kind string
+	Text string
 }
 
 // SignTx is one transaction of a Sign Request, decoded.
@@ -100,8 +125,27 @@ func (t *talk) card(d node.SignRequestDetail) *SignCard {
 	if at, err := time.Parse(time.RFC3339, d.CreatedAt); err == nil {
 		c.Deadline = at.Add(time.Duration(d.DeadlineSeconds) * time.Second)
 	}
+	var chains []string
 	for _, tx := range d.Details {
 		c.Transactions = append(c.Transactions, SignTx{Chain: tx.Chain, Type: tx.Type, Lines: append([]string{}, tx.Lines...)})
+		if !slices.Contains(chains, tx.Chain) {
+			chains = append(chains, tx.Chain)
+		}
+	}
+	switch len(d.Details) {
+	case 0:
+	case 1:
+		c.Summary = "1 transaction · " + chains[0]
+	default:
+		c.Summary = fmt.Sprintf("%d transactions · %s", len(d.Details), strings.Join(chains, ", "))
+	}
+	if cause, ok := t.proposed[d.MsgID]; ok {
+		c.Cause = &cause
+	}
+	c.History = []SignEvent{}
+	for _, ev := range d.History {
+		at, _ := time.Parse(time.RFC3339, ev.At)
+		c.History = append(c.History, SignEvent{At: at, Kind: ev.Kind, Text: t.eventText(ev)})
 	}
 	seen := map[string]bool{}
 	var mineBy string // the Handle that took this device's stance
@@ -157,6 +201,37 @@ func (t *talk) card(d node.SignRequestDetail) *SignCard {
 	return c
 }
 
+// eventText says ev; t.mu is held.
+func (t *talk) eventText(ev signreq.Event) string {
+	who := t.device(ev.Node)
+	if ev.Handle != "" {
+		who = fmt.Sprintf("@%s on %s", ev.Handle, who)
+	}
+	switch ev.Kind {
+	case signreq.EventProposed:
+		return who + " proposed it."
+	case signreq.EventAccepted:
+		return who + " accepted."
+	case signreq.EventRefusal:
+		return fmt.Sprintf("%s refused: “%s”", who, ev.Reason)
+	case signreq.EventBroadcast:
+		return who + " broadcast it."
+	case signreq.Waiting:
+		return "Enough devices accepted; waiting for signing to start."
+	case signreq.Signing:
+		return "Signing started."
+	case signreq.Done:
+		return "Signed."
+	case signreq.Aborted:
+		return "Signing was aborted."
+	case signreq.Refused:
+		return "Too many devices refused for it to be signed."
+	case signreq.Expired:
+		return "It lapsed before signing started."
+	}
+	return ev.Kind
+}
+
 // device names a Node as the app shows it: "This Device", its name in
 // the Roster, or its short ID; t.mu is held.
 func (t *talk) device(nodeID string) string {
@@ -183,6 +258,10 @@ func (t *talk) signItem(d node.SignRequestDetail) Item {
 	}
 	it.Side, it.From, it.Handle = Left, t.device(d.Proposer), d.ProposerHandle
 	it.Job = d.ProposerHandle == "" && d.Depth > 0
+	if !it.Job {
+		it.Party = t.party(d.Proposer, d.ProposerHandle)
+		it.Livery = t.liveries[it.Party]
+	}
 	return it
 }
 

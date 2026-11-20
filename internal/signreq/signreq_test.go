@@ -647,6 +647,65 @@ func TestRequestStatus(t *testing.T) {
 	}
 }
 
+// Inspect's History is each stance, the change of status it brought
+// about, the signing Session's start and end, each receipt, in log order,
+// and, last, the request lapsing, which no row marks.
+func TestHistory(t *testing.T) {
+	start := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	r := rowOf(t, 10, 0xa1, start, conv[:], req(ethTx())) // 300s window
+	r.Sender = identity.ID{1}
+	at := func(s int) string { return start.Add(time.Duration(s) * time.Second).UTC().Format(time.RFC3339) }
+	node := func(b byte) string { return (identity.ID{b}).String() }
+	sessionStart := rawRow(t, 12, 1, cosl.TypeSessionStart, start.Add(2*time.Second), nil,
+		&coslv1.SessionStart{SessionId: bytes32(0x88), Curve: "ecdsa", T: 2, N: 2, SignRequestId: r.MsgID[:],
+			Participants: [][]byte{idBytes(1), idBytes(2)}})
+	complete := rawRow(t, 13, 2, cosl.TypeSessionComplete, start.Add(3*time.Second), nil,
+		&coslv1.SessionComplete{SessionId: bytes32(0x88), Curve: "ecdsa", PublicKey: ecdsaKey.PublicKey, Signatures: [][]byte{make([]byte, 65)}})
+	abort := rawRow(t, 13, 2, cosl.TypeSessionAbort, start.Add(3*time.Second), nil, &coslv1.SessionAbort{SessionId: bytes32(0x88), Reason: "declined"})
+	proposed := Event{Kind: EventProposed, Seq: 10, At: at(0), Node: node(1)}
+	accepted := Event{Kind: EventAccepted, Seq: 11, At: at(1), Node: node(2)}
+	waiting := Event{Kind: Waiting, Seq: 11, At: at(1)}
+	signing := Event{Kind: Signing, Seq: 12, At: at(2)}
+
+	cases := []struct {
+		name string
+		key  []cosl.Row
+		rows []cosl.Row
+		now  time.Time
+		want []Event
+	}{
+		{"signed and broadcast", mintedKey(t, start), []cosl.Row{
+			acceptRow(t, 11, 2, start.Add(time.Second), conv[:], r.MsgID), sessionStart, complete,
+			broadcastRow(t, 14, 3, start.Add(4*time.Second), conv[:], r.MsgID, 1),
+		}, start.Add(time.Hour), []Event{proposed, accepted, waiting, signing,
+			{Kind: Done, Seq: 13, At: at(3)}, {Kind: EventBroadcast, Seq: 14, At: at(4), Node: node(3)}}},
+		{"aborted", mintedKey(t, start), []cosl.Row{
+			acceptRow(t, 11, 2, start.Add(time.Second), conv[:], r.MsgID), sessionStart, abort,
+		}, start.Add(10 * time.Second), []Event{proposed, accepted, waiting, signing, {Kind: Aborted, Seq: 13, At: at(3)}}},
+		{"refused", mintedKeyOf(t, start, 2, 3), []cosl.Row{
+			refuseRow(t, 11, 2, start.Add(time.Second), conv[:], r.MsgID, "unknown payee", "auditor"),
+			refuseRow(t, 12, 3, start.Add(2*time.Second), conv[:], r.MsgID, "too much", ""),
+		}, start.Add(10 * time.Second), []Event{proposed,
+			{Kind: EventRefusal, Seq: 11, At: at(1), Node: node(2), Handle: "auditor", Reason: "unknown payee"},
+			{Kind: EventRefusal, Seq: 12, At: at(2), Node: node(3), Reason: "too much"},
+			{Kind: Refused, Seq: 12, At: at(2)}}},
+		{"expired", mintedKey(t, start), nil, start.Add(time.Hour), []Event{proposed, {Kind: Expired, At: at(300)}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rows := append(append(c.key, r), c.rows...)
+			d, err := Inspect(rows, "a1", c.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(d.History, c.want) {
+				t.Errorf("history =\n%+v\nwant\n%+v", d.History, c.want)
+			}
+		})
+	}
+}
+
 // Listing and inspecting a Sign Request need only MsgTypes rows, so a reader
 // asks the replica for those and never reads talk or round traffic: the
 // answer from them alone is the whole answer.
@@ -730,10 +789,10 @@ func TestStances(t *testing.T) {
 	}
 	got := Stances(rows, r, rq)
 	want := []Stance{
-		{Node: identity.ID{1}, Seq: 1, Handle: "treasurer"},
-		{Node: identity.ID{3}, Seq: 3},
-		{Node: identity.ID{4}, Seq: 5, Handle: "auditor", Refused: true, Reason: "unknown payee"},
-		{Node: identity.ID{5}, Seq: 9, Handle: "ops"},
+		{Node: identity.ID{1}, Seq: 1, At: at(0).UnixNano(), Handle: "treasurer"},
+		{Node: identity.ID{3}, Seq: 3, At: at(1).UnixNano()},
+		{Node: identity.ID{4}, Seq: 5, At: at(2).UnixNano(), Handle: "auditor", Refused: true, Reason: "unknown payee"},
+		{Node: identity.ID{5}, Seq: 9, At: at(4).UnixNano(), Handle: "ops"},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("stances = %+v\nwant %+v", got, want)
@@ -819,11 +878,12 @@ func TestRefusalsAndHandlesInListAndInspect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantAccepts := []Actor{{Node: (identity.ID{1}).String(), Handle: "treasurer", Seq: 10}, {Node: (identity.ID{2}).String(), Handle: "ops", Seq: 11}, {Node: (identity.ID{4}).String(), Seq: 13}}
+	at0, at1 := start.UTC().Format(time.RFC3339), start.Add(time.Second).UTC().Format(time.RFC3339)
+	wantAccepts := []Actor{{Node: (identity.ID{1}).String(), Handle: "treasurer", Seq: 10, At: at0}, {Node: (identity.ID{2}).String(), Handle: "ops", Seq: 11, At: at1}, {Node: (identity.ID{4}).String(), Seq: 13, At: at1}}
 	if !slices.Equal(d.Accepts, wantAccepts) {
 		t.Errorf("accepts = %+v, want %+v", d.Accepts, wantAccepts)
 	}
-	wantRefusals := []Refusal{{Actor: Actor{Node: (identity.ID{3}).String(), Handle: "auditor", Seq: 12}, Reason: "unknown payee"}}
+	wantRefusals := []Refusal{{Actor: Actor{Node: (identity.ID{3}).String(), Handle: "auditor", Seq: 12, At: at1}, Reason: "unknown payee"}}
 	if !slices.Equal(d.Refusals, wantRefusals) {
 		t.Errorf("refusals = %+v, want %+v", d.Refusals, wantRefusals)
 	}

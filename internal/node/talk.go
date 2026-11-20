@@ -625,6 +625,24 @@ func (h *Host) UnpostedRuns(_ context.Context, groupAlias, conv string) ([]Run, 
 	return transcript.Unposted(ts), nil
 }
 
+// SignRuns are the runs of this Node's Agents in conv whose sign Tools
+// acted on a Sign Request, from their live and cleared Transcripts alike
+// (transcript.Acting).
+func (h *Host) SignRuns(_ context.Context, groupAlias, conv string) ([]Run, error) {
+	id, err := conversationID(conv)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.knownGroup(groupAlias); err != nil {
+		return nil, err
+	}
+	ts, err := transcript.ReadConversation(h.p, groupAlias, id)
+	if err != nil {
+		return nil, err
+	}
+	return transcript.Acting(ts), nil
+}
+
 // ChainPlace is a Conversation of a Group on this Node: its alias, and
 // the hex Conversation ID, GroupTalk for the Group-level talk.
 type ChainPlace struct {

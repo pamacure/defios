@@ -60,11 +60,14 @@ needs checking by hand:
   earlier Transcripts still open, and its next run starts a new one. The window's look is
   checked on the PR.
 - Sign Requests, with two devices and a Key: "+" proposes one (Fill, review,
-  Propose) and its card shows on both, on the right only for the proposer.
-  The other device gets a notification; clicking it opens the card. Refuse
-  asks for a reason and warns a stance is final; Accept signs it, and
-  Broadcast lists a receipt beneath on both. With the other device quit,
-  Accept shows Queued until it is back. Add a Hook on `sign.request` with an
+  Propose) and its card shows on both, on the right only for the proposer,
+  with its details open on the proposer's. The other device gets a
+  notification; clicking it opens the request's details. Clicking a card,
+  its row under Sign Requests, or Review on it opens its details: what it
+  signs, each device's stance, and its History. Refuse there asks for a
+  reason and warns a stance is final; Accept signs it, and Broadcast lists
+  a receipt in the details on both. With the other device quit, Accept
+  shows Queued until it is back. Add a Hook on `sign.request` with an
   agent Job: the notification says "@agent is on it", and a failing Job
   notifies again that the request needs you. Turn new-message notifications
   on in Settings: another device's message notifies.

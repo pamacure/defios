@@ -19,8 +19,9 @@ func (s *Shell) RefuseSign(msgID, reason string) TalkState { return s.talk.refus
 // Receipt. A chain that failed shows as the page's Problem.
 func (s *Shell) BroadcastSign(msgID string) TalkState { return s.talk.broadcastSign(msgID) }
 
-// FocusSign opens conv, in the served Group, and brings Sign Request
-// msgID's card into view ("" for none), as a notification is clicked.
+// FocusSign opens conv, in the served Group, and selects Sign Request
+// msgID ("" for none), opening its details with its card in view, as it
+// is proposed here or a notification about it is clicked.
 func (s *Shell) FocusSign(group, conv, msgID string) TalkState {
 	return s.talk.focusSign(group, conv, msgID)
 }

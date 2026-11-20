@@ -28,9 +28,9 @@ func raws(js ...string) []json.RawMessage {
 // of chain: what a chain leaves once the agent answered.
 func sayAs(r *rig, conv, chain, handle string, depth uint32, run transcript.Run, text string) node.Message {
 	r.t.Helper()
+	r.node.mu.Lock()
 	msgID := fmt.Sprintf("a9%062x", len(r.node.sg().runs[chain])+run.Step*16)
 	run.Chain, run.Handle, run.Depth, run.Outcome, run.MsgID = chain, handle, depth, transcript.OutcomeSaid, msgID
-	r.node.mu.Lock()
 	r.node.sg().runs[chain] = append(r.node.sg().runs[chain], run)
 	r.node.mu.Unlock()
 	return r.node.commit(conv, node.Message{MsgID: msgID, NodeID: r.node.NodeID(), DisplayName: "laptop", Handle: handle, Depth: depth, Text: text})
@@ -266,6 +266,9 @@ func TestAJobsMessageGivesItsJobRun(t *testing.T) {
 	r.node.addJobRuns(node.JobRun{Trigger: "said", Event: trigger.Event{Type: "app.freeform"}, Fired: now, Job: "check", Kind: "exec", State: node.JobOK,
 		Started: now, Ended: now, Messages: []string{wrote.MsgID}})
 	ended(r, s, node.GroupTalk, chain, said.MsgID)
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { // read with said, but perhaps not by the same read
+		return slices.ContainsFunc(ts.Items, func(it shell.Item) bool { return it.MsgID == reply.MsgID && it.Chain == chain })
+	})
 
 	d := s.JobRunDetails(1)
 	if d.Problem != nil || d.Job == nil || d.Job.Handle != "scout" || d.Run == nil || d.Run.MsgID != said.MsgID || d.Chain != chain || d.Step != 1 {

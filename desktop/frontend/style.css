@@ -543,28 +543,42 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .msg.signmsg { width: min(560px, 92%); }
 .signcard { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-l); font-size: 13px; }
 .msg.right .signcard { border-left-color: var(--line); border-right: 3px solid var(--accent); }
-.signmsg.flash .signcard { box-shadow: 0 0 0 3px var(--accent-bright); }
+.signmsg .signcard { cursor: pointer; }
+.signmsg.selected .signcard { box-shadow: 0 0 0 2px var(--accent); }
 .signcard header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.signcard .reason, .signform .reason { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
-.signcard .label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
-.signcard .txs { display: flex; flex-direction: column; gap: 8px; }
-.signcard .tx ul { margin: 0; padding: 6px 10px; list-style: none; background: var(--bg); border-radius: var(--radius-s); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.signcard .stances { display: flex; flex-direction: column; gap: 4px; }
-.signcard .stance { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.signcard .stance .who strong { color: var(--text-soft); font-weight: 600; }
-.signcard .stance .handle { color: var(--accent-strong); font-weight: 600; margin-left: 4px; }
-.signcard .stance .why { color: var(--text-soft); font-style: italic; flex-basis: 100%; padding-left: 16px; }
-.signcard .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.signcard .row > .btn { flex: none; min-width: 96px; }
-.signcard .refuse { display: flex; flex-direction: column; gap: 8px; }
-.signcard .refuse textarea, .signform textarea { height: auto; padding: 8px 10px; text-align: left; resize: vertical; font: inherit; }
+:is(.signcard, .signpanel) .reason, .signform .reason { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+:is(.signcard, .signpanel) .label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+:is(.signcard, .signpanel) .txs { display: flex; flex-direction: column; gap: 8px; }
+:is(.signcard, .signpanel) .tx ul { margin: 0; padding: 6px 10px; list-style: none; background: var(--bg); border-radius: var(--radius-s); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+:is(.signcard, .signpanel) .stances { display: flex; flex-direction: column; gap: 4px; }
+:is(.signcard, .signpanel) .stance { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+:is(.signcard, .signpanel) .stance .who strong { color: var(--text-soft); font-weight: 600; }
+:is(.signcard, .signpanel) .stance .handle { color: var(--accent-strong); font-weight: 600; margin-left: 4px; }
+:is(.signcard, .signpanel) .stance .why { color: var(--text-soft); font-style: italic; flex-basis: 100%; padding-left: 16px; }
+:is(.signcard, .signpanel) .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+:is(.signcard, .signpanel) .row > .btn { flex: none; min-width: 96px; }
+:is(.signcard, .signpanel) .refuse { display: flex; flex-direction: column; gap: 8px; }
+:is(.signcard, .signpanel) .refuse textarea, .signform textarea { height: auto; padding: 8px 10px; text-align: left; resize: vertical; font: inherit; }
 .warn-text { margin: 0; padding: 6px 10px; border-radius: var(--radius-s); background: var(--warn-bg); color: var(--warn-text); font-size: 12px; }
-.signcard .queued { color: var(--warn-text); }
-.signcard .receipts, .signcard .runs { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
-.signcard .receipt { display: flex; flex-direction: column; gap: 2px; }
-.signcard .receipt code { font-size: 12px; overflow-wrap: anywhere; user-select: all; }
-.signcard .run { display: flex; flex-direction: column; gap: 4px; }
-.signcard .job { display: flex; flex-direction: column; gap: 4px; }
+:is(.signcard, .signpanel) .queued { color: var(--warn-text); }
+:is(.signcard, .signpanel) .receipts, :is(.signcard, .signpanel) .runs { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+:is(.signcard, .signpanel) .receipt { display: flex; flex-direction: column; gap: 2px; }
+:is(.signcard, .signpanel) .receipt code { font-size: 12px; overflow-wrap: anywhere; user-select: all; }
+:is(.signcard, .signpanel) .run { display: flex; flex-direction: column; gap: 4px; }
+:is(.signcard, .signpanel) .job { display: flex; flex-direction: column; gap: 4px; }
+
+.signcard .summary { margin: 0; color: var(--text-soft); font-size: 12px; }
+.signcard .chips, .signhead .chips { display: inline-flex; gap: 6px; }
+.signhead { display: flex; flex-direction: column; gap: 6px; }
+.signhead .spread { justify-content: space-between; }
+.signhead .reason { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.signhead .link { align-self: flex-start; }
+.signactions, .signcard .hints { display: flex; flex-direction: column; gap: 8px; }
+.signactions .hint, .signcard .hints .hint { margin: 0; }
+.signpanel .receipts, .signpanel .runs { border-top: 0; padding-top: 0; }
+.signpanel .history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.signpanel .history li { display: flex; gap: 8px; align-items: baseline; }
+.signpanel .history time { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .signrows { display: flex; flex-direction: column; gap: 4px; }
 .signrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; text-align: left; background: none; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; font: inherit; font-size: 13px; color: var(--text); }
@@ -902,14 +916,14 @@ body[data-page="talk"] .toasts { top: 116px; }
 .card h1, .center h1 { font-size: 22px; }
 .chat-head h2 { font-size: 17px; }
 .modal h2 { font-size: 18px; }
-.part > header h2, .about h3, .agents h4, .card .eyebrow, .signcard .label, .signform .for .label, .blk .kind, .groupmenu .label {
+.part > header h2, .about h3, .agents h4, .card .eyebrow, .signcard .label, .signpanel .label, .signform .for .label, .blk .kind, .groupmenu .label {
   font-family: var(--display); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
 }
 .groupmenu .label { font-size: 11px; }
 .gsettings h3, .vault h3, .agents h3, .tsec h3, .tomledit h3, .triggers .pform.new h3, .networks .pform.new h3, .plpreview h3 {
   font-family: var(--display); font-weight: 700; font-size: 14px; letter-spacing: .02em;
 }
-.signcard header strong { font-family: var(--display); font-weight: 700; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; }
+.signcard header strong, .signhead .spread strong { font-family: var(--display); font-weight: 700; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; }
 .stat strong, .conv .badge, .quorum .count { font-family: var(--display); font-weight: 700; }
 .stat strong { font-size: 18px; }
 
@@ -968,7 +982,7 @@ body[data-page="talk"] .toasts { top: 116px; }
   animation: scan 1.4s linear infinite;
 }
 @keyframes scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
-.signmsg.flash .signcard { box-shadow: 0 var(--depth) 0 var(--edge), 0 0 0 3px var(--accent-bright), 0 0 28px var(--glow); }
+.signmsg.selected .signcard { box-shadow: 0 var(--depth) 0 var(--edge), 0 0 0 2px var(--accent-bright), 0 0 28px var(--glow); }
 
 /* The stud grid, behind the screens that stand alone. */
 main.center:not(.page), main.onboard { position: relative; isolation: isolate; }

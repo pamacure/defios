@@ -65,6 +65,7 @@ func (n *fakeNode) propose(conv, nodeID, handle, reason string, needed int) stri
 		},
 		DeadlineSeconds: 300,
 		Details:         []signreq.TxDetail{{Chain: "ethereum chain 1", Type: "ethereum", Lines: []string{"to 0x0102", "value 1000 wei"}}},
+		History:         []signreq.Event{{Kind: signreq.EventProposed, Seq: t.seq, At: time.Now().UTC().Format(time.RFC3339), Node: nodeID, Handle: handle}},
 	}}
 	if handle == "" && nodeID != n.NodeID() {
 		d.Accepts[0].Handle = ""
@@ -85,6 +86,11 @@ func (n *fakeNode) answer(msgID, nodeID, handle string, refuse bool, reason stri
 	r := n.request(msgID)
 	n.tk().seq++
 	a := signreq.Actor{Node: nodeID, Handle: handle, Seq: n.tk().seq}
+	ev := signreq.Event{Kind: signreq.EventAccepted, Seq: a.Seq, At: time.Now().UTC().Format(time.RFC3339), Node: nodeID, Handle: handle}
+	if refuse {
+		ev.Kind, ev.Reason = signreq.EventRefusal, reason
+	}
+	r.History = append(r.History, ev)
 	if refuse {
 		r.Refused = append(r.Refused, nodeID)
 		r.Refusals = append(r.Refusals, signreq.Refusal{Actor: a, Reason: reason})
@@ -96,6 +102,7 @@ func (n *fakeNode) answer(msgID, nodeID, handle string, refuse bool, reason stri
 		r.Accepts = append(r.Accepts, a)
 		if len(r.Accepted) >= r.Needed {
 			r.Status, r.Session = signreq.Done, "5e55"
+			r.History = append(r.History, signreq.Event{Kind: signreq.Done, Seq: a.Seq, At: ev.At})
 		}
 	}
 	if nodeID == n.NodeID() {
@@ -147,6 +154,7 @@ func (n *fakeNode) InspectSignRequest(_ context.Context, group, msgID string) (n
 	d := *r
 	d.Hooks = slices.Clone(r.Hooks)
 	d.BroadcastReceipts = slices.Clone(r.BroadcastReceipts)
+	d.History = slices.Clone(r.History)
 	return d, nil
 }
 
@@ -277,6 +285,7 @@ func (n *fakeNode) BroadcastSignRequest(_ context.Context, group, msgID string) 
 		Seq: n.tk().seq, Broadcaster: n.NodeID(), At: time.Now().UTC().Format(time.RFC3339),
 		Transactions: []signreq.BroadcastedTx{{Chain: "ethereum chain 1", TxHash: "0xabc"}},
 	})
+	r.History = append(r.History, signreq.Event{Kind: signreq.EventBroadcast, Seq: n.tk().seq, At: time.Now().UTC().Format(time.RFC3339), Node: n.NodeID()})
 	r.Broadcasts, r.FullyBroadcast = len(r.BroadcastReceipts), true
 	sum := r.Summary
 	n.mu.Unlock()

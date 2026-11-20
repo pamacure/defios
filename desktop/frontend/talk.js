@@ -9,7 +9,7 @@ import { call, h, icon, put } from "./dom.js";
 import { avatar, brick, forgetPicks, liveryClass, liveryPicker } from "./livery.js";
 import { mentionSpans } from "./mention.js";
 import { callFailed, problemBox, problemLine, showProblem } from "./notice.js";
-import { openSignForm, signCard, signForm, signInit, statusChip } from "./sign.js";
+import { openSignForm, signActions, signCard, signForm, signHead, signInit, signSections, statusChip } from "./sign.js";
 
 let ts = null; // the TalkState shown
 let mount = null; // the element the page draws into, while on screen
@@ -211,24 +211,25 @@ function markRead() {
 window.addEventListener("focus", markRead);
 document.addEventListener("visibilitychange", markRead);
 
-// focusCard brings the card ts.Focus names into view, once, as a
-// notification about it was clicked.
+// focusCard selects the Sign Request ts.Focus names, once, as it was
+// proposed here or a notification about it was clicked.
 function focusCard() {
   if (!ts.Focus || ts.Focus === tui.focused) return;
-  const el = mount.querySelector(`#card-${CSS.escape(ts.Focus)}`);
-  if (!el) return; // its card is not read yet
+  if (!signItem(ts.Focus)) return; // its card is not read yet
   tui.focused = ts.Focus;
-  showCard(el);
+  showSign(ts.Focus);
 }
 
-// showCard scrolls the transcript to a card and marks it for a moment.
-function showCard(el) {
+// signItem is Sign Request msgID's line in the open Conversation.
+const signItem = (msgID) => ts.Items.find((it) => it.Kind === "sign" && it.MsgID === msgID);
+
+// showSign selects Sign Request msgID, if its card is here: its details
+// open, and its card scrolls into view.
+function showSign(msgID) {
+  const it = signItem(msgID);
+  if (!it) return;
   tui.scroll.pinned = false;
-  queueMicrotask(() => {
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.classList.add("flash");
-    setTimeout(() => el.classList.remove("flash"), 1600);
-  });
+  select(it);
 }
 
 // The left column: Group, then each Key, then Keys being made.
@@ -453,8 +454,8 @@ function transcript() {
 }
 
 function item(it) {
-  if (it.Kind === "sign") return signCard(it, tui.busy);
   const sel = selectable(it);
+  if (it.Kind === "sign") return signCard(it, tui.busy, sel);
   if (it.Kind === "system" || it.Kind === "job") {
     return h("div", { ...sel, class: `sysline ${sel.class}` }, h("span", {}, it.Text), h("time", {}, time(it.At)));
   }
@@ -721,7 +722,7 @@ function makeComposer() {
 }
 
 // Selecting a line: its details replace the right column's. Every line
-// but a Sign Request's card can be selected.
+// can be selected, a Sign Request's card too.
 
 // lineKey names a line across redraws: its msg_id, a run's chain and
 // step, a Job line's Job Run and text, or a system line's time and text.
@@ -754,7 +755,7 @@ function selectable(it) {
 // still there.
 function selectedItem() {
   if (tui.selected === null || !ts?.Items) return null;
-  return ts.Items.find((it) => it.Kind !== "sign" && lineKey(it) === tui.selected) ?? null;
+  return ts.Items.find((it) => lineKey(it) === tui.selected) ?? null;
 }
 
 // narrow: the window is too narrow for the right column, which About
@@ -785,9 +786,8 @@ function deselect({ redraw = true } = {}) {
 
 // step moves the selection to the next selectable line by, 1 or -1.
 function step(by) {
-  const lines = ts.Items.filter((it) => it.Kind !== "sign");
-  const i = lines.findIndex((it) => lineKey(it) === tui.selected);
-  const next = lines[i + by];
+  const i = ts.Items.findIndex((it) => lineKey(it) === tui.selected);
+  const next = ts.Items[i + by];
   if (i >= 0 && next) select(next);
 }
 
@@ -809,7 +809,7 @@ async function loadDetails() {
   let read;
   if (it.Kind === "run") read = call("RunDetails", it.Chain, it.Step);
   else if (it.Kind === "job") read = call("JobRunDetails", it.JobRun);
-  else if (it.Kind !== "system") read = call("MessageDetails", it.MsgID);
+  else if (it.Kind !== "system" && it.Kind !== "sign") read = call("MessageDetails", it.MsgID);
   else read = Promise.resolve({});
   const view = await read.catch((err) => ({ Problem: callFailed(err) }));
   if (tui.selected !== key) return;
@@ -937,6 +937,31 @@ function detailsPanel(it) {
       run && !run.Cleared && earlier(run)));
 }
 
+// signPanel is the right column showing the selected Sign Request: who
+// proposed it and when, and, kept in view, what it asks and what can be
+// done with it; then what it signs, each device's stance, its Broadcast
+// Receipts, this device's Hooks on it, and its History.
+function signPanel(it) {
+  const c = it.Sign;
+  const name = it.Side === "right" ? "You" : it.From;
+  const head = h("header", { class: "dhead" },
+    avatar(it.Livery, { label: name }),
+    h("div", { class: "who" },
+      h("strong", {}, name),
+      it.Handle && h("span", { class: `handle ${liveryClass(it.Livery)}` }, `@${it.Handle}`),
+      it.Job && h("span", { class: "handle" }, "Job"),
+      h("time", { datetime: it.At }, utc(it.At))),
+    h("button", { class: "icon-btn close", type: "button", "aria-label": "Close details", title: "Close (Esc)", onclick: () => deselect() }, "×"));
+  // The run of this device's agent that proposed it, as its line here.
+  const k = c.Cause;
+  const by = k && ts.Items.find((x) => (k.MsgID ? x.MsgID === k.MsgID : x.Kind === "run" && x.Chain === k.Chain && x.Step === k.Step));
+  const cause = by && h("button", { class: "link", type: "button", onclick: () => select(by) }, `Show @${it.Handle}'s run that proposed it`);
+  return h("aside", { class: "about details", "aria-label": "Sign Request details" },
+    h("article", { class: "dcard signpanel" },
+      h("div", { class: "dtop" }, head, signHead(c, cause), signActions(c, tui.busy)),
+      signSections(c)));
+}
+
 const JOB_STATE = {
   ok: ["Finished", "ok"],
   failed: ["Failed", "bad"],
@@ -1013,7 +1038,7 @@ function runFacts(run) {
     run.Provider && row("Provider", h("div", { class: "value" }, h("strong", {}, run.Provider), run.ModelID && h("code", {}, run.ModelID), run.Shape && h("span", { class: "hint" }, run.Shape))),
     run.Signs?.length > 0 && row("Sign Requests", h("div", { class: "signrows" }, run.Signs.map((sg) => h("button", {
       class: "signrow", type: "button",
-      onclick: () => { const el = mount.querySelector(`#card-${CSS.escape(sg.MsgID)}`); if (el) showCard(el); },
+      onclick: () => showSign(sg.MsgID),
     }, h("span", { class: "text" }, sg.Reason || "No reason"), h("span", { class: "chip" }, SIGN_TOOL[sg.Tool] ?? sg.Tool))))),
     grants.length > 0 && h("details", { class: "fold-in" },
       h("summary", {}, `Tools and Skills (${grants.length})`),
@@ -1094,7 +1119,7 @@ function chainSteps(steps, chain) {
 
 function right() {
   const it = selectedItem();
-  if (it) return detailsPanel(it);
+  if (it) return it.Kind === "sign" ? signPanel(it) : detailsPanel(it);
   return h("aside", { class: "about", "aria-label": "About this conversation" },
     ts.Key ? keyDetails(ts.Key) : fold("Group talk",
       h("p", { class: "hint" }, "Talk with everyone in the Group. Each Key has a conversation of its own.")),
@@ -1165,20 +1190,14 @@ function fold(title, ...body) {
     !folded && body);
 }
 
-// signRequests lists this Key's Sign Requests, newest first; each scrolls
-// to its card.
+// signRequests lists this Key's Sign Requests, newest first; each opens
+// its details.
 function signRequests() {
   const rows = [...ts.SignRequests].reverse();
   return fold("Sign Requests",
     rows.length
       ? h("div", { class: "signrows" }, rows.map((r) => h("button", {
-        class: "signrow", type: "button",
-        onclick: () => {
-          tui.about = false;
-          draw();
-          const el = mount.querySelector(`#card-${CSS.escape(r.MsgID)}`);
-          if (el) showCard(el);
-        },
+        class: "signrow", type: "button", onclick: () => showSign(r.MsgID),
       }, h("span", { class: "text" }, r.Reason || "No reason"), statusChip(r.Status))))
       : h("p", { class: "hint" }, "None yet. Propose one with + beside the message box."));
 }
@@ -1228,7 +1247,7 @@ function overrides() {
       : h("p", { class: "hint" }, "Uses the Group's Providers and Networks."));
 }
 
-signInit({ ts: () => ts, act, draw, blocks: transcriptBlocks, convName, curveName });
+signInit({ ts: () => ts, act, draw, select: (it) => select(it), blocks: transcriptBlocks, convName, curveName });
 
 document.addEventListener("click", (e) => {
   if (!e.target.isConnected) return; // a click that redrew the page

@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"defios.com/internal/config"
 	"defios.com/internal/mention"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
-	"defios.com/internal/signreq"
 	"defios.com/internal/transcript"
 	"defios.com/internal/trigger"
 )
@@ -44,6 +44,7 @@ type TalkNode interface {
 	LiveTranscripts(ctx context.Context, group, conv string) ([]node.LiveTranscript, error)
 	LiveRuns(ctx context.Context, group, conv, handle string) ([]node.Run, error)
 	UnpostedRuns(ctx context.Context, group, conv string) ([]node.Run, error)
+	SignRuns(ctx context.Context, group, conv string) ([]node.Run, error)
 	JobRuns(ctx context.Context, group, job string, last int) ([]node.JobRun, error)
 	JobRun(ctx context.Context, group string, id uint64) (node.JobRun, error)
 	ClearTranscripts(ctx context.Context, group, conv, handle string) ([]string, error)
@@ -91,7 +92,7 @@ type TalkState struct {
 	// running now.
 	Items []Item
 	Live  []LiveChain
-	// Focus is the Sign Request whose card to bring into view, as a
+	// Focus is the Sign Request to select, as it was proposed here or a
 	// notification about it was clicked; "" for none.
 	Focus string
 
@@ -357,6 +358,9 @@ type talk struct {
 	// with the messages. Reading them reads every Transcript there and
 	// every Job Run, so they are not read on every message.
 	saidStale bool
+	// saidVer counts each time said went stale, so a read that began
+	// before the last time leaves it stale for the next.
+	saidVer uint64
 	// liveries are this Node's, by party key (ADR 0037).
 	liveries map[string]string
 	handles  []string
@@ -375,7 +379,9 @@ type talk struct {
 	// signVer counts what changed reqs or cards since they were read
 	// whole, so a read that overlapped one is read again, not applied.
 	signVer uint64
-	signed  map[string]string // each Sign Request's last status seen
+	// proposed is, by Sign Request msg_id, the run of this device's agent
+	// that proposed it, read with said.
+	proposed map[string]SignCause
 	// failed is why each read last failed, by what it reads; while one
 	// has, the next status change reads everything again, as a Group just
 	// formed has no replica until Raft starts.
@@ -399,9 +405,10 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 		t.n, t.self, t.group, t.open = n, self, group, node.GroupTalk
 		t.gen++
 		t.convs, t.msgs, t.said, t.unposted, t.jobRuns, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, nil, true, nil
+		t.saidVer++
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
-		t.accepted, t.signed = map[string]bool{}, map[string]string{}
+		t.accepted, t.proposed = map[string]bool{}, nil
 		t.reqs, t.cards, t.focus = nil, map[string]node.SignRequestDetail{}, ""
 		t.failed = map[string]*Problem{}
 	}
@@ -582,17 +589,21 @@ func (t *talk) loadMessages() {
 		return
 	}
 	t.mu.Lock()
-	withSaid := t.saidStale
+	withSaid, ver := t.saidStale, t.saidVer
 	t.mu.Unlock()
 	t.loadMu.Lock()
 	msgs, err := a.n.Messages(t.ctx, a.group, a.conv)
 	var chat []node.ChatMessage
 	var unposted []node.Run
 	var jobRuns []node.JobRun
+	var signRuns []node.Run
 	if err == nil && withSaid {
 		chat, err = a.n.Chat(t.ctx, a.group, a.conv, 0, true)
 		if err == nil {
 			unposted, err = a.n.UnpostedRuns(t.ctx, a.group, a.conv)
+		}
+		if err == nil {
+			signRuns, err = a.n.SignRuns(t.ctx, a.group, a.conv)
 		}
 		if err == nil {
 			jobRuns, err = a.n.JobRuns(t.ctx, a.group, "", 0)
@@ -611,10 +622,18 @@ func (t *talk) loadMessages() {
 	if t.read("messages", err) {
 		t.msgs = msgs
 		if withSaid {
-			t.said, t.unposted, t.jobRuns, t.saidStale = map[string]string{}, unposted, jobRuns, false
+			t.said, t.unposted, t.jobRuns, t.saidStale = map[string]string{}, unposted, jobRuns, t.saidVer != ver
 			for _, m := range chat {
 				if m.Chain != "" {
 					t.said[m.MsgID] = m.Chain
+				}
+			}
+			t.proposed = map[string]SignCause{}
+			for _, r := range signRuns {
+				for _, ac := range r.Acted {
+					if ac.Tool == config.ToolSignPropose {
+						t.proposed[ac.MsgID] = SignCause{Chain: r.Chain, Step: r.Step, MsgID: r.MsgID}
+					}
 				}
 			}
 		}
@@ -1146,7 +1165,6 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 		reload = t.loadConversations
 	case ev.SignRequest != nil && ev.SignRequest.Group == group:
 		r := ev.SignRequest.Request
-		t.signRequest(r)
 		t.setRequest(r)
 		reload = t.loadConversations
 		if r.Conversation == open {
@@ -1160,6 +1178,7 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 	case ev.Chain != nil && ev.Chain.Group == group:
 		if t.chain(ev.Chain.Conversation, ev.Chain.Event) && ev.Chain.Conversation == open {
 			t.saidStale = true
+			t.saidVer++
 			reload = func() {
 				t.loadMessages()
 				t.loadSizes()
@@ -1277,20 +1296,6 @@ func (t *talk) session(sum node.Session) {
 	case session.Aborted:
 		t.say(node.GroupTalk, "Making the Key "+what+" was aborted.")
 	}
-}
-
-// signRequest tells the Sign Request's Conversation that its status
-// changed; t.mu is held.
-func (t *talk) signRequest(r signreq.Summary) {
-	if t.signed[r.MsgID] == r.Status {
-		return
-	}
-	t.signed[r.MsgID] = r.Status
-	what := "Sign Request"
-	if r.Reason != "" {
-		what += fmt.Sprintf(" “%s”", r.Reason)
-	}
-	t.say(r.Conversation, fmt.Sprintf("%s is %s.", what, r.Status))
 }
 
 func curveName(c string) string {

@@ -449,6 +449,22 @@ func (n *fakeNode) UnpostedRuns(_ context.Context, group, conv string) ([]node.R
 	return out, nil
 }
 
+// SignRuns are the runs whose sign Tools acted among this Node's chains'
+// runs, by chain.
+func (n *fakeNode) SignRuns(_ context.Context, group, conv string) ([]node.Run, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []node.Run
+	for _, chain := range slices.Sorted(maps.Keys(n.sg().runs)) {
+		for _, r := range n.sg().runs[chain] {
+			if len(r.Acted) > 0 {
+				out = append(out, r)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (n *fakeNode) ClearTranscripts(_ context.Context, group, conv, handle string) ([]string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

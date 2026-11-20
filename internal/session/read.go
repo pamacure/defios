@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"time"
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
@@ -26,6 +27,13 @@ type Summary struct {
 	// ProposedAlias is the Key alias a keygen Session proposes, if valid. It
 	// comes from another Node, so an invalid one is never shown (ADR 0033).
 	ProposedAlias string `json:"proposed_alias,omitempty"`
+	// StartSeq and Started are where and when its session.start was
+	// written; EndSeq and Ended, where and when the row that ended it was,
+	// the complete that counts or the first abort: 0 and "" while open.
+	StartSeq uint64 `json:"start_seq"`
+	Started  string `json:"started"`
+	EndSeq   uint64 `json:"end_seq,omitempty"`
+	Ended    string `json:"ended,omitempty"`
 }
 
 // Completion is one participant's session.complete, as `session inspect` shows it.
@@ -130,6 +138,7 @@ type rec struct {
 	dup          bool // a signing start for a request that already has one
 	proposal     proposal
 	abortAt      []uint64
+	abortedAt    int64 // the first abort's created_at
 	abortReason  string
 	completes    []seen
 	completeSeq  uint64
@@ -144,6 +153,7 @@ type rec struct {
 
 type seen struct {
 	seq        uint64
+	at         int64    // its created_at
 	hash       [32]byte // the row's EnvelopeHash
 	sender     identity.ID
 	curve      string
@@ -168,11 +178,29 @@ func (r *rec) gate() ID {
 }
 
 func (r *rec) summary() Summary {
-	sum := Summary{SessionID: r.id.String(), Status: r.status, Curve: r.curve, T: r.t, N: r.n, ProposedAlias: r.proposal.alias}
+	sum := Summary{
+		SessionID: r.id.String(), Status: r.status, Curve: r.curve, T: r.t, N: r.n, ProposedAlias: r.proposal.alias,
+		StartSeq: r.startSeq, Started: rfc3339(r.createdAt),
+	}
+	switch r.status {
+	case Complete:
+		for _, c := range r.completes {
+			if c.seq == r.completeSeq {
+				sum.EndSeq, sum.Ended = c.seq, rfc3339(c.at)
+			}
+		}
+	case Aborted:
+		sum.EndSeq, sum.Ended = r.abortAt[0], rfc3339(r.abortedAt)
+	}
 	if r.isSign {
 		sum.SignRequest = hex.EncodeToString(r.signReq[:])
 	}
 	return sum
+}
+
+// rfc3339 is created_at (Unix nanoseconds) as the readers write a time.
+func rfc3339(createdAt int64) string {
+	return time.Unix(0, createdAt).UTC().Format(time.RFC3339)
 }
 
 func (r *rec) detail() Detail {
@@ -276,6 +304,9 @@ func (f *fold) add(rows []cosl.Row) error {
 			if r.abortReason == "" {
 				r.abortReason = p.Reason
 			}
+			if len(r.abortAt) == 0 {
+				r.abortedAt = row.CreatedAt
+			}
 			r.abortAt = append(r.abortAt, row.Seq)
 		case *coslv1.SessionComplete:
 			id, ok := idBytes(p.SessionId)
@@ -287,7 +318,7 @@ func (f *fold) add(rows []cosl.Row) error {
 				continue
 			}
 			r.completes = append(r.completes, seen{
-				seq: row.Seq, hash: row.EnvelopeHash, sender: row.Sender, curve: p.Curve, publicKey: append([]byte(nil), p.PublicKey...),
+				seq: row.Seq, at: row.CreatedAt, hash: row.EnvelopeHash, sender: row.Sender, curve: p.Curve, publicKey: append([]byte(nil), p.PublicKey...),
 				signatures: cloneAll(p.Signatures),
 			})
 		case *coslv1.TssSession:

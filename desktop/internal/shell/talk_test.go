@@ -11,7 +11,6 @@ import (
 	"defios.com/desktop/internal/shell"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
-	"defios.com/internal/signreq"
 	"defios.com/internal/transcript"
 	"defios.com/internal/trigger"
 )
@@ -582,32 +581,6 @@ func TestPrunedMessagesAreLeftOutAndUnreadableOnesArePlaceholders(t *testing.T) 
 	}
 	if it := ts.Items[1]; it.Kind != "message" || it.Text != "hi" {
 		t.Fatalf("readable: %+v", it)
-	}
-}
-
-func TestSignRequestStatusIsASystemLine(t *testing.T) {
-	r := newRig(t, "alpha")
-	k := withKey(t, r)
-	s := served(t, r)
-	s.OpenConversation(k.ConversationID)
-	req := func(status string) {
-		r.node.emit(node.Event{SignRequest: &node.SignRequestEvent{Group: "alpha", Request: signreq.Summary{
-			MsgID: "5r", Conversation: k.ConversationID, Status: status, Reason: "pay rent"}}})
-	}
-	req("open")
-	req("open") // a stance, no status change
-	req("signed")
-	ts := eventuallyTalk(t, s, items(2))
-	var got []string
-	for _, it := range ts.Items {
-		got = append(got, string(it.Kind)+": "+it.Text)
-	}
-	want := []string{
-		"system: Sign Request “pay rent” is open.",
-		"system: Sign Request “pay rent” is signed.",
-	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("lines:\n%s", strings.Join(got, "\n"))
 	}
 }
 

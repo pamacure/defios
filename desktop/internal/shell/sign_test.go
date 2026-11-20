@@ -2,10 +2,13 @@ package shell_test
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"defios.com/desktop/internal/shell"
 	"defios.com/internal/node"
+	"defios.com/internal/transcript"
 )
 
 // keyServed is a Shell serving alpha over r's fake Node, with a 2-of-2
@@ -187,5 +190,55 @@ func TestFocusingASignRequestOpensItsConversationOnItsCard(t *testing.T) {
 	card(t, s, id, anyCard)
 	if ts := s.OpenConversation(node.GroupTalk); ts.Focus != "" {
 		t.Fatalf("focus kept: %q", ts.Focus)
+	}
+}
+
+// A Sign Request's card says how many transactions it has and on which
+// chains, and keeps its History; a change of its status is no line of
+// the transcript.
+func TestASignRequestsHistoryIsOnItsCardNotTheTranscript(t *testing.T) {
+	r := newRig(t, "alpha")
+	s, k := keyServed(t, r)
+	id := r.node.propose(k.ConversationID, "b0b", "", "pay rent", 2)
+	r.node.answer(id, r.node.NodeID(), "", false, "")
+
+	ts, it := card(t, s, id, func(c *shell.SignCard) bool { return c.Status == "signed" })
+	c := it.Sign
+	if c.Summary != "1 transaction · ethereum chain 1" {
+		t.Fatalf("summary %q", c.Summary)
+	}
+	var got []string
+	for _, ev := range c.History {
+		got = append(got, ev.Kind+": "+ev.Text)
+	}
+	want := []string{"proposed: bob proposed it.", "accepted: This Device accepted.", "signed: Signed."}
+	if !slices.Equal(got, want) {
+		t.Fatalf("history:\n%s", strings.Join(got, "\n"))
+	}
+	for _, it := range ts.Items {
+		if it.Kind == shell.KindSystem {
+			t.Fatalf("system line: %q", it.Text)
+		}
+	}
+}
+
+// A Sign Request proposed by a run of this device's agent names that run,
+// for its card to lead to.
+func TestASignRequestNamesTheRunOfThisDevicesAgentThatProposedIt(t *testing.T) {
+	r := newRig(t, "alpha")
+	k := withKey(t, r)
+	r.node.mu.Lock()
+	id := fmt.Sprintf("5e%062x", r.node.tk().seq+1) // the next propose's
+	r.node.sg().runs["c4a1"] = []transcript.Run{{Chain: "c4a1", Step: 2, Handle: "treasurer", Depth: 1, Outcome: transcript.OutcomeSilent,
+		Acted: []transcript.Acted{{Tool: "sign_propose", MsgID: id}}}}
+	r.node.mu.Unlock()
+	s := served(t, r)
+	s.OpenConversation(k.ConversationID)
+	if got := r.node.propose(k.ConversationID, r.node.NodeID(), "treasurer", "pay rent", 2); got != id {
+		t.Fatalf("proposed %s, want %s", got, id)
+	}
+	_, it := card(t, s, id, func(c *shell.SignCard) bool { return c.Cause != nil })
+	if *it.Sign.Cause != (shell.SignCause{Chain: "c4a1", Step: 2}) {
+		t.Fatalf("cause %+v", *it.Sign.Cause)
 	}
 }

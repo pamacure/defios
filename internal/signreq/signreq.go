@@ -6,6 +6,7 @@ package signreq
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -384,6 +386,7 @@ func Deadline(createdAt int64, req *coslv1.SignRequest) time.Time {
 type Stance struct {
 	Node    identity.ID
 	Seq     uint64
+	At      int64 // its row's created_at, Unix nanoseconds
 	Handle  string
 	Refused bool
 	Reason  string
@@ -396,7 +399,7 @@ type Stance struct {
 // with an invalid Handle or a refusal with no reason, is no stance. The FSM
 // already drops senders that are not on the Roster.
 func Stances(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []Stance {
-	out := []Stance{{Node: row.Sender, Seq: row.Seq, Handle: req.Handle}}
+	out := []Stance{{Node: row.Sender, Seq: row.Seq, At: row.CreatedAt, Handle: req.Handle}}
 	end := deadline(row, req)
 	seen := map[identity.ID]struct{}{row.Sender: {}}
 	for _, r := range rows {
@@ -410,7 +413,7 @@ func Stances(rows []cosl.Row, row cosl.Row, req *coslv1.SignRequest) []Stance {
 		if err != nil {
 			continue
 		}
-		st, id := Stance{Node: r.Sender, Seq: r.Seq}, []byte(nil)
+		st, id := Stance{Node: r.Sender, Seq: r.Seq, At: r.CreatedAt}, []byte(nil)
 		switch m := msg.(type) {
 		case *coslv1.SignAccept:
 			id, st.Handle = m.SignRequestId, m.Handle
@@ -534,6 +537,7 @@ type Actor struct {
 	Node   string `json:"node"`
 	Handle string `json:"handle,omitempty"`
 	Seq    uint64 `json:"seq"`
+	At     string `json:"at"`
 }
 
 // Refusal is one Node's refusal, with its reason.
@@ -549,6 +553,31 @@ type Detail struct {
 	Details         []TxDetail `json:"details"`
 	// BroadcastReceipts are the request's sign.broadcast rows, in log order.
 	BroadcastReceipts []BroadcastReceipt `json:"broadcast_receipts"`
+	// History is what happened to the request, in log order.
+	History []Event `json:"history"`
+}
+
+// Kinds of Event: a row's, or a change of status, named by the status.
+const (
+	EventProposed  = "proposed"  // the sign.request; Node and Handle proposed it
+	EventAccepted  = "accepted"  // a sign.accept
+	EventRefusal   = "refusal"   // a sign.refuse, with its Reason
+	EventBroadcast = "broadcast" // a sign.broadcast; Node broadcast it
+	// Changes of status: Waiting at the t-th accept, Refused at the
+	// refusal that leaves too few to accept, Signing at its Session's
+	// start, Done or Aborted at its end, Expired at the deadline.
+)
+
+// Event is one moment of a Sign Request's History: what happened, at which
+// row of the log and when its writer wrote it, and who did it. Expired is
+// marked by no row, so it has no Seq, and comes last.
+type Event struct {
+	Kind   string `json:"kind"`
+	Seq    uint64 `json:"seq,omitempty"`
+	At     string `json:"at"`
+	Node   string `json:"node,omitempty"`
+	Handle string `json:"handle,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // status derives a request's status. sessions are the log's Sessions in start
@@ -608,12 +637,12 @@ func decodeRow(r cosl.Row) (*coslv1.SignRequest, error) {
 func summarise(rows []cosl.Row, sessions []session.Summary, keys map[string]threshold, r cosl.Row, req *coslv1.SignRequest, now time.Time) Summary {
 	sum := Summary{
 		Seq: r.Seq, MsgID: hex.EncodeToString(r.MsgID[:]), Conversation: hex.EncodeToString(r.ConversationID),
-		Proposer: r.Sender.String(), ProposerHandle: req.Handle, Depth: req.Depth, CreatedAt: time.Unix(0, r.CreatedAt).UTC().Format(time.RFC3339),
+		Proposer: r.Sender.String(), ProposerHandle: req.Handle, Depth: req.Depth, CreatedAt: rfc3339(r.CreatedAt),
 		Transactions: len(req.Transactions), Reason: req.Reason,
 		Accepted: []string{}, Refused: []string{}, Accepts: []Actor{}, Refusals: []Refusal{},
 	}
 	for _, st := range Stances(rows, r, req) {
-		a := Actor{Node: st.Node.String(), Handle: st.Handle, Seq: st.Seq}
+		a := Actor{Node: st.Node.String(), Handle: st.Handle, Seq: st.Seq, At: rfc3339(st.At)}
 		if st.Refused {
 			sum.Refused = append(sum.Refused, a.Node)
 			sum.Refusals = append(sum.Refusals, Refusal{Actor: a, Reason: st.Reason})
@@ -736,9 +765,11 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 		}
 		d.Details = append(d.Details, td)
 	}
-	for _, b := range broadcasts(rows, m, req) {
+	receipts := broadcasts(rows, m, req)
+	d.History = history(rows, sessions, keys[string(m.ConversationID)], m, req, receipts, d.Status)
+	for _, b := range receipts {
 		rc := BroadcastReceipt{
-			Seq: b.row.Seq, Broadcaster: b.row.Sender.String(), At: time.Unix(0, b.row.CreatedAt).UTC().Format(time.RFC3339),
+			Seq: b.row.Seq, Broadcaster: b.row.Sender.String(), At: rfc3339(b.row.CreatedAt),
 		}
 		for _, tx := range b.msg.Transactions {
 			c := ChainOf(req.Transactions[tx.TxIndex])
@@ -747,6 +778,63 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 		d.BroadcastReceipts = append(d.BroadcastReceipts, rc)
 	}
 	return d, nil
+}
+
+// history is the History of the request at r, whose status is now
+// status: its stances, and the change of status each brought about; its
+// signing Session's start and end; its receipts; and its lapsing.
+func history(rows []cosl.Row, sessions []session.Summary, k threshold, r cosl.Row, req *coslv1.SignRequest, receipts []receipt, status string) []Event {
+	var out []Event
+	accepted, refused := 0, 0
+	for i, st := range Stances(rows, r, req) {
+		ev := Event{Kind: EventAccepted, Seq: st.Seq, At: rfc3339(st.At), Node: st.Node.String(), Handle: st.Handle}
+		switch {
+		case i == 0:
+			ev.Kind = EventProposed
+		case st.Refused:
+			ev.Kind, ev.Reason = EventRefusal, st.Reason
+		}
+		out = append(out, ev)
+		change := Event{Seq: ev.Seq, At: ev.At}
+		if st.Refused {
+			refused++
+			if k.t > 0 && refused == k.n-k.t+1 {
+				change.Kind = Refused
+			}
+		} else {
+			accepted++
+			if k.t > 0 && accepted == k.t {
+				change.Kind = Waiting
+			}
+		}
+		if change.Kind != "" {
+			out = append(out, change)
+		}
+	}
+	id := hex.EncodeToString(r.MsgID[:])
+	if i := slices.IndexFunc(sessions, func(s session.Summary) bool { return s.SignRequest == id }); i >= 0 {
+		s := sessions[i]
+		out = append(out, Event{Kind: Signing, Seq: s.StartSeq, At: s.Started})
+		switch s.Status {
+		case session.Complete:
+			out = append(out, Event{Kind: Done, Seq: s.EndSeq, At: s.Ended})
+		case session.Aborted:
+			out = append(out, Event{Kind: Aborted, Seq: s.EndSeq, At: s.Ended})
+		}
+	}
+	for _, b := range receipts {
+		out = append(out, Event{Kind: EventBroadcast, Seq: b.row.Seq, At: rfc3339(b.row.CreatedAt), Node: b.row.Sender.String()})
+	}
+	slices.SortStableFunc(out, func(a, b Event) int { return cmp.Compare(a.Seq, b.Seq) })
+	if status == Expired {
+		out = append(out, Event{Kind: Expired, At: deadline(r, req).UTC().Format(time.RFC3339)})
+	}
+	return out
+}
+
+// rfc3339 is a row's created_at (Unix nanoseconds) as readers write a time.
+func rfc3339(createdAt int64) string {
+	return time.Unix(0, createdAt).UTC().Format(time.RFC3339)
 }
 
 // TxIDString is how chain c writes a transaction id: base58 on Solana, else hex.

@@ -478,3 +478,20 @@ func TestUnpostedRunsAreTheSilentFailedAndCancelledOnes(t *testing.T) {
 		t.Fatalf("unposted = %q", got)
 	}
 }
+
+// The runs acting on Sign Requests are those whose sign Tools acted, in
+// live and cleared Transcripts alike.
+func TestActingRunsAreThoseWhoseSignToolsActed(t *testing.T) {
+	p := paths(t)
+	write(t, p, nil, "cd34", lines...) // none acted
+	write(t, p, nil, "ef56",
+		transcript.Line{Step: 1, Handle: "scribe", Depth: 1, Kind: transcript.KindActed, Tool: "sign_propose", MsgID: "aa11"},
+		transcript.Line{Step: 1, Handle: "scribe", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent})
+	var got []string
+	for _, r := range transcript.Acting(read(t, p, nil)) {
+		got = append(got, fmt.Sprintf("%s/%d @%s %v", r.Chain, r.Step, r.Handle, r.Acted))
+	}
+	if want := []string{"ef56/1 @scribe [{sign_propose aa11}]"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("acting = %q", got)
+	}
+}

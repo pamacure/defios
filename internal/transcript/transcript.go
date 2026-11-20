@@ -574,6 +574,19 @@ func Unposted(ts []Transcript) []Run {
 	return out
 }
 
+// Acting are the runs in ts whose sign Tools acted on a Sign Request.
+func Acting(ts []Transcript) []Run {
+	var out []Run
+	for _, t := range ts {
+		for _, r := range Runs(t.Lines) {
+			if len(r.Acted) > 0 {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
 // Tokens are the input and output tokens a usage line bills, whichever
 // API Shape wrote it: input_tokens, with the Messages API's
 // cache_creation_input_tokens and cache_read_input_tokens added, or
