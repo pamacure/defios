@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"defios.com/internal/base58"
 	"defios.com/internal/config"
 	"defios.com/internal/key"
 	"defios.com/internal/keyalias"
@@ -52,7 +53,8 @@ type Key struct {
 	// Share: this Node holds a share of it, as far as can be told: see
 	// Keys.
 	Share bool
-	// Address is an ECDSA Key's Ethereum address.
+	// Address is where the Key funds and spends: an ECDSA Key's Ethereum
+	// address, an EdDSA Key's Solana address (its public key in base58).
 	Address string
 }
 
@@ -253,8 +255,11 @@ func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byt
 		ConversationID: k.Conversation(), Workspace: names[key.ConversationID(k.Curve, k.PublicKey)], SessionID: k.SessionID.String(),
 		T: k.T, N: k.N, Share: have[k.Ref()],
 	}
-	if k.Curve == "ecdsa" {
+	switch k.Curve {
+	case "ecdsa":
 		v.Address, _ = key.EthereumAddress(k.PublicKey)
+	case "eddsa":
+		v.Address = base58.Encode(k.PublicKey)
 	}
 	return v
 }

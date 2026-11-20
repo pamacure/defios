@@ -116,6 +116,7 @@ async function act(method, ...args) {
 }
 
 const curveName = (c) => ({ ecdsa: "ECDSA", eddsa: "EdDSA" }[c] ?? c);
+const addressLabel = (c) => (c === "eddsa" ? "Solana address" : "Ethereum address");
 const convName = (c) => (c.ID === GROUP_TALK ? "Group" : c.Alias || `${curveName(c.Curve)} ${c.ShortKey}`);
 const shortID = (id) => (id.length > 16 ? `${id.slice(0, 16)}…` : id);
 
@@ -1126,7 +1127,7 @@ function keyDetails(k) {
     row("Curve", h("div", { class: "value" }, curveName(k.Curve))),
     row("Signers", h("div", { class: "value" }, `${k.T} of ${k.N} devices`)),
     row("Public key", copyable(k.PublicKey, "Public key")),
-    k.Address && row("Address", copyable(k.Address, "Address")),
+    k.Address && row(addressLabel(k.Curve), copyable(k.Address, "Address")),
     row("This device", h("div", { class: "value" }, k.Share ? "Holds a share" : "Holds no share")));
 }
 

@@ -75,7 +75,8 @@ type keyView struct {
 	T         int    `json:"t"`
 	N         int    `json:"n"`
 	Share     bool   `json:"share"`
-	// Address is the Ethereum address of an ECDSA Key, where it funds and spends.
+	// Address is where the Key funds and spends: an ECDSA Key's Ethereum
+	// address, an EdDSA Key's Solana address.
 	Address string `json:"address,omitempty"`
 }
 
@@ -118,7 +119,7 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 	fmt.Fprintf(g.app.Stdout, "key %s\npublic_key %s\nconversation %s\nworkspace %s\nsession %s\ncurve %s\nt %d\nn %d\nshare %s\n",
 		v.shownAs(g.out()), v.PublicKey, v.ConversationID, v.Workspace, v.SessionID, v.Curve, v.T, v.N, yesNo(v.Share))
 	if v.Address != "" {
-		fmt.Fprintf(g.app.Stdout, "ethereum_address %s\n", v.Address)
+		fmt.Fprintf(g.app.Stdout, "%s_address %s\n", addressChain(v.Curve), v.Address)
 	}
 	return nil
 }
@@ -178,6 +179,14 @@ func (v keyView) shownAs(p palette) string {
 		return p.primary(v.Key)
 	}
 	return p.primary(v.Alias) + "  " + v.Key
+}
+
+// addressChain names the chain a Key's Address is on, by its curve.
+func addressChain(curve string) string {
+	if curve == "eddsa" {
+		return "solana"
+	}
+	return "ethereum"
 }
 
 // viewOf is k as key prints it, warning when its config.toml did not read:
