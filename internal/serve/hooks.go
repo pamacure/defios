@@ -502,9 +502,14 @@ func rowEvent(r cosl.Row) (trigger.Event, bool) {
 	case *coslv1.SignBroadcast:
 		ev.SignRequestID = hex.EncodeToString(m.SignRequestId)
 	case *coslv1.SessionStart:
+		ev.SessionID = hex.EncodeToString(m.SessionId)
 		if len(m.SignRequestId) > 0 {
 			ev.SignRequestID = hex.EncodeToString(m.SignRequestId)
 		}
+	case *coslv1.SessionAbort:
+		ev.SessionID = hex.EncodeToString(m.SessionId)
+	case *coslv1.SessionComplete:
+		ev.SessionID = hex.EncodeToString(m.SessionId)
 	}
 	return ev, true
 }

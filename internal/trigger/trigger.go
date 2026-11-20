@@ -52,6 +52,8 @@ type Event struct {
 	Text string `json:"text,omitempty"`
 	// SignRequestID is the hex msg_id of the Sign Request it is about.
 	SignRequestID string `json:"sign_request_id,omitempty"`
+	// SessionID is the hex ID of the Session it is about.
+	SessionID string `json:"session_id,omitempty"`
 	// Status is a request.<status> event's new status.
 	Status string `json:"status,omitempty"`
 	// Time is the RFC 3339 time a Schedule fired for.
@@ -246,6 +248,7 @@ func Vars(ev Event, jobRun string) map[string]string {
 		"DEFIOS_EVENT":           ev.Type,
 		"DEFIOS_MSG_ID":          ev.MsgID,
 		"DEFIOS_SIGN_REQUEST_ID": ev.SignRequestID,
+		"DEFIOS_SESSION_ID":      ev.SessionID,
 		"DEFIOS_CONVERSATION":    ev.Conversation,
 		"DEFIOS_DEPTH":           strconv.FormatUint(uint64(ev.Depth)+1, 10),
 		"DEFIOS_JOB_RUN":         jobRun,

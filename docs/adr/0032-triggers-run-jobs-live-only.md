@@ -110,8 +110,8 @@ made up later.
   or excluded.
 - **`exec` Jobs** take an argument list, not a shell string, with the event
   as JSON on stdin. Their environment holds `PATH`, the `DEFIOS_*` variables
-  (Group alias, Trigger, event type, msg id, Sign Request id, Conversation,
-  depth, and the config and data directories and socket the CLI finds this
+  (Group alias, Trigger, event type, msg id, Sign Request id, Session id,
+  Conversation, depth, and the config and data directories and socket the CLI finds this
   Node by) and the Secrets the Job names, nothing else. serve expands
   `$DEFIOS_*` and `${DEFIOS_*}` in the arguments, and nothing else, so the
   default Jobs need no shell. They run in the Group

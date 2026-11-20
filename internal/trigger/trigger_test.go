@@ -145,7 +145,7 @@ func TestAnExecJobRunsItsArgvWithTheEventAndAClosedEnvironment(t *testing.T) {
 	}
 	// sh sets PWD, SHLVL and _ itself.
 	env = slices.DeleteFunc(env, func(k string) bool { return k == "PWD" || k == "SHLVL" || k == "_" })
-	want := []string{"DEFIOS_CONVERSATION", "DEFIOS_DATA_DIR", "DEFIOS_DEPTH", "DEFIOS_EVENT", "DEFIOS_GROUP", "DEFIOS_JOB_RUN", "DEFIOS_MSG_ID", "DEFIOS_SIGN_REQUEST_ID", "DEFIOS_TRIGGER", "PATH", "STORED", "TOKEN"}
+	want := []string{"DEFIOS_CONVERSATION", "DEFIOS_DATA_DIR", "DEFIOS_DEPTH", "DEFIOS_EVENT", "DEFIOS_GROUP", "DEFIOS_JOB_RUN", "DEFIOS_MSG_ID", "DEFIOS_SESSION_ID", "DEFIOS_SIGN_REQUEST_ID", "DEFIOS_TRIGGER", "PATH", "STORED", "TOKEN"}
 	if !slices.Equal(env, want) {
 		t.Errorf("environment %v, want %v", env, want)
 	}
