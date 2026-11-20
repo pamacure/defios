@@ -413,18 +413,18 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 
 .composer { position: relative; padding: 10px 16px 14px; border-top: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
 .composer .row { display: flex; gap: 8px; align-items: flex-end; }
-.composer textarea { height: auto; min-height: 40px; max-height: 160px; padding: 9px 12px; text-align: left; resize: vertical; background: var(--field); font: inherit; line-height: 1.4; }
+.composer textarea { height: 38px; min-height: 38px; max-height: 160px; padding: 8px 12px; text-align: left; resize: none; overflow-x: hidden; overflow-y: hidden; background: var(--field); font: inherit; line-height: 1.4; }
 /* The composer's mirror: the text again, behind a textarea whose own text
    is transparent, marking each mention. Its glyphs must sit exactly under
    the textarea's, so nothing in it may change a character's width: no
    weight, style, icon or padding. */
 .composer .compose { position: relative; flex: 1; min-width: 0; display: flex; border-radius: var(--radius); background: var(--field); }
 .composer .compose textarea { position: relative; z-index: 1; background: transparent; color: transparent; caret-color: var(--text); }
-.composer .compose textarea::placeholder { color: var(--muted); }
-.composer .mirror { position: absolute; top: 0; left: 0; box-sizing: border-box; padding: 9px 12px; border: 1px solid transparent; font: inherit; line-height: 1.4; text-align: left; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; overflow: hidden; pointer-events: none; color: var(--text); }
+.composer .compose textarea::placeholder { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer .mirror { position: absolute; top: 0; left: 0; box-sizing: border-box; padding: 8px 12px; border: 1px solid transparent; font: inherit; line-height: 1.4; text-align: left; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; overflow: hidden; pointer-events: none; color: var(--text); }
 /* A textarea scrolls through its bottom padding; a div may not, so the
    mirror gets that much more to scroll through. */
-.composer .mirror::after { content: ""; display: block; height: 9px; }
+.composer .mirror::after { content: ""; display: block; height: 8px; }
 .composer .mirror .on { background: var(--lv-wash, var(--bg)); border-radius: 3px; }
 .composer .mirror .off { text-decoration: underline wavy var(--danger); text-decoration-skip-ink: none; text-underline-offset: 3px; }
 .suggest li { display: flex; align-items: center; gap: 8px; }

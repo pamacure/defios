@@ -579,7 +579,7 @@ function liveChain(c) {
 // as Send would refuse it.
 
 function makeComposer() {
-  const textarea = h("textarea", { class: "field", rows: 2, placeholder: "Write a message — @ to summon an agent", "aria-label": "Message" });
+  const textarea = h("textarea", { class: "field", rows: 1, placeholder: "Write a message — @ to summon an agent", "aria-label": "Message" });
   const mirror = h("div", { class: "mirror", "aria-hidden": "true" });
   const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
   const refusal = h("div", { class: "refusal" });
@@ -629,7 +629,18 @@ function makeComposer() {
     // A last empty line has height in a textarea, not in a div.
     out.push(text.slice(at), text.endsWith("\n") ? " " : "");
     mirror.replaceChildren(...out.filter((c) => c !== ""));
+    grow();
     fit();
+  };
+  // grow sizes the textarea to its text, from one line up to its
+  // max-height; only past that does it scroll.
+  const grow = () => {
+    const cs = getComputedStyle(textarea);
+    const max = parseFloat(cs.maxHeight);
+    textarea.style.height = "auto";
+    const want = textarea.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    textarea.style.height = `${Math.min(want, max)}px`;
+    textarea.style.overflowY = want > max ? "auto" : "hidden";
   };
   // fit lays the mirror exactly over the textarea's text: as wide as it
   // less any scrollbar, as tall, and scrolled as far.
@@ -640,7 +651,8 @@ function makeComposer() {
     mirror.scrollTop = textarea.scrollTop;
   };
   textarea.addEventListener("scroll", fit);
-  new ResizeObserver(fit).observe(textarea);
+  // A change of width rewraps the text, so the height follows it.
+  new ResizeObserver(() => { grow(); fit(); }).observe(textarea);
   const choose = (handle) => {
     const at = mentionAt();
     if (!at) return;
