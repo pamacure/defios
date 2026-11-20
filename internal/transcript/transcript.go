@@ -91,8 +91,7 @@ type Line struct {
 	MsgID   string          `json:"msg_id,omitempty"`
 	Seq     uint64          `json:"seq,omitempty"`
 	Error   string          `json:"error,omitempty"`
-	// At, with KindOutcome, is when the run ended, UTC; zero on an
-	// outcome line written before it was recorded.
+	// At, with KindOutcome, is when the run ended, UTC.
 	At time.Time `json:"at,omitzero"`
 }
 
@@ -495,7 +494,7 @@ type Run struct {
 	Seq     uint64 // with OutcomeSaid, once it has a row
 	Error   string // with OutcomeError: why
 	// Ended is when it ended, as its outcome line records it: zero for a
-	// run with no outcome, or one recorded before outcome lines had a time.
+	// run with no outcome.
 	Ended time.Time
 }
 

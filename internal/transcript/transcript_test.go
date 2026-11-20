@@ -432,8 +432,7 @@ func TestSizesAreEachLiveTranscriptsLastInputTokens(t *testing.T) {
 }
 
 // A run's outcome line records when it ended, UTC, and its run carries
-// that time; an outcome line written before it did still reads, with
-// none.
+// that time.
 func TestAnOutcomeRecordsWhenTheRunEnded(t *testing.T) {
 	before := time.Now()
 	l, ok := transcript.Outcome("", 0, nil, false, false)
@@ -443,16 +442,8 @@ func TestAnOutcomeRecordsWhenTheRunEnded(t *testing.T) {
 	l.Step, l.Handle, l.Depth = 1, "scribe", 1
 	p := paths(t)
 	write(t, p, nil, chainID, l)
-	f, err := os.OpenFile(p.LiveTranscriptFile(group.ImplicitAlias, "group", "scribe"), os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.WriteString(`{"chain":"abab","step":2,"handle":"scribe","depth":1,"kind":"outcome","outcome":"cancelled"}` + "\n")
-	f.Close()
-
 	runs := transcript.Runs(read(t, p, nil)[0].Lines)
-	if len(runs) != 2 || !runs[0].Ended.Equal(l.At) || runs[0].Outcome != transcript.OutcomeSilent ||
-		!runs[1].Ended.IsZero() || runs[1].Outcome != transcript.OutcomeCancelled {
+	if len(runs) != 1 || !runs[0].Ended.Equal(l.At) || runs[0].Outcome != transcript.OutcomeSilent {
 		t.Fatalf("runs = %+v", runs)
 	}
 }

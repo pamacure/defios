@@ -236,8 +236,7 @@ func TestAnAgentThatStaysSilentLeavesAMessageWithItsTranscript(t *testing.T) {
 
 // This device's agents' runs that posted nothing show as faded messages
 // from that agent, read from their Transcripts, live or cleared, so they
-// are there as the page opens: each placed by when it ended, or with no
-// time recorded, right after the talk its turn accounted for, and grouped
+// are there as the page opens: each placed by when it ended, and grouped
 // with that agent's own messages. A failure's error is only in its
 // details.
 func TestRunsThatPostedNothingAreFadedMessagesFromTheirAgent(t *testing.T) {
@@ -246,7 +245,7 @@ func TestRunsThatPostedNothingAreFadedMessagesFromTheirAgent(t *testing.T) {
 	long := strings.Repeat("the Provider refused the request ", 20)
 	r.node.mu.Lock()
 	r.node.sg().runs["a1"] = []transcript.Run{{Chain: "a1", Step: 1, Handle: "auditor", Depth: 1, Outcome: transcript.OutcomeSilent, Ended: t0.Add(15 * time.Minute)}}
-	r.node.sg().runs["b2"] = []transcript.Run{{Chain: "b2", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeError, Error: long, TalkSeq: 1}}
+	r.node.sg().runs["b2"] = []transcript.Run{{Chain: "b2", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeError, Error: long, Ended: t0.Add(5 * time.Minute)}}
 	r.node.sg().runs["c3"] = []transcript.Run{
 		{Chain: "c3", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeSaid, MsgID: "ab", Ended: t0.Add(24 * time.Minute)},
 		{Chain: "c3", Step: 2, Handle: "auditor", Depth: 2, Outcome: transcript.OutcomeCancelled, Ended: t0.Add(25 * time.Minute)},

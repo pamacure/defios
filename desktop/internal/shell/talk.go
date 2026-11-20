@@ -979,10 +979,7 @@ var unpostedText = map[string]string{
 
 // placeRuns is logged, a Conversation's items, with the open
 // Conversation's runs of this device's agents that posted nothing placed
-// among them: each before the first item
-// after it ended, or, with no end recorded, right after the last
-// committed item its turn's talk reached, TalkSeq, taking that item's
-// time; t.mu is held.
+// among them, each before the first item after it ended; t.mu is held.
 func (t *talk) placeRuns(logged []Item) []Item {
 	if len(t.unposted) == 0 {
 		return logged
@@ -993,27 +990,11 @@ func (t *talk) placeRuns(logged []Item) []Item {
 	}
 	var runs []placed
 	for _, r := range t.unposted {
-		it := t.runItem(r)
-		at := 0
-		if r.Ended.IsZero() {
-			for i, l := range logged {
-				if l.Seq != 0 && l.Seq <= r.TalkSeq {
-					at = i + 1
-				}
-			}
-			switch {
-			case at > 0:
-				it.At = logged[at-1].At
-			case len(logged) > 0:
-				it.At = logged[0].At
-			}
-		} else {
-			at = len(logged)
-			if i := slices.IndexFunc(logged, func(l Item) bool { return r.Ended.Before(l.At) }); i >= 0 {
-				at = i
-			}
+		at := len(logged)
+		if i := slices.IndexFunc(logged, func(l Item) bool { return r.Ended.Before(l.At) }); i >= 0 {
+			at = i
 		}
-		runs = append(runs, placed{at, it})
+		runs = append(runs, placed{at, t.runItem(r)})
 	}
 	slices.SortStableFunc(runs, func(a, b placed) int {
 		if c := cmp.Compare(a.at, b.at); c != 0 {
