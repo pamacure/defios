@@ -650,6 +650,14 @@ func fakeConversationSend(t *testing.T, dir string) *atomic.Value {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"seq":9,"term":1,"msg_id":"` + strings.Repeat("ab", 32) + `"}`))
 	})
+	for _, path := range []string{"/v1/sign/accept", "/v1/sign/refuse"} {
+		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			body.Store(string(b))
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`))
+		})
+	}
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
@@ -1052,9 +1060,10 @@ func TestDefiosDepthIsTheDepthAJobWritesAt(t *testing.T) {
 	}
 }
 
-// Under an exec Job, conversation send and sign propose hand serve
-// DEFIOS_JOB_RUN, the token naming the Job's Job Run, so serve records the
-// message or request on it; a person's hand none.
+// Under an exec Job, conversation send and sign propose, accept and
+// refuse hand serve DEFIOS_JOB_RUN, the token naming the Job's Job Run, so
+// serve records the message or what was done to the request on it; a
+// person's hand none.
 func TestConversationSendAndSignProposeHandServeTheJobRun(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
@@ -1062,6 +1071,8 @@ func TestConversationSendAndSignProposeHandServeTheJobRun(t *testing.T) {
 	txs := `[{"network": "eth", "ethereum": {"to": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "value": "1"}}]`
 	send := []string{"--dir", dir, "conversation", "send", "hi"}
 	propose := []string{"--dir", dir, "sign", "propose", "--key", "ecdsa:02", "--reason", "pay", "--transactions", "-"}
+	accept := []string{"--dir", dir, "sign", "accept", "abcd"}
+	refuse := []string{"--dir", dir, "sign", "refuse", "abcd", "--reason", "no"}
 	for _, c := range []struct {
 		env  map[string]string
 		args []string
@@ -1071,6 +1082,10 @@ func TestConversationSendAndSignProposeHandServeTheJobRun(t *testing.T) {
 		{nil, send, nil},
 		{map[string]string{"DEFIOS_JOB_RUN": "7-123"}, propose, "7-123"},
 		{nil, propose, nil},
+		{map[string]string{"DEFIOS_JOB_RUN": "7-123"}, accept, "7-123"},
+		{nil, accept, nil},
+		{map[string]string{"DEFIOS_JOB_RUN": "7-123"}, refuse, "7-123"},
+		{nil, refuse, nil},
 	} {
 		if r := run(t, c.env, txs, c.args...); r.code != 0 {
 			t.Fatalf("%v: exit %d: %s", c.args, r.code, r.stderr)

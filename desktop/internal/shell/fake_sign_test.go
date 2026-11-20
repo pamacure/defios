@@ -217,11 +217,11 @@ func (n *fakeNode) ProposeSignRequest(_ context.Context, group, keyQuery string,
 	return node.Sent{MsgID: id, Seq: 1}, nil
 }
 
-func (n *fakeNode) AcceptSignRequest(_ context.Context, group, msgID string) (node.Answered, error) {
+func (n *fakeNode) AcceptSignRequest(_ context.Context, group, msgID, _ string) (node.Answered, error) {
 	return n.stance(group, msgID, false, "")
 }
 
-func (n *fakeNode) RefuseSignRequest(_ context.Context, group, msgID, reason string) (node.Answered, error) {
+func (n *fakeNode) RefuseSignRequest(_ context.Context, group, msgID, reason, _ string) (node.Answered, error) {
 	if err := signreq.CheckReason(reason); err != nil {
 		return node.Answered{}, &node.InvalidError{Err: err}
 	}

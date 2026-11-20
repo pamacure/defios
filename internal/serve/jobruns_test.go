@@ -264,10 +264,11 @@ exec = ["sh", "-c", "echo said; echo \"$DEFIOS_JOB_RUN\" > \"$0\"", %q]
 	}
 }
 
-// A Sign Request an exec Job proposes with its DEFIOS_JOB_RUN is recorded
-// on that Job Run, apart from its talk messages; one proposed with a token
-// naming no Job Run kept is proposed all the same.
-func TestAJobRunRecordsTheSignRequestsItsJobProposed(t *testing.T) {
+// The Sign Requests an exec Job proposes, accepts and refuses with its
+// DEFIOS_JOB_RUN are recorded on that Job Run, each by its whole msg_id,
+// apart from its talk messages; one proposed with a token naming no Job
+// Run kept is proposed all the same.
+func TestAJobRunRecordsWhatItsJobDidToSignRequests(t *testing.T) {
 	tokFile := filepath.Join(t.TempDir(), "tok")
 	a, b := pairWith(t, func(n *node) {
 		recordsStances(n)
@@ -281,8 +282,11 @@ func TestAJobRunRecordsTheSignRequestsItsJobProposed(t *testing.T) {
 	b.joins(t, gid, 2)
 	mintKey(t, a, b, gid)
 	pk := bytes.Repeat([]byte{0x33}, 33)
+	keyQuery := "ecdsa:" + hexOf(pk)
 	conv := key.ConversationID("ecdsa", pk)
+	waitMinted(t, a, gid, conv[:])
 	waitMinted(t, b, gid, conv[:])
+	setNetworks(t, a, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n")
 	writeConfig(t, b.paths.GroupConfigFile(group.ImplicitAlias), fmt.Sprintf(`
 [networks.eth]
 type = "ethereum"
@@ -297,15 +301,27 @@ exec = ["sh", "-c", "echo \"$DEFIOS_JOB_RUN\" > \"$0\"", %q]
 	}
 	r := waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && runs[0].State == jobrun.OK })[0]
 
-	sent, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: payEth, Depth: 1}, r.Token())
-	if err != nil {
+	propose := func(n *node, reason, token string) string {
+		t.Helper()
+		v, err := n.client().SignPropose(ctx, keyQuery, signreq.Spec{Reason: reason, Transactions: payEth, Depth: 1}, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitSign(t, b, v.MsgID, func(signreq.Detail) bool { return true })
+		return v.MsgID
+	}
+	mine := propose(b, "pay", r.Token())
+	accepted, refused := propose(a, "pay one", ""), propose(a, "pay two", "")
+	if _, err := b.client().SignAccept(ctx, accepted[:12], r.Token()); err != nil {
 		t.Fatal(err)
 	}
-	runs := waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && len(runs[0].SignRequests) == 1 })
-	if got := runs[0]; got.SignRequests[0] != sent.MsgID || len(got.Messages) != 0 {
-		t.Errorf("Job Run sign requests %v, messages %v; want [%s] and none", got.SignRequests, got.Messages, sent.MsgID)
+	if _, err := b.client().SignRefuse(ctx, refused, "no", r.Token()); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay again", Transactions: payEth, Depth: 1}, "9-1"); err != nil {
-		t.Fatalf("proposed with a token naming no Job Run: %v", err)
+	runs := waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && len(runs[0].Signs) == 3 })
+	want := []jobrun.Sign{{Act: jobrun.Propose, MsgID: mine}, {Act: jobrun.Accept, MsgID: accepted}, {Act: jobrun.Refuse, MsgID: refused}}
+	if got := runs[0]; !slices.Equal(got.Signs, want) || len(got.Messages) != 0 {
+		t.Errorf("Job Run signs %v, messages %v; want %v and none", got.Signs, got.Messages, want)
 	}
+	propose(b, "pay again", "9-1") // a token naming no Job Run kept
 }

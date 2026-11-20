@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"defios.com/internal/config"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/mention"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
@@ -97,8 +98,8 @@ type JobRunView struct {
 	Body, ContentType string
 	// Handle is an agent Job's agent.
 	Handle string
-	// Signs are the Sign Requests an exec Job proposed; an agent Job's
-	// are its run's.
+	// Signs are the Sign Requests an exec Job proposed, accepted or
+	// refused; an agent Job's are its run's.
 	Signs []RunSign
 }
 
@@ -125,10 +126,18 @@ func (t *talk) jobRunView(r node.JobRun) *JobRunView {
 			v.Attempts = append(v.Attempts, JobAttempt{Status: a.Status, Error: a.Error})
 		}
 	}
-	for _, id := range r.SignRequests {
-		v.Signs = append(v.Signs, t.runSign(config.ToolSignPropose, id))
+	for _, sg := range r.Signs {
+		v.Signs = append(v.Signs, t.runSign(jobSignTool[sg.Act], sg.MsgID))
 	}
 	return v
+}
+
+// jobSignTool is the sign Tool an agent does each of an exec Job's acts
+// with, as the panel names what a run did.
+var jobSignTool = map[string]string{
+	jobrun.Propose: config.ToolSignPropose,
+	jobrun.Accept:  config.ToolSignAccept,
+	jobrun.Refuse:  config.ToolSignRefuse,
 }
 
 // runSign is the Sign Request msgID that tool acted on, with its reason;

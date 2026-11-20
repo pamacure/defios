@@ -178,7 +178,7 @@ a request for chains it has a Network for (see network); the refusal names the c
 			if err != nil {
 				return err
 			}
-			v, err := h.AcceptSignRequest(cmd.Context(), node.ServedGroup, args[0])
+			v, err := h.AcceptSignRequest(cmd.Context(), node.ServedGroup, args[0], g.app.Getenv("DEFIOS_JOB_RUN"))
 			if err != nil {
 				return signError(err)
 			}
@@ -218,7 +218,7 @@ stop, and before one starts it does nothing.`,
 			if err != nil {
 				return err
 			}
-			v, err := h.RefuseSignRequest(cmd.Context(), node.ServedGroup, args[0], refuseReason)
+			v, err := h.RefuseSignRequest(cmd.Context(), node.ServedGroup, args[0], refuseReason, g.app.Getenv("DEFIOS_JOB_RUN"))
 			if err != nil {
 				return signError(err)
 			}

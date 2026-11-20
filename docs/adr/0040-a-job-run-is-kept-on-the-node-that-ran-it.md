@@ -39,8 +39,9 @@ like a Transcript.
 - **A Job Run records the messages its Job wrote.** An `exec` Job is given
   `DEFIOS_JOB_RUN`, a token naming its Job Run, alongside the other
   `DEFIOS_*` variables. When the CLI writes to talk with that token set, it
-  records the message's msg_id on the Job Run, and when it proposes a Sign
-  Request, the request's, apart from the messages. The token goes nowhere
+  records the message's msg_id on the Job Run, and when it proposes,
+  accepts or refuses a Sign Request, which it did to which request, apart
+  from the messages. The token goes nowhere
   near the COSL: the message itself is unchanged. An agent Job's messages
   and requests are found through its chain.
 - **Readable from every front end.** `trigger runs [--job NAME] [--last N]`

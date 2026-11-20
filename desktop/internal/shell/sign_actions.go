@@ -43,14 +43,14 @@ func (t *talk) focusSign(group, conv, msgID string) TalkState {
 
 func (t *talk) acceptSign(msgID string) TalkState {
 	return t.act(func(a at) error {
-		_, err := a.n.AcceptSignRequest(t.ctx, a.group, msgID)
+		_, err := a.n.AcceptSignRequest(t.ctx, a.group, msgID, "")
 		return err
 	}, func() { t.loadCard(msgID) })
 }
 
 func (t *talk) refuseSign(msgID, reason string) TalkState {
 	return t.act(func(a at) error {
-		_, err := a.n.RefuseSignRequest(t.ctx, a.group, msgID, reason)
+		_, err := a.n.RefuseSignRequest(t.ctx, a.group, msgID, reason, "")
 		return err
 	}, func() { t.loadCard(msgID) })
 }

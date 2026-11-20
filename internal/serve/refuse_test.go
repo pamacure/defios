@@ -73,13 +73,13 @@ func TestRefusingASignRequest(t *testing.T) {
 	if list, err := a.client().SignList(ctx); err != nil || list[0].Stance != signreq.StanceUnaddressed || list[0].Status != signreq.Open {
 		t.Fatalf("alice's list = %+v, %v; want open and her stance unaddressed", list, err)
 	}
-	if _, err := a.client().SignRefuse(ctx, msgID, " "); !errors.Is(err, signreq.ErrInvalid) {
+	if _, err := a.client().SignRefuse(ctx, msgID, " ", ""); !errors.Is(err, signreq.ErrInvalid) {
 		t.Fatalf("refuse with no reason = %v, want ErrInvalid", err)
 	}
-	if _, err := b.client().SignRefuse(ctx, msgID, "no"); !errors.Is(err, session.ErrAlreadyAccepted) {
+	if _, err := b.client().SignRefuse(ctx, msgID, "no", ""); !errors.Is(err, session.ErrAlreadyAccepted) {
 		t.Fatalf("the proposer's refusal = %v, want ErrAlreadyAccepted", err)
 	}
-	if v, err := a.client().SignRefuse(ctx, msgID[:8], "unknown payee"); err != nil || v.Queued {
+	if v, err := a.client().SignRefuse(ctx, msgID[:8], "unknown payee", ""); err != nil || v.Queued {
 		t.Fatalf("refuse = %+v, %v", v, err)
 	}
 	for _, n := range []*node{a, b} {
@@ -94,10 +94,10 @@ func TestRefusingASignRequest(t *testing.T) {
 	if d, _ := b.client().SignInspect(ctx, msgID); d.Stance != signreq.StanceAccepted {
 		t.Errorf("bob's stance = %q, want accepted", d.Stance)
 	}
-	if _, err := a.client().SignRefuse(ctx, msgID, "still no"); !errors.Is(err, session.ErrAlreadyRefused) {
+	if _, err := a.client().SignRefuse(ctx, msgID, "still no", ""); !errors.Is(err, session.ErrAlreadyRefused) {
 		t.Fatalf("a second refusal = %v, want ErrAlreadyRefused", err)
 	}
-	if _, err := a.client().SignAccept(ctx, msgID); !errors.Is(err, session.ErrAlreadyRefused) {
+	if _, err := a.client().SignAccept(ctx, msgID, ""); !errors.Is(err, session.ErrAlreadyRefused) {
 		t.Fatalf("an accept after refusing = %v, want ErrAlreadyRefused", err)
 	}
 }
@@ -110,14 +110,14 @@ func TestAQueuedRefusalIsThisNodesStance(t *testing.T) {
 	ctx := context.Background()
 	b.stop()
 	a.waitLeaderless(t)
-	r, err := a.client().SignRefuse(ctx, msgID, "unknown payee")
+	r, err := a.client().SignRefuse(ctx, msgID, "unknown payee", "")
 	if err != nil || !r.Queued {
 		t.Fatalf("refuse with no leader = %+v, %v; want queued", r, err)
 	}
-	if _, err := a.client().SignAccept(ctx, msgID); !errors.Is(err, session.ErrAlreadyRefused) {
+	if _, err := a.client().SignAccept(ctx, msgID, ""); !errors.Is(err, session.ErrAlreadyRefused) {
 		t.Fatalf("accept behind a queued refusal = %v, want ErrAlreadyRefused", err)
 	}
-	if _, err := a.client().SignRefuse(ctx, msgID, "again"); !errors.Is(err, session.ErrAlreadyRefused) {
+	if _, err := a.client().SignRefuse(ctx, msgID, "again", ""); !errors.Is(err, session.ErrAlreadyRefused) {
 		t.Fatalf("refusal behind a queued refusal = %v, want ErrAlreadyRefused", err)
 	}
 	if list, err := a.client().SignList(ctx); err != nil || list[0].Stance != signreq.StanceRefused || len(list[0].Refused) != 0 {
@@ -141,10 +141,10 @@ func TestAQueuedAcceptBlocksARefusal(t *testing.T) {
 	ctx := context.Background()
 	b.stop()
 	a.waitLeaderless(t)
-	if v, err := a.client().SignAccept(ctx, msgID); err != nil || !v.Queued {
+	if v, err := a.client().SignAccept(ctx, msgID, ""); err != nil || !v.Queued {
 		t.Fatalf("accept with no leader = %+v, %v; want queued", v, err)
 	}
-	if _, err := a.client().SignRefuse(ctx, msgID, "changed my mind"); !errors.Is(err, session.ErrAlreadyAccepted) {
+	if _, err := a.client().SignRefuse(ctx, msgID, "changed my mind", ""); !errors.Is(err, session.ErrAlreadyAccepted) {
 		t.Fatalf("refusal behind a queued accept = %v, want ErrAlreadyAccepted", err)
 	}
 	if list, err := a.client().SignList(ctx); err != nil || list[0].Stance != signreq.StanceAccepted {

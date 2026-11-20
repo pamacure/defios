@@ -199,7 +199,7 @@ jobs = ["ready"]
 	if d := waitSign(t, a, v.MsgID, func(signreq.Detail) bool { return true }); d.Depth != 1 {
 		t.Errorf("inspect depth %d, want 1", d.Depth)
 	}
-	if _, err := a.client().SignRefuse(ctx, v.MsgID, "no"); err != nil {
+	if _, err := a.client().SignRefuse(ctx, v.MsgID, "no", ""); err != nil {
 		t.Fatal(err)
 	}
 	waitLines(t, out, []string{"sign.request:2", "request.open:2", "sign.refuse:2", "request.refused:2"})

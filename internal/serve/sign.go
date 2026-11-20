@@ -13,6 +13,7 @@ import (
 	"defios.com/internal/chainfill"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/outbox"
@@ -34,9 +35,13 @@ type signInspectRequest struct {
 	MsgID string `json:"msg_id"`
 }
 
-type signRefuseRequest struct {
+// signAnswerRequest is an accept, or a refusal with its Reason. JobRun is
+// the token naming the Job Run of the exec Job answering, if one is, as
+// with signProposeRequest.
+type signAnswerRequest struct {
 	MsgID  string `json:"msg_id"`
-	Reason string `json:"reason"`
+	Reason string `json:"reason,omitempty"`
+	JobRun string `json:"job_run,omitempty"`
 }
 
 // signPropose commits a sign.request scoped to the Key's Conversation. The
@@ -74,7 +79,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest, handle
 		return SendView{}, err
 	}
 	if req.JobRun != "" {
-		s.jobRuns.signRequest(req.JobRun, v.MsgID)
+		s.jobRuns.sign(req.JobRun, jobrun.Propose, v.MsgID)
 	}
 	// Proposing is the proposer's accept: its signature on the request is the
 	// accept the log sees, so only the local gate opens (ADR 0010). The
@@ -276,17 +281,26 @@ type DeclineView struct {
 }
 
 // signAccept is `sign accept` of the request whose msg id starts with msgID.
-func (s *server) signAccept(ctx context.Context, msgID string) (AcceptView, error) {
+func (s *server) signAccept(ctx context.Context, msgID, jobRun string) (AcceptView, error) {
 	return answered(s.resolveSign(msgID, nil, func(svc *session.Service, id [32]byte) error {
-		return s.acceptSign(svc, ctx, id, "")
+		return s.answeredBy(jobRun, jobrun.Accept, id, s.acceptSign(svc, ctx, id, ""))
 	}))
 }
 
 // signRefuse is `sign refuse` of the request whose msg id starts with msgID.
-func (s *server) signRefuse(ctx context.Context, msgID, reason string) (AcceptView, error) {
+func (s *server) signRefuse(ctx context.Context, msgID, reason, jobRun string) (AcceptView, error) {
 	return answered(s.resolveSign(msgID, nil, func(svc *session.Service, id [32]byte) error {
-		return s.refuseSign(svc, ctx, id, reason, "")
+		return s.answeredBy(jobRun, jobrun.Refuse, id, s.refuseSign(svc, ctx, id, reason, ""))
 	}))
+}
+
+// answeredBy records act on request id on the Job Run jobRun names, if
+// it was taken, committed or queued, and returns err.
+func (s *server) answeredBy(jobRun, act string, id [32]byte, err error) error {
+	if jobRun != "" && (err == nil || errors.Is(err, session.ErrQueued)) {
+		s.jobRuns.sign(jobRun, act, hex.EncodeToString(id[:]))
+	}
+	return err
 }
 
 // answered is an accept's or refusal's view: session.ErrQueued is Queued.
@@ -309,19 +323,19 @@ func (s *server) signDecline(ctx context.Context, msgID string) (DeclineView, er
 
 func (s *server) signRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sign/accept", func(w http.ResponseWriter, r *http.Request) {
-		var req signInspectRequest
+		var req signAnswerRequest
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		v, err := s.signAccept(r.Context(), req.MsgID)
+		v, err := s.signAccept(r.Context(), req.MsgID, req.JobRun)
 		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sign/refuse", func(w http.ResponseWriter, r *http.Request) {
-		var req signRefuseRequest
+		var req signAnswerRequest
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		v, err := s.signRefuse(r.Context(), req.MsgID, req.Reason)
+		v, err := s.signRefuse(r.Context(), req.MsgID, req.Reason, req.JobRun)
 		respond(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sign/decline", func(w http.ResponseWriter, r *http.Request) {
@@ -456,16 +470,18 @@ func (c Client) SignPropose(ctx context.Context, keyQuery string, spec signreq.S
 }
 
 // SignAccept is `sign accept`: append this Node's sign.accept, or queue it.
-func (c Client) SignAccept(ctx context.Context, msgID string) (AcceptView, error) {
+// jobRun is DEFIOS_JOB_RUN when an exec Job accepts it, else "".
+func (c Client) SignAccept(ctx context.Context, msgID, jobRun string) (AcceptView, error) {
 	var v AcceptView
-	err := c.do(ctx, "/v1/sign/accept", signInspectRequest{MsgID: msgID}, &v)
+	err := c.do(ctx, "/v1/sign/accept", signAnswerRequest{MsgID: msgID, JobRun: jobRun}, &v)
 	return v, err
 }
 
 // SignRefuse is `sign refuse`: append this Node's sign.refuse, or queue it.
-func (c Client) SignRefuse(ctx context.Context, msgID, reason string) (AcceptView, error) {
+// jobRun is DEFIOS_JOB_RUN when an exec Job refuses it, else "".
+func (c Client) SignRefuse(ctx context.Context, msgID, reason, jobRun string) (AcceptView, error) {
 	var v AcceptView
-	err := c.do(ctx, "/v1/sign/refuse", signRefuseRequest{MsgID: msgID, Reason: reason}, &v)
+	err := c.do(ctx, "/v1/sign/refuse", signAnswerRequest{MsgID: msgID, Reason: reason, JobRun: jobRun}, &v)
 	return v, err
 }
 
@@ -502,19 +518,19 @@ func (r *Running) SignPropose(ctx context.Context, keyQuery string, spec signreq
 }
 
 // SignAccept is Client.SignAccept in this process.
-func (r *Running) SignAccept(ctx context.Context, msgID string) (AcceptView, error) {
+func (r *Running) SignAccept(ctx context.Context, msgID, jobRun string) (AcceptView, error) {
 	if err := r.tailnet(); err != nil {
 		return AcceptView{}, err
 	}
-	return r.s.signAccept(ctx, msgID)
+	return r.s.signAccept(ctx, msgID, jobRun)
 }
 
 // SignRefuse is Client.SignRefuse in this process.
-func (r *Running) SignRefuse(ctx context.Context, msgID, reason string) (AcceptView, error) {
+func (r *Running) SignRefuse(ctx context.Context, msgID, reason, jobRun string) (AcceptView, error) {
 	if err := r.tailnet(); err != nil {
 		return AcceptView{}, err
 	}
-	return r.s.signRefuse(ctx, msgID, reason)
+	return r.s.signRefuse(ctx, msgID, reason, jobRun)
 }
 
 // SignDecline is Client.SignDecline in this process.

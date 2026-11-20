@@ -161,10 +161,10 @@ func TestAProposedRequestShowsEachNodesStanceAndItsStatusMoves(t *testing.T) {
 		t.Fatalf("bob's event = %+v", opened)
 	}
 
-	if _, err := bob.h.RefuseSignRequest(ctx, "alpha", sent.MsgID[:8], " "); !errors.As(err, new(*node.InvalidError)) {
+	if _, err := bob.h.RefuseSignRequest(ctx, "alpha", sent.MsgID[:8], " ", ""); !errors.As(err, new(*node.InvalidError)) {
 		t.Fatalf("a blank reason: %v; want InvalidError", err)
 	}
-	if a, err := bob.h.RefuseSignRequest(ctx, "alpha", sent.MsgID[:8], "unknown payee"); err != nil || a.Queued {
+	if a, err := bob.h.RefuseSignRequest(ctx, "alpha", sent.MsgID[:8], "unknown payee", ""); err != nil || a.Queued {
 		t.Fatalf("refuse = %+v, %v", a, err)
 	}
 	// 2 of 2: one refusal leaves too few to accept.
@@ -191,7 +191,7 @@ func TestAProposedRequestShowsEachNodesStanceAndItsStatusMoves(t *testing.T) {
 	if _, err := alice.h.InspectSignRequest(ctx, "alpha", "ffff"); !errors.Is(err, signreq.ErrUnknown) {
 		t.Fatalf("an unknown request: %v; want signreq.ErrUnknown", err)
 	}
-	if _, err := bob.h.AcceptSignRequest(ctx, "alpha", sent.MsgID); !errors.Is(err, session.ErrAlreadyRefused) {
+	if _, err := bob.h.AcceptSignRequest(ctx, "alpha", sent.MsgID, ""); !errors.Is(err, session.ErrAlreadyRefused) {
 		t.Fatalf("accept after refusing: %v; want session.ErrAlreadyRefused", err)
 	}
 }
@@ -314,7 +314,7 @@ func TestARefusalQueuedInTheOutboxIsSeenAsThisNodesStance(t *testing.T) {
 	}
 	until(t, bob.events, func(s node.Status) bool { return !s.MajorityReachable })
 	retry(t, func() error {
-		a, err := bob.h.RefuseSignRequest(ctx, "alpha", sent.MsgID, "not without alice")
+		a, err := bob.h.RefuseSignRequest(ctx, "alpha", sent.MsgID, "not without alice", "")
 		if err == nil && !a.Queued {
 			err = errors.New("the refusal committed")
 		}

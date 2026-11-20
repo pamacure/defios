@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"defios.com/internal/config"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/mention"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
@@ -57,8 +58,8 @@ type TalkNode interface {
 	TransferTx(ctx context.Context, group, keyQuery string, tr node.Transfer) (node.TxSpec, error)
 	FillTransactions(ctx context.Context, group, keyQuery string, txs []node.TxSpec) (node.Filled, error)
 	ProposeSignRequest(ctx context.Context, group, keyQuery string, spec node.SignSpec, jobRun string) (node.Sent, error)
-	AcceptSignRequest(ctx context.Context, group, msgID string) (node.Answered, error)
-	RefuseSignRequest(ctx context.Context, group, msgID, reason string) (node.Answered, error)
+	AcceptSignRequest(ctx context.Context, group, msgID, jobRun string) (node.Answered, error)
+	RefuseSignRequest(ctx context.Context, group, msgID, reason, jobRun string) (node.Answered, error)
 	BroadcastSignRequest(ctx context.Context, group, msgID string) (node.Broadcast, error)
 }
 
@@ -637,8 +638,10 @@ func (t *talk) loadMessages() {
 				}
 			}
 			for _, r := range jobRuns {
-				for _, id := range r.SignRequests {
-					t.proposed[id] = SignCause{JobRun: r.ID}
+				for _, sg := range r.Signs {
+					if sg.Act == jobrun.Propose {
+						t.proposed[sg.MsgID] = SignCause{JobRun: r.ID}
+					}
 				}
 			}
 		}

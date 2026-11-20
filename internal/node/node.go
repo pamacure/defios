@@ -120,8 +120,8 @@ type Node interface {
 	InspectSignRequest(ctx context.Context, group, msgID string) (SignRequestDetail, error)
 	FillTransactions(ctx context.Context, group, keyQuery string, txs []TxSpec) (Filled, error)
 	ProposeSignRequest(ctx context.Context, group, keyQuery string, spec SignSpec, jobRun string) (Sent, error)
-	AcceptSignRequest(ctx context.Context, group, msgID string) (Answered, error)
-	RefuseSignRequest(ctx context.Context, group, msgID, reason string) (Answered, error)
+	AcceptSignRequest(ctx context.Context, group, msgID, jobRun string) (Answered, error)
+	RefuseSignRequest(ctx context.Context, group, msgID, reason, jobRun string) (Answered, error)
 	DeclineSignRequest(ctx context.Context, group, msgID string) (DeclineResult, error)
 	BroadcastSignRequest(ctx context.Context, group, msgID string) (Broadcast, error)
 

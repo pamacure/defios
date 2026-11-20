@@ -133,10 +133,10 @@ func (r *jobRuns) message(token, msgID string) {
 	r.record(token, func(run *JobRun) { run.Messages = append(run.Messages, msgID) })
 }
 
-// signRequest records msgID, a Sign Request proposed with token, on the
-// Job Run token names, as message does a talk message.
-func (r *jobRuns) signRequest(token, msgID string) {
-	r.record(token, func(run *JobRun) { run.SignRequests = append(run.SignRequests, msgID) })
+// sign records act on Sign Request msgID, done with token, on the Job Run
+// token names, as message does a talk message.
+func (r *jobRuns) sign(token, act, msgID string) {
+	r.record(token, func(run *JobRun) { run.Signs = append(run.Signs, jobrun.Sign{Act: act, MsgID: msgID}) })
 }
 
 // record adds what add does to the Job Run token names, if it is kept.

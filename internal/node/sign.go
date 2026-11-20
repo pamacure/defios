@@ -180,13 +180,14 @@ func (h *Host) ProposeSignRequest(ctx context.Context, groupAlias, keyQuery stri
 }
 
 // AcceptSignRequest accepts the request msgID names, offering to sign it:
-// a Node's first accept or refusal is its stance, and final.
-func (h *Host) AcceptSignRequest(ctx context.Context, groupAlias, msgID string) (Answered, error) {
+// a Node's first accept or refusal is its stance, and final. jobRun is
+// DEFIOS_JOB_RUN when an exec Job accepts it, as with ProposeSignRequest.
+func (h *Host) AcceptSignRequest(ctx context.Context, groupAlias, msgID, jobRun string) (Answered, error) {
 	api, err := h.reach(ctx, groupAlias)
 	if err != nil {
 		return Answered{}, err
 	}
-	v, err := api.SignAccept(ctx, msgID)
+	v, err := api.SignAccept(ctx, msgID, jobRun)
 	if err != nil {
 		return Answered{}, wrapServed(err)
 	}
@@ -194,8 +195,8 @@ func (h *Host) AcceptSignRequest(ctx context.Context, groupAlias, msgID string) 
 }
 
 // RefuseSignRequest refuses the request msgID names, saying why: reason
-// is required.
-func (h *Host) RefuseSignRequest(ctx context.Context, groupAlias, msgID, reason string) (Answered, error) {
+// is required. jobRun is as with AcceptSignRequest.
+func (h *Host) RefuseSignRequest(ctx context.Context, groupAlias, msgID, reason, jobRun string) (Answered, error) {
 	if err := signreq.CheckReason(reason); err != nil {
 		return Answered{}, &InvalidError{Err: err}
 	}
@@ -203,7 +204,7 @@ func (h *Host) RefuseSignRequest(ctx context.Context, groupAlias, msgID, reason 
 	if err != nil {
 		return Answered{}, err
 	}
-	v, err := api.SignRefuse(ctx, msgID, reason)
+	v, err := api.SignRefuse(ctx, msgID, reason, jobRun)
 	if err != nil {
 		return Answered{}, wrapServed(err)
 	}

@@ -153,7 +153,11 @@ func runTriggerRun(ctx context.Context, g *globals, arg string) error {
 		block(label, w.Body)
 	}
 	block("messages", strings.Join(r.Messages, "\n"))
-	block("sign requests", strings.Join(r.SignRequests, "\n"))
+	signs := make([]string, len(r.Signs))
+	for i, sg := range r.Signs {
+		signs[i] = sg.Act + " " + sg.MsgID
+	}
+	block("sign requests", strings.Join(signs, "\n"))
 	fmt.Fprint(g.app.Stdout, b.String())
 	return nil
 }

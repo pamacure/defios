@@ -265,7 +265,7 @@ func TestSignListFiltersByStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitSign(t, a, refused.MsgID, func(signreq.Detail) bool { return true })
-	if _, err := a.client().SignRefuse(ctx, refused.MsgID, "no"); err != nil {
+	if _, err := a.client().SignRefuse(ctx, refused.MsgID, "no", ""); err != nil {
 		t.Fatal(err)
 	}
 	waitSign(t, a, refused.MsgID, func(d signreq.Detail) bool { return d.Status == signreq.Refused })

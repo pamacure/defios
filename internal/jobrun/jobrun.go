@@ -66,11 +66,25 @@ type Run struct {
 	// with the token naming this Job Run, in the order written, queued
 	// ones included. An agent Job's are found through its Chain.
 	Messages []string `json:"messages,omitempty"`
-	// SignRequests are the hex msg_ids of the Sign Requests an exec Job
-	// proposed with that token, in the order proposed, queued ones
-	// included. An agent Job's are in its run's Transcript.
-	SignRequests []string `json:"sign_requests,omitempty"`
+	// Signs are what an exec Job did to Sign Requests with that token, in
+	// order, queued ones included. An agent Job's are in its run's
+	// Transcript.
+	Signs []Sign `json:"signs,omitempty"`
 }
+
+// Sign is one Sign Request an exec Job acted on: proposed, accepted or
+// refused, by Act, and its hex msg_id.
+type Sign struct {
+	Act   string `json:"act"`
+	MsgID string `json:"msg_id"`
+}
+
+// Acts of a Sign.
+const (
+	Propose = "propose"
+	Accept  = "accept"
+	Refuse  = "refuse"
+)
 
 // Token names r to the exec Job it runs, as DEFIOS_JOB_RUN: its ID and
 // when it fired, so that a token outliving its Job Run, whose ID came to

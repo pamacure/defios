@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/jobrun"
 	"defios.com/internal/node"
 	"defios.com/internal/transcript"
 	"defios.com/internal/trigger"
@@ -246,7 +247,7 @@ func TestASignRequestNamesTheRunOfThisDevicesAgentThatProposedIt(t *testing.T) {
 }
 
 // A Sign Request this device's exec Job proposed names that Job's Job
-// Run, whose details list the request.
+// Run, whose details list the requests it proposed, accepted or refused.
 func TestASignRequestNamesTheJobRunOfThisDevicesExecJobThatProposedIt(t *testing.T) {
 	r := newRig(t, "alpha")
 	k := withKey(t, r)
@@ -255,7 +256,8 @@ func TestASignRequestNamesTheJobRunOfThisDevicesExecJobThatProposedIt(t *testing
 	r.node.mu.Unlock()
 	now := time.Now()
 	r.node.addJobRuns(node.JobRun{ByHand: true, Fired: now, Job: "pay", Kind: "exec", State: node.JobOK, Started: now, Ended: now,
-		Event: trigger.Event{ConversationID: k.ConversationID}, SignRequests: []string{id}})
+		Event: trigger.Event{ConversationID: k.ConversationID},
+		Signs: []jobrun.Sign{{Act: jobrun.Propose, MsgID: id}, {Act: jobrun.Refuse, MsgID: "5eff"}}})
 	s := served(t, r)
 	s.OpenConversation(k.ConversationID)
 	if got := r.node.propose(k.ConversationID, r.node.NodeID(), "", "pay rent", 2); got != id {
@@ -265,7 +267,8 @@ func TestASignRequestNamesTheJobRunOfThisDevicesExecJobThatProposedIt(t *testing
 	if *it.Sign.Cause != (shell.SignCause{JobRun: 1}) {
 		t.Fatalf("cause %+v", *it.Sign.Cause)
 	}
-	if j := s.JobRunDetails(1).Job; j == nil || !slices.Equal(j.Signs, []shell.RunSign{{Tool: "sign_propose", MsgID: id, Reason: "pay rent"}}) {
+	want := []shell.RunSign{{Tool: "sign_propose", MsgID: id, Reason: "pay rent"}, {Tool: "sign_refuse", MsgID: "5eff"}}
+	if j := s.JobRunDetails(1).Job; j == nil || !slices.Equal(j.Signs, want) {
 		t.Fatalf("Job Run details: %+v", j)
 	}
 }
