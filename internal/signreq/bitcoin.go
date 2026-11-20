@@ -231,6 +231,48 @@ func P2WPKHScript(publicKey []byte) []byte {
 	return h.Sum([]byte{0x00, 0x14})
 }
 
+// BitcoinAddress is the bech32 P2WPKH address on the bitcoin network net of
+// a Key's compressed public key (BIP-173): where that Key receives and the
+// one address it spends from.
+func BitcoinAddress(net string, publicKey []byte) (string, error) {
+	hrp, ok := bitcoinHRP[net]
+	if !ok {
+		return "", fmt.Errorf("unknown bitcoin network %q", net)
+	}
+	if len(publicKey) != 33 {
+		return "", fmt.Errorf("a P2WPKH address needs a 33-byte compressed public key, not %d bytes", len(publicKey))
+	}
+	data := []byte{0} // witness version 0
+	var acc, bits uint32
+	for _, b := range P2WPKHScript(publicKey)[2:] {
+		acc, bits = acc<<8|uint32(b), bits+8
+		for ; bits >= 5; bits -= 5 {
+			data = append(data, byte(acc>>(bits-5)&31))
+		}
+	}
+	if bits > 0 {
+		data = append(data, byte(acc<<(5-bits)&31))
+	}
+	values := []byte{}
+	for _, c := range hrp {
+		values = append(values, byte(c>>5))
+	}
+	values = append(values, 0)
+	for _, c := range hrp {
+		values = append(values, byte(c&31))
+	}
+	polymod := bech32Polymod(append(append(values, data...), 0, 0, 0, 0, 0, 0)) ^ 1
+	var out strings.Builder
+	out.WriteString(hrp + "1")
+	for _, d := range data {
+		out.WriteByte(bech32Charset[d])
+	}
+	for i := range 6 {
+		out.WriteByte(bech32Charset[polymod>>(5*(5-i))&31])
+	}
+	return out.String(), nil
+}
+
 // AssembleBitcoin is the broadcastable segwit transaction for intent in on net,
 // signed by sigs (one r||s||v per input in order, as a Session produces them;
 // v is not carried), and its txid in the display order explorers use. Each

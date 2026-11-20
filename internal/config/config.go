@@ -94,6 +94,7 @@ const (
 	ToolSignAccept  = "sign_accept"
 	ToolSignRefuse  = "sign_refuse"
 	ToolChainFill   = "chain_fill"
+	ToolKeyAddress  = "key_address"
 )
 
 // ToolSkillLoad reads a granted Skill (ADR 0030). It is offered whenever a
@@ -101,7 +102,7 @@ const (
 const ToolSkillLoad = "skill_load"
 
 // Tools is every built-in Tool, in the order a run offers them.
-var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill}
+var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill, ToolKeyAddress}
 
 // Granted is the Tools p grants: its tools, or unset, talk_write and
 // talk_read (ADR 0036).

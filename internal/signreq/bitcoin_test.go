@@ -173,3 +173,31 @@ func TestSignedCountsADigestPerBitcoinInput(t *testing.T) {
 		t.Errorf("three signatures: %v", err)
 	}
 }
+
+// BitcoinAddress is the bech32 P2WPKH address of a compressed public key,
+// under each network's hrp; the generator's is BIP-173's own vector, and
+// each reads back through OutputScript as the Key's P2WPKH script.
+func TestBitcoinAddress(t *testing.T) {
+	pub, _ := hex.DecodeString(btcPubkey)
+	for net, want := range map[string]string{
+		"mainnet": "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+		"testnet": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+		"signet":  "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+		"regtest": "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+	} {
+		got, err := BitcoinAddress(net, pub)
+		if err != nil || got != want {
+			t.Errorf("%s: %q, %v; want %q", net, got, err, want)
+			continue
+		}
+		if spk, err := OutputScript(net, got); err != nil || hex.EncodeToString(spk) != btcSPK {
+			t.Errorf("%s: %s reads back as %x, %v", net, got, spk, err)
+		}
+	}
+	if _, err := BitcoinAddress("liquid", pub); err == nil {
+		t.Error("an unknown network gave an address")
+	}
+	if _, err := BitcoinAddress("mainnet", pub[1:]); err == nil {
+		t.Error("a 32-byte key gave an address")
+	}
+}

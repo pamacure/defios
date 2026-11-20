@@ -134,3 +134,42 @@ func TestAnAgentFillsThenProposes(t *testing.T) {
 		t.Errorf("acted lines = %q", got)
 	}
 }
+
+// key_address gives the Conversation's Key and its address on each of the
+// Node's Networks of its curve: EIP-55 on Ethereum, bech32 P2WPKH on
+// Bitcoin. It is offered only in a Key's Conversation.
+func TestKeyAddressShowsTheKeysAccountOnEachNetwork(t *testing.T) {
+	a, provider, conv := fillPair(t, `["talk_write", "key_address"]`)
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		streamParts(w)
+		if n == 1 {
+			endCall(w, "key_address", `{}`)
+			return
+		}
+		endTalkWrite(w, "noted")
+	})
+	ctx := context.Background()
+	s, err := a.client().ConversationStream(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	v, err := a.client().ConversationSend(ctx, "@auditor where do we receive?", conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "commit:noted end") {
+		t.Fatalf("events = %s", got)
+	}
+	calls := provider.seen()
+	if calls[0].Tools != "talk_write key_address" {
+		t.Errorf("tools offered %q", calls[0].Tools)
+	}
+	got := lastTurn(calls[1])
+	want := `{\"key\":\"ecdsa:` + hex.EncodeToString(generator) + `\",\"curve\":\"ecdsa\",\"public_key\":\"` + hex.EncodeToString(generator) + `\",\"networks\":[` +
+		`{\"network\":\"btc\",\"type\":\"bitcoin\",\"address\":\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\"},` +
+		`{\"network\":\"eth\",\"type\":\"ethereum\",\"address\":\"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf\"}]}`
+	if !strings.Contains(got, want) || strings.Contains(got, `"is_error":true`) {
+		t.Errorf("key_address answered %s, want %s", got, want)
+	}
+}

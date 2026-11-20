@@ -11,8 +11,11 @@ import (
 	"strings"
 
 	"defios.com/internal/agent"
+	"defios.com/internal/base58"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
+	"defios.com/internal/key"
+	"defios.com/internal/network"
 	"defios.com/internal/outbox"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -56,6 +59,9 @@ const (
 		"Solana: you give the instructions; feePayer (the Key's address), recentBlockhash, cluster and genesisHash are filled. A filled blockhash expires in about 60–90 seconds, so propose promptly. " +
 		"Bitcoin is refused: its inputs and fee need an indexer. Returns the completed transactions, ready for sign_propose, " +
 		"and per transaction the fields filled and the endpoint read. Check them before you propose."
+	keyAddressDescription = "Show this Conversation's Key and its account, as JSON: its curve and public key, and its address on each of your Node's Networks it can sign for, " +
+		"by Network alias and type. Ethereum: the EIP-55 address. Solana: the public key in base58. Bitcoin: the bech32 P2WPKH address of that Network's bitcoin network, the one script type the Key spends from. " +
+		"A Network of the other curve is left out; with none of the Key's curve, networks is empty. Read-only."
 	signRefuseDescription = "Refuse a Sign Request of this Conversation's Key, as your Node and under your Handle, giving your own reason: " +
 		"your Node's stance is final. Returns queued if it waits in your Node's Outbox."
 )
@@ -64,6 +70,9 @@ const (
 // signreq.Statuses.
 var signListSchema = json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["` + strings.Join(signreq.Statuses, `","`) +
 	`"],"description":"List only the Sign Requests in this status; unset lists them all."}},"additionalProperties":false}`)
+
+// keyAddressSchema is key_address's input: none.
+var keyAddressSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 
 var (
 	signMsgIDSchema   = json.RawMessage(`{"type":"object","properties":{"msg_id":{"type":"string","description":"The Sign Request's hex msg_id, or a unique prefix of it."}},"required":["msg_id"],"additionalProperties":false}`)
@@ -126,6 +135,10 @@ func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string,
 		case config.ToolChainFill:
 			if conv != nil {
 				out = append(out, agent.Tool{Name: name, Description: chainFillDescription, Schema: chainFillSchema, Call: s.chainFillTool(conv)})
+			}
+		case config.ToolKeyAddress:
+			if conv != nil {
+				out = append(out, agent.Tool{Name: name, Description: keyAddressDescription, Schema: keyAddressSchema, Call: s.keyAddressTool(conv)})
 			}
 		}
 	}
@@ -315,6 +328,69 @@ func (s *server) chainFillTool(conv []byte) func(context.Context, json.RawMessag
 		}
 		return toolJSON(v)
 	}
+}
+
+// KeyAddressView is key_address's result: a Key and its address on each
+// of this Node's Networks of its curve, in alias order.
+type KeyAddressView struct {
+	Key       string           `json:"key"`
+	Curve     string           `json:"curve"`
+	PublicKey string           `json:"public_key"`
+	Networks  []NetworkAddress `json:"networks"`
+}
+
+// NetworkAddress is a Key's address on one Network.
+type NetworkAddress struct {
+	Network string `json:"network"`
+	Type    string `json:"type"`
+	Address string `json:"address"`
+}
+
+// keyAddressTool is key_address in conv: its Key's address on each of
+// this Node's Networks of its curve, as they are when called.
+func (s *server) keyAddressTool(conv []byte) func(context.Context, json.RawMessage) (string, error) {
+	return func(_ context.Context, input json.RawMessage) (string, error) {
+		dec := json.NewDecoder(bytes.NewReader(input))
+		dec.DisallowUnknownFields()
+		var in struct{}
+		if len(bytes.TrimSpace(input)) > 0 && dec.Decode(&in) != nil {
+			return "", errors.New("its input must be {}")
+		}
+		_, store, running := s.current()
+		if !running {
+			return "", ErrNoReplica
+		}
+		k, _, nets, err := s.keyNetworks(store, conversationKey(conv))
+		if err != nil {
+			return "", toolError(err)
+		}
+		v := KeyAddressView{Key: k.Ref(), Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey), Networks: []NetworkAddress{}}
+		for _, n := range nets {
+			if n.Curve() != k.Curve {
+				continue
+			}
+			addr, err := networkAddress(n, k.PublicKey)
+			if err != nil {
+				return "", fmt.Errorf("network %s: %w", n.Alias, err)
+			}
+			v.Networks = append(v.Networks, NetworkAddress{Network: n.Alias, Type: n.Type, Address: addr})
+		}
+		return toolJSON(v)
+	}
+}
+
+// networkAddress is the address of the Key of publicKey on n, whose curve
+// it is of.
+func networkAddress(n network.Network, publicKey []byte) (string, error) {
+	switch n.Type {
+	case network.Ethereum:
+		return key.EthereumAddress(publicKey)
+	case network.Solana:
+		return base58.Encode(publicKey), nil
+	case network.Bitcoin:
+		return signreq.BitcoinAddress(n.BitcoinNetwork, publicKey)
+	}
+	return "", fmt.Errorf("no address for a %s Network", n.Type)
 }
 
 // toolError is err as a Tool's error: prefixed with its kind, the code the

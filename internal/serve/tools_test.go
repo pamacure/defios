@@ -126,7 +126,7 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 // named in the system block; a call of one is a tool error.
 func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
-	grantTools(t, a, "auditor", `["talk_write", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse", "chain_fill"]`)
+	grantTools(t, a, "auditor", `["talk_write", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse", "chain_fill", "key_address"]`)
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w)
 		switch n {
@@ -147,7 +147,7 @@ func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if calls[0].Tools != "talk_write" || strings.Contains(calls[0].System, "sign_") || strings.Contains(calls[0].System, "chain_fill") {
+	if calls[0].Tools != "talk_write" || strings.Contains(calls[0].System, "sign_") || strings.Contains(calls[0].System, "chain_fill") || strings.Contains(calls[0].System, "key_address") {
 		t.Errorf("tools offered %q; system block %s", calls[0].Tools, calls[0].System)
 	}
 	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"sign_list\"`) {
