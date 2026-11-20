@@ -93,7 +93,7 @@ func TestOutboxHoldsWritesUntilAMajorityReturns(t *testing.T) {
 	}
 	one := queued(a.client().ConversationSend(ctx, "one", nil))
 	eth := json.RawMessage(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","gasLimit":"21000","maxFeePerGas":"30"}`)
-	req := queued(a.client().SignPropose(ctx, keyQuery, signreq.Spec{Reason: "pay", Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}}))
+	req := queued(a.client().SignPropose(ctx, keyQuery, signreq.Spec{Reason: "pay", Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}}, ""))
 
 	a.restart(t)
 	three := queued(a.client().ConversationSend(ctx, "three", conv[:]))

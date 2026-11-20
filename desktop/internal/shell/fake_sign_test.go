@@ -195,7 +195,7 @@ func (n *fakeNode) FillTransactions(_ context.Context, group, keyQuery string, t
 	return out, nil
 }
 
-func (n *fakeNode) ProposeSignRequest(_ context.Context, group, keyQuery string, spec node.SignSpec) (node.Sent, error) {
+func (n *fakeNode) ProposeSignRequest(_ context.Context, group, keyQuery string, spec node.SignSpec, _ string) (node.Sent, error) {
 	n.mu.Lock()
 	if err := n.servedOrErr(group); err != nil {
 		n.mu.Unlock()

@@ -283,7 +283,7 @@ func signedRequestOn(t *testing.T, kind string, rpcURL string, otherURL ...strin
 	}
 	setNetworks(t, b, mine)
 	setNetworks(t, a, theirs)
-	v, err := b.client().SignPropose(ctx, curve+":"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: txs})
+	v, err := b.client().SignPropose(ctx, curve+":"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: txs}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

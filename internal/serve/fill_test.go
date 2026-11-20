@@ -74,7 +74,7 @@ func TestSignFillCompletesForSignPropose(t *testing.T) {
 	if n := res.Notes[0]; len(n.Filled) != 5 || n.Chain != "ethereum chain 1" || n.Endpoint == "" {
 		t.Errorf("note %+v", n)
 	}
-	v, err := a.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay", Transactions: res.Transactions})
+	v, err := a.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay", Transactions: res.Transactions}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

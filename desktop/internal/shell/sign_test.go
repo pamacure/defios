@@ -5,10 +5,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"defios.com/desktop/internal/shell"
 	"defios.com/internal/node"
 	"defios.com/internal/transcript"
+	"defios.com/internal/trigger"
 )
 
 // keyServed is a Shell serving alpha over r's fake Node, with a 2-of-2
@@ -240,5 +242,30 @@ func TestASignRequestNamesTheRunOfThisDevicesAgentThatProposedIt(t *testing.T) {
 	_, it := card(t, s, id, func(c *shell.SignCard) bool { return c.Cause != nil })
 	if *it.Sign.Cause != (shell.SignCause{Chain: "c4a1", Step: 2}) {
 		t.Fatalf("cause %+v", *it.Sign.Cause)
+	}
+}
+
+// A Sign Request this device's exec Job proposed names that Job's Job
+// Run, whose details list the request.
+func TestASignRequestNamesTheJobRunOfThisDevicesExecJobThatProposedIt(t *testing.T) {
+	r := newRig(t, "alpha")
+	k := withKey(t, r)
+	r.node.mu.Lock()
+	id := fmt.Sprintf("5e%062x", r.node.tk().seq+1) // the next propose's
+	r.node.mu.Unlock()
+	now := time.Now()
+	r.node.addJobRuns(node.JobRun{ByHand: true, Fired: now, Job: "pay", Kind: "exec", State: node.JobOK, Started: now, Ended: now,
+		Event: trigger.Event{ConversationID: k.ConversationID}, SignRequests: []string{id}})
+	s := served(t, r)
+	s.OpenConversation(k.ConversationID)
+	if got := r.node.propose(k.ConversationID, r.node.NodeID(), "", "pay rent", 2); got != id {
+		t.Fatalf("proposed %s, want %s", got, id)
+	}
+	_, it := card(t, s, id, func(c *shell.SignCard) bool { return c.Cause != nil })
+	if *it.Sign.Cause != (shell.SignCause{JobRun: 1}) {
+		t.Fatalf("cause %+v", *it.Sign.Cause)
+	}
+	if j := s.JobRunDetails(1).Job; j == nil || !slices.Equal(j.Signs, []shell.RunSign{{Tool: "sign_propose", MsgID: id, Reason: "pay rent"}}) {
+		t.Fatalf("Job Run details: %+v", j)
 	}
 }

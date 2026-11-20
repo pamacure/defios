@@ -130,6 +130,17 @@ type liveRun struct {
 // Run token names. A token naming no Job Run kept is passed over: the
 // message is written all the same.
 func (r *jobRuns) message(token, msgID string) {
+	r.record(token, func(run *JobRun) { run.Messages = append(run.Messages, msgID) })
+}
+
+// signRequest records msgID, a Sign Request proposed with token, on the
+// Job Run token names, as message does a talk message.
+func (r *jobRuns) signRequest(token, msgID string) {
+	r.record(token, func(run *JobRun) { run.SignRequests = append(run.SignRequests, msgID) })
+}
+
+// record adds what add does to the Job Run token names, if it is kept.
+func (r *jobRuns) record(token string, add func(*JobRun)) {
 	id, ok := jobrun.TokenID(token)
 	if !ok {
 		return
@@ -153,7 +164,7 @@ func (r *jobRuns) message(token, msgID string) {
 	if run.Token() != token {
 		return
 	}
-	run.Messages = append(run.Messages, msgID)
+	add(run)
 	r.logErr(r.store.Put(*run))
 	if live {
 		l.f.tell()

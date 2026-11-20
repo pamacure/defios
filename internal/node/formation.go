@@ -88,7 +88,7 @@ type servedAPI interface {
 	SignList(ctx context.Context) ([]signreq.Summary, error)
 	SignInspect(ctx context.Context, msgID string) (signreq.Detail, error)
 	SignFill(ctx context.Context, keyQuery string, txs []signreq.TxSpec) (chainfill.Result, error)
-	SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec) (serve.SendView, error)
+	SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec, jobRun string) (serve.SendView, error)
 	SignAccept(ctx context.Context, msgID string) (serve.AcceptView, error)
 	SignRefuse(ctx context.Context, msgID, reason string) (serve.AcceptView, error)
 	SignDecline(ctx context.Context, msgID string) (serve.DeclineView, error)

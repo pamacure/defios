@@ -39,7 +39,7 @@ func signToolsPair(t *testing.T, tools string) (a *node, provider *fakeProvider,
 	for _, fill := range []byte{0x33, 0x44} {
 		waitWorkspace(t, a, mintKeyOf(t, a, b, gid, fill))
 		spec := signreq.Spec{Reason: fmt.Sprintf("pay invoice %x", fill), Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}}
-		v, err := a.client().SignPropose(context.Background(), "ecdsa:"+hexOf(bytes.Repeat([]byte{fill}, 33)), spec)
+		v, err := a.client().SignPropose(context.Background(), "ecdsa:"+hexOf(bytes.Repeat([]byte{fill}, 33)), spec, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -256,11 +256,11 @@ func TestSignListFiltersByStatus(t *testing.T) {
 	a, b, provider, conv := signingAgents(t)
 	ctx := context.Background()
 	ref := "ecdsa:" + hexOf(bytes.Repeat([]byte{0x33}, 33))
-	open, err := a.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay one", Transactions: payEth})
+	open, err := a.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay one", Transactions: payEth}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	refused, err := b.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay two", Transactions: payEth})
+	refused, err := b.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay two", Transactions: payEth}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestAQueuedProposalIsQueuedToTheModel(t *testing.T) {
 func TestAnAgentAcceptsASignRequest(t *testing.T) {
 	a, b, provider, conv := signingAgents(t)
 	pk := "ecdsa:" + hexOf(bytes.Repeat([]byte{0x33}, 33))
-	v, err := a.client().SignPropose(context.Background(), pk, signreq.Spec{Reason: "pay", Transactions: payEth})
+	v, err := a.client().SignPropose(context.Background(), pk, signreq.Spec{Reason: "pay", Transactions: payEth}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

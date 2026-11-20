@@ -38,7 +38,7 @@ func TestSignResolvesAKeyAliasOfTheServedGroupWithNoRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign fill by alias: %v", err)
 	}
-	v, err := a.client().SignPropose(ctx, "Treasury", signreq.Spec{Reason: "pay", Transactions: res.Transactions})
+	v, err := a.client().SignPropose(ctx, "Treasury", signreq.Spec{Reason: "pay", Transactions: res.Transactions}, "")
 	if err != nil {
 		t.Fatalf("sign propose by alias: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestSignRefusesAnAmbiguousOrUnreadableAlias(t *testing.T) {
 	writeConfig(t, otherFile, "alias = \"TWIN\"\n")
 	for name, call := range map[string]func(string) error{
 		"propose": func(q string) error {
-			_, err := a.client().SignPropose(ctx, q, signreq.Spec{Reason: "pay"})
+			_, err := a.client().SignPropose(ctx, q, signreq.Spec{Reason: "pay"}, "")
 			return err
 		},
 		"fill": func(q string) error {

@@ -191,7 +191,7 @@ jobs = ["ready"]
 			t.Fatal(err)
 		}
 	}
-	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: payEth, Depth: 1})
+	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: payEth, Depth: 1}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

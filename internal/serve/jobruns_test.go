@@ -17,7 +17,9 @@ import (
 	"defios.com/internal/config"
 	"defios.com/internal/group"
 	"defios.com/internal/jobrun"
+	"defios.com/internal/key"
 	"defios.com/internal/serve"
+	"defios.com/internal/signreq"
 	"defios.com/internal/trigger"
 )
 
@@ -259,5 +261,51 @@ exec = ["sh", "-c", "echo said; echo \"$DEFIOS_JOB_RUN\" > \"$0\"", %q]
 	runs = waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 2 && runs[0].State == jobrun.OK })
 	if r := runs[0]; !r.ByHand || r.Event.Type != "" || r.Event.ConversationID != "" {
 		t.Errorf("with no event, Job Run %+v", r)
+	}
+}
+
+// A Sign Request an exec Job proposes with its DEFIOS_JOB_RUN is recorded
+// on that Job Run, apart from its talk messages; one proposed with a token
+// naming no Job Run kept is proposed all the same.
+func TestAJobRunRecordsTheSignRequestsItsJobProposed(t *testing.T) {
+	tokFile := filepath.Join(t.TempDir(), "tok")
+	a, b := pairWith(t, func(n *node) {
+		recordsStances(n)
+		if n.name == "bob" {
+			tune := n.tune
+			n.tune = func(o *serve.Options) { tune(o); o.Getenv = os.Getenv }
+		}
+	})
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+	mintKey(t, a, b, gid)
+	pk := bytes.Repeat([]byte{0x33}, 33)
+	conv := key.ConversationID("ecdsa", pk)
+	waitMinted(t, b, gid, conv[:])
+	writeConfig(t, b.paths.GroupConfigFile(group.ImplicitAlias), fmt.Sprintf(`
+[networks.eth]
+type = "ethereum"
+chain_id = 1
+
+[jobs.pay]
+exec = ["sh", "-c", "echo \"$DEFIOS_JOB_RUN\" > \"$0\"", %q]
+`, tokFile))
+	ctx := context.Background()
+	if v, err := b.client().JobRun(ctx, "pay", nil); err != nil || !v.OK {
+		t.Fatalf("job run pay = %+v, %v", v, err)
+	}
+	r := waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && runs[0].State == jobrun.OK })[0]
+
+	sent, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: payEth, Depth: 1}, r.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := waitJobRuns(t, b, func(runs []jobrun.Run) bool { return len(runs) == 1 && len(runs[0].SignRequests) == 1 })
+	if got := runs[0]; got.SignRequests[0] != sent.MsgID || len(got.Messages) != 0 {
+		t.Errorf("Job Run sign requests %v, messages %v; want [%s] and none", got.SignRequests, got.Messages, sent.MsgID)
+	}
+	if _, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay again", Transactions: payEth, Depth: 1}, "9-1"); err != nil {
+		t.Fatalf("proposed with a token naming no Job Run: %v", err)
 	}
 }

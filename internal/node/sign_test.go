@@ -150,7 +150,7 @@ func TestAProposedRequestShowsEachNodesStanceAndItsStatusMoves(t *testing.T) {
 
 	var sent node.Sent
 	retry(t, func() (err error) {
-		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "pay the invoice", Transactions: payEth})
+		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "pay the invoice", Transactions: payEth}, "")
 		return err
 	})
 	if sent.Queued || sent.Seq == 0 {
@@ -202,7 +202,7 @@ func TestARequestWhoseDeadlinePassesIsSeenExpired(t *testing.T) {
 	ctx := context.Background()
 	var sent node.Sent
 	retry(t, func() (err error) {
-		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "quick", DeadlineSeconds: 1, Transactions: payEth})
+		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "quick", DeadlineSeconds: 1, Transactions: payEth}, "")
 		return err
 	})
 	for _, mb := range []*member{alice, bob} {
@@ -253,7 +253,7 @@ jobs = ["ready"]
 
 	var sent node.Sent
 	retry(t, func() (err error) {
-		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "pay", Transactions: payEth})
+		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "pay", Transactions: payEth}, "")
 		return err
 	})
 	ended := next(t, bob.events, func(ev node.Event) *node.HookRunEvent {
@@ -305,7 +305,7 @@ func TestARefusalQueuedInTheOutboxIsSeenAsThisNodesStance(t *testing.T) {
 	ctx := context.Background()
 	var sent node.Sent
 	retry(t, func() (err error) {
-		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "pay", Transactions: payEth})
+		sent, err = alice.h.ProposeSignRequest(ctx, "alpha", key, node.SignSpec{Reason: "pay", Transactions: payEth}, "")
 		return err
 	})
 	next(t, bob.events, signEvent(sent.MsgID, signreq.Open))

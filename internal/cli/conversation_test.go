@@ -1052,29 +1052,35 @@ func TestDefiosDepthIsTheDepthAJobWritesAt(t *testing.T) {
 	}
 }
 
-// Under an exec Job, conversation send hands serve DEFIOS_JOB_RUN, the
-// token naming the Job's Job Run, so serve records the message on it; a
-// person's send hands none.
-func TestConversationSendHandsServeTheJobRun(t *testing.T) {
+// Under an exec Job, conversation send and sign propose hand serve
+// DEFIOS_JOB_RUN, the token naming the Job's Job Run, so serve records the
+// message or request on it; a person's hand none.
+func TestConversationSendAndSignProposeHandServeTheJobRun(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	body := fakeConversationSend(t, dir)
+	txs := `[{"network": "eth", "ethereum": {"to": "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "value": "1"}}]`
+	send := []string{"--dir", dir, "conversation", "send", "hi"}
+	propose := []string{"--dir", dir, "sign", "propose", "--key", "ecdsa:02", "--reason", "pay", "--transactions", "-"}
 	for _, c := range []struct {
 		env  map[string]string
+		args []string
 		want any
 	}{
-		{map[string]string{"DEFIOS_JOB_RUN": "7-123"}, "7-123"},
-		{nil, nil},
+		{map[string]string{"DEFIOS_JOB_RUN": "7-123"}, send, "7-123"},
+		{nil, send, nil},
+		{map[string]string{"DEFIOS_JOB_RUN": "7-123"}, propose, "7-123"},
+		{nil, propose, nil},
 	} {
-		if r := run(t, c.env, "", "--dir", dir, "conversation", "send", "hi"); r.code != 0 {
-			t.Fatalf("exit %d: %s", r.code, r.stderr)
+		if r := run(t, c.env, txs, c.args...); r.code != 0 {
+			t.Fatalf("%v: exit %d: %s", c.args, r.code, r.stderr)
 		}
 		var m map[string]any
 		if err := json.Unmarshal([]byte(body.Load().(string)), &m); err != nil {
 			t.Fatal(err)
 		}
 		if m["job_run"] != c.want {
-			t.Errorf("with %v, posted %v; want job_run %v", c.env, m, c.want)
+			t.Errorf("%v with %v, posted %v; want job_run %v", c.args[2:4], c.env, m, c.want)
 		}
 	}
 }

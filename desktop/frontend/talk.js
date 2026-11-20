@@ -952,10 +952,13 @@ function signPanel(it) {
       it.Job && h("span", { class: "handle" }, "Job"),
       h("time", { datetime: it.At }, utc(it.At))),
     h("button", { class: "icon-btn close", type: "button", "aria-label": "Close details", title: "Close (Esc)", onclick: () => deselect() }, "×"));
-  // The run of this device's agent that proposed it, as its line here.
+  // The run of this device's agent, or the Job Run of its exec Job, that
+  // proposed it, as its line here.
   const k = c.Cause;
-  const by = k && ts.Items.find((x) => (k.MsgID ? x.MsgID === k.MsgID : x.Kind === "run" && x.Chain === k.Chain && x.Step === k.Step));
-  const cause = by && h("button", { class: "link", type: "button", onclick: () => select(by) }, `Show @${it.Handle}'s run that proposed it`);
+  const by = k && ts.Items.find((x) => (k.JobRun ? x.Kind === "job" && x.JobRun === k.JobRun
+    : k.MsgID ? x.MsgID === k.MsgID : x.Kind === "run" && x.Chain === k.Chain && x.Step === k.Step));
+  const cause = by && h("button", { class: "link", type: "button", onclick: () => select(by) },
+    k.JobRun ? "Show the Job Run that proposed it" : `Show @${it.Handle}'s run that proposed it`);
   return h("aside", { class: "about details", "aria-label": "Sign Request details" },
     h("article", { class: "dcard signpanel" },
       h("div", { class: "dtop" }, head, signHead(c, cause), signActions(c, tui.busy)),
@@ -986,7 +989,8 @@ function jobFacts(job) {
     row("Started", utc(job.Started)),
     row("Ended", utc(job.Ended)),
     job.ExitCode !== null && job.ExitCode !== undefined && row("Exit code", String(job.ExitCode)),
-    job.Attempts?.length > 0 && row("HTTP status", job.Attempts.map((a) => a.Status || "none").join(", ")));
+    job.Attempts?.length > 0 && row("HTTP status", job.Attempts.map((a) => a.Status || "none").join(", ")),
+    job.Signs?.length > 0 && row("Sign Requests", signRows(job.Signs)));
 }
 
 // jobBody is what a Job Run produced: an exec Job's command and output,
@@ -1036,14 +1040,19 @@ function runFacts(run) {
     run.Error && h("pre", { class: "error-text" }, run.Error),
     row("Tokens", h("div", { class: "value" }, `${run.InputTokens.toLocaleString()} in · ${run.OutputTokens.toLocaleString()} out`)),
     run.Provider && row("Provider", h("div", { class: "value" }, h("strong", {}, run.Provider), run.ModelID && h("code", {}, run.ModelID), run.Shape && h("span", { class: "hint" }, run.Shape))),
-    run.Signs?.length > 0 && row("Sign Requests", h("div", { class: "signrows" }, run.Signs.map((sg) => h("button", {
-      class: "signrow", type: "button",
-      onclick: () => showSign(sg.MsgID),
-    }, h("span", { class: "text" }, sg.Reason || "No reason"), h("span", { class: "chip" }, SIGN_TOOL[sg.Tool] ?? sg.Tool))))),
+    run.Signs?.length > 0 && row("Sign Requests", signRows(run.Signs)),
     grants.length > 0 && h("details", { class: "fold-in" },
       h("summary", {}, `Tools and Skills (${grants.length})`),
       run.Tools?.length > 0 && h("p", {}, h("span", { class: "label" }, "Tools "), run.Tools.join(", ")),
       run.Skills?.length > 0 && h("p", {}, h("span", { class: "label" }, "Skills "), run.Skills.join(", "))));
+}
+
+// signRows are the Sign Requests a run or Job Run acted on, each opening
+// its details, marked with what it did.
+function signRows(signs) {
+  return h("div", { class: "signrows" }, signs.map((sg) => h("button", {
+    class: "signrow", type: "button", onclick: () => showSign(sg.MsgID),
+  }, h("span", { class: "text" }, sg.Reason || "No reason"), h("span", { class: "chip" }, SIGN_TOOL[sg.Tool] ?? sg.Tool))));
 }
 
 // runBody is only this run: its opening, headed by what summoned it, that

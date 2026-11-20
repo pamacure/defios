@@ -66,17 +66,17 @@ func TestSignProposeListInspect(t *testing.T) {
 	keyQuery := "ecdsa:" + hexOf(pk)
 
 	wrong := signreq.Spec{Reason: "r", Transactions: []signreq.TxSpec{{Network: "sol", Solana: json.RawMessage(`{"feePayer":"p","recentBlockhash":"h","instructions":[{"programId":"x"}]}`)}}}
-	if _, err := b.client().SignPropose(ctx, keyQuery, wrong); !errors.Is(err, signreq.ErrCurveMismatch) {
+	if _, err := b.client().SignPropose(ctx, keyQuery, wrong, ""); !errors.Is(err, signreq.ErrCurveMismatch) {
 		t.Fatalf("wrong curve: %v", err)
 	}
-	if _, err := a.client().SignPropose(ctx, keyQuery, spec); !errors.Is(err, network.ErrUnknown) {
+	if _, err := a.client().SignPropose(ctx, keyQuery, spec, ""); !errors.Is(err, network.ErrUnknown) {
 		t.Fatalf("an alias the proposer has no Network for: %v", err)
 	}
-	if _, err := b.client().SignPropose(ctx, hexOf(conv[:]), wrong); !errors.Is(err, signreq.ErrCurveMismatch) {
+	if _, err := b.client().SignPropose(ctx, hexOf(conv[:]), wrong, ""); !errors.Is(err, signreq.ErrCurveMismatch) {
 		t.Fatalf("by Conversation ID: %v", err)
 	}
 	for _, query := range []string{hexOf(pk), hexOf(pk)[:8]} {
-		if _, err := b.client().SignPropose(ctx, query, spec); !errors.Is(err, key.ErrUnknown) {
+		if _, err := b.client().SignPropose(ctx, query, spec, ""); !errors.Is(err, key.ErrUnknown) {
 			t.Errorf("propose --key %s: %v, want an unknown Key", query, err)
 		}
 		if _, err := b.client().SignFill(ctx, query, spec.Transactions); !errors.Is(err, key.ErrUnknown) {
@@ -85,11 +85,11 @@ func TestSignProposeListInspect(t *testing.T) {
 	}
 	noReason := spec
 	noReason.Reason = ""
-	if _, err := b.client().SignPropose(ctx, keyQuery, noReason); !errors.Is(err, signreq.ErrInvalid) {
+	if _, err := b.client().SignPropose(ctx, keyQuery, noReason, ""); !errors.Is(err, signreq.ErrInvalid) {
 		t.Fatalf("no reason: %v", err)
 	}
 
-	v, err := b.client().SignPropose(ctx, keyQuery, spec)
+	v, err := b.client().SignPropose(ctx, keyQuery, spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestSignProposeStartsSessionAndAcceptCompletesIt(t *testing.T) {
 	}
 
 	eth := json.RawMessage(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","gasLimit":"21000","maxFeePerGas":"30"}`)
-	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}})
+	v, err := b.client().SignPropose(ctx, "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

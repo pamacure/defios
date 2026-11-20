@@ -97,6 +97,9 @@ type JobRunView struct {
 	Body, ContentType string
 	// Handle is an agent Job's agent.
 	Handle string
+	// Signs are the Sign Requests an exec Job proposed; an agent Job's
+	// are its run's.
+	Signs []RunSign
 }
 
 // JobAttempt is one webhook attempt: its HTTP status, 0 for none, and its
@@ -106,8 +109,8 @@ type JobAttempt struct {
 	Error  string
 }
 
-// jobRunView is r as the panel shows it.
-func jobRunView(r node.JobRun) *JobRunView {
+// jobRunView is r as the panel shows it; t.mu is held.
+func (t *talk) jobRunView(r node.JobRun) *JobRunView {
 	v := &JobRunView{
 		ID: r.ID, Trigger: r.Trigger, ByHand: r.ByHand, Event: r.Event.Type, EventMsgID: cmp.Or(r.Event.MsgID, r.Event.SignRequestID),
 		Job: r.Job, Kind: r.Kind, State: r.State, Error: r.Error, Fired: r.Fired, Started: r.Started, Ended: r.Ended,
@@ -122,7 +125,22 @@ func jobRunView(r node.JobRun) *JobRunView {
 			v.Attempts = append(v.Attempts, JobAttempt{Status: a.Status, Error: a.Error})
 		}
 	}
+	for _, id := range r.SignRequests {
+		v.Signs = append(v.Signs, t.runSign(config.ToolSignPropose, id))
+	}
 	return v
+}
+
+// runSign is the Sign Request msgID that tool acted on, with its reason;
+// t.mu is held.
+func (t *talk) runSign(tool, msgID string) RunSign {
+	sign := RunSign{Tool: tool, MsgID: msgID}
+	for _, q := range t.reqs {
+		if q.MsgID == msgID {
+			sign.Reason = q.Reason
+		}
+	}
+	return sign
 }
 
 // RunSign is a Sign Request a run's sign Tool acted on, and its reason.
@@ -244,7 +262,9 @@ func (t *talk) jobRunOf(a at, m node.Message, chain string) *JobRunView {
 	for _, r := range runs {
 		agent := chain != "" && r.Kind == config.JobAgent && r.Chain == chain && r.Handle == m.Handle
 		if agent || slices.Contains(r.Messages, m.MsgID) {
-			return jobRunView(r)
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			return t.jobRunView(r)
 		}
 	}
 	return nil
@@ -263,7 +283,7 @@ func (t *talk) jobRunDetails(id uint64) Details {
 		return Details{Problem: problemOf(err)}
 	}
 	t.mu.Lock()
-	d := Details{DeviceID: t.self, Device: t.device(t.self), Online: true, Job: jobRunView(r)}
+	d := Details{DeviceID: t.self, Device: t.device(t.self), Online: true, Job: t.jobRunView(r)}
 	t.mu.Unlock()
 	if r.Kind != config.JobAgent || r.Chain == "" {
 		return d
@@ -368,13 +388,7 @@ func (t *talk) runView(r transcript.Run, cleared bool) RunView {
 		v.OutputTokens += out
 	}
 	for _, ac := range r.Acted {
-		sign := RunSign{Tool: ac.Tool, MsgID: ac.MsgID}
-		for _, q := range t.reqs {
-			if q.MsgID == ac.MsgID {
-				sign.Reason = q.Reason
-			}
-		}
-		v.Signs = append(v.Signs, sign)
+		v.Signs = append(v.Signs, t.runSign(ac.Tool, ac.MsgID))
 	}
 	return v
 }

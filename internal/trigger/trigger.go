@@ -140,8 +140,9 @@ type Runner struct {
 	Agent func(ctx context.Context, name string, j config.Job, ev Event) error
 	// JobRun is the token naming the Job Run of the Job it runs, given an
 	// exec Job as DEFIOS_JOB_RUN: the CLI hands it to serve with each talk
-	// message the Job writes, and serve records the message on that Job Run
-	// (ADR 0040). Empty outside a Trigger's firing.
+	// message the Job writes and each Sign Request it proposes, and serve
+	// records them on that Job Run (ADR 0040). Empty outside a Trigger's
+	// firing.
 	JobRun string
 	// Backoff is the wait before a webhook's first retry, doubling after
 	// each; zero is a second.

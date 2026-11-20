@@ -164,13 +164,15 @@ func (h *Host) FillTransactions(ctx context.Context, groupAlias, keyQuery string
 
 // ProposeSignRequest proposes that the Key keyQuery names sign spec's
 // transactions, in groupAlias, which must be served. Proposing is this
-// Node's accept.
-func (h *Host) ProposeSignRequest(ctx context.Context, groupAlias, keyQuery string, spec SignSpec) (Sent, error) {
+// Node's accept. jobRun is DEFIOS_JOB_RUN when an exec Job proposes it:
+// the token naming its Job Run, on which serve records the request (ADR
+// 0040); "" otherwise. It never reaches the COSL.
+func (h *Host) ProposeSignRequest(ctx context.Context, groupAlias, keyQuery string, spec SignSpec, jobRun string) (Sent, error) {
 	api, err := h.reach(ctx, groupAlias)
 	if err != nil {
 		return Sent{}, err
 	}
-	v, err := api.SignPropose(ctx, keyQuery, spec)
+	v, err := api.SignPropose(ctx, keyQuery, spec, jobRun)
 	if err != nil {
 		return Sent{}, wrapServed(err)
 	}

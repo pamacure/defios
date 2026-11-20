@@ -41,19 +41,21 @@ type SignCard struct {
 	Runs []SignRun
 	// Deadline is when it lapses unless signing started.
 	Deadline time.Time
-	// Cause is the run of this device's agent that proposed it; nil for
-	// none, or none this device keeps.
+	// Cause is the run of this device's agent, or the Job Run of its exec
+	// Job, that proposed it; nil for none, or none this device keeps.
 	Cause *SignCause
 	// History is what happened to it, in log order.
 	History []SignEvent
 }
 
-// SignCause is a run of this device's agent that proposed a Sign Request:
-// its chain and step, and what it said, "" for nothing.
+// SignCause is what of this device's proposed a Sign Request: a run of
+// its agent, by its chain and step, and what it said, "" for nothing; or
+// the Job Run, by its ID, of an exec Job.
 type SignCause struct {
-	Chain string
-	Step  int
-	MsgID string
+	Chain  string
+	Step   int
+	MsgID  string
+	JobRun uint64
 }
 
 // SignEvent is one moment of a Sign Request's History: its Kind, a

@@ -35,7 +35,7 @@ func stancePair(t *testing.T) (a, b *node, msgID string) {
 		waitMinted(t, n, gid, conv[:])
 		setNetworks(t, n, "[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\n")
 	}
-	v, err := b.client().SignPropose(context.Background(), "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: payEth})
+	v, err := b.client().SignPropose(context.Background(), "ecdsa:"+hexOf(pk), signreq.Spec{Reason: "pay", Transactions: payEth}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,6 +24,10 @@ import (
 type signProposeRequest struct {
 	Key string `json:"key"`
 	signreq.Spec
+	// JobRun is the token naming the Job Run of the exec Job proposing
+	// it, if one is: the request is recorded on it, and the token goes no
+	// further (ADR 0040).
+	JobRun string `json:"job_run,omitempty"`
 }
 
 type signInspectRequest struct {
@@ -68,6 +72,9 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest, handle
 	v, err := write(ctx, ob, signed)
 	if err != nil {
 		return SendView{}, err
+	}
+	if req.JobRun != "" {
+		s.jobRuns.signRequest(req.JobRun, v.MsgID)
 	}
 	// Proposing is the proposer's accept: its signature on the request is the
 	// accept the log sees, so only the local gate opens (ADR 0010). The
@@ -441,9 +448,10 @@ func signSessions(rows []cosl.Row) (map[string]string, error) {
 }
 
 // SignPropose is `sign propose`: commit a sign.request for the Key.
-func (c Client) SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec) (SendView, error) {
+// jobRun is DEFIOS_JOB_RUN when an exec Job proposes it, else "".
+func (c Client) SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec, jobRun string) (SendView, error) {
 	var v SendView
-	err := c.do(ctx, "/v1/sign/propose", signProposeRequest{Key: keyQuery, Spec: spec}, &v)
+	err := c.do(ctx, "/v1/sign/propose", signProposeRequest{Key: keyQuery, Spec: spec, JobRun: jobRun}, &v)
 	return v, err
 }
 
@@ -486,11 +494,11 @@ func (c Client) SignInspect(ctx context.Context, msgID string) (signreq.Detail, 
 // needs the tailnet up, as the socket's do.
 
 // SignPropose is Client.SignPropose in this process.
-func (r *Running) SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec) (SendView, error) {
+func (r *Running) SignPropose(ctx context.Context, keyQuery string, spec signreq.Spec, jobRun string) (SendView, error) {
 	if err := r.tailnet(); err != nil {
 		return SendView{}, err
 	}
-	return r.s.signPropose(ctx, signProposeRequest{Key: keyQuery, Spec: spec}, "")
+	return r.s.signPropose(ctx, signProposeRequest{Key: keyQuery, Spec: spec, JobRun: jobRun}, "")
 }
 
 // SignAccept is Client.SignAccept in this process.

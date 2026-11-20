@@ -152,7 +152,7 @@ func (t *talk) proposeSign(conv, reason string, txs []node.TxSpec) SignFormView 
 	if !ok {
 		return SignFormView{Problem: problemOf(node.ErrNotServed)}
 	}
-	sent, err := a.n.ProposeSignRequest(t.ctx, a.group, conv, node.SignSpec{Reason: reason, Transactions: txs})
+	sent, err := a.n.ProposeSignRequest(t.ctx, a.group, conv, node.SignSpec{Reason: reason, Transactions: txs}, "")
 	if err != nil {
 		return SignFormView{Problem: problemOf(err)}
 	}

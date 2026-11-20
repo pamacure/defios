@@ -56,7 +56,7 @@ type TalkNode interface {
 	InspectSignRequest(ctx context.Context, group, msgID string) (node.SignRequestDetail, error)
 	TransferTx(ctx context.Context, group, keyQuery string, tr node.Transfer) (node.TxSpec, error)
 	FillTransactions(ctx context.Context, group, keyQuery string, txs []node.TxSpec) (node.Filled, error)
-	ProposeSignRequest(ctx context.Context, group, keyQuery string, spec node.SignSpec) (node.Sent, error)
+	ProposeSignRequest(ctx context.Context, group, keyQuery string, spec node.SignSpec, jobRun string) (node.Sent, error)
 	AcceptSignRequest(ctx context.Context, group, msgID string) (node.Answered, error)
 	RefuseSignRequest(ctx context.Context, group, msgID, reason string) (node.Answered, error)
 	BroadcastSignRequest(ctx context.Context, group, msgID string) (node.Broadcast, error)
@@ -380,7 +380,7 @@ type talk struct {
 	// whole, so a read that overlapped one is read again, not applied.
 	signVer uint64
 	// proposed is, by Sign Request msg_id, the run of this device's agent
-	// that proposed it, read with said.
+	// or the Job Run of its exec Job that proposed it, read with said.
 	proposed map[string]SignCause
 	// failed is why each read last failed, by what it reads; while one
 	// has, the next status change reads everything again, as a Group just
@@ -634,6 +634,11 @@ func (t *talk) loadMessages() {
 					if ac.Tool == config.ToolSignPropose {
 						t.proposed[ac.MsgID] = SignCause{Chain: r.Chain, Step: r.Step, MsgID: r.MsgID}
 					}
+				}
+			}
+			for _, r := range jobRuns {
+				for _, id := range r.SignRequests {
+					t.proposed[id] = SignCause{JobRun: r.ID}
 				}
 			}
 		}

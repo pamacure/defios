@@ -63,7 +63,7 @@ Every chain must be of the Key's curve.`,
 			if err != nil {
 				return err
 			}
-			sent, err := h.ProposeSignRequest(cmd.Context(), node.ServedGroup, keyQuery, spec)
+			sent, err := h.ProposeSignRequest(cmd.Context(), node.ServedGroup, keyQuery, spec, g.app.Getenv("DEFIOS_JOB_RUN"))
 			if err != nil {
 				return signError(err)
 			}
