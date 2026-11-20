@@ -483,7 +483,10 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 
 /* The selected line, and its details in place of the right column's
    Conversation content, in the style of the Sign Request card. */
-.msg.selected .text { box-shadow: 0 0 0 2px var(--accent); }
+/* A selected line's ring is an outline, which lands on whole device
+   pixels as a border does: a box-shadow's does not, so its top and
+   bottom drew thinner on some lines than others. */
+.msg.selected .text { outline: 2px solid var(--accent); }
 .sysline.selected { color: var(--text); background: var(--accent-wash); border-radius: var(--radius-s); padding: 2px 8px; }
 /* The top padding is the card's margin, so the pinned head meets the
    column's top edge with nothing showing through above it. */
@@ -544,7 +547,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .signcard { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-l); font-size: 13px; }
 .msg.right .signcard { border-left-color: var(--line); border-right: 3px solid var(--accent); }
 .signmsg .signcard { cursor: pointer; }
-.signmsg.selected .signcard { box-shadow: 0 0 0 2px var(--accent); }
+.signmsg.selected .signcard { outline: 2px solid var(--accent); }
 .signcard header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 :is(.signcard, .signpanel) .reason, .signform .reason { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 :is(.signcard, .signpanel) .label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
@@ -982,9 +985,9 @@ body[data-page="talk"] .toasts { top: 116px; }
   animation: scan 1.4s linear infinite;
 }
 @keyframes scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
-/* The ring wraps the card and its ledge, which is drawn over the ring's
-   fill below it: drawn under the ledge alone, the ring has no bottom. */
-.signmsg.selected .signcard { box-shadow: 0 var(--depth) 0 var(--edge), 0 0 0 2px var(--accent-bright), 0 var(--depth) 0 2px var(--accent-bright), 0 0 28px var(--glow); }
+/* The ring is an outline round the card, and its ledge drops below the
+   ring so as not to hide the ring's bottom. */
+.signmsg.selected .signcard { outline: 2px solid var(--accent-bright); box-shadow: 0 calc(var(--depth) + 2px) 0 var(--edge), 0 0 28px var(--glow); }
 
 /* The stud grid, behind the screens that stand alone. */
 main.center:not(.page), main.onboard { position: relative; isolation: isolate; }
