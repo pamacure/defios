@@ -982,7 +982,9 @@ body[data-page="talk"] .toasts { top: 116px; }
   animation: scan 1.4s linear infinite;
 }
 @keyframes scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
-.signmsg.selected .signcard { box-shadow: 0 var(--depth) 0 var(--edge), 0 0 0 2px var(--accent-bright), 0 0 28px var(--glow); }
+/* The ring wraps the card and its ledge, which is drawn over the ring's
+   fill below it: drawn under the ledge alone, the ring has no bottom. */
+.signmsg.selected .signcard { box-shadow: 0 var(--depth) 0 var(--edge), 0 0 0 2px var(--accent-bright), 0 var(--depth) 0 2px var(--accent-bright), 0 0 28px var(--glow); }
 
 /* The stud grid, behind the screens that stand alone. */
 main.center:not(.page), main.onboard { position: relative; isolation: isolate; }
