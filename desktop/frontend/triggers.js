@@ -5,7 +5,7 @@
 // (main.UI.Triggers) and redraws only on its own changes or a new
 // edit-target Group, so a redraw of the app never drops what is typed. UI
 // text says "device" for a Node.
-import { call, h, put } from "./dom.js";
+import { call, grow, h, put } from "./dom.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { secretField } from "./secretfield.js";
 import { brickClass, liveryClass } from "./livery.js";
@@ -188,7 +188,7 @@ function row(where, field, label, input, hint, box = input) {
 }
 
 const text = (value, attrs = {}) => h("input", { class: "field left", autocomplete: "off", spellcheck: "false", value: value ?? "", ...attrs });
-const area = (value, attrs = {}) => h("textarea", { class: "field left area", spellcheck: "false", ...attrs }, value ?? "");
+const area = (value, attrs = {}) => grow(h("textarea", { class: "field left area", spellcheck: "false", ...attrs }, value ?? ""));
 const lines = (s) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 const list = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
@@ -427,7 +427,7 @@ function jobForm(j) {
   if (d.Kind === "agent") {
     const { sel: agent, el: agentEl } = agentSelect(d.Agent,
       { none: tv.Handles?.length ? "Choose an agent" : "No agents on this device yet" });
-    const prompt = area(d.Prompt, { rows: 3, placeholder: "Review the Sign Request and accept it if it matches policy." });
+    const prompt = area(d.Prompt, { rows: 1, placeholder: "Review the Sign Request and accept it if it matches policy." });
     // A Key is shown by its alias but written as its Workspace name, which
     // never changes. Each place the agent is not included in says so, as
     // the Job would fail there; one chosen offers to include it.

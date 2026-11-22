@@ -3,7 +3,7 @@
 // form keeps only what is being typed, and every step goes through the Go
 // side (main.UI.SignForm, FillSign, ProposeSign). UI text says "device" for
 // a Node.
-import { call, h } from "./dom.js";
+import { call, grow, h } from "./dom.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 
 // ctx is the Talk page's: { ts() the TalkState, act(method, ...args),
@@ -198,12 +198,12 @@ function actions(c, busy) {
 
 function reasonField() {
   const el = h("textarea", {
-    class: "field", rows: 2, required: true, "data-field": "refuse-reason", "data-autofocus": true,
+    class: "field", rows: 1, required: true, "data-field": "refuse-reason", "data-autofocus": true,
     placeholder: "Why refuse? The other devices see this.", "aria-label": "Reason for refusing",
   });
   el.value = cui.reason;
   el.addEventListener("input", () => { cui.reason = el.value; });
-  return el;
+  return grow(el);
 }
 
 const JOB_STATE = { pending: "Waiting", running: "Running…", ok: "Done", failed: "Failed", not_run: "Not run" };
@@ -399,7 +399,7 @@ function field(obj, name, attrs = {}, tag = "input") {
   const el = h(tag, { class: "field", autocomplete: "off", spellcheck: "false", "data-field": attrs["data-field"] ?? name, ...attrs });
   el.value = obj[name] ?? "";
   el.addEventListener("input", () => { obj[name] = el.value; });
-  return el;
+  return tag === "textarea" ? grow(el) : el;
 }
 
 export function signForm() {
@@ -429,7 +429,7 @@ function edit() {
     ? h("p", { class: "hint" }, "This device has no Network for this Key's chains. Add one on the Networks page.")
     : form.txs.map((tx, i) => txFields(tx, i)),
   !noNets && h("button", { class: "link", type: "button", onclick: () => { form.txs.push({ ...blankTx(), network: form.networks[0].Alias }); ctx.draw(); } }, "+ Add a transaction"),
-  h("label", {}, "Reason", field(form, "reason", { required: true, rows: 2, placeholder: "What this pays for. Every device sees it.", "data-field": "sign-reason" }, "textarea")),
+  h("label", {}, "Reason", field(form, "reason", { required: true, rows: 1, placeholder: "What this pays for. Every device sees it.", "data-field": "sign-reason" }, "textarea")),
   h("p", { class: "hint" }, "Fill completes the nonce, fees and blockhash from this device's Networks, for you to review before proposing. Proposing counts as this device's accept."),
   h("div", { class: "row end" },
     h("button", { class: "btn small", type: "button", onclick: closeForm }, "Cancel"),
@@ -492,7 +492,7 @@ function callFields(tx, i) {
 function intentFields(tx, i, type) {
   return [
     h("label", {}, `Intent (${type || "chain"} JSON)`,
-      field(tx, "intent", { rows: 5, required: true, class: "field mono", "data-field": `intent-${i}`, placeholder: type === "bitcoin" ? '{"inputs": [...], "outputs": [...]}' : "{ ... }" }, "textarea")),
+      field(tx, "intent", { rows: 1, required: true, class: "field mono", "data-field": `intent-${i}`, placeholder: type === "bitcoin" ? '{"inputs": [...], "outputs": [...]}' : "{ ... }" }, "textarea")),
     h("p", { class: "hint" }, type === "bitcoin"
       ? "A Bitcoin payment needs its inputs chosen, so it is written out as the chain's intent. Fill completes the fees."
       : "The transaction as the chain's intent, as defios sign propose --transactions takes it. Fill completes what it leaves out."),

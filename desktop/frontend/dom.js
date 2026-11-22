@@ -47,3 +47,23 @@ export function put(el, ...children) {
   el.replaceChildren(...children.flat(Infinity).filter((c) => c != null && c !== false));
   return el;
 }
+
+// fitHeight sizes a textarea to its text, from its rows up to its
+// max-height; only past that does it scroll, and never sideways.
+export function fitHeight(el) {
+  if (!el.isConnected) return;
+  const cs = getComputedStyle(el);
+  const max = parseFloat(cs.maxHeight) || Infinity;
+  el.style.height = "auto";
+  const want = el.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  el.style.height = `${Math.min(want, max)}px`;
+  el.style.overflowY = want > max ? "auto" : "hidden";
+}
+
+// grow keeps a textarea sized to its text as it is typed in and as its
+// width, and so its wrapping, changes.
+export function grow(el) {
+  el.addEventListener("input", () => fitHeight(el));
+  new ResizeObserver(() => fitHeight(el)).observe(el);
+  return el;
+}

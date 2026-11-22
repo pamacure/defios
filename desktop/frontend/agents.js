@@ -4,7 +4,7 @@
 // side reports (main.UI.Agents) and redraws only on its own changes or a
 // new edit-target Group, so a redraw of the app never drops what is
 // being typed. UI text says "device" for a Node.
-import { call, h, put } from "./dom.js";
+import { call, grow, h, put } from "./dom.js";
 import { avatar, forgetPicks, liveryPicker, randomFree } from "./livery.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
 import { secretField } from "./secretfield.js";
@@ -169,7 +169,7 @@ function cell(where, field, label, input, hint) {
 }
 
 const text = (value, attrs = {}) => h("input", { class: "field left", autocomplete: "off", spellcheck: "false", value: value ?? "", ...attrs });
-const area = (value, attrs = {}) => h("textarea", { class: "field left area", spellcheck: "false", ...attrs }, value ?? "");
+const area = (value, attrs = {}) => grow(h("textarea", { class: "field left area", spellcheck: "false", ...attrs }, value ?? ""));
 
 // ---- This Device: Agent Profiles ----
 
@@ -223,7 +223,7 @@ function profileForm(o) {
     Provider: providerSelect(d.Provider, !o),
     Model: text(d.Model, { placeholder: "claude-opus-5-5" }),
     MaxTurns: text(d.MaxTurns, { inputmode: "numeric", placeholder: "Default" }),
-    Body: area(d.Body, { rows: 4, placeholder: '{"max_tokens": 4096}' }),
+    Body: area(d.Body, { rows: 1, placeholder: '{"max_tokens": 4096}' }),
     Brief: area(d.Brief, { rows: 12, class: "field left area mono", placeholder: o ? "" : "A placeholder Agent Brief is written if this is left empty." }),
   };
   profInputs = o ? inputs : null;
@@ -443,7 +443,7 @@ function providerForm(p) {
   preset.addEventListener("change", fromPreset);
   if (d.Preset) fromPreset();
   const key = secretField({ group, id: `pv-api_key`, value: d.APIKey, noneLabel: "No API key" });
-  const body = area(d.Body, { rows: 3, placeholder: '{"max_tokens": 4096}' });
+  const body = area(d.Body, { rows: 1, placeholder: '{"max_tokens": 4096}' });
   const keyRow = row(where, "api_key", "API key", h("div", {}), "A Secret of this Group, sent only to this Provider's base URL.");
   keyRow.querySelector(".fcell").firstChild.replaceWith(key.el);
   const saved = h("span", { class: "saved", "aria-live": "polite" }, av.Where === where && av.Saved ? "Saved." : "");

@@ -5,7 +5,7 @@
 // it holds only what is being typed or is open on screen. UI text says
 // "device" for a Node.
 import { Clipboard } from "/wails/runtime.js";
-import { call, h, icon, put } from "./dom.js";
+import { call, fitHeight, h, icon, put } from "./dom.js";
 import { avatar, brick, forgetPicks, liveryClass, liveryPicker } from "./livery.js";
 import { mentionSpans } from "./mention.js";
 import { callFailed, problemBox, problemLine, showProblem } from "./notice.js";
@@ -684,16 +684,7 @@ function makeComposer() {
     grow();
     fit();
   };
-  // grow sizes the textarea to its text, from one line up to its
-  // max-height; only past that does it scroll.
-  const grow = () => {
-    const cs = getComputedStyle(textarea);
-    const max = parseFloat(cs.maxHeight);
-    textarea.style.height = "auto";
-    const want = textarea.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
-    textarea.style.height = `${Math.min(want, max)}px`;
-    textarea.style.overflowY = want > max ? "auto" : "hidden";
-  };
+  const grow = () => fitHeight(textarea);
   // fit lays the mirror exactly over the textarea's text: as wide as it
   // less any scrollbar, as tall, and scrolled as far.
   const fit = () => {
