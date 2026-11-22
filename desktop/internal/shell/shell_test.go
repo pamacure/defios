@@ -169,6 +169,31 @@ func TestTheThemeFollowsTheOSUntilOneIsChosen(t *testing.T) {
 	}
 }
 
+// The dark backgrounds are Charcoal until another is chosen, are kept
+// across starts, and refuse a name they do not know.
+func TestTheDarkBackgroundsAreCharcoalUntilOthersAreChosen(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := r.start(false)
+	if st := s.State(); st.Prefs.Dark != "charcoal" {
+		t.Fatalf("default dark = %q", st.Prefs.Dark)
+	}
+	if st := s.SetDark("forest"); st.Prefs.Dark != "forest" || st.Problem != nil || r.prefs.get().Dark != prefs.DarkForest {
+		t.Fatalf("forest: %+v, saved %q", st, r.prefs.get().Dark)
+	}
+	if st := r.start(false).State(); st.Prefs.Dark != "forest" {
+		t.Fatalf("after a restart: %q", st.Prefs.Dark)
+	}
+	if st := s.SetDark("navy"); st.Problem == nil || st.Problem.Code != "bad-dark" || st.Prefs.Dark != "forest" {
+		t.Fatalf("an unknown dark: %+v", st)
+	}
+	if st := s.SetDark("teal"); st.Prefs.Dark != "teal" || st.Problem != nil || r.prefs.get().Dark != prefs.DarkTeal {
+		t.Fatalf("teal: %+v", st)
+	}
+	if st := s.SetDark("charcoal"); st.Prefs.Dark != "charcoal" || st.Problem != nil || r.prefs.get().Dark != prefs.DarkCharcoal {
+		t.Fatalf("back to charcoal: %+v", st)
+	}
+}
+
 func TestStartAtLoginRegistersWithTheOS(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := r.start(false)

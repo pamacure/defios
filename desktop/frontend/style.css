@@ -43,10 +43,10 @@
    app forces it (Settings, Appearance; app.js sets data-theme). */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #151A1F;
+    --bg: #131413;
     --surface: #1A2523;
-  --field: #0E1216;
-    --line: #303940;
+    --field: #0B0C0B;
+    --line: #334542;
     --muted: #8EA4B7;
     --text: #EDF1F4;
     --text-soft: #BBCAD8;
@@ -65,15 +65,15 @@
     --livery-slate: #A9BBCB; --livery-slate-wash: #2A3540;
     --livery-brown: #D3A272; --livery-brown-wash: #3A2A1A;
     --bar: #8BB5AE;
-    --soft: #23524A;
+    --soft: #334542;
     color-scheme: dark;
   }
 }
-:root[data-theme="dark"] {
-  --bg: #151A1F;
+:root[data-theme="dark"], .darkwin {
+  --bg: #131413;
   --surface: #1A2523;
-  --field: #0E1216;
-  --line: #303940;
+  --field: #0B0C0B;
+  --line: #334542;
   --muted: #8EA4B7;
   --text: #EDF1F4;
   --text-soft: #BBCAD8;
@@ -92,7 +92,7 @@
   --livery-slate: #A9BBCB; --livery-slate-wash: #2A3540;
   --livery-brown: #D3A272; --livery-brown-wash: #3A2A1A;
   --bar: #8BB5AE;
-  --soft: #23524A;
+  --soft: #334542;
   color-scheme: dark;
 }
 
@@ -924,33 +924,64 @@ body[data-page="talk"] .toasts { top: 116px; }
   --glow: rgba(63, 249, 170, 0.55);
   --stud: rgba(109, 126, 141, 0.26);
   --float: 0 14px 28px rgba(21, 26, 31, 0.14);
+  /* Textures, dark only (the blocks below): --sand is grain on cards,
+     --glass-* smoke the layers that float over content. */
+  --sand: none;
+  --glass-bg: var(--surface);
+  --glass-blur: none;
+  --glass-sheen: none;
+  --glass-lit: 0 0 transparent;
   --snap: cubic-bezier(.3, 1.45, .5, 1);
   --out: cubic-bezier(.2, .8, .2, 1);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --edge: #0B0E11;
+    --edge: #090A09;
     --accent-edge: #1E8A5C;
     --bright-edge: #1FA06B;
-    --soft-edge: #163832;
+    --soft-edge: #1A2523;
     --danger-edge: #8E1720;
     --live: #3FF9AA;
     --glow: rgba(63, 249, 170, 0.4);
     --stud: rgba(142, 164, 183, 0.16);
     --float: 0 14px 28px rgba(0, 0, 0, 0.4);
+    --sand: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='a'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='2' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 2.4 0 0 0 -1.45'/%3E%3C/filter%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.6 0 0 0 1.05'/%3E%3C/filter%3E%3Cg opacity='.1'%3E%3Crect width='100%25' height='100%25' filter='url(%23a)' opacity='.55'/%3E%3Crect width='100%25' height='100%25' filter='url(%23b)' opacity='.8'/%3E%3C/g%3E%3C/svg%3E");
+    --glass-bg: color-mix(in srgb, var(--surface) 62%, transparent);
+    --glass-blur: blur(20px) saturate(1.3);
+    --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 45%);
+    --glass-lit: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   }
 }
-:root[data-theme="dark"] {
-  --edge: #0B0E11;
+:root[data-theme="dark"], .darkwin {
+  --edge: #090A09;
   --accent-edge: #1E8A5C;
   --bright-edge: #1FA06B;
-  --soft-edge: #163832;
+  --soft-edge: #1A2523;
   --danger-edge: #8E1720;
   --live: #3FF9AA;
   --glow: rgba(63, 249, 170, 0.4);
   --stud: rgba(142, 164, 183, 0.16);
   --float: 0 14px 28px rgba(0, 0, 0, 0.4);
+  --sand: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='a'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='2' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 2.4 0 0 0 -1.45'/%3E%3C/filter%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.6 0 0 0 1.05'/%3E%3C/filter%3E%3Cg opacity='.1'%3E%3Crect width='100%25' height='100%25' filter='url(%23a)' opacity='.55'/%3E%3Crect width='100%25' height='100%25' filter='url(%23b)' opacity='.8'/%3E%3C/g%3E%3C/svg%3E");
+  --glass-bg: color-mix(in srgb, var(--surface) 62%, transparent);
+  --glass-blur: blur(20px) saturate(1.3);
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 45%);
+  --glass-lit: inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
+
+/* Dark backgrounds (Settings, Dark backgrounds; app.js sets data-dark).
+   The dark blocks above are Charcoal, the darkest; Deep teal is muted and
+   Forest the greenest. All from the Figma palette but --field and --edge,
+   which sit darker than its darkest swatches, and Deep teal's surface and
+   line, which sit between its two darkest tertiary swatches so the panels
+   stay dim. Accents do not change. The forced-dark blocks also colour
+   Settings' .darkwin previews, so each shows its own backgrounds. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"])[data-dark="teal"] { --bg: #1A2523; --surface: #283433; --field: #111917; --line: #3B4D4A; --edge: #0E1514; --soft: #3B4D4A; --soft-edge: #283433; }
+  :root:not([data-theme="light"])[data-dark="forest"] { --bg: #01150A; --surface: #05301D; --field: #000D06; --line: #0E5336; --edge: #000A04; --soft: #1A7A51; --soft-edge: #0E5336; }
+}
+:root[data-theme="dark"][data-dark="teal"], .darkwin[data-dark="teal"] { --bg: #1A2523; --surface: #283433; --field: #111917; --line: #3B4D4A; --edge: #0E1514; --soft: #3B4D4A; --soft-edge: #283433; }
+:root[data-theme="dark"][data-dark="forest"], .darkwin[data-dark="forest"] { --bg: #01150A; --surface: #05301D; --field: #000D06; --line: #0E5336; --edge: #000A04; --soft: #1A7A51; --soft-edge: #0E5336; }
 
 /* Quantico: titles, section labels, and counts. */
 .page h1, .center h1, .card h1, .modal h2, .chat-head h2 { font-family: var(--display); font-weight: 700; letter-spacing: .01em; }
@@ -989,8 +1020,8 @@ body[data-page="talk"] .toasts { top: 116px; }
 /* What holds content stands on the same edge; what floats also lifts. */
 .part, .card, .signcard, .stat, .provider, .devices, .tabs { box-shadow: 0 var(--depth) 0 var(--edge); }
 .stat, .provider, .devices, .tabs { --depth: 2px; }
-.dropdown, .popover, .suggest, .toast { box-shadow: 0 var(--depth) 0 var(--edge), var(--float); }
-.modal { border: 1px solid var(--line); box-shadow: 0 var(--depth) 0 var(--edge), 0 24px 48px rgba(0, 0, 0, 0.28); }
+.dropdown, .popover, .suggest, .toast { box-shadow: var(--glass-lit), 0 var(--depth) 0 var(--edge), var(--float); }
+.modal { border: 1px solid var(--line); box-shadow: var(--glass-lit), 0 var(--depth) 0 var(--edge), 0 24px 48px rgba(0, 0, 0, 0.28); }
 .tabs button[aria-selected="true"] { box-shadow: 0 2px 0 var(--edge); }
 .chip { font-weight: 500; }
 
@@ -1143,3 +1174,46 @@ select:not([multiple]):not([size]):disabled { color: var(--muted); cursor: defau
   font-family: var(--display); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
 }
 .selectmenu .group:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--line); }
+
+/* Settings, Dark backgrounds: one small window per choice, in its own
+   colours (the forced-dark blocks above); the chosen one glows. */
+.toggle.darkpick { flex-direction: column; }
+.darkopts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; width: 100%; max-width: 560px; }
+.darkopt { position: relative; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
+.darkopt input { position: absolute; opacity: 0; pointer-events: none; }
+.darkopt .name { display: flex; align-items: baseline; gap: 6px; font-size: 13px; }
+.darkopt .name strong { color: var(--text); font-weight: 600; }
+.darkopt .name span { color: var(--muted); }
+.darkwin { display: grid; grid-template-columns: 22px 1fr; height: 92px; overflow: hidden; color-scheme: dark; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); outline: 2px solid transparent; outline-offset: 2px; transition: outline-color .12s, box-shadow .12s; }
+.darkopt:hover .darkwin { outline-color: var(--line); }
+.darkopt.on .darkwin { outline-color: var(--accent-bright); box-shadow: 0 0 18px var(--glow); }
+.darkopt input:focus-visible + .darkwin { outline-color: var(--live); }
+.darkwin i { display: block; }
+.darkwin .rail { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; background: var(--surface); border-right: 1px solid var(--line); }
+.darkwin .rail i { width: 12px; height: 8px; border-radius: 2px; background: var(--line); }
+.darkwin .rail .mark { width: 12px; height: 12px; margin-bottom: 3px; background: var(--accent); }
+.darkwin .rail .on { position: relative; background: var(--accent-wash); box-shadow: -5px 0 0 -3px var(--live), -4px 0 8px -2px var(--glow); }
+.darkwin .body { display: flex; flex-direction: column; gap: 4px; padding: 6px; min-width: 0; }
+.darkwin .row { height: 5px; width: 70%; border-radius: 2px; background: var(--line); }
+.darkwin .row.sel { width: 85%; height: 8px; background: var(--accent-wash); }
+.darkwin .card { display: flex; flex-direction: column; gap: 4px; padding: 4px 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 2px; box-shadow: 0 2px 0 var(--edge); }
+.darkwin .card.live { border-color: var(--live); box-shadow: 0 2px 0 var(--edge), 0 0 12px -4px var(--glow); }
+.darkwin .card .row { width: 60%; background: var(--muted); opacity: .5; }
+.darkwin .quorum { display: flex; gap: 2px; }
+.darkwin .seg { width: 10px; height: 4px; border-radius: 1px; background: var(--bg); border: 1px solid var(--line); }
+.darkwin .seg.on { background: var(--accent-bright); border-color: var(--bright-edge); box-shadow: 0 0 6px var(--glow); }
+.darkwin .foot { display: flex; gap: 4px; margin-top: auto; }
+.darkwin .well { flex: 1; height: 9px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); }
+.darkwin .go { width: 18px; height: 9px; border-radius: 2px; background: var(--accent); box-shadow: 0 2px 0 var(--accent-edge); }
+
+/* Textures, dark only (--sand and --glass-* are none or plain in light).
+   Sand: a 140px noise tile at 10%, drawn once, on the cards that sit on
+   the page. Smoked glass: only on the layers that float over content,
+   where the blur has something to show; kept to these few, small layers
+   as each re-blurs what is behind it on every redraw. */
+.part, .card, .signcard { background-image: var(--sand); }
+.dropdown, .popover, .suggest, .toast, .modal {
+  background: var(--glass-sheen), var(--sand), var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}

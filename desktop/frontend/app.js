@@ -157,7 +157,7 @@ function dismissProblem() {
 function render(force = false) {
   if (!state) return;
   const s = state;
-  applyTheme(s.Prefs.Theme);
+  applyTheme(s.Prefs.Theme, s.Prefs.Dark);
   const key = JSON.stringify([s.View, s.Selected, s.Groups, s.Problem, s.Node, ui.addingGroup,
     s.Progress, s.Forming, s.Restored, s.PassphraseHeld, ui.restore, ui.invite, ui.pick, ui.declining,
     s.View === "served" && !ui.addingGroup ? [s.Seq, ui.page, ui.menuOpen, ui.busy] : ui.busy]);
@@ -709,11 +709,12 @@ function editTarget(s) {
 }
 
 // applyTheme sets the colours: "light" or "dark" override the OS, any
-// other follows it (style.css).
-function applyTheme(theme) {
+// other follows it; dark picks the dark theme's backgrounds (style.css).
+function applyTheme(theme, dark) {
   const root = document.documentElement;
   if (theme === "light" || theme === "dark") root.dataset.theme = theme;
   else delete root.dataset.theme;
+  root.dataset.dark = dark || "charcoal";
 }
 
 // themePicker chooses System, Light or Dark.
@@ -726,6 +727,32 @@ function themePicker(s) {
         h("option", { value: v, selected: s.Prefs.Theme === v }, label))));
 }
 
+// darkPicker chooses the dark theme's backgrounds, each shown as a small
+// window in its own colours (style.css, .darkwin), whatever the app's.
+function darkPicker(s) {
+  return h("div", { class: "toggle darkpick" },
+    h("span", { class: "text" }, h("strong", {}, "Dark backgrounds"),
+      h("span", {}, "Used whenever the app is dark.")),
+    h("div", { class: "darkopts", role: "radiogroup", "aria-label": "Dark backgrounds" },
+      [["charcoal", "Charcoal", "Darkest"], ["teal", "Deep teal", "Muted"], ["forest", "Forest", "Greenest"]].map(([v, label, note]) =>
+        h("label", { class: s.Prefs.Dark === v ? "darkopt on" : "darkopt" },
+          h("input", { type: "radio", name: "dark", value: v, checked: s.Prefs.Dark === v, disabled: ui.busy, onchange: () => act("SetDark", v) }),
+          darkWindow(v),
+          h("span", { class: "name" }, h("strong", {}, label), h("span", {}, note))))));
+}
+
+// darkWindow is a miniature of the app: a rail, a chosen row, a live card
+// with its quorum, and a button.
+function darkWindow(dark) {
+  return h("div", { class: "darkwin", "data-dark": dark, "aria-hidden": "true" },
+    h("div", { class: "rail" }, h("i", { class: "mark" }), h("i", { class: "on" }), h("i", {}), h("i", {})),
+    h("div", { class: "body" },
+      h("i", { class: "row sel" }), h("i", { class: "row" }),
+      h("div", { class: "card live" }, h("i", { class: "row" }),
+        h("div", { class: "quorum" }, h("i", { class: "seg on" }), h("i", { class: "seg on" }), h("i", { class: "seg" }))),
+      h("div", { class: "foot" }, h("i", { class: "well" }), h("i", { class: "go" }))));
+}
+
 // nodeSettings are This Device's preferences: the app's own, kept outside
 // the Node directory.
 function nodeSettings(s) {
@@ -734,6 +761,7 @@ function nodeSettings(s) {
     h("span", { class: "text" }, h("strong", {}, label), ...extra));
   return h("div", {},
     themePicker(s),
+    darkPicker(s),
     toggle("Notifications", s.Prefs.Notifications, "SetNotifications", {},
       h("span", {}, "Let DeFiOS notify you, such as when a Sign Request needs you.")),
     toggle("New-message notifications", s.Prefs.Notifications && s.Prefs.MessageNotifications, "SetMessageNotifications",

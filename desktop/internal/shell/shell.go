@@ -193,6 +193,8 @@ type Prefs struct {
 	MessageNotifications bool
 	// Theme is "system", "light" or "dark".
 	Theme string
+	// Dark is the dark theme's backgrounds: "charcoal", "teal" or "forest".
+	Dark string
 }
 
 // Shell is the app's state. Its methods are safe from any goroutine; each
@@ -762,6 +764,31 @@ func themeName(t prefs.Theme) string {
 	return string(t)
 }
 
+// SetDark picks the dark theme's backgrounds: "charcoal", "teal" or
+// "forest". It applies whenever the app is dark, by the OS or by Dark.
+func (s *Shell) SetDark(name string) State {
+	s.op.Lock()
+	defer s.op.Unlock()
+	d, ok := darks[name]
+	if !ok {
+		s.set(func(st *State) {
+			st.Problem = &Problem{Code: "bad-dark", Message: "Choose Charcoal, Deep teal or Forest."}
+		})
+		return s.State()
+	}
+	s.savePrefs(func(p *prefs.Prefs) { p.Dark = d })
+	return s.State()
+}
+
+var darks = map[string]prefs.Dark{"charcoal": prefs.DarkCharcoal, "teal": prefs.DarkTeal, "forest": prefs.DarkForest}
+
+func darkName(d prefs.Dark) string {
+	if d == prefs.DarkCharcoal {
+		return "charcoal"
+	}
+	return string(d)
+}
+
 // SetWindowSize keeps the window's size for the next start.
 func (s *Shell) SetWindowSize(width, height int) {
 	s.mu.Lock()
@@ -852,7 +879,7 @@ func (s *Shell) set(change func(*State)) {
 		st.Connecting = false
 	}
 	st.BackupDue = s.p.BackupDue
-	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications(), MessageNotifications: s.p.MessageNotifications, Theme: themeName(s.p.Theme)}
+	st.Prefs = Prefs{StartAtLogin: s.p.StartAtLogin, Keychain: s.p.Keychain, Notifications: s.p.Notifications(), MessageNotifications: s.p.MessageNotifications, Theme: themeName(s.p.Theme), Dark: darkName(s.p.Dark)}
 	st.Seq++
 	out := *st
 	s.mu.Unlock()

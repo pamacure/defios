@@ -130,3 +130,7 @@ needs checking by hand:
 - Settings, Appearance: Light and Dark override the OS's setting at once,
   on every page and the lock screen, and stay after a restart; System
   follows the OS again.
+- Settings, Dark backgrounds: Charcoal, Deep teal and Forest change the
+  backgrounds at once whenever the app is dark (by the OS or by Dark),
+  keep the green accents, and stay after a restart; in Light nothing
+  changes.
