@@ -35,7 +35,7 @@
   --radius-l: 6px;
   --rail: 64px;
   color-scheme: light;
-  font-family: system-ui, -apple-system, "Segoe UI", "Ubuntu", "Cantarell", sans-serif;
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Ubuntu", "Cantarell", sans-serif;
   font-size: 14px;
 }
 
@@ -100,7 +100,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
 #app { height: 100%; }
 button, input, select { font: inherit; color: inherit; }
-code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 0.92em; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+code { font-family: var(--mono); font-size: 0.92em; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 
 /* Centred screens: loading, lock, served elsewhere, onboarding. */
 .center { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 24px; text-align: center; }
@@ -235,7 +235,7 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .center .warning { max-width: 440px; text-align: left; }
 .card .notice { margin: 6px 0 0; }
 .progress.wide { width: 100%; }
-.lines { margin: 0; padding: 0; list-style: none; font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+.lines { margin: 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
 
 .tabs { display: flex; gap: 4px; padding: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
 .tabs button { flex: 1; height: 32px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--text-soft); cursor: pointer; }
@@ -579,7 +579,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 :is(.signcard, .signpanel) .reason, .signform .reason { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 :is(.signcard, .signpanel) .label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
 :is(.signcard, .signpanel) .txs { display: flex; flex-direction: column; gap: 8px; }
-:is(.signcard, .signpanel) .tx ul { margin: 0; padding: 6px 10px; list-style: none; background: var(--bg); border-radius: var(--radius-s); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+:is(.signcard, .signpanel) .tx ul { margin: 0; padding: 6px 10px; list-style: none; background: var(--bg); border-radius: var(--radius-s); font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 :is(.signcard, .signpanel) .stances { display: flex; flex-direction: column; gap: 4px; }
 :is(.signcard, .signpanel) .stance { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 :is(.signcard, .signpanel) .stance .who strong { color: var(--text-soft); font-weight: 600; }
@@ -626,13 +626,13 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .signform .stack { display: flex; flex-direction: column; gap: 12px; }
 .signform label { display: flex; flex-direction: column; gap: 4px; color: var(--text-soft); font-size: 13px; }
 .signform .field { text-align: left; }
-.signform .field.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.signform .field.mono { font-family: var(--mono); font-size: 12px; }
 .signform .row { display: flex; gap: 12px; align-items: center; }
 .signform .row.end { justify-content: flex-end; gap: 8px; }
 .tx-fields { margin: 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .tx-fields legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
 .tx-fields .tabs button { height: 28px; font-size: 13px; }
-.signform label .type { color: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.signform label .type { color: var(--muted); font-family: var(--mono); font-size: 12px; }
 .tx-review { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
 .tx-review dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
 .tx-review dt { color: var(--muted); display: flex; gap: 6px; align-items: center; }
@@ -656,7 +656,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .pitem.add { color: var(--accent-strong); font-weight: 600; margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0 0 var(--radius-s) var(--radius-s); }
 .pdetail { min-width: 0; }
 .pdetail .gsec:last-child { padding-bottom: 0; }
-.field.area { height: auto; padding: 8px 12px; resize: vertical; line-height: 1.45; font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 13px; }
+.field.area { height: auto; padding: 8px 12px; resize: vertical; line-height: 1.45; font-family: var(--mono); font-size: 13px; }
 .pdetail .fcell, .providers .fcell { max-width: 560px; }
 .agents select.field { height: 40px; background: var(--field); }
 .gfold { border-top: 1px solid var(--line); }
@@ -818,7 +818,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .plugins .inline { display: flex; gap: 8px; }
 .plugins .inline .field { flex: 1; min-width: 0; }
 .plugins .inline .btn { flex: none; height: 40px; }
-.field.mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-size: 13px; }
+.field.mono { font-family: var(--mono); font-size: 13px; }
 .plpreview { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; padding: 14px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-wash); }
 .plpreview h3 { margin: 0; }
 .plpreview .provider { background: var(--surface); }
@@ -892,16 +892,28 @@ body[data-page="talk"] .toasts { top: 116px; }
 
 /* ------------------------------------------------------------------
    The look: bricks that snap together. Quantico for titles and the
-   numbers that matter; a solid lower edge instead of soft shadow, which
-   a press pushes down onto; and the bright green kept for what is live.
+   numbers that matter, IBM Plex Sans for everything read and IBM Plex
+   Mono for code and transaction data; a solid lower edge instead of soft
+   shadow, which a press pushes down onto; and the bright green kept for
+   what is live.
    Little moves: the app redraws by making its elements anew, so motion.js
    keeps the few animations there are in place across a redraw.
    ------------------------------------------------------------------ */
 @font-face { font-family: "Quantico"; font-weight: 400; font-display: block; src: url("/fonts/Quantico-Regular.woff2") format("woff2"); }
 @font-face { font-family: "Quantico"; font-weight: 700; font-display: block; src: url("/fonts/Quantico-Bold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-display: block; src: url("/fonts/IBMPlexSans-Regular.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-style: italic; font-display: block; src: url("/fonts/IBMPlexSans-Italic.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 500; font-display: block; src: url("/fonts/IBMPlexSans-Medium.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-display: block; src: url("/fonts/IBMPlexSans-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 700; font-display: block; src: url("/fonts/IBMPlexSans-Bold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-display: block; src: url("/fonts/IBMPlexMono-Regular.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-style: italic; font-display: block; src: url("/fonts/IBMPlexMono-Italic.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 600; font-display: block; src: url("/fonts/IBMPlexMono-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 700; font-display: block; src: url("/fonts/IBMPlexMono-Bold.woff2") format("woff2"); }
 
 :root {
   --display: "Quantico", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   --depth: 3px;
   --edge: #A3B5C6;
   --accent-edge: #1A7A51;
