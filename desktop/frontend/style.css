@@ -264,7 +264,12 @@ code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", monospace; font-si
 .page.talkpage { padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
 .page.talkpage > .banner { margin: 12px 16px 0; }
 .page.talkpage > :is(.banner, .backupbanner) + .talk { margin-top: 12px; }
-.talk { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr) 380px; }
+/* The left column and the rail beside it are as wide as the right column:
+   --side. A folded column is a --strip. */
+.talk { --side: 380px; --strip: 44px; --left: calc(var(--side) - var(--rail)); --right: var(--side);
+  flex: 1; min-height: 0; display: grid; grid-template-columns: var(--left) minmax(0, 1fr) var(--right); }
+.talk.left-folded { --left: var(--strip); }
+.talk.right-folded { --right: var(--strip); }
 .talk-empty { padding: 24px; }
 .btn.small { height: 30px; padding: 0 10px; font-size: 13px; }
 .dot.off { background: var(--danger); }
@@ -295,6 +300,27 @@ button.conv > .sub { grid-column: 1 / -1; }
 .newkey-form { margin: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .newkey-form label { display: flex; flex-direction: column; gap: 4px; color: var(--text-soft); }
 .hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+
+/* A side column's head: its title, and the button that folds it. As tall
+   as the chat's head, so the three line up. */
+.col-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 8px 10px 14px; border-bottom: 1px solid var(--line); }
+.col-head h2 { flex: 1; min-width: 0; margin: 0; font-size: 14px; font-weight: 600; }
+.fold-col, .col-strip .unfold > span:first-child { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: var(--radius-s); color: var(--muted); }
+.fold-col { border: 0; padding: 0; background: transparent; cursor: pointer; }
+.fold-col:hover { background: var(--bg); color: var(--text); }
+.fold-col svg, .col-strip .unfold svg { width: 18px; height: 18px; display: block; }
+:is(.fold-col, .col-strip .unfold):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* A folded column: one button down its length that unfolds it. */
+.col-strip { min-height: 0; display: flex; background: var(--surface); }
+.col-strip.left { border-right: 1px solid var(--line); }
+.col-strip.right { border-left: 1px solid var(--line); }
+.col-strip .unfold { all: unset; box-sizing: border-box; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 10px 0; cursor: pointer; color: var(--text-soft); }
+.col-strip .unfold:hover { background: var(--bg); color: var(--text); }
+.col-strip .unfold:hover > span:first-child { color: var(--text); }
+.col-strip .strip-title { writing-mode: vertical-rl; font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+.col-strip.left .strip-title { transform: rotate(180deg); }
+.col-strip .strip-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.col-strip .strip-mark.sign { background: var(--accent); }
 
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
@@ -441,7 +467,8 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .suggest li { padding: 6px 10px; border-radius: var(--radius-s); cursor: pointer; }
 .suggest li[aria-selected="true"] { background: var(--accent-wash); color: var(--accent-strong); }
 
-.about { background: var(--surface); border-left: 1px solid var(--line); overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.about { background: var(--surface); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.about-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .about section { display: flex; flex-direction: column; gap: 8px; }
 .about section + section { border-top: 1px solid var(--line); padding-top: 12px; }
 .about h3 { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-soft); }
@@ -477,7 +504,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .about .agentrow .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
 @media (max-width: 1100px) {
-  .talk { grid-template-columns: 180px minmax(0, 1fr) 220px; }
+  .talk { --side: 260px; }
   .msg { max-width: 92%; }
 }
 
@@ -490,7 +517,7 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .sysline.selected { color: var(--text); background: var(--accent-wash); border-radius: var(--radius-s); padding: 2px 8px; }
 /* The top padding is the card's margin, so the pinned head meets the
    column's top edge with nothing showing through above it. */
-.about.details { padding: 0 12px 12px; }
+.about.details .about-body { padding: 0 12px 12px; }
 .dcard { margin-top: 12px; }
 .dcard > .dtop { position: sticky; top: 0; z-index: 1; display: flex; flex-direction: column; gap: 12px;
   margin: -12px -14px 0; padding: 12px 14px 10px; background: var(--surface); border-bottom: 1px solid var(--line);
@@ -532,9 +559,9 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
    the transcript. */
 .about-toggle { display: none; align-items: center; }
 @media (max-width: 999px) {
-  .talk { position: relative; grid-template-columns: 180px minmax(0, 1fr); }
+  .talk { position: relative; grid-template-columns: var(--left) minmax(0, 1fr); }
   .about-toggle { display: inline-flex; }
-  .talk > .about { display: none; }
+  .talk > .about, .talk > .col-strip.right, .about .fold-col { display: none; }
   .talk.about-open > .about {
     display: flex; position: absolute; top: 0; right: 0; bottom: 0; width: min(380px, 92%); z-index: 5;
     box-shadow: -8px 0 24px rgba(21, 26, 31, 0.18);

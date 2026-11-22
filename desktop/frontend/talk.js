@@ -49,6 +49,10 @@ const tui = {
   // The right column's sections folded into their headings: what is
   // about the Key starts open, the rest folded.
   folded: new Set(["Agents here", "Devices here", "Overrides"]),
+  // The side columns folded to a strip; and, while a selection has
+  // unfolded the right one, whether it was folded before (null if not).
+  collapsed: { left: false, right: false },
+  rightBefore: null,
 };
 
 // talkPage is the page, drawn into a new element; go opens another page.
@@ -171,8 +175,14 @@ function draw() {
   const field = mount.contains(active) ? active.dataset?.field : undefined;
   const caret = field ? [active.selectionStart, active.selectionEnd] : null;
   const focused = active === composer.input;
+  // Opened over the transcript on a narrow window, the right column is
+  // never folded.
+  const rightFolded = tui.collapsed.right && !tui.about;
   mount.classList.toggle("about-open", tui.about);
-  mount.replaceChildren(left(), center(), right(), signForm() ?? "", liveryPop() ?? "");
+  mount.classList.toggle("left-folded", tui.collapsed.left);
+  mount.classList.toggle("right-folded", rightFolded);
+  mount.replaceChildren(tui.collapsed.left ? strip("left", "Conversations", leftMark()) : left(), center(),
+    rightFolded ? strip("right", "About") : right(), signForm() ?? "", liveryPop() ?? "");
   const tr = mount.querySelector(".transcript");
   const scroll = () => { if (tr.isConnected) tr.scrollTop = tui.scroll.pinned ? tr.scrollHeight : tui.scroll.top; };
   if (tr) {
@@ -244,8 +254,50 @@ function left() {
     : h("span", { class: "sub" }, `${curveName(c.Curve)} · ${c.T} of ${c.N}`),
   marks(c)));
   return h("nav", { class: "convs", "aria-label": "Conversations" },
+    colHead("left", "Conversations"),
     h("div", { class: "list" }, rows, ts.Keygens.map(keygenRow)),
     newKey());
+}
+
+// leftMark is the folded left column's dot, if any Conversation has a
+// mark: in the accent if one has open Sign Requests.
+function leftMark() {
+  const marked = ts.Conversations.filter((c) => c.OpenSignRequests > 0 || c.Unread > 0 || c.UnreadAutomated);
+  if (!marked.length) return null;
+  const sign = marked.some((c) => c.OpenSignRequests > 0);
+  return h("span", { class: `strip-mark ${sign ? "sign" : ""}`, title: sign ? "Open Sign Requests" : "Unread messages" });
+}
+
+// The side columns' heads, and the strips they fold to. A fold button and
+// the strip that replaces it share a data-field, so focus moves from one to
+// the other as the page redraws.
+
+// colHead is a side column's title, beside the button that folds it.
+function colHead(side, title) {
+  return h("header", { class: "col-head" },
+    h("h2", {}, title),
+    h("button", {
+      class: "fold-col", type: "button", "data-field": `fold-${side}`, "aria-expanded": "true",
+      "aria-label": `Collapse ${title}`, title: `Collapse ${title}`, onclick: () => foldColumn(side, true),
+    }, icon(side === "left" ? "chevronsLeft" : "chevronsRight")));
+}
+
+// strip is a folded column: the whole of it a button that unfolds it,
+// with its title down its length and mark, if any, under the chevrons.
+function strip(side, title, mark = null) {
+  return h(side === "left" ? "nav" : "aside", { class: `col-strip ${side}`, "aria-label": title },
+    h("button", {
+      class: "unfold", type: "button", "data-field": `fold-${side}`, "aria-expanded": "false",
+      "aria-label": `Expand ${title}`, title: `Expand ${title}`, onclick: () => foldColumn(side, false),
+    }, icon(side === "left" ? "chevronsRight" : "chevronsLeft"), mark, h("span", { class: "strip-title" }, title)));
+}
+
+// foldColumn folds the side column, or unfolds it. Done by hand, it is what
+// the right column goes back to as a selection closes.
+function foldColumn(side, folded) {
+  tui.collapsed[side] = folded;
+  if (side === "right") tui.rightBefore = null;
+  draw();
 }
 
 // marks are a row's badges, side by side: its open Sign Requests, what
@@ -776,8 +828,12 @@ const narrow = () => window.matchMedia("(max-width: 999px)").matches;
 
 // select selects it, opening the right column if About had hidden it.
 function select(it) {
-  if (tui.selected === null) tui.aboutBefore = tui.about;
+  if (tui.selected === null) {
+    tui.aboutBefore = tui.about;
+    tui.rightBefore = tui.collapsed.right;
+  }
   if (narrow()) tui.about = true;
+  tui.collapsed.right = false;
   tui.selected = lineKey(it);
   tui.details = null;
   tui.earlier = null;
@@ -793,6 +849,8 @@ function deselect({ redraw = true } = {}) {
   tui.details = null;
   tui.earlier = null;
   tui.about = tui.aboutBefore;
+  if (tui.rightBefore !== null) tui.collapsed.right = tui.rightBefore;
+  tui.rightBefore = null;
   if (redraw) draw();
 }
 
@@ -937,7 +995,7 @@ function detailsPanel(it) {
   else if (it.Job && it.From !== "This Device") body = h("p", { class: "hint" }, `Job, on ${it.From}`);
   else if (it.Job) body = h("p", { class: "hint" }, "This device no longer keeps the Job Run that wrote it.");
 
-  return h("aside", { class: "about details", "aria-label": "Message details" },
+  return rightColumn({ class: "about details", "aria-label": "Message details" }, "Details",
     h("article", { class: "dcard" },
       // Who wrote it, when, and what can be done with it stay in view
       // as the rest scrolls under them.
@@ -971,7 +1029,7 @@ function signPanel(it) {
     : k.MsgID ? x.MsgID === k.MsgID : x.Kind === "run" && x.Chain === k.Chain && x.Step === k.Step));
   const cause = by && h("button", { class: "link", type: "button", onclick: () => select(by) },
     k.JobRun ? "Show the Job Run that proposed it" : `Show @${it.Handle}'s run that proposed it`);
-  return h("aside", { class: "about details", "aria-label": "Sign Request details" },
+  return rightColumn({ class: "about details", "aria-label": "Sign Request details" }, "Details",
     h("article", { class: "dcard signpanel" },
       h("div", { class: "dtop" }, head, signHead(c, cause), signActions(c, tui.busy)),
       signSections(c)));
@@ -1141,7 +1199,7 @@ function chainSteps(steps, chain) {
 function right() {
   const it = selectedItem();
   if (it) return it.Kind === "sign" ? signPanel(it) : detailsPanel(it);
-  return h("aside", { class: "about", "aria-label": "About this conversation" },
+  return rightColumn({ class: "about", "aria-label": "About this conversation" }, "About",
     ts.Key ? keyDetails(ts.Key) : fold("Group talk",
       h("p", { class: "hint" }, "Talk with everyone in the Group. Each Key has a conversation of its own.")),
     ts.Key && signRequests(),
@@ -1149,6 +1207,10 @@ function right() {
     devices(),
     overrides());
 }
+
+// rightColumn is the right column: its head, over what scrolls under it.
+const rightColumn = (attrs, title, ...content) =>
+  h("aside", attrs, colHead("right", title), h("div", { class: "about-body" }, content));
 
 function keyDetails(k) {
   const alias = tui.editAlias
