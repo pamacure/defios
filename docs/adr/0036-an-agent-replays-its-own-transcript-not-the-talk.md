@@ -93,5 +93,4 @@ to.
   text, tool calls and results still are. Each run records what it was
   made under (its API Shape, grants and that binding) on its turn line.
 - Per-chain `transcripts/` directories are no longer read and nothing is
-  migrated; `MIGRATION.md` says how to remove them and rename `SYSTEM.md`
-  to `BRIEF.md`.
+  migrated.
