@@ -1278,18 +1278,20 @@ function signRequests() {
 
 function agents() {
   const list = ts.Agents.length
-    ? ts.Agents.map((a) => h("div", {
-      class: "agentrow",
-      // The whole row opens the agent's Profile, but for its checkbox and
-      // its avatar, which act on their own.
-      onclick: (e) => { if (!e.target.closest("input, .avatar")) nav("agents", { profile: a.Handle }); },
-    },
-    h("input", {
-      type: "checkbox", checked: a.Included, disabled: tui.busy, "aria-label": `@${a.Handle} answers here`,
-      onchange: (e) => act("SetAgentIncluded", a.Handle, e.target.checked),
-    }),
-    avatar(a.Livery, { open: openLivery(a.Party, `@${a.Handle}`), label: `@${a.Handle}` }),
-    h("button", { class: "handle", type: "button", title: `Open the Profile of @${a.Handle}` }, `@${a.Handle}`)))
+    // The whole row toggles whether the agent answers here, but for its
+    // avatar, which opens its Livery picker, and its handle, a link to its
+    // Profile: buttons in a label act on their own.
+    ? ts.Agents.map((a) => h("label", { class: "agentrow" },
+      h("input", {
+        type: "checkbox", checked: a.Included, disabled: tui.busy, "aria-label": `@${a.Handle} answers here`,
+        onchange: (e) => act("SetAgentIncluded", a.Handle, e.target.checked),
+      }),
+      avatar(a.Livery, { open: openLivery(a.Party, `@${a.Handle}`), label: `@${a.Handle}` }),
+      h("span", { class: "name" },
+        h("button", {
+          class: `handle ${liveryClass(a.Livery)}`, type: "button", title: `Open the Profile of @${a.Handle}`,
+          onclick: () => nav("agents", { profile: a.Handle }),
+        }, `@${a.Handle}`))))
     : h("p", { class: "hint" }, "This device has no agents yet. Make one on the Agents page.");
   return fold("Agents here",
     h("p", { class: "hint" }, "The agents of this device that answer when mentioned here."),

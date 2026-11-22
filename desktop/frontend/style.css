@@ -498,14 +498,17 @@ button.avatar:focus-visible { outline: 2px solid var(--text); outline-offset: 2p
 .dcard .copy .copied { bottom: auto; top: 100%; margin: 4px 0 0; }
 @keyframes copied { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .about .copyable .copied, .dcard .copy .copied { animation: none; } }
-/* An agent row opens the agent's Profile from anywhere but its checkbox and
-   avatar; a handle too long for the column fades off to the right. */
+/* An agent row toggles its checkbox from anywhere but its avatar and its
+   handle, a link to the agent's Profile marked as a mention is; a handle
+   too long for the column fades off to the right. */
 .about .agentrow { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 8px; margin: 0 -8px; border-radius: var(--radius); cursor: pointer; }
 .about .agentrow:hover { background: var(--bg); }
-.about .agentrow input { flex: none; margin: 0; width: 16px; height: 16px; accent-color: var(--accent); cursor: default; }
+.about .agentrow input { flex: none; margin: 0; width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 .about .agentrow .avatar { flex: none; }
-.about .agentrow .handle { all: unset; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13px; color: var(--text); cursor: pointer;
+.about .agentrow .name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.about .agentrow .handle { all: unset; font-size: 13px; font-weight: 600; cursor: pointer;
+  padding: 0 5px; border-radius: 4px; background: var(--lv-wash, var(--bg)); color: var(--lv, var(--text-soft)); }
 .about .agentrow .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
 @media (max-width: 1100px) {
