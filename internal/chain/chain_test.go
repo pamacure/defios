@@ -112,10 +112,10 @@ func TestWalkFromADepthSummonsOneDeeper(t *testing.T) {
 	check(t, lines, []string{"1 run @a d2", "2 skip @b d3: @a replied at depth 2, which is max_depth 2"})
 
 	lines = nil
-	chain.WalkFrom(2, inc, []string{"a", "x"}, do)
+	chain.WalkFrom(2, inc, []string{"a", "b"}, do)
 	check(t, lines, []string{
 		"1 skip @a d3: the message was written at depth 2, which is max_depth 2",
-		"2 skip @x d3: @x is not in [agent] profiles here",
+		"2 skip @b d3: the message was written at depth 2, which is max_depth 2",
 	})
 }
 

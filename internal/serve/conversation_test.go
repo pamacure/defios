@@ -343,8 +343,9 @@ max_depth = 2
 	}
 }
 
-// A person's message that mentions a Handle not included where it is sent is
-// refused, naming the Handle and what is included, and nothing is appended.
+// A person's or a Job's message that mentions a Handle not included where
+// it is sent is refused, naming the Handle and what is included, and
+// nothing is appended.
 // One whose mentions are all included, or that mentions nobody, commits.
 func TestConversationSendRefusesUnresolvedMention(t *testing.T) {
 	a, b := pair(t)
@@ -367,6 +368,14 @@ profiles = ["auditor"]
 	}
 	if _, err := a.client().ConversationSend(ctx, "@scribe", nil); err == nil || !strings.Contains(err.Error(), "@scribe") {
 		t.Errorf("refusal does not name the Handle: %v", err)
+	}
+	// A Job's message, written at its DEFIOS_DEPTH, is refused as a
+	// person's is, at max_depth (1, unset) and past it too (ADR 0041).
+	for _, depth := range []uint32{1, 2, 3} {
+		_, err := a.client().ConversationSendAs(ctx, "@auditor and @nobody", "", depth, "", nil)
+		if !errors.Is(err, serve.ErrBadHandle) || !strings.Contains(err.Error(), "@nobody") {
+			t.Errorf("a Job's send at depth %d = %v, want ErrBadHandle naming @nobody", depth, err)
+		}
 	}
 	// b's config includes nothing, and says so.
 	if _, err := b.client().ConversationSend(ctx, "@auditor?", nil); !errors.Is(err, serve.ErrBadHandle) || !strings.Contains(err.Error(), "none") {
