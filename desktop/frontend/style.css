@@ -989,16 +989,16 @@ body[data-page="talk"] .toasts { top: 116px; }
 
 /* Dark backgrounds (Settings, Dark backgrounds; app.js sets data-dark).
    The dark blocks above are Charcoal, the darkest; Deep teal is muted and
-   Forest the greenest. All from the Figma palette but --field and --edge,
-   which sit darker than its darkest swatches, and Deep teal's surface and
-   line, which sit between its two darkest tertiary swatches so the panels
-   stay dim. Accents do not change. The forced-dark blocks also colour
+   Forest the greenest. Forest is from the Figma palette but --field and
+   --edge, which sit darker than its darkest swatches. Deep teal is off-
+   palette: a dim teal (hue ~172) a little lighter and far more saturated
+   than Charcoal, so the two stay apart. Accents do not change. The forced-dark blocks also colour
    Settings' .darkwin previews, so each shows its own backgrounds. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"])[data-dark="teal"] { --bg: #1A2523; --surface: #283433; --field: #111917; --line: #3B4D4A; --edge: #0E1514; --soft: #3B4D4A; --soft-edge: #283433; }
+  :root:not([data-theme="light"])[data-dark="teal"] { --bg: #111F1E; --surface: #1C2E2C; --field: #0A1413; --line: #304643; --edge: #070E0D; --soft: #304643; --soft-edge: #1C2E2C; }
   :root:not([data-theme="light"])[data-dark="forest"] { --bg: #01150A; --surface: #05301D; --field: #000D06; --line: #0E5336; --edge: #000A04; --soft: #1A7A51; --soft-edge: #0E5336; }
 }
-:root[data-theme="dark"][data-dark="teal"], .darkwin[data-dark="teal"] { --bg: #1A2523; --surface: #283433; --field: #111917; --line: #3B4D4A; --edge: #0E1514; --soft: #3B4D4A; --soft-edge: #283433; }
+:root[data-theme="dark"][data-dark="teal"], .darkwin[data-dark="teal"] { --bg: #111F1E; --surface: #1C2E2C; --field: #0A1413; --line: #304643; --edge: #070E0D; --soft: #304643; --soft-edge: #1C2E2C; }
 :root[data-theme="dark"][data-dark="forest"], .darkwin[data-dark="forest"] { --bg: #01150A; --surface: #05301D; --field: #000D06; --line: #0E5336; --edge: #000A04; --soft: #1A7A51; --soft-edge: #0E5336; }
 
 /* Quantico: titles, section labels, and counts. */
