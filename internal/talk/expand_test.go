@@ -85,3 +85,27 @@ func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {
 		t.Errorf("expanded = %q, want %q", g, want)
 	}
 }
+
+// A message comes with the Handles the run that said it summoned, in the
+// order it summoned them (ADR 0041).
+func TestExpandGivesTheSummonsOfTheRunThatSaidIt(t *testing.T) {
+	f := newFixture(t)
+	said := f.agentSays(f.alice, "router", "over to them")
+	line := func(kind string, set func(*transcript.Line)) transcript.Line {
+		l := transcript.Line{Step: 1, Handle: "router", Depth: 1, Kind: kind}
+		set(&l)
+		return l
+	}
+	f.transcribe("abab",
+		line(transcript.KindSummoned, func(l *transcript.Line) { l.Summoned = "auditor" }),
+		line(transcript.KindSummoned, func(l *transcript.Line) { l.Summoned = "scribe" }),
+		line(transcript.KindOutcome, func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeSaid, said, 1 }),
+	)
+	got, err := f.reader().Expand(nil, f.read(nil).Chat())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !reflect.DeepEqual(got[0].Summoned, []string{"auditor", "scribe"}) {
+		t.Fatalf("expanded = %+v", got)
+	}
+}

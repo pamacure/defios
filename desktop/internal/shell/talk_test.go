@@ -234,6 +234,79 @@ func TestAnAgentThatStaysSilentLeavesAMessageWithItsTranscript(t *testing.T) {
 	}
 }
 
+// A summon shows on the agent that made it: live as talk_summon accepts
+// it, then from its Transcript on what its run left, the faded row of a
+// silent run or the message it said, each Handle in its agent's Livery
+// (ADR 0041).
+func TestSummonsShowOnTheRunThatMadeThem(t *testing.T) {
+	r := newRig(t, "alpha")
+	r.node.tk().included[node.GroupTalk] = []string{"router", "auditor", "scribe"}
+	r.node.tk().liveries = map[string]string{node.AgentParty("auditor"): "blue-stud"}
+	s := served(t, r)
+	s.SendMessage("@router who should look?")
+	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
+
+	for _, ev := range []node.ChainEvent{
+		{Type: serve.EventChainStart, Chain: chain},
+		{Type: serve.EventAgentStart, Chain: chain, Handle: "router", Depth: 1},
+		{Type: serve.EventAgentSummoned, Chain: chain, Handle: "auditor", By: "router"},
+	} {
+		chainEvent(r.node, node.GroupTalk, ev)
+	}
+	auditor := shell.Party{Party: node.AgentParty("auditor"), Handle: "auditor", Livery: "blue-stud"}
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool {
+		return len(ts.Live) == 1 && len(ts.Live[0].Agents) == 1 && slices.Equal(ts.Live[0].Agents[0].Summoned, []shell.Party{auditor})
+	})
+
+	said := fmt.Sprintf("%064x", 78)
+	r.node.mu.Lock()
+	r.node.sg().runs[chain] = []transcript.Run{
+		{Chain: chain, Step: 1, Handle: "router", Depth: 1, Outcome: transcript.OutcomeSilent, Ended: time.Now(), Summoned: []string{"auditor"}},
+		{Chain: chain, Step: 2, Handle: "auditor", Depth: 2, Outcome: transcript.OutcomeSaid, MsgID: said, Summoned: []string{"scribe"}},
+	}
+	r.node.mu.Unlock()
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentSilent, Chain: chain, Handle: "router"})
+	r.node.commit(node.GroupTalk, node.Message{MsgID: said, NodeID: r.node.NodeID(), Handle: "auditor", Depth: 2, Text: "scribe, note this"})
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventChainEnd, Chain: chain})
+
+	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool {
+		return len(ts.Live) == 0 && len(ts.Items) == 3 && ts.Items[2].Chain != ""
+	})
+	if run := ts.Items[1]; run.Kind != shell.KindRun || !slices.Equal(run.Summoned, []shell.Party{auditor}) {
+		t.Fatalf("silent run: %+v", run)
+	}
+	scribe := shell.Party{Party: node.AgentParty("scribe"), Handle: "scribe"}
+	if msg := ts.Items[2]; msg.MsgID != said || !slices.Equal(msg.Summoned, []shell.Party{scribe}) {
+		t.Fatalf("said message: %+v", msg)
+	}
+}
+
+// A run's summons stay on the message it said from its commit, while the
+// agents it summoned answer, before the chain ends (ADR 0041).
+func TestASaidRunsSummonsStayOnItsMessageWhileTheChainGoesOn(t *testing.T) {
+	r := newRig(t, "alpha")
+	r.node.tk().included[node.GroupTalk] = []string{"router", "auditor"}
+	s := served(t, r)
+	s.SendMessage("@router who should look?")
+	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
+	said := fmt.Sprintf("%064x", 79)
+	for _, ev := range []node.ChainEvent{
+		{Type: serve.EventChainStart, Chain: chain},
+		{Type: serve.EventAgentStart, Chain: chain, Handle: "router", Depth: 1},
+		{Type: serve.EventAgentSummoned, Chain: chain, Handle: "auditor", By: "router"},
+		{Type: serve.EventAgentCommit, Chain: chain, MsgID: said},
+	} {
+		chainEvent(r.node, node.GroupTalk, ev)
+	}
+	r.node.commit(node.GroupTalk, node.Message{MsgID: said, NodeID: r.node.NodeID(), Handle: "router", Depth: 1, Text: "over to auditor"})
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentStart, Chain: chain, Handle: "auditor", Depth: 2})
+	auditor := []shell.Party{{Party: node.AgentParty("auditor"), Handle: "auditor"}}
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool {
+		return len(ts.Items) == 2 && ts.Items[1].MsgID == said && slices.Equal(ts.Items[1].Summoned, auditor) &&
+			len(ts.Live) == 1 && len(ts.Live[0].Agents) == 1 && ts.Live[0].Agents[0].Handle == "auditor"
+	})
+}
+
 // This device's agents' runs that posted nothing show as faded messages
 // from that agent, read from their Transcripts, live or cleared, so they
 // are there as the page opens: each placed by when it ended, and grouped

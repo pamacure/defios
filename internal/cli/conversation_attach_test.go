@@ -236,6 +236,29 @@ func TestConversationSendPrintsSaidTextAndSilence(t *testing.T) {
 	}
 }
 
+// A summon prints as it is accepted, naming the agent that made it, even
+// when that agent then stays silent (ADR 0041).
+func TestConversationSendPrintsSummons(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	newChainServe(t, dir, &chainServe{events: []serve.ChainEvent{
+		{Type: serve.EventChainStart, Chain: chainA},
+		{Type: serve.EventAgentStart, Chain: chainA, Handle: "router", Depth: 1},
+		{Type: serve.EventAgentSummoned, Chain: chainA, Handle: "auditor", By: "router"},
+		{Type: serve.EventAgentSilent, Chain: chainA, Handle: "router"},
+		{Type: serve.EventAgentStart, Chain: chainA, Handle: "auditor", Depth: 2},
+		{Type: serve.EventAgentCommit, Chain: chainA, Seq: 10, Text: "all good"},
+		{Type: serve.EventChainEnd, Chain: chainA},
+	}})
+	r := run(t, nil, "", "--dir", dir, "conversation", "send", "@router")
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	if want := "sent as seq 9 (msg_id " + strings.Repeat("ab", 32) + ")\n@router summoned @auditor\n@router stayed silent\n@auditor: all good\n"; r.stdout != want {
+		t.Fatalf("stdout:\n%s\nwant:\n%s", r.stdout, want)
+	}
+}
+
 // --detach returns at commit, and so does a message that mentions nobody:
 // neither watches.
 func TestConversationSendDetachAndNoMentionReturnAtCommit(t *testing.T) {

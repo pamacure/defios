@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"defios.com/internal/group"
 	"defios.com/internal/serve"
@@ -234,5 +235,35 @@ func TestTheFactsExplainTalkSummon(t *testing.T) {
 		if strings.Contains(c.System, `\@`) || strings.Contains(c.System, "without the `@`") {
 			t.Fatalf("system advises on @:\n%s", c.System)
 		}
+	}
+}
+
+// A watcher joining mid-run is shown the summons the run has made so far,
+// so Talk can show them on it (ADR 0041).
+func TestALateWatcherSeesTheRunsSummonsSoFar(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor", "quant")
+	maxDepth2(t, a)
+	grantTools(t, a, "auditor", `["talk_write", "talk_summon"]`)
+	started, release := make(chan struct{}), make(chan struct{})
+	scriptAs(provider, map[string][]func(http.ResponseWriter){
+		"auditor": {summonOf("quant"), func(w http.ResponseWriter) {
+			streamParts(w, "so far")
+			close(started)
+			<-release
+			endTalkWrite(w, "done")
+		}},
+		"quant": {say("checked")},
+	})
+	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	time.Sleep(100 * time.Millisecond) // let the serve publish the deltas
+	late := watch(t, a)
+	close(release)
+	got := summary(untilEnd(t, late, v.MsgID))
+	if !strings.HasPrefix(got, `chain.start start:@auditor/1 tool:talk_summon {"handle":"quant"} summoned:@quant `) {
+		t.Fatalf("late watcher saw %s", got)
 	}
 }

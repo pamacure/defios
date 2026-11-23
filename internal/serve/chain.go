@@ -124,7 +124,7 @@ type conversationChains struct {
 
 // shown is a running chain from the agent now answering: its chain.start,
 // that agent's agent.start, and its output so far, consecutive deltas of a
-// kind as one agent.delta.
+// kind as one agent.delta, with the summons it has made.
 type shown struct {
 	start, agent *ChainEvent
 	output       []ChainEvent
@@ -146,6 +146,9 @@ func (sh *shown) fold(ev ChainEvent) {
 		}
 	case EventAgentReset:
 		sh.output = sh.output[:sh.attempt]
+	case EventAgentSummoned:
+		// Accepted between model calls, so no reset voids it.
+		sh.output = append(sh.output, ev)
 	case EventAgentCommit, EventAgentSilent, EventAgentSkipped, EventAgentError:
 		sh.agent, sh.output, sh.attempt = nil, nil, 0
 	case EventChainEnd:

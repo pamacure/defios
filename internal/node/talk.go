@@ -118,6 +118,9 @@ type ChatMessage struct {
 	Blocks []json.RawMessage
 	// Chain, with transcripts, is the chain of the run that said it.
 	Chain string
+	// Summoned, with transcripts, are the Handles that run summoned with
+	// talk_summon, in order (ADR 0041).
+	Summoned []string
 }
 
 // Outgoing is a message to send. Handle "" is no agent's: this person's
@@ -434,7 +437,7 @@ func (h *Host) Chat(_ context.Context, groupAlias, conv string, limit int, trans
 	}
 	out := make([]ChatMessage, len(expanded))
 	for i, e := range expanded {
-		out[i] = ChatMessage{Message: h.message(e.Message), Blocks: e.Blocks, Chain: e.Chain}
+		out[i] = ChatMessage{Message: h.message(e.Message), Blocks: e.Blocks, Chain: e.Chain, Summoned: e.Summoned}
 	}
 	return out, nil
 }

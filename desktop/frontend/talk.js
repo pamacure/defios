@@ -525,11 +525,12 @@ function item(it) {
   }
   // A run of this device's agent that posted nothing: its outcome, faded.
   if (it.Kind === "run") {
-    return h("div", { ...sel, class: `msg ${it.Side} unposted ${run} ${sel.class}` }, meta, beside(it, h("p", { class: "text" }, it.Text)));
+    return h("div", { ...sel, class: `msg ${it.Side} unposted ${run} ${sel.class}` }, meta, beside(it, h("p", { class: "text" }, it.Text)), summoned(it.Summoned));
   }
   return h("div", { ...sel, class: `msg ${it.Side} ${run} ${sel.class}` },
     meta,
     beside(it, h("div", { class: "text" }, (it.Parts ?? [{ Text: it.Text }]).map(part))),
+    summoned(it.Summoned),
     it.Droppable && h("div", { class: "actions" },
       h("button", { class: "link", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop")));
 }
@@ -542,6 +543,15 @@ function beside(it, bubble) {
   if (it.Side !== "left") return bubble;
   const label = it.Handle ? (it.From === "This Device" ? `@${it.Handle}` : `@${it.Handle} on ${it.From}`) : it.From;
   return h("div", { class: "line" }, avatar(it.Livery, { shown: it.Avatar, open: it.Party && openLivery(it.Party, label), label }), bubble);
+}
+
+// summoned is the line under a run of this device's agent naming whom it
+// summoned with talk_summon (ADR 0041), each in its Livery; none if it
+// summoned nobody.
+function summoned(parties) {
+  if (!parties?.length) return null;
+  return h("p", { class: "summoned" }, "summoned ",
+    parties.map((p, i) => [i > 0 && ", ", h("span", { class: `mention ${liveryClass(p.Livery)}` }, brick(p.Livery), `@${p.Handle}`)]));
 }
 
 // part is a run of a sent message's text: a mention is a chip in the
@@ -621,7 +631,8 @@ function liveChain(c) {
           ? a.Blocks.map((b) => h("div", { class: `blk ${b.Kind}` },
             b.Kind !== "text" && h("span", { class: "kind" }, b.Kind === "thinking" ? "Thinking" : "Tool"),
             h("div", {}, b.Text)))
-          : h("p", { class: "placeholder" }, "Thinking…"))))));
+          : h("p", { class: "placeholder" }, "Thinking…"))),
+      summoned(a.Summoned))));
 }
 
 // The composer: @ autocompletes the Handles included here; \@ writes an @

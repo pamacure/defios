@@ -244,6 +244,9 @@ type Item struct {
 	Chain   string
 	Step    int
 	Outcome string
+	// Summoned, on a message or KindRun of this device's agent, are the
+	// agents its run summoned, in order (ADR 0041).
+	Summoned []Party
 	// JobRun is the ID of the Job Run a KindJob line is about: for a
 	// firing, its first Job's.
 	JobRun uint64
@@ -284,6 +287,9 @@ type LiveAgent struct {
 	Livery string // "" for none
 	Depth  uint32
 	Blocks []LiveBlock
+	// Summoned are the agents its run has summoned so far, in order
+	// (ADR 0041).
+	Summoned []Party
 }
 
 // LiveBlock is a run of output of one kind: thinking, text or tool.
@@ -350,6 +356,8 @@ type talk struct {
 	status node.Status
 	msgs   []node.Message
 	said   map[string]string // by msg_id, the chain of this device's run that said it
+	// summoned are, by msg_id, the Handles the run that said it summoned.
+	summoned map[string][]string
 	// unposted are this device's runs here that posted nothing.
 	unposted []node.Run
 	// jobRuns are this device's Job Runs in the Group, newest first.
@@ -405,7 +413,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 	if !same {
 		t.n, t.self, t.group, t.open = n, self, group, node.GroupTalk
 		t.gen++
-		t.convs, t.msgs, t.said, t.unposted, t.jobRuns, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, nil, true, nil
+		t.convs, t.msgs, t.said, t.summoned, t.unposted, t.jobRuns, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, nil, nil, true, nil
 		t.saidVer++
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
@@ -623,10 +631,13 @@ func (t *talk) loadMessages() {
 	if t.read("messages", err) {
 		t.msgs = msgs
 		if withSaid {
-			t.said, t.unposted, t.jobRuns, t.saidStale = map[string]string{}, unposted, jobRuns, t.saidVer != ver
+			t.said, t.summoned, t.unposted, t.jobRuns, t.saidStale = map[string]string{}, map[string][]string{}, unposted, jobRuns, t.saidVer != ver
 			for _, m := range chat {
 				if m.Chain != "" {
 					t.said[m.MsgID] = m.Chain
+				}
+				if len(m.Summoned) > 0 {
+					t.summoned[m.MsgID] = m.Summoned
 				}
 			}
 			t.proposed = map[string]SignCause{}
@@ -837,8 +848,13 @@ func (t *talk) snapshot() TalkState {
 	for _, c := range t.live[t.open] {
 		lc := LiveChain{Chain: c.Chain, Agents: []LiveAgent{}}
 		for _, a := range c.Agents {
+			var summoned []string
+			for _, p := range a.Summoned {
+				summoned = append(summoned, p.Handle)
+			}
 			lc.Agents = append(lc.Agents, LiveAgent{
 				Handle: a.Handle, Party: t.party(t.self, a.Handle), Livery: t.liveries[t.party(t.self, a.Handle)], Depth: a.Depth, Blocks: append([]LiveBlock{}, a.Blocks...),
+				Summoned: t.summons(summoned),
 			})
 		}
 		st.Live = append(st.Live, lc)
@@ -1025,7 +1041,19 @@ func (t *talk) runItem(r node.Run) Item {
 		Text: unpostedText[r.Outcome], Party: party, Livery: t.liveries[party],
 		sender: sender(t.self, r.Handle, false),
 		Chain:  r.Chain, Step: r.Step, Outcome: r.Outcome,
+		Summoned: t.summons(r.Summoned),
 	}
+}
+
+// summons are handles, the agents of this device a run summoned, as
+// parties in their Liveries; t.mu is held.
+func (t *talk) summons(handles []string) []Party {
+	out := []Party{}
+	for _, h := range handles {
+		p := t.party(t.self, h)
+		out = append(out, Party{Party: p, Handle: h, Livery: t.liveries[p]})
+	}
+	return out
 }
 
 // sender names who wrote a left-side line, for runs of one sender's.
@@ -1078,6 +1106,7 @@ func (t *talk) item(m node.Message) Item {
 		it.From = shortKey(m.NodeID)
 	}
 	it.Chain = t.said[m.MsgID]
+	it.Summoned = t.summons(t.summoned[m.MsgID])
 	return it
 }
 
@@ -1239,12 +1268,32 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 	case serve.EventAgentReset:
 		agent().Blocks = nil
 	case serve.EventAgentCommit:
+		// Its summons stay on what it said: the Transcript, read again
+		// once the chain ends, has them too.
+		if a := agent(); len(a.Summoned) > 0 && ev.MsgID != "" {
+			if t.summoned == nil {
+				t.summoned = map[string][]string{}
+			}
+			for _, p := range a.Summoned {
+				t.summoned[ev.MsgID] = append(t.summoned[ev.MsgID], p.Handle)
+			}
+		}
 		done()
 	case serve.EventAgentSilent, serve.EventAgentError:
 		done()
 		// Its run posted nothing: its Transcript, read again, shows it
 		// as a message from it.
 		return true
+	case serve.EventAgentSummoned:
+		// It goes on the latest run of its summoner, which is still
+		// answering: a summon is accepted mid-run.
+		c := find()
+		for i := len(c.Agents) - 1; i >= 0; i-- {
+			if c.Agents[i].Handle == ev.By {
+				c.Agents[i].Summoned = append(c.Agents[i].Summoned, Party{Handle: ev.Handle})
+				break
+			}
+		}
 	case serve.EventAgentSkipped:
 		t.say(conv, fmt.Sprintf("@%s was skipped: %s", ev.Handle, ev.Reason))
 	case serve.EventAgentTranscript:

@@ -538,6 +538,9 @@ func (c *chainPrinter) print(ev serve.ChainEvent) error {
 		endLine()
 		fmt.Fprintln(out, p.dim("@"+ev.Handle+" stayed silent"))
 		c.handle = ""
+	case serve.EventAgentSummoned:
+		endLine() // the run goes on: its output opens a new line
+		fmt.Fprintln(out, p.dim("@"+ev.By+" summoned @"+ev.Handle))
 	case serve.EventAgentSkipped:
 		fmt.Fprintln(out, p.dim("@"+ev.Handle+" skipped: "+ev.Reason))
 	case serve.EventAgentTranscript:

@@ -18,6 +18,9 @@ type Expanded struct {
 	Blocks []json.RawMessage
 	// Chain is the chain of the run that said it, "" with no run.
 	Chain string
+	// Summoned are the Handles that run summoned with talk_summon, in
+	// order (ADR 0041).
+	Summoned []string
 }
 
 // Expand is msgs, from conv's talk (nil for Group-level talk), each with
@@ -38,7 +41,7 @@ func (r Reader) Expand(conv []byte, msgs Messages) ([]Expanded, error) {
 	out := make([]Expanded, len(msgs))
 	for i, m := range msgs {
 		run := said[m.MsgID()]
-		out[i] = Expanded{Message: m, Blocks: run.Output(), Chain: run.Chain}
+		out[i] = Expanded{Message: m, Blocks: run.Output(), Chain: run.Chain, Summoned: run.Summoned}
 	}
 	return out, nil
 }
