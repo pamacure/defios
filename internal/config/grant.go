@@ -38,8 +38,7 @@ func refused(format string, a ...any) error { return refusal{fmt.Sprintf(format,
 // the Secrets an MCP Server's process gets, each one it asks for, and are
 // for nothing else. Granting a server again sets its Secrets to secrets.
 // It returns what item is and whether p changed: granting what p has
-// changes nothing. An unset tools is talk_write and talk_read, so a Tool
-// granted into it joins them. A name that is both a Skill and an MCP Server is ambiguous.
+// changes nothing. A name that is both a Skill and an MCP Server is ambiguous.
 func (p Profile) Grant(pluginsDir, item string, secrets []string) (Profile, GrantKind, bool, error) {
 	if !strings.Contains(item, "/") {
 		if secrets != nil {
@@ -48,11 +47,10 @@ func (p Profile) Grant(pluginsDir, item string, secrets []string) (Profile, Gran
 		if err := ValidateTool(item); err != nil {
 			return p, GrantTool, false, refusal{err.Error()}
 		}
-		tools := p.Granted()
-		if slices.Contains(tools, item) {
+		if slices.Contains(p.Tools, item) {
 			return p, GrantTool, false, nil
 		}
-		p.Tools = append(slices.Clone(tools), item)
+		p.Tools = append(slices.Clone(p.Tools), item)
 		return p, GrantTool, true, nil
 	}
 	kind, srv, err := pluginItem(pluginsDir, item)
@@ -95,17 +93,19 @@ func (p Profile) Grant(pluginsDir, item string, secrets []string) (Profile, Gran
 // <plugin>/<name>, and whether p changed: revoking what p lacks changes
 // nothing. One p grants needs no Plugin, so one whose Plugin is gone can
 // be revoked; one it does not is looked up under pluginsDir only to tell
-// its kind. Revoking every Tool leaves tools empty, not unset.
+// its kind. Revoking every Tool leaves tools unset, which grants none.
 func (p Profile) Revoke(pluginsDir, item string) (Profile, GrantKind, bool, error) {
 	if !strings.Contains(item, "/") {
 		if err := ValidateTool(item); err != nil {
 			return p, GrantTool, false, refusal{err.Error()}
 		}
-		tools := p.Granted()
-		if !slices.Contains(tools, item) {
+		if !slices.Contains(p.Tools, item) {
 			return p, GrantTool, false, nil
 		}
-		p.Tools = slices.DeleteFunc(slices.Clone(tools), func(t string) bool { return t == item })
+		p.Tools = slices.DeleteFunc(slices.Clone(p.Tools), func(t string) bool { return t == item })
+		if len(p.Tools) == 0 {
+			p.Tools = nil
+		}
 		return p, GrantTool, true, nil
 	}
 	_, hasMCP := p.MCP[item]

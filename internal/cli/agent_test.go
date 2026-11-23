@@ -66,9 +66,9 @@ func TestAgentAddWritesTheProfile(t *testing.T) {
 	}
 
 	want := map[string]config.Profile{
-		"auditor": {Provider: "claude", MaxTurns: 4, Body: map[string]any{
+		"auditor": {Provider: "claude", MaxTurns: 4, Tools: []string{"talk_write", "talk_read"}, Body: map[string]any{
 			"model": "claude-opus-5-5", "max_tokens": int64(1024), "thinking": map[string]any{"type": "adaptive"}}},
-		"scribe": {Provider: "claude"},
+		"scribe": {Provider: "claude", Tools: []string{"talk_write", "talk_read"}},
 	}
 	for h, w := range want {
 		if got := profile(t, dir, h); !reflect.DeepEqual(got, w) {
@@ -160,11 +160,11 @@ func TestAgentEditChangesOnlyWhatItIsGiven(t *testing.T) {
 		args []string
 		want config.Profile
 	}{
-		{[]string{"--model", "b"}, config.Profile{Provider: "claude", MaxTurns: 4, Body: map[string]any{"model": "b", "stream": true}}},
-		{[]string{"--provider", "openai"}, config.Profile{Provider: "openai", MaxTurns: 4, Body: map[string]any{"model": "b", "stream": true}}},
-		{[]string{"--max-turns", "2"}, config.Profile{Provider: "openai", MaxTurns: 2, Body: map[string]any{"model": "b", "stream": true}}},
-		{[]string{"--body", `{"store": false}`}, config.Profile{Provider: "openai", MaxTurns: 2, Body: map[string]any{"store": false}}},
-		{[]string{"--body", `{"stream": true}`, "--model", "c"}, config.Profile{Provider: "openai", MaxTurns: 2, Body: map[string]any{"model": "c", "stream": true}}},
+		{[]string{"--model", "b"}, config.Profile{Provider: "claude", MaxTurns: 4, Tools: []string{"talk_write", "talk_read"}, Body: map[string]any{"model": "b", "stream": true}}},
+		{[]string{"--provider", "openai"}, config.Profile{Provider: "openai", MaxTurns: 4, Tools: []string{"talk_write", "talk_read"}, Body: map[string]any{"model": "b", "stream": true}}},
+		{[]string{"--max-turns", "2"}, config.Profile{Provider: "openai", MaxTurns: 2, Tools: []string{"talk_write", "talk_read"}, Body: map[string]any{"model": "b", "stream": true}}},
+		{[]string{"--body", `{"store": false}`}, config.Profile{Provider: "openai", MaxTurns: 2, Tools: []string{"talk_write", "talk_read"}, Body: map[string]any{"store": false}}},
+		{[]string{"--body", `{"stream": true}`, "--model", "c"}, config.Profile{Provider: "openai", MaxTurns: 2, Tools: []string{"talk_write", "talk_read"}, Body: map[string]any{"model": "c", "stream": true}}},
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "agent", "edit", "auditor"}, c.args...)...)
 		if r.code != 0 {
@@ -264,7 +264,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	p := agentsWithKeys(t)
 	dir := p.AgentProfileDir("auditor")
 	r := run(t, nil, "", "--dir", p.Config, "agent", "show", "auditor")
-	want := "handle auditor\nprovider claude\nmax_turns 4\nlivery blue-arch\ntools talk_write, talk_read\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
+	want := "handle auditor\nprovider claude\nmax_turns 4\nlivery blue-arch\ntools none\nskills none\nmcp none\nprofile_dir " + dir + "\n" +
 		`body {"model":"claude-opus-5-5","stream":true}` + "\nincluded_in default\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("show: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
@@ -274,7 +274,7 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil {
 		t.Fatalf("show --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
-	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{"talk_write", "talk_read"}, "skills": []any{}, "mcp": map[string]any{},
+	wantJSON := map[string]any{"handle": "scribe", "provider": "claude", "profile_dir": p.AgentProfileDir("scribe"), "tools": []any{}, "skills": []any{}, "mcp": map[string]any{},
 		"included_in": []any{"default/ecdsa-ab1111111111"}}
 	if !reflect.DeepEqual(got, wantJSON) {
 		t.Fatalf("show --json = %v\nwant %v", got, wantJSON)
@@ -285,8 +285,8 @@ func TestAgentShowPrintsEveryFieldAndWhereItIsIncluded(t *testing.T) {
 }
 
 // agent grant and revoke edit a profile's tools, the whole list of Tools it
-// may call (ADR 0029), and print it: granting into an unset list first
-// writes talk_write and talk_read with it, revoking every Tool leaves an empty list, and a Tool
+// may call (ADR 0029), and print it: one added has talk_write and talk_read
+// (ADR 0041), revoking every Tool leaves it granted none, and a Tool
 // granted again or revoked when not granted changes nothing. An unknown Tool
 // or Handle is refused, naming the Tools there are; show prints the list.
 func TestAgentGrantRevokeEditTheTools(t *testing.T) {
@@ -306,7 +306,7 @@ func TestAgentGrantRevokeEditTheTools(t *testing.T) {
 		{[]string{"revoke", "auditor", "talk_write"}, "talk_read\nsign_list\nsign_inspect\n", []string{"talk_read", "sign_list", "sign_inspect"}},
 		{[]string{"revoke", "auditor", "talk_read"}, "sign_list\nsign_inspect\n", []string{"sign_list", "sign_inspect"}},
 		{[]string{"revoke", "auditor", "sign_list"}, "sign_inspect\n", []string{"sign_inspect"}},
-		{[]string{"revoke", "auditor", "sign_inspect", "--json"}, "[]\n", []string{}},
+		{[]string{"revoke", "auditor", "sign_inspect", "--json"}, "[]\n", nil},
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "agent"}, tc.args...)...)
 		if r.code != 0 || r.stdout != tc.stdout {

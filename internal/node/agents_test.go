@@ -96,16 +96,18 @@ func TestAnAgentProfileIsAddedEditedAndDeleted(t *testing.T) {
 	}
 }
 
-// Grant and Revoke change what an Agent Profile may call, a Tool granted
-// into an unset list joining talk_write and talk_read; a grant refused changes nothing.
+// An Agent Profile is added granted talk_write and talk_read, and no other
+// Tool (ADR 0041); Grant and Revoke change what it may call, and a grant
+// refused changes nothing.
 func TestGrantAndRevokeChangeAnAgentProfilesTools(t *testing.T) {
 	h, err := node.Open(nodeDir(t), node.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := h.AddAgentProfile(ctx, "auditor", node.ProfileEdit{Provider: ptr("claude")}); err != nil {
-		t.Fatal(err)
+	a, err := h.AddAgentProfile(ctx, "auditor", node.ProfileEdit{Provider: ptr("claude")})
+	if err != nil || !reflect.DeepEqual(a.Tools, []string{"talk_write", "talk_read"}) {
+		t.Fatalf("add: %#v %v; want talk_write and talk_read", a.Tools, err)
 	}
 	kind, a, err := h.Grant(ctx, "auditor", "sign_list", nil)
 	if err != nil || kind != node.GrantTool || !reflect.DeepEqual(a.Tools, []string{"talk_write", "talk_read", "sign_list"}) {

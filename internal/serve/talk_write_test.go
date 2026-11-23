@@ -220,8 +220,8 @@ func TestProfileOptionsShapeTheRun(t *testing.T) {
 // field overrides only that field.
 func TestAProfileRunsOnItsProvidersBody(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
-	writeConfig(t, a.paths.AgentProfileFile("auditor"), "provider = \"claude\"\n")
-	writeConfig(t, a.paths.AgentProfileFile("scribe"), "provider = \"claude\"\n\n[body]\nmodel = \"claude-big\"\n")
+	writeConfig(t, a.paths.AgentProfileFile("auditor"), "provider = \"claude\"\ntools = [\"talk_write\", \"talk_read\"]\n")
+	writeConfig(t, a.paths.AgentProfileFile("scribe"), "provider = \"claude\"\ntools = [\"talk_write\", \"talk_read\"]\n\n[body]\nmodel = \"claude-big\"\n")
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
 	writeConfig(t, path, readFile(t, path)+"\n[providers.claude.body]\nmodel = \"claude-base\"\nstream = true\nmax_tokens = 512\n")
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {

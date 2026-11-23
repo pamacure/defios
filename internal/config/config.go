@@ -61,8 +61,8 @@ type Profile struct {
 	// MaxTurns is how many model calls a summon may make; 0 is unset,
 	// which is agent.DefaultMaxTurns.
 	MaxTurns int `toml:"max_turns,omitzero"`
-	// Tools is the whole list of built-in Tools it may call (ADR 0029): nil
-	// is unset, talk_write and talk_read; empty grants none.
+	// Tools is the whole list of built-in Tools it may call (ADR 0029);
+	// unset grants none, as an empty list does (ADR 0041).
 	Tools []string `toml:"tools,omitempty"`
 	// Skills are the Skills it may load, each <plugin>/<skill> (ADR 0030).
 	// That each is installed is checked at summon, so a profile naming a
@@ -103,15 +103,6 @@ const ToolSkillLoad = "skill_load"
 
 // Tools is every built-in Tool, in the order a run offers them.
 var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill, ToolKeyAddress}
-
-// Granted is the Tools p grants: its tools, or unset, talk_write and
-// talk_read (ADR 0036).
-func (p Profile) Granted() []string {
-	if p.Tools == nil {
-		return []string{ToolTalkWrite, ToolTalkRead}
-	}
-	return p.Tools
-}
 
 // ValidateTool refuses a name that is no built-in Tool.
 func ValidateTool(name string) error {
@@ -214,9 +205,6 @@ func write(path string, v any, a Agent) error {
 		return fmt.Errorf("config: %w; %w", err, ErrNotWritten)
 	}
 	out := buf.Bytes()
-	if p, ok := v.(Profile); ok && p.Tools != nil && len(p.Tools) == 0 {
-		out = append([]byte("tools = []\n"), out...)
-	}
 	if a.Profiles != nil && len(a.Profiles) == 0 {
 		out = agentHeader.ReplaceAll(out, []byte("[agent]\nprofiles = []\n"))
 	}
@@ -266,8 +254,7 @@ func parseConfig(path string, data []byte) (Config, error) {
 }
 
 // WriteProfile writes an Agent Profile's config.toml, mode 0600, once it
-// reads back. The encoder drops an empty list, so tools set empty, which
-// grants none, is written first by hand.
+// reads back.
 func WriteProfile(path string, p Profile) error {
 	return write(path, p, Agent{})
 }

@@ -27,10 +27,10 @@ func installAudits(t *testing.T, n *node) {
 }
 
 // grantSkills sets the skills of n's profile h, as agentNode writes it, to
-// skills, a TOML array, with tools left unset.
+// skills, a TOML array, with its tools talk_write and talk_read.
 func grantSkills(t *testing.T, n *node, h, skills string) {
 	t.Helper()
-	writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\nskills = "+skills+"\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
+	writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\ntools = [\"talk_write\", \"talk_read\"]\nskills = "+skills+"\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
 }
 
 // An agent granted Skills is offered skill_load without it being in tools,

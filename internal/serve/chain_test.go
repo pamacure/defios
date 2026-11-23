@@ -292,7 +292,7 @@ func agentNode(t *testing.T, n *node, baseURL string, handles ...string) {
 	var cfg strings.Builder
 	for _, h := range handles {
 		writeBrief(t, n, h)
-		writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
+		writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\ntools = [\"talk_write\", \"talk_read\"]\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
 	}
 	fmt.Fprintf(&cfg, "[agent]\nprofiles = [\"%s\"]\n\n", strings.Join(handles, `", "`))
 	fmt.Fprintf(&cfg, "[providers.claude]\nbase_url = %q\napi_path = \"/v1/messages\"\napi_key = \"$ANTHROPIC_KEY\"\n", baseURL)

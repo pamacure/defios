@@ -48,7 +48,7 @@ func TestAgentGrantRevokeEditTheMCPServers(t *testing.T) {
 			t.Fatalf("%v: exit %d, stdout %q, stderr %q; want %q", tc.args, r.code, r.stdout, r.stderr, tc.stdout)
 		}
 		p := profile(t, dir, "auditor")
-		if !reflect.DeepEqual(p.MCP, tc.mcp) || p.Tools != nil || p.Skills != nil {
+		if !reflect.DeepEqual(p.MCP, tc.mcp) || !reflect.DeepEqual(p.Tools, []string{"talk_write", "talk_read"}) || p.Skills != nil {
 			t.Fatalf("%v: mcp = %#v, tools = %#v, skills = %#v; want mcp %#v", tc.args, p.MCP, p.Tools, p.Skills, tc.mcp)
 		}
 	}

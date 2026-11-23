@@ -39,7 +39,7 @@ func bothWays(t *testing.T, a *node, apiPath string, reply func(n int, w http.Re
 	fmt.Fprintf(&cfg, "[providers.p]\nbase_url = %q\napi_path = %q\n\n", srv.URL, apiPath)
 	for _, h := range []string{"streamed", "whole"} {
 		writeBrief(t, a, h)
-		profile := "provider = \"p\"\n\n[body]\nmodel = \"m\"\n"
+		profile := "provider = \"p\"\ntools = [\"talk_write\", \"talk_read\"]\n\n[body]\nmodel = \"m\"\n"
 		if h == "streamed" {
 			profile += "stream = true\n"
 		}

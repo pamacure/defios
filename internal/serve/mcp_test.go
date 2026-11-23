@@ -67,7 +67,7 @@ func installTools(t *testing.T, n *node, args, env string) string {
 // Servers tables, TOML [mcp."<plugin>/<server>"] tables.
 func grantMCP(t *testing.T, n *node, h, tables string) {
 	t.Helper()
-	writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n\n"+tables)
+	writeConfig(t, n.paths.AgentProfileFile(h), "provider = \"claude\"\ntools = [\"talk_write\", \"talk_read\"]\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n\n"+tables)
 }
 
 // starts are the pids the fixture logged starting in dir.

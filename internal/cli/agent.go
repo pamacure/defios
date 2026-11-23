@@ -139,7 +139,8 @@ Provider of its alias. These commands need no serve.`,
 		Use:   "add <handle>",
 		Short: "Add an Agent Profile: write agents/<handle>/config.toml and scaffold its BRIEF.md",
 		Long: `Add an Agent Profile running on a Provider alias. Its Agent Brief, BRIEF.md, is written with a placeholder unless
-one is already there. It is not included anywhere until you include its Handle, and each Group that
+one is already there. It is granted the Tools talk_write and talk_read, and no other until you grant it (see
+agent grant). It is not included anywhere until you include its Handle, and each Group that
 includes it must define its Provider. It is given --livery, or a random Livery no other party holds,
 none if all 64 are taken.`,
 		Args: cobra.ExactArgs(1),
@@ -301,8 +302,7 @@ Group's, and exclude --key refuses it.`,
 		Short: "Grant an Agent Profile a built-in Tool, a Plugin's Skill or MCP Server, and print what it is granted of that kind",
 		Long: `Add a Tool to an Agent Profile's tools, the whole list of built-in Tools it may call (ADR 0029), a
 <plugin>/<skill> to its skills, the Skills it may read with skill_load, or a <plugin>/<server> to its mcp,
-the MCP Servers whose tools it may call (ADR 0030). An unset tools is talk_write and talk_read, so granting into
-it writes both with the new Tool. The Tools are ` + strings.Join(config.Tools, ", ") + `; the sign Tools are offered
+the MCP Servers whose tools it may call (ADR 0030). A Tool it is not granted by name it cannot call. The Tools are ` + strings.Join(config.Tools, ", ") + `; the sign Tools are offered
 only in a Key's Conversation, never in Group-level talk. A Skill or MCP Server must be of a Plugin installed
 or built in, and a name that is both is refused as ambiguous.
 
@@ -318,8 +318,8 @@ its server asks for, set under its own name. Granting a server again sets its Se
 		Use:   "revoke <handle> <tool | plugin/skill | plugin/server>",
 		Short: "Revoke a built-in Tool, a Skill or an MCP Server from an Agent Profile, and print what it is granted of that kind",
 		Long: `Take a Tool out of an Agent Profile's tools, a <plugin>/<skill> out of its skills, or a <plugin>/<server>
-out of its mcp. Revoking talk_write leaves an agent that cannot post to the talk; revoking every Tool leaves an
-empty list, an agent that can only end its turn. A Skill or MCP Server it grants can be revoked though its
+out of its mcp. Revoking talk_write leaves an agent that cannot post to the talk; revoking every Tool leaves it
+granted none, an agent that can only end its turn. A Skill or MCP Server it grants can be revoked though its
 Plugin is no longer installed.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

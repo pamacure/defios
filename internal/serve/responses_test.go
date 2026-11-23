@@ -67,6 +67,7 @@ func openaiAgent(t *testing.T, a *node, reply func(n int, w http.ResponseWriter)
 	t.Cleanup(srv.Close)
 	writeBrief(t, a, "auditor")
 	writeConfig(t, a.paths.AgentProfileFile("auditor"), `provider = "openai"
+tools = ["talk_write", "talk_read"]
 
 [body]
 model = "gpt-test"

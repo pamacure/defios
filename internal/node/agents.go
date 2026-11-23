@@ -219,7 +219,8 @@ func (h *Host) AgentProfile(ctx context.Context, handle string) (AgentProfile, e
 // AddAgentProfile adds an Agent Profile running on e.Provider, which is
 // required, and scaffolds its Agent Brief, BRIEF.md, with a placeholder unless
 // one is there. It is given e.Livery, or a random free Livery, none if
-// every one is taken. It is included nowhere until IncludeAgent.
+// every one is taken. It is granted talk_write and talk_read, and no other
+// Tool (ADR 0041). It is included nowhere until IncludeAgent.
 func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit) (AgentProfile, error) {
 	if err := validHandle(handle); err != nil {
 		return AgentProfile{}, err
@@ -227,7 +228,7 @@ func (h *Host) AddAgentProfile(ctx context.Context, handle string, e ProfileEdit
 	if e.Provider == nil {
 		return AgentProfile{}, onField(FieldProvider, invalidf("a Provider is required: the alias of the Provider it runs on"))
 	}
-	var p config.Profile
+	p := config.Profile{Tools: []string{config.ToolTalkWrite, config.ToolTalkRead}}
 	if err := e.apply(&p); err != nil {
 		return AgentProfile{}, err
 	}
@@ -573,7 +574,7 @@ func (h *Host) profileOf(handle string, p config.Profile, in []Place, livery str
 	if in == nil {
 		in = []Place{}
 	}
-	return AgentProfile{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: p.Granted(),
+	return AgentProfile{Handle: handle, Provider: p.Provider, Model: model, MaxTurns: p.MaxTurns, Tools: append([]string{}, p.Tools...),
 		Skills: skills, MCP: mcp, Body: p.Body, Dir: h.p.AgentProfileDir(handle), Livery: livery, IncludedIn: in}
 }
 

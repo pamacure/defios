@@ -31,7 +31,7 @@ func skillAgent(t *testing.T) (dir string) {
 
 // agent grant and revoke of <plugin>/<skill> edit a profile's skills, the
 // kind inferred from what is installed or built in (ADR 0029), and print
-// them, leaving its tools unset; show prints them. An unknown Skill or
+// them, leaving its tools as they were; show prints them. An unknown Skill or
 // Plugin, and a name that is both a Skill and an MCP Server, are refused,
 // changing nothing.
 func TestAgentGrantRevokeEditTheSkills(t *testing.T) {
@@ -50,7 +50,7 @@ func TestAgentGrantRevokeEditTheSkills(t *testing.T) {
 			t.Fatalf("%v: exit %d, stdout %q, stderr %q; want %q", tc.args, r.code, r.stdout, r.stderr, tc.stdout)
 		}
 		p := profile(t, dir, "auditor")
-		if !reflect.DeepEqual(p.Skills, tc.skills) || p.Tools != nil {
+		if !reflect.DeepEqual(p.Skills, tc.skills) || !reflect.DeepEqual(p.Tools, []string{"talk_write", "talk_read"}) {
 			t.Fatalf("%v: skills = %#v, tools = %#v; want skills %#v", tc.args, p.Skills, p.Tools, tc.skills)
 		}
 	}
