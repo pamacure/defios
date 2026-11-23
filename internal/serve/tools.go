@@ -39,6 +39,16 @@ var talkReadSchema = json.RawMessage(`{"type":"object","properties":{` +
 	`"before_seq":{"type":"integer","minimum":1,"description":"Return only talk before this seq, to page back."}},` +
 	`"additionalProperties":false}`)
 
+// talkSummonDescription tells the model what talk_summon does (ADR 0041).
+const talkSummonDescription = "Summon another agent of your Node to answer in this talk, by its Handle. " +
+	"It answers after your run ends, at the next depth, shown the message you write with talk_write, or if you stay silent, the message that summoned you. " +
+	"Call it once for each agent, before you end your run; it does not end your run. " +
+	"It refuses your own Handle, a person, an agent not included here, one you have already summoned this run, and any at the max depth, naming whom you may summon."
+
+// talkSummonSchema is talk_summon's input.
+var talkSummonSchema = json.RawMessage(`{"type":"object","properties":{"handle":{"type":"string","description":"The Handle of the agent to summon, without the @."}},` +
+	`"required":["handle"],"additionalProperties":false}`)
+
 // The sign Tools' descriptions and input schemas (ADR 0029).
 const (
 	signListDescription = "List the Sign Requests of this Conversation's Key, open and past, as JSON: each with its status, " +
@@ -95,13 +105,22 @@ var (
 // acted records that a sign Tool acted on the Sign Request msgID, hex.
 type acted func(tool, msgID string)
 
+// runSummons are the Handles one run has summoned with talk_summon, in
+// the order it called it (ADR 0041); record tells the run's Transcript and
+// watchers of each.
+type runSummons struct {
+	handles []string
+	record  func(handle string)
+}
+
 // agentTools are the Tools granted that handle's run in conv may call, in
 // the order config.Tools lists them: talk_read reading this Node's view of
-// conv's talk from ob and store, the sign Tools only in a Key's
+// conv's talk from ob and store, talk_summon adding to sum, the sign
+// Tools only in a Key's
 // Conversation, never in Group-level talk (nil conv), and scoped to that
 // Key's Sign Requests. Those that write act as this Node under handle, a
 // proposal at the run's depth, and each that succeeds is told to did.
-func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string, depth uint32, granted []string, conv []byte, did acted) []agent.Tool {
+func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string, depth uint32, granted []string, conv []byte, did acted, sum *runSummons) []agent.Tool {
 	var out []agent.Tool
 	for _, name := range config.Tools {
 		if !slices.Contains(granted, name) {
@@ -112,6 +131,10 @@ func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string,
 			out = append(out, agent.TalkWrite)
 		case config.ToolTalkRead:
 			out = append(out, agent.Tool{Name: name, Description: fmt.Sprintf(talkReadDescription, s.selfName(), handle), Schema: talkReadSchema, Call: s.talkReadTool(ob, store, conv)})
+		case config.ToolTalkSummon:
+			// Offered at every depth, so the Tools do not change between
+			// runs; at the max depth it refuses (ADR 0041).
+			out = append(out, agent.Tool{Name: name, Description: talkSummonDescription, Schema: talkSummonSchema, Call: s.talkSummonTool(store, conv, handle, depth, sum)})
 		case config.ToolSignList:
 			if conv != nil {
 				out = append(out, agent.Tool{Name: name, Description: signListDescription, Schema: signListSchema, Call: s.signListTool(conv)})
@@ -194,6 +217,55 @@ func (s *server) talkReadTool(ob *outbox.Outbox, store *cosl.Store, conv []byte)
 			p.Lines = append(p.Lines, fmt.Sprintf(`{"earlier_before_seq":%d}`, p.Earlier))
 		}
 		return strings.Join(p.Lines, "\n"), nil
+	}
+}
+
+// talkSummonTool is talk_summon for handle's run at depth in conv: it
+// accepts a Handle included there as it is when called, adding it to sum,
+// and refuses one that could not run, saying whom handle may summon
+// (ADR 0041). The summoned agent runs after this run ends.
+func (s *server) talkSummonTool(store *cosl.Store, conv []byte, handle string, depth uint32, sum *runSummons) func(context.Context, json.RawMessage) (string, error) {
+	return func(_ context.Context, input json.RawMessage) (string, error) {
+		var in struct {
+			Handle string `json:"handle"`
+		}
+		if err := json.Unmarshal(input, &in); err != nil || in.Handle == "" {
+			return "", errors.New(`its input must be {"handle": "<Handle>"}`)
+		}
+		h := strings.TrimPrefix(in.Handle, "@")
+		e, err := s.load(store, conv)
+		if err != nil {
+			return "", err
+		}
+		inc, err := e.Included()
+		if err != nil {
+			return "", err
+		}
+		if !inc.Summons(depth) {
+			return "", fmt.Errorf("you are at depth %d, the max depth: you may summon nobody", depth)
+		}
+		var may []config.ResolvedProfile
+		for _, p := range inc.Profiles {
+			if p.Handle != handle && !slices.Contains(sum.handles, p.Handle) {
+				may = append(may, p)
+			}
+		}
+		var why string
+		switch {
+		case h == handle:
+			why = "is you"
+		case h == config.HandleUser:
+			why = "is a person, not an agent"
+		case !includes(inc, h):
+			why = "is not an agent included here"
+		case slices.Contains(sum.handles, h):
+			why = "is already summoned in this run"
+		default:
+			sum.handles = append(sum.handles, h)
+			sum.record(h)
+			return fmt.Sprintf("@%s will answer after your run ends.", h), nil
+		}
+		return "", fmt.Errorf("@%s %s. You may summon: %s.", h, why, listHandles(may))
 	}
 }
 

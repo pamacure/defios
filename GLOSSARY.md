@@ -125,7 +125,7 @@ _Avoid_: work log, trace, output log, reply (that is the message it says)
 _Avoid_: tag, ping, at-reference
 
 **Summon**:
-An agent's call, during its run, naming a Handle to answer once that run ends, in the Chain it runs in. The only way an agent brings in another; refused at once when the Handle is its own, a person's, not included where it answers, or past the max depth.
+An agent's call, during its run, naming a Handle to answer once that run ends, in the Chain it runs in. The only way an agent brings in another; refused at once when the Handle is its own, a person's, not included where it answers, already summoned in that run, or at the max depth.
 _Avoid_: mention (that is text a person or Job writes), invoke, delegate, hand off
 
 **Trigger**:

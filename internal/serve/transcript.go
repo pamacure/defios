@@ -12,12 +12,13 @@ const (
 
 // Transcript line kinds: which of a TranscriptLine's fields it holds.
 const (
-	KindTurn    = transcript.KindTurn
-	KindRequest = transcript.KindRequest
-	KindBlock   = transcript.KindBlock
-	KindUsage   = transcript.KindUsage
-	KindActed   = transcript.KindActed
-	KindOutcome = transcript.KindOutcome
+	KindTurn     = transcript.KindTurn
+	KindRequest  = transcript.KindRequest
+	KindBlock    = transcript.KindBlock
+	KindUsage    = transcript.KindUsage
+	KindActed    = transcript.KindActed
+	KindSummoned = transcript.KindSummoned
+	KindOutcome  = transcript.KindOutcome
 )
 
 // TranscriptLine is one line of an Agent's Transcript.

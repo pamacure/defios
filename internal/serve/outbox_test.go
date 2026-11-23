@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -131,14 +132,18 @@ func waitEmptyOutbox(t *testing.T, n *node) {
 	t.Fatalf("%s: Outbox not empty after the drain", n.name)
 }
 
-// With no leader, a person's mention of @auditor, whose reply summons
-// @scribe, runs both: each reply is queued, and @scribe reads @auditor's
+// With no leader, a person's mention of @auditor, which summons @scribe,
+// runs both: each reply is queued, and @scribe reads @auditor's
 // from this Node's view of the talk. When the queued messages commit, no
 // chain runs again (ADR 0025).
 func TestAChainRunsWithNoLeader(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe")
 	maxDepth2(t, a)
-	replyAs(provider, map[string]string{"auditor": "ask @scribe", "scribe": "done"})
+	grantTools(t, a, "auditor", `["talk_write", "talk_summon"]`)
+	scriptAs(provider, map[string][]func(http.ResponseWriter){
+		"auditor": {summonOf("scribe"), say("ask scribe")},
+		"scribe":  {say("done")},
+	})
 	b.stop()
 	a.waitLeaderless(t)
 	s := watch(t, a)
@@ -150,7 +155,8 @@ func TestAChainRunsWithNoLeader(t *testing.T) {
 		t.Fatalf("send = %+v, want queued", v)
 	}
 	events := untilEnd(t, s, v.MsgID)
-	want := `chain.start start:@auditor/1 tool:talk_write {"text":"ask @scribe"} commit:ask @scribe start:@scribe/2 tool:talk_write {"text":"done"} commit:done end`
+	want := `chain.start start:@auditor/1 tool:talk_summon {"handle":"scribe"} summoned:@scribe tool:` + "\n" +
+		`talk_write {"text":"ask scribe"} commit:ask scribe start:@scribe/2 tool:talk_write {"text":"done"} commit:done end`
 	if got := summary(events); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
@@ -160,13 +166,13 @@ func TestAChainRunsWithNoLeader(t *testing.T) {
 		}
 	}
 	calls := provider.seen()
-	if want := "(You are summoned by:)\n[queued] alice/@auditor: ask @scribe"; len(calls) != 2 || calls[1].Prompt != want {
+	if want := "(@auditor summoned you on account of:)\n[queued] alice/@auditor: ask scribe"; len(calls) != 3 || calls[2].Prompt != want {
 		t.Fatalf("calls = %+v, want @scribe's prompt %q", calls, want)
 	}
 
 	b.restart(t)
 	rows := a.groupLevelRows(t, gid, 3)
-	if ffs := freeforms(t, rows); ffs[0].Text != "@auditor check" || ffs[1].Text != "ask @scribe" || ffs[2].Text != "done" {
+	if ffs := freeforms(t, rows); ffs[0].Text != "@auditor check" || ffs[1].Text != "ask scribe" || ffs[2].Text != "done" {
 		t.Fatalf("rows = %+v", ffs)
 	}
 	waitEmptyOutbox(t, a)
@@ -177,8 +183,8 @@ func TestAChainRunsWithNoLeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	untilEnd(t, s, v.MsgID)
-	if n := len(provider.seen()); n != 3 {
-		t.Fatalf("provider called %d times, want 3: a chain ran again when its messages committed", n)
+	if n := len(provider.seen()); n != 4 {
+		t.Fatalf("provider called %d times, want 4: a chain ran again when its messages committed", n)
 	}
 }
 

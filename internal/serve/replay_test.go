@@ -77,25 +77,31 @@ func TestASecondSummonReplaysTheFirstRun(t *testing.T) {
 
 // Each agent replays only its own runs: another agent's are talk to it,
 // read as lines. An agent summoned again in one chain replays its run
-// earlier in that chain, and is told the reply that summons it.
+// earlier in that chain, and is told the message of the agent that
+// summons it.
 func TestAnAgentReplaysOnlyItsOwnRuns(t *testing.T) {
 	a, _, _, provider := agentPair(t, "bob", "sam")
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
 	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 3\n", 1))
-	replyAs(provider, map[string]string{"bob": "over to @sam", "sam": "back to @bob"})
+	grantTools(t, a, "bob", `["talk_write", "talk_summon"]`)
+	grantTools(t, a, "sam", `["talk_write", "talk_summon"]`)
+	scriptAs(provider, map[string][]func(http.ResponseWriter){
+		"bob": {summonOf("sam"), say("over to sam")},
+		"sam": {summonOf("bob"), say("back to bob")},
+	})
 	v := summon(t, a, "@bob start")
 	calls := provider.seen()
-	if len(calls) != 3 {
+	if len(calls) != 5 {
 		t.Fatalf("calls = %+v", calls)
 	}
-	if sam := calls[1]; sam.Messages != 1 || !strings.HasPrefix(sam.Prompt, "(You are summoned by:)\n") || !strings.HasSuffix(sam.Prompt, "alice/@bob: over to @sam") {
+	if sam := calls[2]; sam.Messages != 1 || !strings.HasPrefix(sam.Prompt, "(@bob summoned you on account of:)\n") || !strings.HasSuffix(sam.Prompt, "alice/@bob: over to sam") {
 		t.Fatalf("sam's turn, of %d messages = %q", sam.Messages, sam.Prompt)
 	}
-	again := calls[2]
-	if again.Messages != 3 || unmarked(again.Raw[0]) != unmarked(calls[0].Raw[0]) {
+	again := calls[4]
+	if again.Messages != 5 || unmarked(again.Raw[0]) != unmarked(calls[0].Raw[0]) {
 		t.Fatalf("bob's second run does not replay his first: %s", again.Raw)
 	}
-	if strings.Contains(again.Prompt, "Talk since") || !strings.HasSuffix(again.Prompt, "alice/@sam: back to @bob") || strings.Contains(again.Prompt, fmt.Sprintf("[%d]", v.Seq)) {
+	if strings.Contains(again.Prompt, "Talk since") || !strings.HasSuffix(again.Prompt, "alice/@sam: back to bob") || strings.Contains(again.Prompt, fmt.Sprintf("[%d]", v.Seq)) {
 		t.Fatalf("bob's second turn = %q", again.Prompt)
 	}
 	if !strings.Contains(again.RunFacts, "depth 3 of at most 3") || !strings.Contains(again.RunFacts, "Agents you may summon: none.") {

@@ -52,20 +52,19 @@ func TestWalkRunsThePersonsMentionsInOrder(t *testing.T) {
 	}
 }
 
-func TestWalkSummonsDepthFirstAndSkipsWhatCannotRun(t *testing.T) {
-	inc := included(2, "a", "b", "c")
+// A run's summons run after it, depth-first in the order it called them,
+// at the next depth; a Handle is not checked here: talk_summon refused
+// what cannot run when it was called (ADR 0041).
+func TestWalkRunsARunsSummonsDepthFirst(t *testing.T) {
 	lines, finished := walk([]string{"a", "c"}, script{
-		// @a ignores its own mention, summons @b, and mentions @x, which
-		// is not included: @x still takes a step.
-		"a": {Said: "@a @b and @x", Included: inc},
-		// @b, at max_depth, cannot summon @c.
-		"b": {Said: "over to @c", Included: inc},
+		"a": {Summons: []string{"b", "x"}, MsgID: "from-a"},
+		"b": {Summons: []string{"c"}, MsgID: "from-b"},
 	})
 	check(t, lines, []string{
 		"1 run @a d1",
 		"2 run @b d2",
-		"3 skip @c d3: @b replied at depth 2, which is max_depth 2",
-		"4 skip @x d2: @x is not in [agent] profiles here",
+		"3 run @c d3",
+		"4 run @x d2",
 		"5 run @c d1",
 	})
 	if !finished {
@@ -73,16 +72,15 @@ func TestWalkSummonsDepthFirstAndSkipsWhatCannotRun(t *testing.T) {
 	}
 }
 
-func TestWalkASilentAgentSummonsNobody(t *testing.T) {
-	inc := included(3, "a", "b")
-	lines, _ := walk([]string{"a", "b"}, script{"a": {Included: inc}})
-	check(t, lines, []string{"1 run @a d1", "2 run @b d1"})
+// A silent run's summons still run (ADR 0041).
+func TestWalkASilentAgentsSummonsRun(t *testing.T) {
+	lines, _ := walk([]string{"a", "b"}, script{"a": {Summons: []string{"c"}}})
+	check(t, lines, []string{"1 run @a d1", "2 run @c d2", "3 run @b d1"})
 }
 
 func TestWalkStopsAtAStop(t *testing.T) {
-	inc := included(3, "a", "b", "c")
 	lines, finished := walk([]string{"a", "c"}, script{
-		"a": {Said: "@b", Included: inc},
+		"a": {Summons: []string{"b"}, MsgID: "from-a"},
 		"b": {Stop: true},
 	})
 	check(t, lines, []string{"1 run @a d1", "2 run @b d2"})
@@ -103,13 +101,10 @@ func TestWalkFromADepthSummonsOneDeeper(t *testing.T) {
 			line += ": " + s.Reason
 		}
 		lines = append(lines, line)
-		if s.Handle == "a" && s.Action == chain.Run {
-			return chain.Outcome{Said: "@b", Included: inc}
-		}
 		return chain.Outcome{}
 	}
 	chain.WalkFrom(1, inc, []string{"a"}, do)
-	check(t, lines, []string{"1 run @a d2", "2 skip @b d3: @a replied at depth 2, which is max_depth 2"})
+	check(t, lines, []string{"1 run @a d2"})
 
 	lines = nil
 	chain.WalkFrom(2, inc, []string{"a", "b"}, do)
@@ -119,17 +114,18 @@ func TestWalkFromADepthSummonsOneDeeper(t *testing.T) {
 	})
 }
 
-// Each step names the message that summons it: none for those the chain
-// starts with, and for one a reply summons, that reply's.
-func TestAStepNamesTheMessageThatSummonsIt(t *testing.T) {
-	inc := included(3, "a", "b", "c")
+// Each step names the agent that summoned it and the nearest message up
+// the chain: none for those the chain starts with; for one a run summons,
+// that run's message, or if it was silent, the message that summoned it
+// (ADR 0041).
+func TestAStepNamesItsSummonerAndTheNearestMessage(t *testing.T) {
 	var by []string
-	chain.Walk([]string{"a", "c"}, func(s chain.Step) chain.Outcome {
-		by = append(by, s.Handle+"<"+s.Summoner)
+	chain.Walk([]string{"a", "d"}, func(s chain.Step) chain.Outcome {
+		by = append(by, s.Handle+"<@"+s.By+" "+s.OnAccountOf)
 		return map[string]chain.Outcome{
-			"a": {Said: "@b", MsgID: "from-a", Included: inc},
-			"b": {Said: "@c", MsgID: "from-b", Included: inc},
+			"a": {Summons: []string{"b"}, MsgID: "from-a"},
+			"b": {Summons: []string{"c"}}, // silent
 		}[s.Handle]
 	})
-	check(t, by, []string{"a<", "b<from-a", "c<from-b", "c<"})
+	check(t, by, []string{"a<@ ", "b<@a from-a", "c<@b from-a", "d<@ "})
 }

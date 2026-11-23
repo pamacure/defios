@@ -104,9 +104,9 @@ func (s *server) conversationSend(ctx context.Context, text, handle string, dept
 // checkHandle allows no agent's message whose mentions all name Handles
 // included where it is sent, and an agent's whose Handle is included there,
 // at a depth from 1 to max_depth, and returns what is included there. An
-// agent's mentions are not checked: the chain skips those it cannot summon
-// (ADR 0015). Like requireConversation it is the writer's check, not the
-// FSM's: another Node's config is not this Node's to know.
+// agent's text mentions nobody, so it is not checked: an agent summons
+// with talk_summon (ADR 0041). Like requireConversation it is the writer's
+// check, not the FSM's: another Node's config is not this Node's to know.
 func (s *server) checkHandle(store *cosl.Store, conversationID []byte, handle string, depth uint32, text string) (config.Included, error) {
 	if handle == "" {
 		return s.checkMentions(store, conversationID, mention.Handles(text))

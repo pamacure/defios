@@ -88,6 +88,7 @@ type MCPGrant struct {
 const (
 	ToolTalkWrite   = agent.TalkWriteName
 	ToolTalkRead    = "talk_read"
+	ToolTalkSummon  = "talk_summon"
 	ToolSignList    = "sign_list"
 	ToolSignInspect = "sign_inspect"
 	ToolSignPropose = "sign_propose"
@@ -102,7 +103,7 @@ const (
 const ToolSkillLoad = "skill_load"
 
 // Tools is every built-in Tool, in the order a run offers them.
-var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill, ToolKeyAddress}
+var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolTalkSummon, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill, ToolKeyAddress}
 
 // ValidateTool refuses a name that is no built-in Tool.
 func ValidateTool(name string) error {

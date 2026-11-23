@@ -452,6 +452,8 @@ func summary(events []serve.ChainEvent) string {
 			out = append(out, "silent:@"+ev.Handle)
 		case serve.EventAgentSkipped:
 			out = append(out, "skipped:@"+ev.Handle)
+		case serve.EventAgentSummoned:
+			out = append(out, "summoned:@"+ev.Handle)
 		case serve.EventAgentError:
 			out = append(out, "error:@"+ev.Handle)
 		case serve.EventChainEnd:
@@ -1141,67 +1143,44 @@ func replyAs(provider *fakeProvider, replies map[string]string) {
 	})
 }
 
-// With max_depth 1 an agent's mention summons nobody: it is skipped with a
-// reason, and the reply that carries it commits.
-func TestAnAgentsMentionAtMaxDepthIsSkipped(t *testing.T) {
-	a, b, gid, provider := agentPair(t, "auditor", "scribe")
-	replyAs(provider, map[string]string{"auditor": "ask @scribe"})
-	s := watch(t, a)
-	v, err := a.client().ConversationSend(context.Background(), "@auditor", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := untilEnd(t, s, v.MsgID)
-	if got := summary(events); got != `chain.start start:@auditor/1 tool:talk_write {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe end` {
-		t.Fatalf("events = %s", got)
-	}
-	if reason := events[len(events)-2].Reason; !strings.Contains(reason, "max_depth 1") {
-		t.Fatalf("reason = %q", reason)
-	}
-	if ffs := freeforms(t, b.groupLevelRows(t, gid, 2)); ffs[1].Text != "ask @scribe" || ffs[1].Handle != "auditor" {
-		t.Fatalf("rows = %+v", ffs)
-	}
-	if n := len(provider.seen()); n != 1 {
-		t.Fatalf("provider called %d times, want 1", n)
-	}
-}
-
-// With max_depth 2 an agent's mention runs depth-first at the next depth:
-// @auditor @scribe, where auditor mentions quant, runs auditor, quant,
-// scribe at depths 1, 2, 1. quant's mention, at max_depth, is skipped, and
-// auditor's mention of itself is ignored. Each agent's last turn gives its
-// depth and the Handles it may summon, or none (ADR 0036).
+// With max_depth 2 an agent's summons run depth-first at the next depth:
+// @auditor @scribe, where auditor summons quant, runs auditor, quant,
+// scribe at depths 1, 2, 1. Each agent's last turn gives its depth and the
+// Handles it may summon, or none (ADR 0036).
 func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe", "quant")
-	path := a.paths.GroupConfigFile(group.ImplicitAlias)
-	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
-	replyAs(provider, map[string]string{"auditor": "@quant, and me, @auditor", "quant": "ask @scribe"})
+	maxDepth2(t, a)
+	grantTools(t, a, "auditor", `["talk_write", "talk_summon"]`)
+	scriptAs(provider, map[string][]func(http.ResponseWriter){
+		"auditor": {summonOf("quant"), say("over to quant")},
+		"quant":   {say("ask scribe")},
+	})
 	s := watch(t, a)
 	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `chain.start start:@auditor/1 tool:talk_write {"text":"@quant, and me, @auditor"} commit:@quant, and me, @auditor ` +
-		`start:@quant/2 tool:talk_write {"text":"ask @scribe"} commit:ask @scribe skipped:@scribe ` +
-		`start:@scribe/1 tool:talk_write {"text":"reply 3"} commit:reply 3 end`
+	want := `chain.start start:@auditor/1 tool:talk_summon {"handle":"quant"} summoned:@quant tool:` + "\n" + `talk_write {"text":"over to quant"} commit:over to quant ` +
+		`start:@quant/2 tool:talk_write {"text":"ask scribe"} commit:ask scribe ` +
+		`start:@scribe/1 tool:talk_write {"text":"reply 4"} commit:reply 4 end`
 	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
 	calls := provider.seen()
-	if len(calls) != 3 {
+	if len(calls) != 4 {
 		t.Fatalf("calls = %+v", calls)
 	}
-	for i, want := range []string{
-		"(You are at depth 1 of at most 2. Agents you may summon: @scribe, @quant.)",
-		"(You are at depth 2 of at most 2. Agents you may summon: none.)",
-		"(You are at depth 1 of at most 2. Agents you may summon: @auditor, @quant.)",
+	for i, want := range map[int]string{
+		0: "(You are at depth 1 of at most 2. Agents you may summon: @scribe, @quant.)",
+		2: "(You are at depth 2 of at most 2. Agents you may summon: none.)",
+		3: "(You are at depth 1 of at most 2. Agents you may summon: @auditor, @quant.)",
 	} {
 		if calls[i].RunFacts != want {
 			t.Errorf("call %d's last turn lacks %q:\n%s", i+1, want, calls[i].RunFacts)
 		}
 	}
-	if want := summonedBy(v.Seq, "alice: @auditor @scribe"); calls[2].Prompt != want {
-		t.Fatalf("scribe's prompt = %q, want %q", calls[2].Prompt, want)
+	if want := summonedBy(v.Seq, "alice: @auditor @scribe"); calls[3].Prompt != want {
+		t.Fatalf("scribe's prompt = %q, want %q", calls[3].Prompt, want)
 	}
 }
 
@@ -1210,23 +1189,27 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 // facts. Its depth and whom it may summon are in the last turn (ADR 0036).
 func TestAnAgentsSystemBlockIsTheSameAtEveryDepth(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
-	path := a.paths.GroupConfigFile(group.ImplicitAlias)
-	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
-	replyAs(provider, map[string]string{"scribe": "ask @auditor"})
+	maxDepth2(t, a)
+	grantTools(t, a, "scribe", `["talk_write", "talk_summon"]`)
+	scriptAs(provider, map[string][]func(http.ResponseWriter){
+		"auditor": {say("reply 1"), say("reply 4")},
+		"scribe":  {summonOf("auditor"), say("ask auditor")},
+	})
 	s := watch(t, a)
 	v, err := a.client().ConversationSend(context.Background(), "@auditor @scribe", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `chain.start start:@auditor/1 tool:talk_write {"text":"reply 1"} commit:reply 1 start:@scribe/1 tool:talk_write {"text":"ask @auditor"} commit:ask @auditor start:@auditor/2 tool:talk_write {"text":"reply 3"} commit:reply 3 end`
+	want := `chain.start start:@auditor/1 tool:talk_write {"text":"reply 1"} commit:reply 1 start:@scribe/1 tool:talk_summon {"handle":"auditor"} summoned:@auditor tool:` + "\n" +
+		`talk_write {"text":"ask auditor"} commit:ask auditor start:@auditor/2 tool:talk_write {"text":"reply 4"} commit:reply 4 end`
 	if got := summary(untilEnd(t, s, v.MsgID)); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
 	calls := provider.seen()
-	if len(calls) != 3 {
+	if len(calls) != 4 {
 		t.Fatalf("calls = %+v", calls)
 	}
-	first, second := calls[0], calls[2]
+	first, second := calls[0], calls[3]
 	if first.SystemBlocks != 1 || !first.SystemCached || second.SystemBlocks != 1 || !second.SystemCached {
 		t.Fatalf("system blocks: %d cached %t, then %d cached %t; want one cached block each",
 			first.SystemBlocks, first.SystemCached, second.SystemBlocks, second.SystemCached)
@@ -1254,7 +1237,7 @@ func TestTheBriefingCoversDeFiOS(t *testing.T) {
 	briefing, _, _ := strings.Cut(sys, "\n\nYou are auditor.")
 	for _, want := range []string{
 		"Node", "Group-level talk", "Conversation", "Agent Brief", "Vault", "Plugin", "Trigger", "Network",
-		"depth 0", "max depth", "never another Node's", "without the `@`",
+		"depth 0", "max depth", "never another Node's", "talk_summon",
 	} {
 		if !strings.Contains(briefing, want) {
 			t.Errorf("the Briefing lacks %q", want)
@@ -1266,11 +1249,15 @@ func TestTheBriefingCoversDeFiOS(t *testing.T) {
 // the one that summoned it included.
 func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe", "quant")
-	path := a.paths.GroupConfigFile(group.ImplicitAlias)
-	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
+	maxDepth2(t, a)
+	grantTools(t, a, "auditor", `["talk_write", "talk_summon"]`)
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
-		if n == 1 {
-			streamSay(w, "@quant")
+		switch n {
+		case 1:
+			callSummon(w, "quant")
+			return
+		case 2:
+			streamSay(w, "over to quant")
 			return
 		}
 		w.WriteHeader(400)
@@ -1281,11 +1268,11 @@ func TestANestedFailureDropsTheRestOfTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:talk_write {"text":"@quant"} commit:@quant start:@quant/2 error:@quant end` {
+	if got := summary(untilEnd(t, s, v.MsgID)); got != `chain.start start:@auditor/1 tool:talk_summon {"handle":"quant"} summoned:@quant tool:`+"\n"+`talk_write {"text":"over to quant"} commit:over to quant start:@quant/2 error:@quant end` {
 		t.Fatalf("events = %s", got)
 	}
-	if n := len(provider.seen()); n != 2 {
-		t.Fatalf("provider called %d times, want 2", n)
+	if n := len(provider.seen()); n != 3 {
+		t.Fatalf("provider called %d times, want 3", n)
 	}
 }
 
@@ -1296,9 +1283,14 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
 	writeConfig(t, path, strings.Replace(readFile(t, path), "[agent]\n", "[agent]\nmax_depth = 2\n", 1))
 	started := make(chan int, 1)
+	grantTools(t, a, "auditor", `["talk_write", "talk_summon"]`)
 	provider.set(func(n int, w http.ResponseWriter, r *http.Request) {
-		if n == 1 {
-			streamSay(w, "@quant")
+		switch n {
+		case 1:
+			callSummon(w, "quant")
+			return
+		case 2:
+			streamSay(w, "over to quant")
 			return
 		}
 		streamParts(w, "start")
@@ -1316,12 +1308,12 @@ func TestCancelDropsNestedAgents(t *testing.T) {
 	if c, err := a.client().ConversationCancel(ctx, nil, ""); err != nil || !c.Cancelled {
 		t.Fatalf("cancel = %+v, %v", c, err)
 	}
-	if got := summary(append(seen, untilEnd(t, s, v.MsgID)...)); got != `chain.start start:@auditor/1 tool:talk_write {"text":"@quant"} commit:@quant start:@quant/2 text:start end:cancelled` {
+	if got := summary(append(seen, untilEnd(t, s, v.MsgID)...)); got != `chain.start start:@auditor/1 tool:talk_summon {"handle":"quant"} summoned:@quant tool:`+"\n"+`talk_write {"text":"over to quant"} commit:over to quant start:@quant/2 text:start end:cancelled` {
 		t.Fatalf("events = %s", got)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if n := len(provider.seen()); n != 2 {
-		t.Fatalf("provider called %d times, want 2", n)
+	if n := len(provider.seen()); n != 3 {
+		t.Fatalf("provider called %d times, want 3", n)
 	}
 }
 

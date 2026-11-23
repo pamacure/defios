@@ -34,12 +34,13 @@ const (
 
 // Line kinds: which of a Line's fields it holds.
 const (
-	KindTurn    = "turn"              // turn, seq and unapplied: the run's user turn, and the talk it accounts for
-	KindRequest = agent.RecordRequest // request: a request body as sent, never its headers
-	KindBlock   = agent.RecordBlock   // block: one output block, or a tool call's result
-	KindUsage   = agent.RecordUsage   // usage: a model call's usage
-	KindActed   = "acted"             // tool and msg_id: a sign Tool acted on that Sign Request
-	KindOutcome = "outcome"           // outcome and at, and msg_id and seq or error with it
+	KindTurn     = "turn"              // turn, seq and unapplied: the run's user turn, and the talk it accounts for
+	KindRequest  = agent.RecordRequest // request: a request body as sent, never its headers
+	KindBlock    = agent.RecordBlock   // block: one output block, or a tool call's result
+	KindUsage    = agent.RecordUsage   // usage: a model call's usage
+	KindActed    = "acted"             // tool and msg_id: a sign Tool acted on that Sign Request
+	KindSummoned = "summoned"          // summoned: talk_summon accepted that Handle (ADR 0041)
+	KindOutcome  = "outcome"           // outcome and at, and msg_id and seq or error with it
 )
 
 // Line is one line of a Transcript. Every line names the run it belongs
@@ -51,8 +52,8 @@ type Line struct {
 	Step   int    `json:"step"`
 	Handle string `json:"handle"`
 	Depth  uint32 `json:"depth"`
-	// Kind is KindTurn, KindRequest, KindBlock, KindUsage, KindActed or
-	// KindOutcome.
+	// Kind is KindTurn, KindRequest, KindBlock, KindUsage, KindActed,
+	// KindSummoned or KindOutcome.
 	Kind string `json:"kind"`
 	// Turn, with KindTurn, is the run's user turn as sent, which a later
 	// run replays (ADR 0036). Seq is then the last seq of the talk its
@@ -87,10 +88,12 @@ type Line struct {
 	Block   json.RawMessage `json:"block,omitempty"`
 	Usage   json.RawMessage `json:"usage,omitempty"`
 	Tool    string          `json:"tool,omitempty"`
-	Outcome string          `json:"outcome,omitempty"`
-	MsgID   string          `json:"msg_id,omitempty"`
-	Seq     uint64          `json:"seq,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	// Summoned, with KindSummoned, is the Handle the run summoned.
+	Summoned string `json:"summoned,omitempty"`
+	Outcome  string `json:"outcome,omitempty"`
+	MsgID    string `json:"msg_id,omitempty"`
+	Seq      uint64 `json:"seq,omitempty"`
+	Error    string `json:"error,omitempty"`
 	// At, with KindOutcome, is when the run ended, UTC.
 	At time.Time `json:"at,omitzero"`
 }
@@ -488,11 +491,14 @@ type Run struct {
 	Blocks   []json.RawMessage
 	Usage    []json.RawMessage
 	// Acted is what its sign Tools did, in order (ADR 0029).
-	Acted   []Acted
-	Outcome string
-	MsgID   string // with OutcomeSaid: what it said, hex
-	Seq     uint64 // with OutcomeSaid, once it has a row
-	Error   string // with OutcomeError: why
+	Acted []Acted
+	// Summoned are the Handles it summoned with talk_summon, in order
+	// (ADR 0041).
+	Summoned []string
+	Outcome  string
+	MsgID    string // with OutcomeSaid: what it said, hex
+	Seq      uint64 // with OutcomeSaid, once it has a row
+	Error    string // with OutcomeError: why
 	// Ended is when it ended, as its outcome line records it: zero for a
 	// run with no outcome.
 	Ended time.Time
@@ -549,6 +555,8 @@ func Runs(lines []Line) []Run {
 			r.Usage = append(r.Usage, l.Usage)
 		case KindActed:
 			r.Acted = append(r.Acted, Acted{Tool: l.Tool, MsgID: l.MsgID})
+		case KindSummoned:
+			r.Summoned = append(r.Summoned, l.Summoned)
 		case KindOutcome:
 			r.Outcome, r.MsgID, r.Seq, r.Error, r.Ended = l.Outcome, l.MsgID, l.Seq, l.Error, l.At
 		}

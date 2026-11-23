@@ -73,3 +73,32 @@ func TestATurnsGapLinesStopAtTheAgentsOwnMessage(t *testing.T) {
 		t.Fatalf("turn =\n%s\nwant\n%s", got, want)
 	}
 }
+
+// A run an agent's talk_summon brings in frames the nearest message up the
+// Chain, or the Job, as what that agent summoned it on account of; what
+// else the turn holds leaves that frame out with it (ADR 0041).
+func TestAnAgentSummonedTurnFramesItsSummoner(t *testing.T) {
+	alice := identity.ID{1}
+	msg := func(seq uint64, handle, text string) talk.Message {
+		return talk.Message{Row: cosl.Row{Seq: seq, MsgID: [32]byte{byte(seq)}, Sender: alice, CreatedAt: writtenAt(seq)}, Handle: handle, Text: text, Sender: "alice"}
+	}
+	summon := msg(10, "", "@router price this")
+	said := talk.Messages{msg(4, "", "old"), summon}
+	last := transcript.Run{TalkSeq: 3}
+	got := runTurn(said, alice, "quant", summoner{agent: "router", msgID: summon.MsgID()}, &last, "(facts)")
+	want := "(Talk since your last run:)\n[4 2026-11-19 09:04] alice: old\n(@router summoned you on account of:)\n[10 2026-11-19 09:10] alice: @router price this\n(facts)"
+	if got.Turn != want {
+		t.Fatalf("turn =\n%s\nwant\n%s", got.Turn, want)
+	}
+	if also := TurnBesides(got.Turn, got.Summons); also != "(Talk since your last run:)\n[4 2026-11-19 09:04] alice: old\n(facts)" {
+		t.Fatalf("besides = %q", also)
+	}
+	job := runTurn(said, alice, "quant", summoner{agent: "router", msgID: "ffff", job: "(the Job's prompt)", jobName: "nightly"}, &last, "(facts)")
+	if !strings.HasSuffix(job.Turn, "(@router summoned you on account of:)\n(the Job's prompt)\n(facts)") {
+		t.Fatalf("a Job's turn = %s", job.Turn)
+	}
+	none := runTurn(said, alice, "quant", summoner{agent: "router", msgID: "ffff"}, &last, "(facts)")
+	if !strings.HasSuffix(none.Turn, "(@router summoned you on account of a message your Node does not hold.)\n(facts)") {
+		t.Fatalf("an unheld summoner's turn = %s", none.Turn)
+	}
+}
