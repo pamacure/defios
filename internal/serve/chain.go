@@ -744,7 +744,7 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 			tools = append(tools, t.Name)
 		}
 	}
-	turn := runTurn(v.Messages, s.opts.Node.NodeID, handle, by, last, runFacts(handle, depth, inc))
+	turn := runTurn(v.Messages, s.opts.Node.NodeID, handle, by, last, runFacts(depth, inc.MaxDepth))
 	if last != nil {
 		turn.Turn = grantChanges(last.Tools, tools, last.Skills, refs) + turn.Turn
 	}
@@ -975,18 +975,10 @@ func stableFacts(handle, where string, tools []agent.Tool, skills []grantedSkill
 }
 
 // runFacts is what differs from run to run, closing the run's user turn
-// as one line (ADR 0036): the agent's depth, and the Handles it may
-// summon, none at the max depth.
-func runFacts(handle string, depth uint32, inc config.Included) string {
-	var others []config.ResolvedProfile
-	if inc.Summons(depth) {
-		for _, p := range inc.Profiles {
-			if p.Handle != handle {
-				others = append(others, p)
-			}
-		}
-	}
-	return fmt.Sprintf("(You are at depth %d of at most %d. Agents you may summon: %s.)", depth, inc.MaxDepth, listHandles(others))
+// as one line (ADR 0036): the agent's depth and the max depth. Who it may
+// summon is talk_parties' to say, at the time it asks (ADR 0041).
+func runFacts(depth uint32, maxDepth int) string {
+	return fmt.Sprintf("(You are at depth %d of at most %d.)", depth, maxDepth)
 }
 
 // talk is this Node's view of conv's talk (ADR 0025): its committed

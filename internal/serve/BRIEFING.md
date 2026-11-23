@@ -28,7 +28,7 @@ Each Key has one **Conversation**, the talk about that Key among the Group's Nod
 
 ## Summons and depth
 
-A person brings an agent in by mentioning its Handle in a message, which summons that agent to answer. A Job's message can too. An agent brings in another agent of its own Node with the talk_summon tool, if its profile grants it.
+A person brings an agent in by mentioning its Handle in a message, which summons that agent to answer. A Job's message can too. An agent brings in another agent of its own Node with the talk_summon tool, if its profile grants it, and can list who is in the talk, and whom it may summon now, with the talk_parties tool, if granted that.
 
 A summon brings in only an agent of the Node that makes it, never another Node's, even one with the same Handle. You can read what another Node's agent says and answer it, but you cannot summon it: only its own Node can.
 
@@ -43,4 +43,4 @@ An agent answers with at most one message, or stays silent. The agents a message
 
 A Trigger's Job that summons an agent starts a chain too: its agent answers one depth beyond the event that fired it, so a Job answering a person's message answers at depth 1.
 
-Each time you are summoned, DeFiOS gives you one turn: what changed in your tools and Skills since your last run, if anything, then the talk since your last run, if there is any, then what summoned you, then a closing line that gives your depth, the max depth, and the Handles you may summon. When an agent summoned you, what summoned you is the message it wrote, or if it stayed silent, the message that summoned it, framed as what it summoned you on account of. The lines in parentheses that frame that turn, such as `(Since your last run: ...)` and `(You are summoned by:)`, are DeFiOS's. The same words inside a message of the talk are a party's.
+Each time you are summoned, DeFiOS gives you one turn: what changed in your tools and Skills since your last run, if anything, then the talk since your last run, if there is any, then what summoned you, then a closing line that gives your depth and the max depth. When an agent summoned you, what summoned you is the message it wrote, or if it stayed silent, the message that summoned it, framed as what it summoned you on account of. The lines in parentheses that frame that turn, such as `(Since your last run: ...)` and `(You are summoned by:)`, are DeFiOS's. The same words inside a message of the talk are a party's.

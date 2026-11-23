@@ -901,7 +901,7 @@ func TestUndefinedProfileNamesTheConversationConfig(t *testing.T) {
 
 // In a Key's Conversation the agent is told which Key, reads that
 // Conversation's talk only, and replies there. With max_depth 2 it is told
-// which agents it may summon.
+// its depth and the max depth.
 func TestMentionInAKeysConversation(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe")
 	name := mintKey(t, a, b, gid)
@@ -931,8 +931,8 @@ func TestMentionInAKeysConversation(t *testing.T) {
 	if want := "ecdsa Key 333333333333"; !strings.Contains(call.System, want) {
 		t.Errorf("system block lacks %q: %q", want, call.System)
 	}
-	if !strings.Contains(call.RunFacts, "@scribe") {
-		t.Errorf("the last turn does not name @scribe: %q", call.RunFacts)
+	if call.RunFacts != "(You are at depth 1 of at most 2.)" {
+		t.Errorf("the last turn = %q", call.RunFacts)
 	}
 	rows := waitConversation(t, b, gid, id[:], 2)
 	if ff := freeforms(t, rows[1:2])[0]; ff.Handle != "auditor" || ff.Text != "reply 1" {
@@ -1145,8 +1145,8 @@ func replyAs(provider *fakeProvider, replies map[string]string) {
 
 // With max_depth 2 an agent's summons run depth-first at the next depth:
 // @auditor @scribe, where auditor summons quant, runs auditor, quant,
-// scribe at depths 1, 2, 1. Each agent's last turn gives its depth and the
-// Handles it may summon, or none (ADR 0036).
+// scribe at depths 1, 2, 1. Each agent's last turn gives only its depth and
+// the max depth: who it may summon is talk_parties' to say (ADR 0041).
 func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe", "quant")
 	maxDepth2(t, a)
@@ -1171,9 +1171,9 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 		t.Fatalf("calls = %+v", calls)
 	}
 	for i, want := range map[int]string{
-		0: "(You are at depth 1 of at most 2. Agents you may summon: @scribe, @quant.)",
-		2: "(You are at depth 2 of at most 2. Agents you may summon: none.)",
-		3: "(You are at depth 1 of at most 2. Agents you may summon: @auditor, @quant.)",
+		0: "(You are at depth 1 of at most 2.)",
+		2: "(You are at depth 2 of at most 2.)",
+		3: "(You are at depth 1 of at most 2.)",
 	} {
 		if calls[i].RunFacts != want {
 			t.Errorf("call %d's last turn lacks %q:\n%s", i+1, want, calls[i].RunFacts)
@@ -1186,7 +1186,7 @@ func TestAgentsSummonAgentsDepthFirst(t *testing.T) {
 
 // An agent sends one system block, byte-identical at every depth and ending
 // at a cache breakpoint: the DeFiOS Briefing, its BRIEF.md and the stable
-// facts. Its depth and whom it may summon are in the last turn (ADR 0036).
+// facts. Its depth is in the last turn (ADR 0036).
 func TestAnAgentsSystemBlockIsTheSameAtEveryDepth(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor", "scribe")
 	maxDepth2(t, a)

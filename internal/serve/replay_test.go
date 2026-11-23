@@ -41,7 +41,7 @@ func TestASecondSummonReplaysTheFirstRun(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls = %+v", calls)
 	}
-	const facts = "(You are at depth 1 of at most 2. Agents you may summon: @sam.)"
+	const facts = "(You are at depth 1 of at most 2.)"
 	one, two := calls[0], calls[1]
 	if want := summonedBy(first.Seq, "alice: @bob hello") + "\n" + facts; one.Messages != 1 || untimed(one.Turn) != want {
 		t.Fatalf("the first run's turn, of %d messages =\n%s\nwant\n%s", one.Messages, one.Turn, want)
@@ -104,7 +104,7 @@ func TestAnAgentReplaysOnlyItsOwnRuns(t *testing.T) {
 	if strings.Contains(again.Prompt, "Talk since") || !strings.HasSuffix(again.Prompt, "alice/@sam: back to bob") || strings.Contains(again.Prompt, fmt.Sprintf("[%d]", v.Seq)) {
 		t.Fatalf("bob's second turn = %q", again.Prompt)
 	}
-	if !strings.Contains(again.RunFacts, "depth 3 of at most 3") || !strings.Contains(again.RunFacts, "Agents you may summon: none.") {
+	if again.RunFacts != "(You are at depth 3 of at most 3.)" {
 		t.Fatalf("bob's second run's facts = %q", again.RunFacts)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"defios.com/internal/base58"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
+	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
 	"defios.com/internal/outbox"
@@ -48,6 +49,16 @@ const talkSummonDescription = "Summon another agent of your Node to answer in th
 // talkSummonSchema is talk_summon's input.
 var talkSummonSchema = json.RawMessage(`{"type":"object","properties":{"handle":{"type":"string","description":"The Handle of the agent to summon, without the @."}},` +
 	`"required":["handle"],"additionalProperties":false}`)
+
+// talkPartiesDescription tells the model what talk_parties does (ADR 0041).
+const talkPartiesDescription = "List the parties of this talk as your Node knows them now, as JSON: " +
+	`{"parties":[{"name":"<name>","kind":"person"|"agent","node":"<Node's display name>"}]}. ` +
+	"A person writes from a Node of the Group's Roster, and is named by the display name talk lines show it by; an agent is one of your Node's agents included here, by its Handle. " +
+	`Your own entry has "you":true. With talk_summon, every other agent has "summonable": true if you could summon it now, false if not. ` +
+	"Other Nodes' agents are not listed: you cannot summon them."
+
+// talkPartiesSchema is talk_parties' input: none.
+var talkPartiesSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 
 // The sign Tools' descriptions and input schemas (ADR 0029).
 const (
@@ -113,11 +124,22 @@ type runSummons struct {
 	record  func(handle string)
 }
 
+// may are the Agents included in inc that handle's run, below the max
+// depth, may still summon: all but itself and those it has summoned.
+func (sum *runSummons) may(inc config.Included, handle string) []config.ResolvedProfile {
+	var out []config.ResolvedProfile
+	for _, p := range inc.Profiles {
+		if p.Handle != handle && !slices.Contains(sum.handles, p.Handle) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // agentTools are the Tools granted that handle's run in conv may call, in
 // the order config.Tools lists them: talk_read reading this Node's view of
-// conv's talk from ob and store, talk_summon adding to sum, the sign
-// Tools only in a Key's
-// Conversation, never in Group-level talk (nil conv), and scoped to that
+// conv's talk from ob and store, talk_summon adding to sum, talk_parties
+// reading sum, the sign Tools only in a Key's Conversation, never in Group-level talk (nil conv), and scoped to that
 // Key's Sign Requests. Those that write act as this Node under handle, a
 // proposal at the run's depth, and each that succeeds is told to did.
 func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string, depth uint32, granted []string, conv []byte, did acted, sum *runSummons) []agent.Tool {
@@ -135,6 +157,9 @@ func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string,
 			// Offered at every depth, so the Tools do not change between
 			// runs; at the max depth it refuses (ADR 0041).
 			out = append(out, agent.Tool{Name: name, Description: talkSummonDescription, Schema: talkSummonSchema, Call: s.talkSummonTool(store, conv, handle, depth, sum)})
+		case config.ToolTalkParties:
+			summons := slices.Contains(granted, config.ToolTalkSummon)
+			out = append(out, agent.Tool{Name: name, Description: talkPartiesDescription, Schema: talkPartiesSchema, Call: s.talkPartiesTool(store, conv, handle, depth, summons, sum)})
 		case config.ToolSignList:
 			if conv != nil {
 				out = append(out, agent.Tool{Name: name, Description: signListDescription, Schema: signListSchema, Call: s.signListTool(conv)})
@@ -168,17 +193,25 @@ func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string,
 	return out
 }
 
-// selfName is how the talk names this Node, as displayName names a
-// message's sender: the display name the Roster pins for it, or the start
-// of its Node ID if there is none.
+// selfName is how the talk names this Node, as rosterName names it.
 func (s *server) selfName() string {
 	id := s.opts.Node.NodeID
 	if rec, _ := s.slot.Current(); rec != nil {
-		if n, ok := rec.Roster().Lookup(id); ok && n.DisplayName != "" {
-			return n.DisplayName
+		if n, ok := rec.Roster().Lookup(id); ok {
+			return rosterName(n)
 		}
 	}
 	return id.String()[:8]
+}
+
+// rosterName is how the talk names n, as displayName names a message's
+// sender: the display name the Roster pins for it, or the start of its
+// Node ID if there is none.
+func rosterName(n group.RosterNode) string {
+	if n.DisplayName != "" {
+		return n.DisplayName
+	}
+	return n.NodeID.String()[:8]
 }
 
 // talkReadTool is talk_read in conv, nil for Group-level talk: a page of
@@ -244,12 +277,7 @@ func (s *server) talkSummonTool(store *cosl.Store, conv []byte, handle string, d
 		if !inc.Summons(depth) {
 			return "", fmt.Errorf("you are at depth %d, the max depth: you may summon nobody", depth)
 		}
-		var may []config.ResolvedProfile
-		for _, p := range inc.Profiles {
-			if p.Handle != handle && !slices.Contains(sum.handles, p.Handle) {
-				may = append(may, p)
-			}
-		}
+		may := sum.may(inc, handle)
 		var why string
 		switch {
 		case h == handle:
@@ -266,6 +294,74 @@ func (s *server) talkSummonTool(store *cosl.Store, conv []byte, handle string, d
 			return fmt.Sprintf("@%s will answer after your run ends.", h), nil
 		}
 		return "", fmt.Errorf("@%s %s. You may summon: %s.", h, why, listHandles(may))
+	}
+}
+
+// The kinds of a Party.
+const (
+	PartyPerson = "person"
+	PartyAgent  = "agent"
+)
+
+// Party is one of talk_parties' parties (ADR 0041).
+type Party struct {
+	Name string `json:"name"`
+	// Kind is PartyPerson or PartyAgent.
+	Kind string `json:"kind"`
+	// Node is the display name of the Node the person writes from, or the
+	// Agent runs on.
+	Node string `json:"node"`
+	// You marks the caller.
+	You bool `json:"you,omitempty"`
+	// Summonable is whether the caller's talk_summon would accept this
+	// Agent now: set for each other Agent when the caller holds
+	// talk_summon, and for no party otherwise.
+	Summonable *bool `json:"summonable,omitempty"`
+}
+
+// talkPartiesTool is talk_parties for handle's run at depth in conv: a
+// person for each Roster Node and this Node's Agents included there, as
+// they are when called. With summons, the run holds talk_summon, and each
+// other Agent is marked whether it would accept it now, from sum (ADR 0041).
+func (s *server) talkPartiesTool(store *cosl.Store, conv []byte, handle string, depth uint32, summons bool, sum *runSummons) func(context.Context, json.RawMessage) (string, error) {
+	return func(_ context.Context, input json.RawMessage) (string, error) {
+		dec := json.NewDecoder(bytes.NewReader(input))
+		dec.DisallowUnknownFields()
+		var in struct{}
+		if len(bytes.TrimSpace(input)) > 0 && dec.Decode(&in) != nil {
+			return "", errors.New("its input must be {}")
+		}
+		e, err := s.load(store, conv)
+		if err != nil {
+			return "", err
+		}
+		inc, err := e.Included()
+		if err != nil {
+			return "", err
+		}
+		v := struct {
+			Parties []Party `json:"parties"`
+		}{Parties: []Party{}}
+		if rec, _ := s.slot.Current(); rec != nil {
+			for _, n := range rec.Roster().Nodes() {
+				name := rosterName(n)
+				v.Parties = append(v.Parties, Party{Name: name, Kind: PartyPerson, Node: name})
+			}
+		}
+		var may []config.ResolvedProfile
+		if summons && inc.Summons(depth) {
+			may = sum.may(inc, handle)
+		}
+		self := s.selfName()
+		for _, p := range inc.Profiles {
+			party := Party{Name: p.Handle, Kind: PartyAgent, Node: self, You: p.Handle == handle}
+			if summons && !party.You {
+				ok := slices.ContainsFunc(may, func(m config.ResolvedProfile) bool { return m.Handle == p.Handle })
+				party.Summonable = &ok
+			}
+			v.Parties = append(v.Parties, party)
+		}
+		return toolJSON(v)
 	}
 }
 
