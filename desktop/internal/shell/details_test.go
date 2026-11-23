@@ -100,28 +100,33 @@ func TestAnAgentsMessageDetailsAreItsRun(t *testing.T) {
 
 // The panel of this person's message lists the chain it started, step by
 // step as the chain walks them: each agent its message mentions, each
-// followed by those its reply summons, with how its run ended or that it
-// was skipped, and what it said. A step that failed ends the chain there.
+// followed by those its run summoned with talk_summon, whether it spoke or
+// stayed silent, with how its run ended or that it was skipped, and what
+// it said. What an agent's text mentions summons nobody. A step that
+// failed ends the chain there.
 func TestYourMessageDetailsListItsChainsSteps(t *testing.T) {
 	r := newRig(t, "alpha")
 	r.node.tk().included[node.GroupTalk] = []string{"auditor", "scribe", "critic"}
 	s := served(t, r)
 	s.SendMessage("@auditor and @scribe, look")
 	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
-	a := sayAs(r, node.GroupTalk, chain, "auditor", 1, transcript.Run{Step: 1}, "over to @critic and @ghost, and me, @auditor")
+	a := sayAs(r, node.GroupTalk, chain, "auditor", 1, transcript.Run{Step: 1, Summoned: []string{"critic", "ghost"}}, "over to @scribe")
 	r.node.mu.Lock()
-	r.node.sg().runs[chain] = append(r.node.sg().runs[chain], transcript.Run{Chain: chain, Step: 2, Handle: "critic", Depth: 2, Outcome: transcript.OutcomeSilent})
+	r.node.sg().runs[chain] = append(r.node.sg().runs[chain],
+		transcript.Run{Chain: chain, Step: 2, Handle: "critic", Depth: 2, Outcome: transcript.OutcomeSilent, Summoned: []string{"scribe"}},
+		transcript.Run{Chain: chain, Step: 3, Handle: "scribe", Depth: 3, Outcome: transcript.OutcomeSilent})
 	r.node.mu.Unlock()
-	// @ghost, step 3, is in no profile here: skipped, with no run.
-	b := sayAs(r, node.GroupTalk, chain, "scribe", 1, transcript.Run{Step: 4}, "done")
+	// @ghost, step 4, is in no profile here: skipped, with no run.
+	b := sayAs(r, node.GroupTalk, chain, "scribe", 1, transcript.Run{Step: 5}, "done")
 	ended(r, s, node.GroupTalk, chain, b.MsgID)
 
 	d := s.MessageDetails(chain)
 	want := []shell.ChainStep{
 		{Step: 1, Handle: "auditor", Depth: 1, State: transcript.OutcomeSaid, MsgID: a.MsgID},
 		{Step: 2, Handle: "critic", Depth: 2, State: transcript.OutcomeSilent},
-		{Step: 3, Handle: "ghost", Depth: 2, State: shell.StepSkipped},
-		{Step: 4, Handle: "scribe", Depth: 1, State: transcript.OutcomeSaid, MsgID: b.MsgID},
+		{Step: 3, Handle: "scribe", Depth: 3, State: transcript.OutcomeSilent},
+		{Step: 4, Handle: "ghost", Depth: 2, State: shell.StepSkipped},
+		{Step: 5, Handle: "scribe", Depth: 1, State: transcript.OutcomeSaid, MsgID: b.MsgID},
 	}
 	if d.Problem != nil || d.Chain != chain || d.Run != nil || !reflect.DeepEqual(d.Steps, want) {
 		t.Fatalf("details: %+v\nsteps %+v\nwant  %+v", d, d.Steps, want)

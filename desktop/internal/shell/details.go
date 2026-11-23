@@ -157,8 +157,8 @@ type RunSign struct {
 	Tool, MsgID, Reason string
 }
 
-// Opening is a run's turn: Heading names what summoned it ("Your
-// message", "@scout's mention", "Job nightly-check"); By is the summoning
+// Opening is a run's turn: Heading names what it was summoned on account
+// of ("Your message", "@scout's message", "Job nightly-check"); By is that
 // message's msg_id, "" for a Job's; Summons is that message's line or the
 // Job's prompt, in full; Also is the rest of the turn.
 type Opening struct {
@@ -167,7 +167,7 @@ type Opening struct {
 
 // Chain step states, besides a run's transcript.Outcome*.
 const (
-	StepSkipped = "skipped" // the chain passed it over
+	StepSkipped = "skipped" // the chain passed it over: its agent was gone from the profiles here
 	StepRunning = "running" // its agent is answering now
 	StepWaiting = "waiting" // the chain has not reached it yet
 	StepCutOff  = "cut off" // a serve stop ended its run
@@ -402,7 +402,7 @@ func (t *talk) runView(r transcript.Run, cleared bool) RunView {
 	return v
 }
 
-// heading names what summoned r; t.mu is held.
+// heading names what r was summoned on account of; t.mu is held.
 func (t *talk) heading(r transcript.Run) string {
 	if r.Job != "" {
 		return "Job " + r.Job
@@ -415,7 +415,7 @@ func (t *talk) heading(r transcript.Run) string {
 	case m.Mine:
 		return "Your message"
 	case m.Handle != "":
-		return "@" + m.Handle + "'s mention"
+		return "@" + m.Handle + "'s message"
 	case m.Depth > 0:
 		return "A Job's message"
 	}
@@ -423,10 +423,12 @@ func (t *talk) heading(r transcript.Run) string {
 }
 
 // chainSteps are the steps of the chain this person's message m started,
-// rebuilt as the chain walks them (internal/chain): depth-first in mention
-// order, each said message's mentions after it. A step with no run here
-// was skipped, or is not reached yet while the chain runs; one that failed,
-// was cancelled or was cut off ended the chain there.
+// rebuilt as the chain walks them (internal/chain): depth-first, the
+// agents m mentions and then, after each, those its run summoned with
+// talk_summon, in call order, whether it spoke or stayed silent (ADR
+// 0041). A step with no run here was skipped, its agent gone from the
+// profiles here, or is not reached yet while the chain runs; one that
+// failed, was cancelled or was cut off ended the chain there.
 func (t *talk) chainSteps(a at, m node.Message) ([]ChainStep, error) {
 	tr, err := a.n.Transcript(t.ctx, a.group, a.conv, m.MsgID)
 	if err != nil && !errors.Is(err, serve.ErrNotAChain) {
@@ -469,19 +471,10 @@ func (t *talk) chainSteps(a at, m node.Message) ([]ChainStep, error) {
 				st.State = StepCutOff
 			}
 			out = append(out, st)
-			switch r.Outcome {
-			case transcript.OutcomeSilent:
-				continue
-			case transcript.OutcomeSaid:
-			default:
+			if r.Outcome != transcript.OutcomeSaid && r.Outcome != transcript.OutcomeSilent {
 				return false // the chain stopped here
 			}
-			said, ok := t.message(r.MsgID)
-			if !ok || !said.Readable() {
-				return false // what it summoned is not known here
-			}
-			next := slices.DeleteFunc(mention.Handles(said.Text), func(s string) bool { return s == h })
-			if !walk(next, depth+1) {
+			if !walk(r.Summoned, depth+1) {
 				return false
 			}
 		}
@@ -489,7 +482,7 @@ func (t *talk) chainSteps(a at, m node.Message) ([]ChainStep, error) {
 	}
 	walk(mention.Handles(m.Text), 1)
 	if !fits {
-		// Not the chain its mentions walk: its runs as they are.
+		// Not the chain its summons walk: its runs as they are.
 		out = nil
 		for _, r := range tr.Runs {
 			out = append(out, ChainStep{Step: r.Step, Handle: r.Handle, Depth: r.Depth, State: r.Outcome, Error: r.Error, MsgID: r.MsgID})
