@@ -193,9 +193,18 @@ textarea.field[rows="1"]::placeholder { white-space: nowrap; overflow: hidden; t
 .gsettings .notice.inline { margin: 0 0 12px; }
 .gform { display: flex; flex-direction: column; gap: 12px; }
 .frow { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 4px 16px; align-items: start; }
+.frow[hidden] { display: none; }
 .frow > label { padding-top: 10px; color: var(--text); font-weight: 500; }
 .fcell { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 460px; }
 .field.left { text-align: left; }
+/* A Schedule's fields: an hour and minute, or a date and time, side by
+   side, and a toggle for each day of the week. */
+.hm { display: flex; align-items: center; gap: 8px; }
+.hm > .field { flex: 1; min-width: 0; }
+.days { display: flex; flex-wrap: wrap; gap: 6px; }
+.days .btn { min-width: 52px; }
+.days .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.devrow .who .when { color: var(--muted); font-size: 12px; }
 .factions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; max-width: 676px; }
 .saved { color: var(--accent-strong); font-size: 13px; }
 .gsec { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }

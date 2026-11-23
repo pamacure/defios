@@ -622,47 +622,214 @@ function schedulesSection() {
     "schedule", tv.Schedules ?? [], scheduleRow, scheduleForm, "+ Add Schedule");
 }
 
-const when = (s) => (s.At ? `once at ${s.At}` : `cron ${s.Cron}${s.TZ ? ` (${s.TZ})` : ""}`);
+// A repeating Schedule's fields: each "*" for every value or one value,
+// and the days of the week it fires on, 0 being Sunday.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAYS = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"]];
+const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const EVERY_DAY = () => new Set([0, 1, 2, 3, 4, 5, 6]);
+const pad2 = (n) => String(n).padStart(2, "0");
+
+// fixedOf reads a cron spec as a fixed schedule's fields: null if it uses
+// more than they show, as a step, a list or a range outside the days of
+// the week.
+function fixedOf(spec) {
+  const p = (spec ?? "").trim().split(/\s+/);
+  if (p.length !== 5) return null;
+  const value = (s, min, max, names) => {
+    let n = /^\d+$/.test(s) ? Number(s) : -1;
+    if (n < 0 && names) {
+      const i = names.indexOf(s.toLowerCase());
+      if (i >= 0) n = i + min;
+    }
+    return n >= min && n <= max ? n : null;
+  };
+  const one = (s, min, max, names) => {
+    if (s === "*") return "*";
+    const n = value(s, min, max, names);
+    return n == null ? null : String(n);
+  };
+  const months = MONTHS.map((m) => m.toLowerCase());
+  const f = { minute: one(p[0], 0, 59), hour: one(p[1], 0, 23), dom: one(p[2], 1, 31), month: one(p[3], 1, 12, months) };
+  if (Object.values(f).includes(null)) return null;
+  if (p[4] === "*") return { ...f, dow: EVERY_DAY() };
+  const dow = new Set();
+  for (const item of p[4].split(",")) {
+    const [a, b] = item.split("-");
+    const lo = value(a, 0, 7, DAY_NAMES), hi = b === undefined ? lo : value(b, 0, 7, DAY_NAMES);
+    if (lo == null || hi == null || lo > hi || item.split("-").length > 2) return null;
+    for (let d = lo; d <= hi; d++) dow.add(d % 7);
+  }
+  return { ...f, dow };
+}
+
+// cronOf is a fixed schedule's fields as a cron spec, its days of the week
+// as ranges where they run on, as 1-5.
+function cronOf(f) {
+  let dow = "*";
+  if (f.dow.size < 7) {
+    const v = [...f.dow].sort((a, b) => a - b), out = [];
+    for (let i = 0; i < v.length;) {
+      let j = i;
+      while (j + 1 < v.length && v[j + 1] === v[j] + 1) j++;
+      out.push(j - i >= 2 ? `${v[i]}-${v[j]}` : v.slice(i, j + 1).join(","));
+      i = j + 1;
+    }
+    dow = out.join(",");
+  }
+  return `${f.minute} ${f.hour} ${f.dom} ${f.month} ${dow}`;
+}
+
+// repeatText says when a repeating Schedule fires, in words when its spec
+// is a fixed schedule.
+function repeatText(spec) {
+  const f = fixedOf(spec);
+  if (!f) return `On cron ${spec}`;
+  const days = [];
+  if (f.dom !== "*") days.push(`on day ${f.dom}`);
+  if (f.dow.size < 7) days.push(`${f.dom !== "*" ? "or" : "on"} ${DAYS.filter(([v]) => f.dow.has(v)).map(([, n]) => n).join(", ")}`);
+  if (f.month !== "*") days.push(`in ${MONTHS[f.month - 1]}`);
+  let t;
+  if (f.minute === "*") t = f.hour === "*" ? "Every minute" : `Every minute from ${pad2(f.hour)}:00 to ${pad2(f.hour)}:59`;
+  else if (f.hour === "*") t = `Every hour at :${pad2(f.minute)}`;
+  else t = `${days.length ? "At" : "Daily at"} ${pad2(f.hour)}:${pad2(f.minute)}`;
+  return [t, ...days].join(" ");
+}
+
+// localParts is an RFC 3339 time as this device's date and time of day,
+// as the pickers take them; empty if it does not read.
+function localParts(at) {
+  const t = at ? new Date(at) : null;
+  if (!t || isNaN(t)) return { date: "", time: "" };
+  return { date: `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`, time: `${pad2(t.getHours())}:${pad2(t.getMinutes())}` };
+}
+
+// rfc3339 is a date and time of day on this device as an RFC 3339 time
+// with this device's offset on that day.
+function rfc3339(date, time) {
+  const t = new Date(`${date}T${time}`);
+  if (isNaN(t)) return "";
+  const off = -t.getTimezoneOffset(), a = Math.abs(off);
+  return `${date}T${time}:00${off < 0 ? "-" : "+"}${pad2(Math.floor(a / 60))}:${pad2(a % 60)}`;
+}
+
+function when(s) {
+  if (!s.At) return `${repeatText(s.Cron)}${s.TZ ? ` (${s.TZ})` : ""}`;
+  const t = new Date(s.At);
+  return `One time only, ${isNaN(t) ? s.At : t.toLocaleString()}`;
+}
 
 function scheduleRow(s) {
   const next = s.Next ? new Date(s.Next) : null;
   return itemRow(`schedule:${s.Name}`, s.Name,
-    h("div", { class: "who" }, h("strong", {}, s.Name), h("code", {}, when(s))),
+    h("div", { class: "who" }, h("strong", {}, s.Name), h("span", { class: "when", title: s.At || `cron ${s.Cron}` }, when(s))),
     h("span", { class: `chip ${next ? "ok" : ""}`, title: next ? next.toString() : "" }, next ? `Next: ${next.toLocaleString()}` : "Fires no more"),
     h("span", { class: "chip" }, `Runs ${s.Jobs.join(", ")}`));
 }
 
+// choice is a <select> of [value, label] pairs, value chosen.
+const choice = (value, pairs, attrs = {}) => h("select", { class: "field left", ...attrs },
+  pairs.map(([v, l]) => h("option", { value: v, selected: String(v) === String(value) }, l)));
+
+// scheduleForm fires a Schedule on one of three: "repeat", a fixed
+// schedule of time, days and month, "at", one time only, picked as a
+// date and time on this device, or "cron", a spec typed out, for one the
+// fixed fields cannot show.
 function scheduleForm(s) {
   const where = s ? `schedule:${s.Name}` : "new-schedule";
   const d = drafts.get(where) ?? (s ? { ...s } : { Name: "", Cron: "", TZ: "", At: "", Jobs: [] });
+  const fixed = fixedOf(d.Cron);
+  const startMode = d.Mode ?? (d.At ? "at" : !d.Cron || fixed ? "repeat" : "cron");
   const name = text(d.Name, { placeholder: "daily_report" });
-  const mode = h("select", { class: "field left" },
-    h("option", { value: "cron", selected: !d.At }, "Repeatedly, on a cron spec"),
-    h("option", { value: "at", selected: !!d.At }, "Once, at a time"));
-  const cron = text(d.Cron, { placeholder: "0 9 * * 1-5" });
+  const mode = choice(startMode, [["repeat", "Repeats on a fixed schedule"], ["at", "One time only"], ["cron", "Repeats on a cron spec"]]);
+
+  // Repeats on a fixed schedule.
+  const f = fixed ?? { minute: "0", hour: "9", dom: "*", month: "*", dow: EVERY_DAY() };
+  const range = (n, from = 0) => Array.from({ length: n }, (_, i) => [String(i + from), pad2(i + from)]);
+  const hour = choice(f.hour, [["*", "Every hour"], ...range(24)], { "aria-label": "Hour" });
+  const minute = choice(f.minute, [["*", "Every minute"], ...range(60)], { "aria-label": "Minute" });
+  const dom = choice(f.dom, [["*", "Every day"], ...range(31, 1).map(([v]) => [v, v])]);
+  const month = choice(f.month, [["*", "Every month"], ...MONTHS.map((m, i) => [String(i + 1), m])]);
+  let dow = new Set(f.dow);
+  const dayButtons = DAYS.map(([v, label]) => {
+    const b = h("button", { type: "button", class: "btn small", "aria-pressed": String(dow.has(v)) }, label);
+    b.addEventListener("click", () => {
+      if (dow.has(v) && dow.size === 1) return; // it fires on some day
+      dow.has(v) ? dow.delete(v) : dow.add(v);
+      b.setAttribute("aria-pressed", String(dow.has(v)));
+    });
+    return [v, b];
+  });
+  const days = h("div", { class: "days", role: "group", "aria-label": "Days of the week" }, dayButtons.map(([, b]) => b));
+  const fixedNow = () => ({ minute: minute.value, hour: hour.value, dom: dom.value, month: month.value, dow });
+  const setFixed = (g) => {
+    minute.value = g.minute; hour.value = g.hour; dom.value = g.dom; month.value = g.month;
+    dow = new Set(g.dow);
+    for (const [v, b] of dayButtons) b.setAttribute("aria-pressed", String(dow.has(v)));
+  };
+
+  // Repeats on a cron spec, and the zone either repeat is read in.
+  const cron = text(fixed ? cronOf(f) : d.Cron, { placeholder: "*/15 9-17 * * 1-5" });
   const tz = text(d.TZ, { placeholder: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris" });
-  const at = text(d.At, { placeholder: "2026-12-01T09:00:00Z" });
-  const cronRows = [row(where, "cron", "Cron", cron, "Five fields: minute, hour, day of month, month, day of week."),
-    row(where, "tz", "Time zone", tz, "An IANA zone. Leave empty for this device's.")];
-  const atRow = row(where, "at", "At", at, "An RFC 3339 time with its offset.");
-  const pick = () => { for (const r of cronRows) r.hidden = mode.value !== "cron"; atRow.hidden = mode.value !== "at"; };
+
+  // One time only.
+  const was = localParts(d.At);
+  const date = h("input", { type: "date", class: "field left", value: was.date });
+  const time = h("input", { type: "time", class: "field left", value: was.time || "09:00", "aria-label": "Time" });
+  const atNow = () => {
+    if (!date.value || !time.value) return "";
+    if (date.value === was.date && time.value === was.time) return d.At; // as written, to the second
+    return rfc3339(date.value, time.value);
+  };
+
+  const repeatRows = [
+    row(where, "time", "Time", hour, "Hour and minute.", h("div", { class: "hm" }, hour, h("span", {}, ":"), minute)),
+    row(where, "dom", "Day of month", dom),
+    row(where, "month", "Month", month),
+    row(where, "dow", "Days of the week", days, "With a day of month too, it fires on either.", days),
+  ];
+  const cronRow = row(where, "cron", "Cron", cron, "Five fields: minute, hour, day of month, month, day of week.");
+  const tzRow = row(where, "tz", "Time zone", tz, "An IANA zone. Leave empty for this device's.");
+  const atRow = row(where, "at", "Date and time", date, `In this device's time zone, ${Intl.DateTimeFormat().resolvedOptions().timeZone || "local"}.`,
+    h("div", { class: "hm" }, date, time));
+  let shown = startMode;
+  const pick = () => {
+    // Switching between the two repeats carries the spec across, where
+    // the fixed fields can show it.
+    if (shown === "repeat" && mode.value === "cron") cron.value = cronOf(fixedNow());
+    if (shown === "cron" && mode.value === "repeat") {
+      const g = fixedOf(cron.value);
+      if (g) setFixed(g);
+    }
+    shown = mode.value;
+    for (const r of repeatRows) r.hidden = shown !== "repeat";
+    cronRow.hidden = shown !== "cron";
+    tzRow.hidden = shown === "at";
+    atRow.hidden = shown !== "at";
+    date.required = time.required = shown === "at";
+  };
   mode.addEventListener("change", pick);
   pick();
   const readAll = () => ({
-    ...d, Name: s ? s.Name : name.value.trim(),
-    Cron: mode.value === "cron" ? cron.value : "", TZ: mode.value === "cron" ? tz.value : "", At: mode.value === "at" ? at.value : "",
+    ...d, Name: s ? s.Name : name.value.trim(), Mode: mode.value,
+    Cron: mode.value === "repeat" ? cronOf(fixedNow()) : cron.value, TZ: tz.value,
+    At: mode.value === "at" ? atNow() : d.At,
     Jobs: jobs.value(),
   });
   const jobs = jobsPicker(d.Jobs, (next) => redrawWith(where, { ...readAll(), Jobs: next }));
   readers.set(where, readAll);
+  const save = () => {
+    const r = readAll(), once = r.Mode === "at";
+    return { New: !s, Name: r.Name, Cron: once ? "" : r.Cron, TZ: once ? "" : r.TZ, At: once ? r.At : "", Jobs: r.Jobs };
+  };
   return h("form", {
     class: s ? "gform pform" : "gform pform new",
-    onsubmit: (e) => { e.preventDefault(); act("SaveSchedule", [{ New: !s, ...readAll() }], where); },
+    onsubmit: (e) => { e.preventDefault(); act("SaveSchedule", [save()], where); },
   },
   !s && h("h3", {}, "New Schedule"),
   !s && row(where, "name", "Name", name, "Lowercase letters, digits, - and _."),
   row(where, "mode", "Fires", mode),
-  cronRows, atRow,
+  repeatRows, cronRow, atRow, tzRow,
   row(where, "jobs", "Runs", jobs.el, "In order, until one fails. An agent Job here must name where it answers."),
   formActions(where, s, "DeleteSchedule", "Add Schedule"));
 }
