@@ -85,7 +85,7 @@ One Node's Handle in one Group: the party that speaks in talk under that Handle 
 _Avoid_: assistant, bot, the agent across Nodes
 
 **Tool**:
-An action built into DeFiOS that an agent may call during a run, such as `talk_write` or `sign_accept`. An agent may call only the Tools its Agent Profile grants; `talk_read` and `talk_write` are granted unless the profile says otherwise. Only Tools act as the Node: nothing else an agent is given can write to the COSL.
+An action built into DeFiOS that an agent may call during a run, such as `talk_write` or `sign_accept`. An agent may call only the Tools its Agent Profile grants, and a profile grants none it does not name, the `talk_` Tools included. Only Tools act as the Node: nothing else an agent is given can write to the COSL.
 _Avoid_: function, command, capability
 
 **Plugin**:
@@ -101,15 +101,19 @@ A program a Plugin defines that offers an agent further actions, run by the Node
 _Avoid_: tool server, toolset, integration
 
 **Handle**:
-The name of an Agent Profile on one Node, written `@handle` in talk to summon it where a Group's or Conversation's config includes it. Local to one Node: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
+The name of an Agent Profile on one Node, which a Mention or a Summon names to bring that agent in where a Group's or Conversation's config includes it. Local to one Node: a mention is resolved only on the Node whose message carries it, so the same Handle on another Node may name a different profile, or none. Every message of talk records the Handle that wrote it, or none when a person did, shown as `user`. A summoned agent takes only the messages its own Node wrote under its Handle as its own words.
 _Avoid_: agent name, username, alias (that is a Group's, Key's, Network's or Provider's local label)
+
+**Party**:
+One who writes in talk: a person, writing from one Node of the Roster, or an Agent.
+_Avoid_: member (a Roster holds Nodes), participant, user (alone)
 
 **Livery**:
 The colour and brick one Node marks a party of talk with, wherever that party writes or is mentioned: one of its own Agent Profiles, another Node (the person writing from it), or another Node's Agent. Given by this Node alone and never replicated: another Node may mark the same party differently, or not at all. No two parties a Node marks may share a Livery, and a party may have none. A mention is marked with the Livery of the Agent it resolves to on the Node whose message carries it.
 _Avoid_: badge (that is a conversation row's count), avatar, colour (alone), theme
 
 **Chain**:
-The agents one person's message, or one Trigger's firing, summons, in the order it mentions them, each followed depth-first by those its own message summons, up to the max depth; named by that message's msg_id, or a random id for a Job's. Each agent reached is one **step**, numbered in that order whether it runs or is skipped.
+The agents one person's message, or one Trigger's firing, summons, in the order it mentions them, each followed depth-first by those its own run summons, up to the max depth; named by that message's msg_id, or a random id for a Job's. Each agent reached is one **step**, numbered in that order whether it runs or is skipped.
 _Avoid_: thread, run, cascade
 
 **Transcript**:
@@ -117,8 +121,12 @@ One Agent's record of its runs in one Conversation (or Group-level talk), from w
 _Avoid_: work log, trace, output log, reply (that is the message it says)
 
 **Mention**:
-`@` and a Handle in talk, which summons that agent where the message is sent. Found from the text alone, case-insensitively and at a word boundary, never by matching against the Handles that exist; `\@` writes one without summoning. A person's mention that names no included Handle is refused; an agent's is skipped.
+`@` and a Handle in a person's or a Job's message, which summons that agent where the message is sent. Found from the text alone, case-insensitively and at a word boundary, never by matching against the Handles that exist; `\@` writes one without summoning. A mention that names no included Handle is refused. `@` and a Handle in an agent's message is no mention: it summons nobody.
 _Avoid_: tag, ping, at-reference
+
+**Summon**:
+An agent's call, during its run, naming a Handle to answer once that run ends, in the Chain it runs in. The only way an agent brings in another; refused at once when the Handle is its own, a person's, not included where it answers, or past the max depth.
+_Avoid_: mention (that is text a person or Job writes), invoke, delegate, hand off
 
 **Trigger**:
 Either a Hook or a Schedule: something in a Node's Group config that, when it fires, runs a Job as that Node. Schedules are how a Node starts things unprompted, Hooks how it answers what others do. Meant for an always-on Node, such as one in the cloud, rather than a laptop or phone. Node-local and never replicated, and stateless: a Trigger fires only on what happens live while `serve` serves its Group, never for what it missed.
