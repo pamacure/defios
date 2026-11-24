@@ -43,7 +43,7 @@ func TestAgentGrantRevokeEditTheSkills(t *testing.T) {
 	}{
 		{[]string{"grant", "auditor", "audit/review"}, "audit/review\n", []string{"audit/review"}},
 		{[]string{"grant", "auditor", "audit/review"}, "audit/review\n", []string{"audit/review"}},
-		{[]string{"grant", "auditor", "defios/review-sign-request", "--json"}, "[\n  \"audit/review\",\n  \"defios/review-sign-request\"\n]\n", []string{"audit/review", "defios/review-sign-request"}},
+		{[]string{"grant", "auditor", "ethereum/review-sign-request", "--json"}, "[\n  \"audit/review\",\n  \"ethereum/review-sign-request\"\n]\n", []string{"audit/review", "ethereum/review-sign-request"}},
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "agent"}, tc.args...)...)
 		if r.code != 0 || r.stdout != tc.stdout {
@@ -54,7 +54,7 @@ func TestAgentGrantRevokeEditTheSkills(t *testing.T) {
 			t.Fatalf("%v: skills = %#v, tools = %#v; want skills %#v", tc.args, p.Skills, p.Tools, tc.skills)
 		}
 	}
-	if r := run(t, nil, "", "--dir", dir, "agent", "show", "auditor"); r.code != 0 || !strings.Contains(r.stdout, "\nskills audit/review, defios/review-sign-request\n") {
+	if r := run(t, nil, "", "--dir", dir, "agent", "show", "auditor"); r.code != 0 || !strings.Contains(r.stdout, "\nskills audit/review, ethereum/review-sign-request\n") {
 		t.Fatalf("show: exit %d, stdout %q", r.code, r.stdout)
 	}
 	path := nodedir.Resolve(nodedir.Lookup{Dir: dir}).AgentProfileFile("auditor")
@@ -81,9 +81,9 @@ func TestAgentGrantRevokeEditTheSkills(t *testing.T) {
 		stdout string
 		skills []string
 	}{
-		{[]string{"revoke", "auditor", "audit/review"}, "defios/review-sign-request\n", []string{"defios/review-sign-request"}},
-		{[]string{"revoke", "auditor", "audit/review"}, "defios/review-sign-request\n", []string{"defios/review-sign-request"}},
-		{[]string{"revoke", "auditor", "defios/review-sign-request", "--json"}, "[]\n", nil},
+		{[]string{"revoke", "auditor", "audit/review"}, "ethereum/review-sign-request\n", []string{"ethereum/review-sign-request"}},
+		{[]string{"revoke", "auditor", "audit/review"}, "ethereum/review-sign-request\n", []string{"ethereum/review-sign-request"}},
+		{[]string{"revoke", "auditor", "ethereum/review-sign-request", "--json"}, "[]\n", nil},
 	} {
 		r := run(t, nil, "", append([]string{"--dir", dir, "agent"}, tc.args...)...)
 		if r.code != 0 || r.stdout != tc.stdout {

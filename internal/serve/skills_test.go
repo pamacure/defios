@@ -42,7 +42,7 @@ func grantSkills(t *testing.T, n *node, h, skills string) {
 func TestAnAgentLoadsAGrantedSkillAndItsFiles(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
 	installAudits(t, a)
-	grantSkills(t, a, "auditor", `["defios/review-sign-request", "audits/erc20"]`)
+	grantSkills(t, a, "auditor", `["ethereum/review-sign-request", "audits/erc20"]`)
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w)
 		switch n {
@@ -75,7 +75,7 @@ func TestAnAgentLoadsAGrantedSkillAndItsFiles(t *testing.T) {
 	if calls[0].Tools != "talk_write talk_read skill_load" {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
-	listing := "- audits/erc20: Audit an ERC-20 transfer.\n- defios/review-sign-request: How to review a Sign Request before accepting or refusing it.\n"
+	listing := "- audits/erc20: Audit an ERC-20 transfer.\n- ethereum/review-sign-request: How to review an Ethereum Sign Request before accepting or refusing it.\n"
 	if !strings.Contains(calls[0].System, listing) || strings.Contains(calls[0].RunFacts, "audits/erc20") {
 		t.Errorf("system block lacks the Skills sorted:\n%s", calls[0].System)
 	}
@@ -134,25 +134,35 @@ func TestSkillLoadRefusesASymlinkOutOfTheSkill(t *testing.T) {
 }
 
 // A granted Skill that is not installed fails the summon, naming the
-// Handle and the entry, and the provider is never called.
+// Handle and the entry, and the provider is never called: one whose Plugin
+// is not installed, and one its Plugin no longer has, as a profile still
+// granting the removed defios/review-sign-request does (ADR 0042).
 func TestAGrantedSkillNotInstalledFailsTheSummon(t *testing.T) {
-	a, _, _, provider := agentPair(t, "auditor")
-	grantSkills(t, a, "auditor", `["audits/erc20"]`)
-	s := watch(t, a)
-	v, err := a.client().ConversationSend(context.Background(), "@auditor audit", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var failed string
-	for _, e := range untilEnd(t, s, v.MsgID) {
-		if e.Type == "agent.error" {
-			failed = e.Error
-		}
-	}
-	if !strings.Contains(failed, "@auditor") || !strings.Contains(failed, "audits/erc20") {
-		t.Errorf("agent.error = %q", failed)
-	}
-	if n := len(provider.seen()); n != 0 {
-		t.Errorf("%d provider calls, want 0", n)
+	for _, tc := range []struct{ ref, why string }{
+		{"audits/erc20", `no Plugin "audits" is installed`},
+		{"defios/review-sign-request", `Plugin defios has no Skill "review-sign-request"`},
+	} {
+		ref := tc.ref
+		t.Run(ref, func(t *testing.T) {
+			a, _, _, provider := agentPair(t, "auditor")
+			grantSkills(t, a, "auditor", `["`+ref+`"]`)
+			s := watch(t, a)
+			v, err := a.client().ConversationSend(context.Background(), "@auditor audit", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var failed string
+			for _, e := range untilEnd(t, s, v.MsgID) {
+				if e.Type == "agent.error" {
+					failed = e.Error
+				}
+			}
+			if !strings.Contains(failed, "@auditor") || !strings.Contains(failed, ref) || !strings.Contains(failed, tc.why) {
+				t.Errorf("agent.error = %q", failed)
+			}
+			if n := len(provider.seen()); n != 0 {
+				t.Errorf("%d provider calls, want 0", n)
+			}
+		})
 	}
 }

@@ -111,9 +111,9 @@ func TestEveryChainPluginOffersTheSameItems(t *testing.T) {
 	}
 }
 
-// defios offers work-in-a-group, the Skill for what no chain decides
-// (ADR 0042).
-func TestDefiosOffersWorkInAGroup(t *testing.T) {
+// defios offers work-in-a-group alone, the Skill for what no chain decides:
+// reviewing a Sign Request is each chain Plugin's (ADR 0042).
+func TestDefiosOffersWorkInAGroupAlone(t *testing.T) {
 	all, err := plugin.All(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -122,8 +122,8 @@ func TestDefiosOffersWorkInAGroup(t *testing.T) {
 		if p.Name != "defios" {
 			continue
 		}
-		if skills := skillNames(p); !slices.Contains(skills, "work-in-a-group") {
-			t.Fatalf("built-in Plugin defios offers Skills %v, missing work-in-a-group", skills)
+		if skills := skillNames(p); !slices.Equal(skills, []string{"work-in-a-group"}) {
+			t.Fatalf("built-in Plugin defios offers Skills %v, want [work-in-a-group]", skills)
 		}
 		return
 	}
