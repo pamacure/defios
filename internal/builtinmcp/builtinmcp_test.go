@@ -97,10 +97,7 @@ func TestEveryChainPluginOffersTheSameItems(t *testing.T) {
 		if !slices.Contains(p.ServerNames(), "tx") {
 			t.Errorf("built-in Plugin %s offers MCP Servers %v, missing tx", p.Name, p.ServerNames())
 		}
-		var skills []string
-		for _, s := range p.Skills {
-			skills = append(skills, s.Name)
-		}
+		skills := skillNames(p)
 		for _, want := range []string{"propose", "review-sign-request"} {
 			if !slices.Contains(skills, want) {
 				t.Errorf("built-in Plugin %s offers Skills %v, missing %s", p.Name, skills, want)
@@ -112,4 +109,32 @@ func TestEveryChainPluginOffersTheSameItems(t *testing.T) {
 			t.Errorf("Network type %s has no built-in Plugin", typ)
 		}
 	}
+}
+
+// defios offers work-in-a-group, the Skill for what no chain decides
+// (ADR 0042).
+func TestDefiosOffersWorkInAGroup(t *testing.T) {
+	all, err := plugin.All(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range all {
+		if p.Name != "defios" {
+			continue
+		}
+		if skills := skillNames(p); !slices.Contains(skills, "work-in-a-group") {
+			t.Fatalf("built-in Plugin defios offers Skills %v, missing work-in-a-group", skills)
+		}
+		return
+	}
+	t.Fatal("no built-in Plugin defios")
+}
+
+// skillNames is the names of the Skills p offers.
+func skillNames(p plugin.Plugin) []string {
+	var names []string
+	for _, s := range p.Skills {
+		names = append(names, s.Name)
+	}
+	return names
 }
