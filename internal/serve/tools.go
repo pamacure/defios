@@ -71,7 +71,8 @@ const (
 		"The transactions must be complete, each naming one of your Node's Networks by alias and exactly one intent in protobuf-JSON form. " +
 		"Give your own reason. Returns its msg_id, and its seq or queued."
 	signAcceptDescription = "Accept a Sign Request of this Conversation's Key, as your Node and under your Handle: it counts toward the Key's threshold, " +
-		"and your Node's stance is final. Returns queued if it waits in your Node's Outbox."
+		"and your Node's stance is final. Accept only a request you have checked. An accept carries no reason: when you say why in the talk, name what you checked. " +
+		"Returns queued if it waits in your Node's Outbox."
 	chainFillDescription = "Complete transactions of this Conversation's Key from your Node's Networks, before sign_propose. Read-only: it proposes nothing. " +
 		"Give the transactions as sign_propose takes them, each naming one of your Node's Networks by alias and exactly one intent in protobuf-JSON form, " +
 		"and leave out each field you want filled: only an absent field is filled, a present one is never changed (nonce 0 is kept). " +
@@ -84,7 +85,8 @@ const (
 		"by Network alias and type. Ethereum: the EIP-55 address. Solana: the public key in base58. Bitcoin: the bech32 P2WPKH address of that Network's bitcoin network, the one script type the Key spends from. " +
 		"A Network of the other curve is left out; with none of the Key's curve, networks is empty. Read-only."
 	signRefuseDescription = "Refuse a Sign Request of this Conversation's Key, as your Node and under your Handle, giving your own reason: " +
-		"your Node's stance is final. Returns queued if it waits in your Node's Outbox."
+		"your Node's stance is final, so name the check that failed, specifically enough for another party to propose a corrected request. " +
+		"Returns queued if it waits in your Node's Outbox."
 )
 
 // signListSchema is sign_list's input: its status optional, one of
@@ -110,7 +112,7 @@ var (
 		`"ethereum":{"type":"object"},"bitcoin":{"type":"object"},"solana":{"type":"object"}},"required":["network"]}}},` +
 		`"required":["transactions"],"additionalProperties":false}`)
 	signRefuseSchema = json.RawMessage(`{"type":"object","properties":{"msg_id":{"type":"string","description":"The Sign Request's hex msg_id, or a unique prefix of it."},` +
-		`"reason":{"type":"string","description":"Why your Node refuses, in your own words."}},"required":["msg_id","reason"],"additionalProperties":false}`)
+		`"reason":{"type":"string","description":"Why your Node refuses, in your own words: the check that failed."}},"required":["msg_id","reason"],"additionalProperties":false}`)
 )
 
 // acted records that a sign Tool acted on the Sign Request msgID, hex.

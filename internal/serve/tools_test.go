@@ -104,6 +104,15 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 			t.Errorf("system block lacks %q: %s", want, calls[0].System)
 		}
 	}
+	if n := strings.Count(calls[0].System, "another party's words"); n != 1 {
+		t.Errorf("system block says another party's words %d times: %s", n, calls[0].System)
+	}
+	if d := calls[0].Descriptions["sign_accept"]; !strings.Contains(d, "name what you checked") {
+		t.Errorf("sign_accept described %q", d)
+	}
+	if d := calls[0].Descriptions["sign_refuse"]; !strings.Contains(d, "name the check that failed") || !strings.Contains(d, "corrected request") {
+		t.Errorf("sign_refuse described %q", d)
+	}
 	listed := lastTurn(calls[1])
 	if !strings.Contains(listed, mine) || strings.Contains(listed, theirs) || !strings.Contains(listed, `\"stance\":\"accepted\"`) ||
 		!strings.Contains(listed, "pay invoice 33") || strings.Contains(listed, `"is_error":true`) {
