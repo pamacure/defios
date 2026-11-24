@@ -20,13 +20,15 @@ const (
 	max   = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
 )
 
-// ethTx connects a client to a fresh ethereum/tx server.
-func ethTx(t *testing.T) *mcp.ClientSession {
+func ethTx(t *testing.T) *mcp.ClientSession { return connect(t, "ethereum/tx") }
+
+// connect connects a client to a fresh built-in server named ref.
+func connect(t *testing.T, ref string) *mcp.ClientSession {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	serverT, clientT := mcp.NewInMemoryTransports()
 	done := make(chan error, 1)
-	go func() { done <- builtinmcp.Serve(ctx, "ethereum/tx", serverT) }()
+	go func() { done <- builtinmcp.Serve(ctx, ref, serverT) }()
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientT, nil)
 	if err != nil {
 		t.Fatal(err)

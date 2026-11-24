@@ -12,8 +12,12 @@ import (
 func init() {
 	for _, chain := range network.Types() {
 		ref := chain + "/tx"
-		if chain == network.Ethereum {
+		switch chain {
+		case network.Ethereum:
 			Servers[ref] = ethereumTx
+			continue
+		case network.Solana:
+			Servers[ref] = solanaTx
 			continue
 		}
 		Servers[ref] = func() *mcp.Server {

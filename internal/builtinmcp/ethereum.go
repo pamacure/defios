@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -353,69 +352,11 @@ type unitsIn struct {
 	Decimals *int   `json:"decimals,omitempty" jsonschema:"the token's decimals, needed for whole"`
 }
 
-var decimalAmount = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+// etherUnits are Ethereum's units, smallest first.
+var etherUnits = []unit{{"wei", 0}, {"gwei", 9}, {"ether", 18}}
 
 func units(_ context.Context, _ *mcp.CallToolRequest, in unitsIn) (*mcp.CallToolResult, any, error) {
-	exp := func(unit string) (int, error) {
-		switch unit {
-		case "wei", "base":
-			return 0, nil
-		case "gwei":
-			return 9, nil
-		case "ether":
-			return 18, nil
-		case "whole":
-			if in.Decimals == nil {
-				return 0, errors.New("whole units need the token's decimals")
-			}
-			if *in.Decimals < 0 || *in.Decimals > 255 {
-				return 0, errors.New("decimals are 0 to 255")
-			}
-			return *in.Decimals, nil
-		}
-		return 0, fmt.Errorf("no unit %q: the units are wei, gwei, ether, base and whole", unit)
-	}
-	from, err := exp(in.From)
-	if err != nil {
-		return nil, nil, err
-	}
-	to, err := exp(in.To)
-	if err != nil {
-		return nil, nil, err
-	}
-	amount := strings.TrimSpace(in.Amount)
-	if !decimalAmount.MatchString(amount) {
-		return nil, nil, errors.New("the amount is a decimal number such as 1.5, with no sign or exponent")
-	}
-	r, _ := new(big.Rat).SetString(amount)
-	// in the smallest unit, wei or base, which is indivisible
-	r.Mul(r, pow10(from))
-	if !r.IsInt() {
-		return nil, nil, fmt.Errorf("%s %s is not a whole number of %s", amount, in.From, smallest(in.From))
-	}
-	r.Quo(r, pow10(to))
-	return text(fmt.Sprintf("%s %s (%s %s)\n", decimalString(r, to), in.To, amount, in.From)), nil, nil
-}
-
-func smallest(unit string) string {
-	if unit == "base" || unit == "whole" {
-		return "base units"
-	}
-	return "wei"
-}
-
-func pow10(n int) *big.Rat {
-	return new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil))
-}
-
-// decimalString is r, a whole number of 10^-places, exactly, without
-// trailing zeros after the point.
-func decimalString(r *big.Rat, places int) string {
-	s := r.FloatString(places)
-	if strings.Contains(s, ".") {
-		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
-	}
-	return s
+	return convert(in, etherUnits)
 }
 
 func orZero(s string) string {

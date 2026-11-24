@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	filippo.io/age v1.3.2
+	filippo.io/edwards25519 v1.2.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/bnb-chain/tss-lib/v4 v4.0.0-20260923032227-f204718ae595
 	github.com/btcsuite/btcd v0.23.4
@@ -31,7 +32,6 @@ require (
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/bigmod v0.1.0 // indirect
-	filippo.io/edwards25519 v1.2.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
