@@ -498,7 +498,7 @@ func profileView(p node.AgentProfile) *ProfileView {
 		o.MaxTurns = strconv.Itoa(p.MaxTurns)
 	}
 	for ref, g := range p.MCP {
-		o.MCP[ref] = g.Secrets
+		o.MCP[ref] = append([]string{}, g.Secrets...) // [] for none, never null
 	}
 	for _, pl := range p.IncludedIn {
 		o.IncludedIn = append(o.IncludedIn, placeView(pl))

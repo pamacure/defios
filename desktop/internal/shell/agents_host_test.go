@@ -177,6 +177,17 @@ func TestGrantsProvidersAndRefusedEditsOnTheAgentsPage(t *testing.T) {
 	}) {
 		t.Fatalf("catalog: %+v", v.Catalog)
 	}
+	// A server asking for nothing gives Env [], not null, which the page
+	// would fail to draw.
+	if !slices.ContainsFunc(v.Catalog.Servers, func(s shell.CatalogServer) bool { return s.Ref == "bitcoin/tx" && s.Env != nil }) {
+		t.Fatalf("catalog servers: %+v", v.Catalog.Servers)
+	}
+	// So is one granted with no Secrets.
+	v = agentsOK(t, "grant tx", alice.GrantAgent("auditor", "bitcoin/tx", nil))
+	if g, ok := v.Open.MCP["bitcoin/tx"]; !ok || g == nil {
+		t.Fatalf("granted bitcoin/tx: %+v", v.Open.MCP)
+	}
+	agentsOK(t, "revoke tx", alice.RevokeAgent("auditor", "bitcoin/tx"))
 
 	// An MCP Server with a Secret, granted then revoked.
 	if sv := alice.NewSecret("ETHERSCAN_KEY", "ek"); sv.Problem != nil {

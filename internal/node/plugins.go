@@ -194,7 +194,8 @@ func pluginOf(p plugin.Plugin, e plugin.LockEntry) Plugin {
 	}
 	for _, name := range p.ServerNames() {
 		s := p.Servers[name]
-		out.Servers = append(out.Servers, PluginServer{Name: name, CommandLine: s.CommandLine(), Env: s.Env})
+		// Env is [] for none, never null, as the desktop page reads it.
+		out.Servers = append(out.Servers, PluginServer{Name: name, CommandLine: s.CommandLine(), Env: append([]string{}, s.Env...)})
 	}
 	return out
 }
