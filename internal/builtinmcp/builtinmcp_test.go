@@ -75,7 +75,7 @@ func TestEveryBuiltInServerIsDeclaredAndImplemented(t *testing.T) {
 
 // skillsLanded are the chain Plugins whose Skills are written; once every
 // one's are, it goes and every chain Plugin needs them.
-var skillsLanded = []string{network.Ethereum}
+var skillsLanded = []string{network.Ethereum, network.Solana}
 
 // Every built-in Plugin but defios is a chain Plugin, named exactly as a
 // Network type and offering the MCP Server tx, and every Network type has

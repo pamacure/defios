@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/binary"
+	"encoding/hex"
 	"slices"
 	"strings"
 	"testing"
@@ -85,7 +86,7 @@ func TestSolanaTxOffersItsTools(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	if !slices.Equal(names, []string{"address", "decode_instruction", "decode_transaction", "units"}) {
+	if !slices.Equal(names, []string{"address", "associated_token_address", "decode_instruction", "decode_transaction", "encode_instruction", "units"}) {
 		t.Fatalf("tools %v", names)
 	}
 }
@@ -280,4 +281,121 @@ func TestSolanaUnitsConvertExactly(t *testing.T) {
 			t.Errorf("%v was taken: %s", args, text)
 		}
 	}
+}
+
+// associated_token_address derives a wallet's token account for a mint,
+// which differs by token program.
+func TestAssociatedTokenAddress(t *testing.T) {
+	cs := solTx(t)
+	says(t, ok(t, cs, "associated_token_address", map[string]any{"wallet": wallet, "mint": usdc}),
+		"associated token account: "+walletUSDC, "token program: "+tokenProgram)
+	t22 := ok(t, cs, "associated_token_address", map[string]any{"wallet": wallet, "mint": usdc, "token_program": token2022})
+	says(t, t22, "token program: "+token2022)
+	if strings.Contains(t22, walletUSDC) {
+		t.Errorf("Token-2022 gave SPL Token's account:\n%s", t22)
+	}
+	for _, args := range []map[string]any{
+		{"wallet": "nope", "mint": usdc},
+		{"wallet": wallet, "mint": usdc, "token_program": systemProgram},
+	} {
+		if text, failed := call(t, cs, "associated_token_address", args); !failed {
+			t.Errorf("%v was taken: %s", args, text)
+		}
+	}
+}
+
+// encode_instruction writes the data of an instruction decode_instruction
+// knows, in base64 for an intent and in hex, and names its accounts.
+func TestEncodeInstructionWritesTheData(t *testing.T) {
+	cs := solTx(t)
+	text := ok(t, cs, "encode_instruction", map[string]any{
+		"program": "system", "instruction": "transfer", "args": map[string]any{"lamports": "1500000000"},
+	})
+	data := cat(le32(2), le64(1_500_000_000))
+	says(t, text, "program_id: "+systemProgram, "base64: "+b64(data), "hex: "+hex.EncodeToString(data), "accounts, in order: source, destination")
+
+	text = ok(t, cs, "encode_instruction", map[string]any{
+		"program": tokenProgram, "instruction": "transferChecked", "args": map[string]any{"amount": "1234567", "decimals": "6"},
+	})
+	data = cat([]byte{12}, le64(1_234_567), []byte{6})
+	says(t, text, "program_id: "+tokenProgram, "base64: "+b64(data), "accounts, in order: source, mint, destination, authority")
+}
+
+// Every instruction with arguments encodes to data decode_instruction reads
+// back as the same arguments.
+func TestEncodeInstructionRoundTrips(t *testing.T) {
+	cs := solTx(t)
+	for _, c := range []struct {
+		program, name string
+		args          map[string]any
+		want          []string
+	}{
+		{"system", "createAccount", map[string]any{"lamports": "2039280", "space": "165", "owner": tokenProgram}, []string{"lamports: 2039280", "space: 165", "owner: " + tokenProgram}},
+		{"system", "assign", map[string]any{"owner": tokenProgram}, []string{"owner: " + tokenProgram}},
+		{"system", "transfer", map[string]any{"lamports": "1"}, []string{"lamports: 1 "}},
+		{"system", "createAccountWithSeed", map[string]any{"base": wallet, "seed": "vault", "lamports": "1", "space": "2", "owner": tokenProgram},
+			[]string{"base: " + wallet, `seed: "vault"`, "lamports: 1 ", "space: 2", "owner: " + tokenProgram}},
+		{"system", "advanceNonceAccount", nil, []string{"advanceNonceAccount"}},
+		{"system", "allocate", map[string]any{"space": "200"}, []string{"space: 200"}},
+		{"system", "allocateWithSeed", map[string]any{"base": wallet, "seed": "a", "space": "10", "owner": tokenProgram}, []string{`seed: "a"`, "space: 10"}},
+		{"system", "assignWithSeed", map[string]any{"base": wallet, "seed": "b", "owner": tokenProgram}, []string{`seed: "b"`, "owner: " + tokenProgram}},
+		{"system", "transferWithSeed", map[string]any{"lamports": "5", "from seed": "c", "from owner": tokenProgram}, []string{"lamports: 5 ", `from seed: "c"`, "from owner: " + tokenProgram}},
+		{"token", "transfer", map[string]any{"amount": "42"}, []string{"SPL Token: transfer", "amount: 42 base units"}},
+		{"token", "approve", map[string]any{"amount": "100"}, []string{"SPL Token: approve", "amount: 100 base units"}},
+		{"token", "setAuthority", map[string]any{"authority type": "account owner", "new authority": other}, []string{"authority type: account owner", "new authority: " + other}},
+		{"token", "setAuthority", map[string]any{"authority type": "mint tokens"}, []string{"authority type: mint tokens", "new authority: none"}},
+		{"token", "mintTo", map[string]any{"amount": "9"}, []string{"SPL Token: mintTo", "amount: 9 "}},
+		{"token", "burn", map[string]any{"amount": "9"}, []string{"SPL Token: burn", "amount: 9 "}},
+		{"token", "closeAccount", nil, []string{"SPL Token: closeAccount"}},
+		{"token", "transferChecked", map[string]any{"amount": "5", "decimals": "0"}, []string{"5 base units (5 at 0 decimals)"}},
+		{"token", "approveChecked", map[string]any{"amount": "18446744073709551615", "decimals": "6"}, []string{"the most a u64 holds"}},
+		{"token", "mintToChecked", map[string]any{"amount": "7", "decimals": "2"}, []string{"0.07 at 2 decimals"}},
+		{"token", "burnChecked", map[string]any{"amount": "7", "decimals": "2"}, []string{"SPL Token: burnChecked"}},
+		{"token", "initializeAccount3", map[string]any{"owner": wallet}, []string{"owner: " + wallet}},
+		{"token-2022", "setAuthority", map[string]any{"authority type": "permanent delegate", "new authority": other}, []string{"SPL Token-2022: setAuthority", "authority type: permanent delegate"}},
+		{"associated-token", "createIdempotent", nil, []string{"Associated Token Account: createIdempotent"}},
+		{"associated-token", "create", nil, []string{"Associated Token Account: create"}},
+	} {
+		t.Run(c.program+" "+c.name, func(t *testing.T) {
+			args := map[string]any{"program": c.program, "instruction": c.name}
+			if c.args != nil {
+				args["args"] = c.args
+			}
+			text := ok(t, cs, "encode_instruction", args)
+			program := between(text, "program_id: ", "\n")
+			data := between(text, "base64: ", "\n")
+			back := ok(t, cs, "decode_instruction", map[string]any{"instruction": map[string]any{"program_id": program, "data": data}})
+			says(t, back, append(c.want, ": "+c.name+"\n")...)
+			if strings.Contains(back, "does not decode") || strings.Contains(back, "extra byte") {
+				t.Errorf("decodes badly:\n%s", back)
+			}
+		})
+	}
+}
+
+func TestEncodeInstructionRefusesWhatItCannotWrite(t *testing.T) {
+	cs := solTx(t)
+	for name, args := range map[string]map[string]any{
+		"unknown program":     {"program": third, "instruction": "transfer"},
+		"unknown instruction": {"program": "system", "instruction": "teleport"},
+		"missing argument":    {"program": "system", "instruction": "transfer"},
+		"unknown argument":    {"program": "system", "instruction": "transfer", "args": map[string]any{"lamports": "1", "memo": "x"}},
+		"a JSON number":       {"program": "system", "instruction": "transfer", "args": map[string]any{"lamports": 1}},
+		"too large":           {"program": "system", "instruction": "transfer", "args": map[string]any{"lamports": "18446744073709551616"}},
+		"negative":            {"program": "token", "instruction": "transfer", "args": map[string]any{"amount": "-1"}},
+		"decimals over a u8":  {"program": "token", "instruction": "transferChecked", "args": map[string]any{"amount": "1", "decimals": "256"}},
+		"bad key":             {"program": "system", "instruction": "assign", "args": map[string]any{"owner": "nope"}},
+		"bad authority type":  {"program": "token", "instruction": "setAuthority", "args": map[string]any{"authority type": "permanent delegate"}},
+	} {
+		if text, failed := call(t, cs, "encode_instruction", args); !failed {
+			t.Errorf("%s was taken: %s", name, text)
+		}
+	}
+}
+
+// between is the text after the first from in s, up to the next to.
+func between(s, from, to string) string {
+	_, after, _ := strings.Cut(s, from)
+	v, _, _ := strings.Cut(after, to)
+	return v
 }

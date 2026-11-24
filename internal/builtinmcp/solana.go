@@ -2,6 +2,8 @@ package builtinmcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -39,6 +42,19 @@ func solanaTx() *mcp.Server {
 		Description: "Decode a Solana intent as sign_propose takes it (protobuf-JSON: base58 pubkeys, data base64): " +
 			"its fee payer, each instruction as decode_instruction reads it, and every signer it needs besides the fee payer.",
 	}, decodeTransaction)
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "encode_instruction",
+		Description: "Encode the data of an instruction decode_instruction knows, for a Solana intent: base64, as an intent holds it, and hex. " +
+			"Name the program (system, token, token-2022, associated-token, or its ID) and the instruction as decode_instruction names it, " +
+			"and give its arguments by the names decode_instruction shows, each a string: integers decimal, keys base58, " +
+			"authority type by name, and new authority omitted for none. Amounts are in base units or lamports: convert them with units first. " +
+			"Also names the instruction's accounts in order; their signer and writable flags are yours to set.",
+	}, encodeInstruction)
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "associated_token_address",
+		Description: "Derive a wallet's associated token account for a mint: the address tokens sent to that wallet go to. " +
+			"The token program is SPL Token unless Token-2022 is given, and the two give different accounts.",
+	}, associatedTokenAddress)
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "address",
 		Description: "Check a Solana address is base58 of 32 bytes, and say whether it is on the Ed25519 curve: " +
@@ -333,6 +349,10 @@ type solProgram struct {
 	// strict is a program that refuses data past an instruction's
 	// arguments, where the others ignore it.
 	strict bool
+	// wide is a program whose tag is a u32, where the others' is a u8.
+	wide bool
+	// authorities are its SPL AuthorityType names, in order.
+	authorities []string
 }
 
 // solLayout is one instruction: its arguments, read from the data after
@@ -347,7 +367,27 @@ type solLayout struct {
 	args  func(r *solReader) []solArg
 	// sensitive says why the instruction is one to check twice, or "".
 	sensitive func(args []solArg, keys []string) string
+	// fields are its arguments as encode_instruction writes them, named
+	// and ordered as args reads them.
+	fields []solField
 }
+
+// solField is one argument of an instruction's data.
+type solField struct {
+	name string
+	kind solKind
+}
+
+type solKind int
+
+const (
+	kU64       solKind = iota
+	kU8                // decimals
+	kKey               // a pubkey
+	kStr               // a bincode String
+	kAuthority         // an SPL AuthorityType, by name
+	kOptKey            // an SPL COption<Pubkey>, omitted for none
+)
 
 type solArg struct {
 	name, text string
@@ -464,9 +504,9 @@ const (
 )
 
 var solPrograms = map[string]solProgram{
-	systemProgramID: {name: "System Program", tag: u32Tag, layouts: systemLayouts},
-	tokenProgramID:  {name: "SPL Token", tag: u8Tag, layouts: tokenLayouts(splAuthorities[:4])},
-	token2022ID:     {name: "SPL Token-2022", tag: u8Tag, layouts: tokenLayouts(splAuthorities)},
+	systemProgramID: {name: "System Program", tag: u32Tag, wide: true, layouts: systemLayouts},
+	tokenProgramID:  tokenProgram("SPL Token", splAuthorities[:4]),
+	token2022ID:     tokenProgram("SPL Token-2022", splAuthorities),
 	ataProgramID: {name: "Associated Token Account", strict: true, layouts: ataLayouts, tag: func(data []byte) (int, []byte, error) {
 		if len(data) == 0 { // the original form, create, has no data
 			return 0, nil, nil
@@ -493,29 +533,34 @@ func u32Tag(data []byte) (int, []byte, error) {
 // after a u32 tag.
 var systemLayouts = map[int]solLayout{
 	0: {name: "createAccount", roles: []string{"funding account", "new account"},
+		fields: []solField{{"lamports", kU64}, {"space", kU64}, {"owner", kKey}},
 		args: func(r *solReader) []solArg {
 			return []solArg{lamports("lamports", r.u64()), number("space", r.u64()), key("owner", r.pubkey())}
 		}},
-	1: {name: "assign", roles: []string{"assigned account"},
+	1: {name: "assign", roles: []string{"assigned account"}, fields: []solField{{"owner", kKey}},
 		args: func(r *solReader) []solArg { return []solArg{key("owner", r.pubkey())} }},
-	2: {name: "transfer", roles: []string{"source", "destination"},
+	2: {name: "transfer", roles: []string{"source", "destination"}, fields: []solField{{"lamports", kU64}},
 		args: func(r *solReader) []solArg { return []solArg{lamports("lamports", r.u64())} }},
 	3: {name: "createAccountWithSeed", roles: []string{"funding account", "created account", "base account"}, min: 2,
+		fields: []solField{{"base", kKey}, {"seed", kStr}, {"lamports", kU64}, {"space", kU64}, {"owner", kKey}},
 		args: func(r *solReader) []solArg {
 			return []solArg{key("base", r.pubkey()), seed("seed", r.str()), lamports("lamports", r.u64()), number("space", r.u64()), key("owner", r.pubkey())}
 		}},
 	4: {name: "advanceNonceAccount", roles: []string{"nonce account", "recent blockhashes sysvar", "nonce authority"}},
-	8: {name: "allocate", roles: []string{"allocated account"},
+	8: {name: "allocate", roles: []string{"allocated account"}, fields: []solField{{"space", kU64}},
 		args: func(r *solReader) []solArg { return []solArg{number("space", r.u64())} }},
 	9: {name: "allocateWithSeed", roles: []string{"allocated account", "base account"},
+		fields: []solField{{"base", kKey}, {"seed", kStr}, {"space", kU64}, {"owner", kKey}},
 		args: func(r *solReader) []solArg {
 			return []solArg{key("base", r.pubkey()), seed("seed", r.str()), number("space", r.u64()), key("owner", r.pubkey())}
 		}},
 	10: {name: "assignWithSeed", roles: []string{"assigned account", "base account"},
+		fields: []solField{{"base", kKey}, {"seed", kStr}, {"owner", kKey}},
 		args: func(r *solReader) []solArg {
 			return []solArg{key("base", r.pubkey()), seed("seed", r.str()), key("owner", r.pubkey())}
 		}},
 	11: {name: "transferWithSeed", roles: []string{"source", "base account", "destination"},
+		fields: []solField{{"lamports", kU64}, {"from seed", kStr}, {"from owner", kKey}},
 		args: func(r *solReader) []solArg {
 			return []solArg{lamports("lamports", r.u64()), seed("from seed", r.str()), key("from owner", r.pubkey())}
 		}},
@@ -528,6 +573,11 @@ var splAuthorities = []string{
 	"transfer fee config", "withheld withdraw", "close mint", "interest rate", "permanent delegate",
 	"confidential transfer mint", "transfer hook program id", "confidential transfer fee config",
 	"metadata pointer", "group pointer", "group member pointer", "scaled UI amount", "pause",
+}
+
+// tokenProgram is SPL Token or Token-2022, by the authority types it has.
+func tokenProgram(name string, authorities []string) solProgram {
+	return solProgram{name: name, tag: u8Tag, layouts: tokenLayouts(authorities), authorities: authorities}
 }
 
 // tokenLayouts are the instructions SPL Token and Token-2022 share, each
@@ -546,12 +596,16 @@ func tokenLayouts(authorities []string) map[int]solLayout {
 		return fmt.Sprintf("delegate %s may move up to %s from %s without the owner signing again",
 			at(keys, delegate), args[0].text, at(keys, 0))
 	}
+	amt := []solField{{"amount", kU64}}
+	checked := []solField{{"amount", kU64}, {"decimals", kU8}}
+	owner := []solField{{"owner", kKey}}
 	return map[int]solLayout{
 		1: {name: "initializeAccount", roles: []string{"account", "mint", "owner", "rent sysvar"}},
-		3: {name: "transfer", roles: []string{"source", "destination", "authority"}, extra: signer, args: amount},
-		4: {name: "approve", roles: []string{"source", "delegate", "owner"}, extra: signer, args: amount, sensitive: approve},
+		3: {name: "transfer", roles: []string{"source", "destination", "authority"}, extra: signer, args: amount, fields: amt},
+		4: {name: "approve", roles: []string{"source", "delegate", "owner"}, extra: signer, args: amount, fields: amt, sensitive: approve},
 		5: {name: "revoke", roles: []string{"source", "owner"}, extra: signer},
 		6: {name: "setAuthority", roles: []string{"mint or account", "current authority"}, extra: signer,
+			fields: []solField{{"authority type", kAuthority}, {"new authority", kOptKey}},
 			args: func(r *solReader) []solArg {
 				t := r.u8()
 				if r.err == nil && int(t) >= len(authorities) {
@@ -574,8 +628,8 @@ func tokenLayouts(authorities []string) map[int]solLayout {
 				}
 				return fmt.Sprintf("hands the %s authority of %s to %s", args[0].text, at(keys, 0), args[1].key)
 			}},
-		7: {name: "mintTo", roles: []string{"mint", "destination", "mint authority"}, extra: signer, args: amount},
-		8: {name: "burn", roles: []string{"account", "mint", "owner"}, extra: signer, args: amount},
+		7: {name: "mintTo", roles: []string{"mint", "destination", "mint authority"}, extra: signer, args: amount, fields: amt},
+		8: {name: "burn", roles: []string{"account", "mint", "owner"}, extra: signer, args: amount, fields: amt},
 		9: {name: "closeAccount", roles: []string{"account", "destination", "owner"}, extra: signer,
 			sensitive: func(_ []solArg, keys []string) string {
 				if len(keys) < 3 || keys[1] == keys[2] {
@@ -585,13 +639,13 @@ func tokenLayouts(authorities []string) map[int]solLayout {
 			}},
 		10: {name: "freezeAccount", roles: []string{"account", "mint", "freeze authority"}, extra: signer},
 		11: {name: "thawAccount", roles: []string{"account", "mint", "freeze authority"}, extra: signer},
-		12: {name: "transferChecked", roles: []string{"source", "mint", "destination", "authority"}, extra: signer, args: checkedAmount},
-		13: {name: "approveChecked", roles: []string{"source", "mint", "delegate", "owner"}, extra: signer, args: checkedAmount, sensitive: approve},
-		14: {name: "mintToChecked", roles: []string{"mint", "destination", "mint authority"}, extra: signer, args: checkedAmount},
-		15: {name: "burnChecked", roles: []string{"account", "mint", "owner"}, extra: signer, args: checkedAmount},
-		16: {name: "initializeAccount2", roles: []string{"account", "mint", "rent sysvar"},
+		12: {name: "transferChecked", roles: []string{"source", "mint", "destination", "authority"}, extra: signer, args: checkedAmount, fields: checked},
+		13: {name: "approveChecked", roles: []string{"source", "mint", "delegate", "owner"}, extra: signer, args: checkedAmount, fields: checked, sensitive: approve},
+		14: {name: "mintToChecked", roles: []string{"mint", "destination", "mint authority"}, extra: signer, args: checkedAmount, fields: checked},
+		15: {name: "burnChecked", roles: []string{"account", "mint", "owner"}, extra: signer, args: checkedAmount, fields: checked},
+		16: {name: "initializeAccount2", roles: []string{"account", "mint", "rent sysvar"}, fields: owner,
 			args: func(r *solReader) []solArg { return []solArg{key("owner", r.pubkey())} }},
-		18: {name: "initializeAccount3", roles: []string{"account", "mint"},
+		18: {name: "initializeAccount3", roles: []string{"account", "mint"}, fields: owner,
 			args: func(r *solReader) []solArg { return []solArg{key("owner", r.pubkey())} }},
 	}
 }
@@ -612,4 +666,201 @@ var ataLayouts = map[int]solLayout{
 	0: {name: "create", roles: ataCreate},
 	1: {name: "createIdempotent", roles: ataCreate},
 	2: {name: "recoverNested", roles: []string{"nested account", "nested mint", "destination", "owner account", "owner mint", "wallet", "token program"}},
+}
+
+// solProgramNames are the names encode_instruction takes for the programs
+// it knows, besides their IDs.
+var solProgramNames = map[string]string{
+	"system":           systemProgramID,
+	"token":            tokenProgramID,
+	"token-2022":       token2022ID,
+	"associated-token": ataProgramID,
+}
+
+type solEncodeIn struct {
+	Program     string         `json:"program" jsonschema:"system, token, token-2022, associated-token, or the program's base58 ID"`
+	Instruction string         `json:"instruction" jsonschema:"the instruction's name as decode_instruction gives it, such as transfer or transferChecked"`
+	Args        map[string]any `json:"args,omitempty" jsonschema:"its arguments by the names decode_instruction shows, each a string: integers decimal, keys base58"`
+}
+
+func encodeInstruction(_ context.Context, _ *mcp.CallToolRequest, in solEncodeIn) (*mcp.CallToolResult, any, error) {
+	id, named := solProgramNames[strings.TrimSpace(in.Program)]
+	if !named {
+		var err error
+		if id, err = solPubkey(in.Program); err != nil {
+			return nil, nil, fmt.Errorf("program: %w, nor system, token, token-2022 or associated-token", err)
+		}
+	}
+	p, known := solPrograms[id]
+	if !known {
+		return nil, nil, fmt.Errorf("program %s is not one encoded here: only system, token, token-2022 and associated-token are", id)
+	}
+	tag, l, found := -1, solLayout{}, false
+	var names []string
+	for t, x := range p.layouts {
+		names = append(names, x.name)
+		if x.name == in.Instruction {
+			tag, l, found = t, x, true
+		}
+	}
+	if !found {
+		slices.Sort(names)
+		return nil, nil, fmt.Errorf("%s has no instruction %q here; it has %s", p.name, in.Instruction, strings.Join(names, ", "))
+	}
+	data, err := encodeFields(p, l, in.Args)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", l.name, err)
+	}
+	if p.wide {
+		data = append(binary.LittleEndian.AppendUint32(nil, uint32(tag)), data...)
+	} else {
+		data = append([]byte{byte(tag)}, data...)
+	}
+	accounts := strings.Join(l.roles, ", ")
+	if l.extra != "" {
+		accounts += ", then a multisig authority's signers"
+	}
+	return text(fmt.Sprintf("%s: %s\nprogram_id: %s\nbase64: %s\nhex: %s\naccounts, in order: %s\n",
+		p.name, l.name, id, base64.StdEncoding.EncodeToString(data), hex.EncodeToString(data), accounts)), nil, nil
+}
+
+// encodeFields writes args as l's data after its tag.
+func encodeFields(p solProgram, l solLayout, args map[string]any) ([]byte, error) {
+	want := make([]string, len(l.fields))
+	for i, f := range l.fields {
+		want[i] = f.name
+	}
+	for name := range args {
+		if !slices.Contains(want, name) {
+			if len(want) == 0 {
+				return nil, fmt.Errorf("takes no arguments, but was given %q", name)
+			}
+			return nil, fmt.Errorf("takes no argument %q; its arguments are %s", name, strings.Join(want, ", "))
+		}
+	}
+	var out []byte
+	for _, f := range l.fields {
+		v, given := args[f.name]
+		if hasNumber(v) {
+			return nil, fmt.Errorf("%s: give it as a string, such as \"1000000\", so it is not rounded", f.name)
+		}
+		str, isStr := v.(string)
+		if given && !isStr {
+			return nil, fmt.Errorf("%s: give it as a string", f.name)
+		}
+		if !given && f.kind != kOptKey {
+			return nil, fmt.Errorf("%s is missing; its arguments are %s", f.name, strings.Join(want, ", "))
+		}
+		str = strings.TrimSpace(str)
+		switch f.kind {
+		case kU64:
+			n, err := uintArg(f.name, str, math.MaxUint64)
+			if err != nil {
+				return nil, err
+			}
+			out = binary.LittleEndian.AppendUint64(out, n)
+		case kU8:
+			n, err := uintArg(f.name, str, math.MaxUint8)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, byte(n))
+		case kKey:
+			k, err := keyArg(f.name, str)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, k...)
+		case kOptKey:
+			if !given || str == "" || str == "none" {
+				out = append(out, 0)
+				continue
+			}
+			k, err := keyArg(f.name, str)
+			if err != nil {
+				return nil, err
+			}
+			out = append(append(out, 1), k...)
+		case kStr:
+			out = binary.LittleEndian.AppendUint64(out, uint64(len(str)))
+			out = append(out, str...)
+		case kAuthority:
+			i := slices.Index(p.authorities, str)
+			if i < 0 {
+				return nil, fmt.Errorf("authority type %q is none %s has; it has %s", str, p.name, strings.Join(p.authorities, ", "))
+			}
+			out = append(out, byte(i))
+		}
+	}
+	return out, nil
+}
+
+// uintArg is the argument name, a decimal string, as an integer up to max.
+func uintArg(name, s string, max uint64) (uint64, error) {
+	n, ok := new(big.Int).SetString(s, 10)
+	if !ok || n.Sign() < 0 || !n.IsUint64() || n.Uint64() > max {
+		return 0, fmt.Errorf("%s: %q is not a whole number from 0 to %d", name, s, max)
+	}
+	return n.Uint64(), nil
+}
+
+// keyArg is the argument name, a base58 address, as its 32 bytes.
+func keyArg(name, s string) ([]byte, error) {
+	k, err := base58.DecodeN(strings.TrimSpace(s), 32)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %q is not base58 of 32 bytes", name, s)
+	}
+	return k, nil
+}
+
+type ataIn struct {
+	Wallet       string `json:"wallet" jsonschema:"the wallet's base58 address"`
+	Mint         string `json:"mint" jsonschema:"the token's mint, base58"`
+	TokenProgram string `json:"token_program,omitempty" jsonschema:"the mint's token program: SPL Token's ID (the default) or Token-2022's"`
+}
+
+func associatedTokenAddress(_ context.Context, _ *mcp.CallToolRequest, in ataIn) (*mcp.CallToolResult, any, error) {
+	program := tokenProgramID
+	if in.TokenProgram != "" {
+		program = canonical(in.TokenProgram)
+	}
+	if program != tokenProgramID && program != token2022ID {
+		return nil, nil, fmt.Errorf("token_program %s is neither SPL Token (%s) nor Token-2022 (%s)", in.TokenProgram, tokenProgramID, token2022ID)
+	}
+	var seeds [][]byte
+	for _, x := range []struct{ name, key string }{{"wallet", in.Wallet}, {"token_program", program}, {"mint", in.Mint}} {
+		k, err := keyArg(x.name, x.key)
+		if err != nil {
+			return nil, nil, err
+		}
+		seeds = append(seeds, k)
+	}
+	ata, ok := programAddress(seeds, ataProgramID)
+	if !ok {
+		return nil, nil, errors.New("no bump makes an address off the curve for these seeds")
+	}
+	return text(fmt.Sprintf("associated token account: %s\nwallet: %s\nmint: %s\ntoken program: %s\n",
+		base58.Encode(ata), canonical(in.Wallet), canonical(in.Mint), program)), nil, nil
+}
+
+// programAddress is Solana's find_program_address: the first address,
+// bumping down from 255, that seeds and a bump derive off the curve.
+func programAddress(seeds [][]byte, programID string) ([]byte, bool) {
+	program, err := base58.DecodeN(programID, 32)
+	if err != nil {
+		return nil, false
+	}
+	for bump := 255; bump >= 0; bump-- {
+		h := sha256.New()
+		for _, s := range seeds {
+			h.Write(s)
+		}
+		h.Write([]byte{byte(bump)})
+		h.Write(program)
+		h.Write([]byte("ProgramDerivedAddress"))
+		if addr := h.Sum(nil); !onCurve(addr) {
+			return addr, true
+		}
+	}
+	return nil, false
 }

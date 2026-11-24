@@ -525,10 +525,13 @@ type BroadcastReceipt struct {
 
 // TxDetail is one decoded transaction, human-readable in Lines.
 type TxDetail struct {
-	Chain   string   `json:"chain"` // e.g. "bitcoin testnet"; never an alias
-	Type    string   `json:"type"`
-	Lines   []string `json:"lines"`
-	Digests []string `json:"digests,omitempty"` // hex, one per signature the transaction needs
+	Chain string   `json:"chain"` // e.g. "bitcoin testnet"; never an alias
+	Type  string   `json:"type"`
+	Lines []string `json:"lines"`
+	// Intent is the transaction's intent, protobuf-JSON as sign_propose
+	// takes it, for an agent to pass to its chain's tx server unchanged.
+	Intent  json.RawMessage `json:"intent,omitempty"`
+	Digests []string        `json:"digests,omitempty"` // hex, one per signature the transaction needs
 }
 
 // Actor is a Node that took a stance on a request, at its seq, and the
@@ -738,6 +741,7 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 			d.Details = append(d.Details, td)
 			continue
 		}
+		td.Intent = intentJSON(tx)
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
 			td.Lines = describeEthereum(in.Ethereum)
@@ -921,6 +925,26 @@ func match(rows []cosl.Row, query string) (cosl.Row, error) {
 	default:
 		return cosl.Row{}, ErrAmbiguous
 	}
+}
+
+// intentJSON is tx's intent as protobuf-JSON, or nil if it has none.
+func intentJSON(tx *coslv1.SignTransaction) json.RawMessage {
+	var m proto.Message
+	switch in := tx.Intent.(type) {
+	case *coslv1.SignTransaction_Ethereum:
+		m = in.Ethereum
+	case *coslv1.SignTransaction_Bitcoin:
+		m = in.Bitcoin
+	case *coslv1.SignTransaction_Solana:
+		m = in.Solana
+	default:
+		return nil
+	}
+	raw, err := protojson.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 func describeEthereum(in *coslv1.EthereumIntent) []string {

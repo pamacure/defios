@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"defios.com/internal/cosl"
@@ -340,6 +341,31 @@ func TestListAndInspect(t *testing.T) {
 	}
 	if _, err := Inspect([]cosl.Row{open, old}, "", now); !errors.Is(err, ErrUnknown) {
 		t.Errorf("empty: %v", err)
+	}
+}
+
+// Each transaction sign_inspect shows carries its intent as protobuf-JSON,
+// whole, so an agent passes it to a tx server as sign_propose takes it.
+func TestInspectGivesEachIntent(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	conv := key.ConversationID("ecdsa", ecdsaKey.PublicKey)
+	sol := solTx()
+	sol.GetSolana().Instructions[0].Data = []byte{2, 0, 0, 0, 0xe8, 3, 0, 0, 0, 0, 0, 0}
+	sol.GetSolana().Instructions[0].Accounts = []*coslv1.SolanaAccount{{Pubkey: b58, Signer: true, Writable: true}}
+	r := req(ethTx(), btcTx(), sol)
+	d, err := Inspect([]cosl.Row{rowOf(t, 1, 0xa1, now, conv[:], r)}, "a1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants := []proto.Message{r.Transactions[0].GetEthereum(), r.Transactions[1].GetBitcoin(), sol.GetSolana()}
+	for i, want := range wants {
+		got := want.ProtoReflect().New().Interface()
+		if err := protojson.Unmarshal(d.Details[i].Intent, got); err != nil {
+			t.Fatalf("details[%d].intent %s: %v", i, d.Details[i].Intent, err)
+		}
+		if !proto.Equal(got, want) {
+			t.Errorf("details[%d].intent = %v, want %v", i, got, want)
+		}
 	}
 }
 

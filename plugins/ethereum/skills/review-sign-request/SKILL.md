@@ -5,8 +5,9 @@ description: How to review an Ethereum Sign Request before accepting or refusing
 # Reviewing an Ethereum Sign Request
 
 Read the request with `sign_inspect`. Each of its `details` is one
-transaction: `chain` names its chain by id (`ethereum chain 1`), and `lines`
-give its fields. Decode with the `ethereum__tx__` tools, then check each
+transaction: `chain` names its chain by id (`ethereum chain 1`), `lines`
+give its fields, and `intent` holds it whole, as the `ethereum__tx__` tools
+take it. Decode with the `ethereum__tx__` tools, then check each
 transaction, in order:
 
 1. **Chain.** The chain id is the chain the talk meant: 1 is Ethereum
