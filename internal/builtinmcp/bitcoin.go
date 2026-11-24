@@ -3,6 +3,7 @@ package builtinmcp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math/big"
@@ -39,7 +40,7 @@ func bitcoinTx() *mcp.Server {
 	}, decodeBitcoinTransaction)
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "address",
-		Description: "Validate a Bitcoin address and give its type (P2PKH, P2SH, P2WPKH, P2WSH or P2TR), the network(s) it belongs to, and the script it pays. " +
+		Description: "Validate a Bitcoin address and give its type (P2PKH, P2SH, P2WPKH, P2WSH or P2TR), the network(s) it belongs to, and the script it pays, in hex and as script_pubkey: base64, as an input spending from it takes it. " +
 			"With network, also say whether it is an address of that network.",
 	}, bitcoinAddress)
 	mcp.AddTool(s, &mcp.Tool{
@@ -281,7 +282,7 @@ func bitcoinAddress(_ context.Context, _ *mcp.CallToolRequest, in btcAddressIn) 
 	script, _ := signreq.OutputScript(nets[0], a)
 	st, _ := btcClassify(script)
 	var b strings.Builder
-	fmt.Fprintf(&b, "valid: %s\nnetwork: %s\nscript: %x\n", st.name, strings.Join(nets, " or "), script)
+	fmt.Fprintf(&b, "valid: %s\nnetwork: %s\nscript: %x\nscript_pubkey: %s\n", st.name, strings.Join(nets, " or "), script, base64.StdEncoding.EncodeToString(script))
 	if len(nets) > 1 {
 		b.WriteString("those networks share this address form, so the address alone does not say which it is meant for\n")
 	}

@@ -158,6 +158,8 @@ func TestBitcoinAddressGivesTypeAndNetwork(t *testing.T) {
 	says(t, ok(t, cs, "address", map[string]any{"address": mainP2TR}), "valid: P2TR", "network: mainnet\n")
 	says(t, ok(t, cs, "address", map[string]any{"address": mainP2SH}), "valid: P2SH", "network: mainnet\n")
 	says(t, ok(t, cs, "address", map[string]any{"address": mainP2WSH}), "valid: P2WSH")
+	// the script in base64, as an input's script_pubkey takes it
+	says(t, ok(t, cs, "address", map[string]any{"address": mainP2WPKH}), "script_pubkey: "+scriptB64(p2wpkhScript)+"\n")
 	says(t, ok(t, cs, "address", map[string]any{"address": testP2WPKH}), "valid: P2WPKH", "network: testnet or signet\n")
 	says(t, ok(t, cs, "address", map[string]any{"address": testP2PKH}), "valid: P2PKH", "testnet or signet or regtest")
 	says(t, ok(t, cs, "address", map[string]any{"address": testP2WPKH, "network": "mainnet"}), "NOT an address of mainnet")
