@@ -216,6 +216,10 @@ _Avoid_: usage (alone), agent usage, cost, quota
 One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several chains of the Key's curve, each naming its chain's identity, but each signed transaction is broadcastable on exactly one chain. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `refused` (too many Sign Refusals for t accepts ever to exist), `aborted` or `expired`.
 _Avoid_: transaction request, signing job, order
 
+**Draft**:
+Transactions `chain_fill` completed, held in a Node's memory under a short id for one Conversation and its Key, for `sign_propose` to propose exactly as filled. It lasts minutes and is not on the COSL.
+_Avoid_: pending proposal, fill result
+
 **Sign Accept**:
 A Node's COSL message (`sign.accept`) agreeing to sign one Sign Request. The first t Nodes to accept, the proposer counting first, are its Signers; once they exist one of them starts the signing Session. Later accepts do not count, and a late `sign accept` fails with `signer-set-full`.
 _Avoid_: approval, vote, signature (a Sign Accept is not a signature over a Digest)
