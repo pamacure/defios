@@ -73,10 +73,14 @@ func TestEveryBuiltInServerIsDeclaredAndImplemented(t *testing.T) {
 	}
 }
 
+// skillsLanded are the chain Plugins whose Skills are written; once every
+// one's are, it goes and every chain Plugin needs them.
+var skillsLanded = []string{network.Ethereum}
+
 // Every built-in Plugin but defios is a chain Plugin, named exactly as a
 // Network type and offering the MCP Server tx, and every Network type has
-// one (ADR 0042). The Skills review-sign-request and propose are checked for
-// in a chain Plugin only once it has Skills, as their tickets land.
+// one (ADR 0042). A chain Plugin in skillsLanded, or with any Skill, offers
+// the Skills review-sign-request and propose.
 func TestEveryChainPluginOffersTheSameItems(t *testing.T) {
 	all, err := plugin.All(t.TempDir())
 	if err != nil {
@@ -98,7 +102,7 @@ func TestEveryChainPluginOffersTheSameItems(t *testing.T) {
 		if !slices.Contains(p.ServerNames(), "tx") {
 			t.Errorf("built-in Plugin %s offers MCP Servers %v, missing tx", p.Name, p.ServerNames())
 		}
-		if len(p.Skills) == 0 {
+		if len(p.Skills) == 0 && !slices.Contains(skillsLanded, p.Name) {
 			continue
 		}
 		var skills []string

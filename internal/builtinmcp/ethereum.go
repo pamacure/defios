@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,12 @@ func ethereumTx() *mcp.Server {
 			"a selector shared by standards gives every reading, and an unknown one is said to be unknown. " +
 			"It knows no protocol's own contracts (routers etc.): give their signature or ABI. Approvals of the maximum amount, and setApprovalForAll(true), are marked unlimited.",
 	}, decodeCalldata)
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "encode_calldata",
+		Description: "Encode a contract call's data from the function's signature and its arguments, for an Ethereum intent's data: " +
+			"base64, as an intent holds it, and 0x hex. An address or bytes is 0x hex, an integer decimal or 0x hex, a bool true or false, " +
+			"a string itself; an array or tuple is a JSON array of its elements. Amounts are in the token's base units: convert them with units first.",
+	}, encodeCalldata)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "address",
 		Description: "Read an Ethereum address, 0x hex in any case or 20 bytes base64, and give its EIP-55 checksummed form, its base64 form, and whether a mixed-case input's checksum is valid.",
@@ -316,6 +323,52 @@ func standardsFor(sel []byte) []reading {
 		}
 	}
 	return out
+}
+
+type encodeIn struct {
+	Signature string `json:"signature" jsonschema:"the function's signature, such as transfer(address to, uint256 amount)"`
+	Args      []any  `json:"args" jsonschema:"its arguments in order: each a string, or a JSON array for an array or tuple; give integers as strings"`
+}
+
+func encodeCalldata(_ context.Context, _ *mcp.CallToolRequest, in encodeIn) (*mcp.CallToolResult, any, error) {
+	f, err := evmabi.Parse(in.Signature)
+	if err != nil {
+		return nil, nil, err
+	}
+	args := make([]string, len(in.Args))
+	for i, a := range in.Args {
+		if hasNumber(a) {
+			// JSON numbers reach here as float64, which rounds large ones
+			return nil, nil, fmt.Errorf("argument %d: give each integer as a string, such as \"1000000\", so none is rounded", i+1)
+		}
+		switch v := a.(type) {
+		case string:
+			args[i] = v
+		default:
+			// a bool or array, as the JSON evmabi reads it
+			raw, err := json.Marshal(v)
+			if err != nil {
+				return nil, nil, fmt.Errorf("argument %d: %w", i+1, err)
+			}
+			args[i] = string(raw)
+		}
+	}
+	data, err := evmabi.Call(in.Signature, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	return text(fmt.Sprintf("%s\nbase64: %s\nhex: 0x%x\n", signature(f), base64.StdEncoding.EncodeToString(data), data)), nil, nil
+}
+
+// hasNumber is whether v, decoded JSON, holds a number anywhere.
+func hasNumber(v any) bool {
+	switch v := v.(type) {
+	case float64:
+		return true
+	case []any:
+		return slices.ContainsFunc(v, hasNumber)
+	}
+	return false
 }
 
 type addressIn struct {
