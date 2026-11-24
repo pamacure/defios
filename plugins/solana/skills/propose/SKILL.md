@@ -47,5 +47,6 @@ the amounts named there.
 4. **Check what it filled:** the cluster is the one the talk meant and the
    fee payer is the Key's address. When one is not, say so in the talk in
    place of proposing.
-5. **Propose** with `sign_propose` straight away, giving the transactions
-   `chain_fill` returned and your own reason.
+5. **Propose** with `sign_propose` straight away, giving the `draft`
+   `chain_fill` returned and your own reason: the Draft is proposed exactly
+   as filled, with nothing copied.

@@ -21,6 +21,7 @@ import (
 
 	"defios.com/internal/base58"
 	"defios.com/internal/ethrpc"
+	"defios.com/internal/evmabi"
 	"defios.com/internal/jsonrpc"
 	"defios.com/internal/key"
 	"defios.com/internal/network"
@@ -57,6 +58,10 @@ type Note struct {
 	Endpoint string   `json:"endpoint,omitempty"`
 	Filled   []string `json:"filled"`
 	Warning  string   `json:"warning,omitempty"`
+	// Call is an Ethereum intent's call, read back from its encoded data
+	// by the signature it gave: what will be signed. Empty for an intent
+	// that gave data and no call (ADR 0043).
+	Call string `json:"call,omitempty"`
 }
 
 // tx is one input transaction, parsed.
@@ -120,11 +125,20 @@ func Fill(ctx context.Context, k key.Key, nets []network.Network, txs []signreq.
 	if len(txs) == 0 {
 		return Result{}, fmt.Errorf("%w: at least one transaction is required", signreq.ErrInvalid)
 	}
+	txs, calls, err := signreq.Normalize(txs)
+	if err != nil {
+		return Result{}, err
+	}
 	parsed := make([]*tx, len(txs))
 	for i, spec := range txs {
 		t, err := parse(i, spec, nets, k)
 		if err != nil {
 			return Result{}, err
+		}
+		if calls[i] != nil {
+			if t.note.Call, err = describeCall(*calls[i], t.eth.Data); err != nil {
+				return Result{}, t.wrap(err)
+			}
 		}
 		parsed[i] = t
 	}
@@ -211,7 +225,9 @@ func parse(i int, spec signreq.TxSpec, nets []network.Network, k key.Key) (*tx, 
 	switch n.Type {
 	case network.Ethereum:
 		t.eth = &coslv1.EthereumIntent{}
-		err = protojson.Unmarshal(raw, t.eth)
+		if err = protojson.Unmarshal(raw, t.eth); err == nil {
+			err = signreq.CheckUnfilled(t.eth, n.Chain())
+		}
 	case network.Solana:
 		t.sol = &coslv1.SolanaIntent{}
 		err = protojson.Unmarshal(raw, t.sol)
@@ -220,6 +236,20 @@ func parse(i int, spec signreq.TxSpec, nets []network.Network, k key.Key) (*tx, 
 		return nil, t.wrap(fmt.Errorf("%w: %v", signreq.ErrInvalid, err))
 	}
 	return t, nil
+}
+
+// describeCall is data read back as f's call: transfer(address to =
+// 0x60D8…, uint256 amount = 100000), an array or tuple as a JSON array.
+func describeCall(f evmabi.Func, data []byte) (string, error) {
+	vals, err := f.Decode(data)
+	if err != nil {
+		return "", err
+	}
+	parts := f.Params()
+	for i, v := range vals {
+		parts[i] += " = " + v.Arg()
+	}
+	return f.Name + "(" + strings.Join(parts, ", ") + ")", nil
 }
 
 // fillEthereum fills one chain's transactions on one endpoint, failing over

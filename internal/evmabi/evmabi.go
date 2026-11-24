@@ -40,6 +40,16 @@ func (f Func) Signature() string {
 	return f.Name + "(" + strings.Join(f.Inputs, ",") + ")"
 }
 
+// Params are f's parameters as its signature writes them, each its type
+// then its name: "address to", or "address" where it has none.
+func (f Func) Params() []string {
+	out := make([]string, len(f.Inputs))
+	for i, t := range f.Inputs {
+		out[i] = strings.TrimSpace(t + " " + f.Names[i])
+	}
+	return out
+}
+
 // Selector is the first 4 bytes of the Keccak-256 of f's Signature.
 func (f Func) Selector() []byte {
 	h := sha3.NewLegacyKeccak256()

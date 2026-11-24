@@ -864,3 +864,14 @@ func programAddress(seeds [][]byte, programID string) ([]byte, bool) {
 	}
 	return nil, false
 }
+
+// hasNumber is whether v, decoded JSON, holds a number anywhere.
+func hasNumber(v any) bool {
+	switch v := v.(type) {
+	case float64:
+		return true
+	case []any:
+		return slices.ContainsFunc(v, hasNumber)
+	}
+	return false
+}

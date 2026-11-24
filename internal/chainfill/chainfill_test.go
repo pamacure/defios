@@ -2,6 +2,7 @@ package chainfill_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -462,6 +463,12 @@ func TestRefusesWhatSignProposeWould(t *testing.T) {
 		"wrong type":     {ethKey, `[{"network":"eth","solana":{}}]`, signreq.ErrInvalid},
 		"bad json":       {ethKey, `[{"network":"eth","ethereum":{"nonce":"x"}}]`, signreq.ErrInvalid},
 		"none":           {ethKey, `[]`, signreq.ErrInvalid},
+		// an intent sign_propose would refuse, refused before the chain is read
+		"short to":      {ethKey, `[{"network":"eth","ethereum":{"to":"0x0102"}}]`, signreq.ErrInvalid},
+		"bad value":     {ethKey, `[{"network":"eth","ethereum":{"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","value":"1e18"}}]`, signreq.ErrInvalid},
+		"zero fee cap":  {ethKey, `[{"network":"eth","ethereum":{"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","maxFeePerGas":"0"}}]`, signreq.ErrInvalid},
+		"other chain":   {ethKey, `[{"network":"eth","ethereum":{"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","chainId":"5"}}]`, signreq.ErrInvalid},
+		"call and data": {ethKey, `[{"network":"eth","ethereum":{"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","data":"","call":{"signature":"f()","args":[]}}}]`, signreq.ErrInvalid},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := chainfill.Fill(context.Background(), tc.k, nets, txs(t, tc.in), at())
@@ -469,5 +476,38 @@ func TestRefusesWhatSignProposeWould(t *testing.T) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+// A call is encoded before the chain is read, so the estimate is of the
+// call, and its note decodes the encoded data back by its signature.
+func TestEthereumFillsACallAndNotesItDecoded(t *testing.T) {
+	url, calls := ethNode(t)
+	in := txs(t, `[{"network":"eth","ethereum":{"to":"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48","value":"0",`+
+		`"call":{"signature":"transfer(address to, uint256 amount)","args":["0x60d8c2d6a6b6d7e36d1b2f1e3b11a02f3b1309e5","100000"]}}}]`)
+	res, err := chainfill.Fill(context.Background(), ethKey, nets, in, at(url))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := intent(t, res.Transactions[0].Ethereum)
+	const data = "a9059cbb00000000000000000000000060d8c2d6a6b6d7e36d1b2f1e3b11a02f3b1309e500000000000000000000000000000000000000000000000000000000000186a0"
+	if got["call"] != nil || got["to"] != "oLhpkcYhizbB0Z1KLp6wzjYG60g=" {
+		t.Errorf("intent %v", got)
+	}
+	if raw, _ := base64.StdEncoding.DecodeString(got["data"].(string)); hex.EncodeToString(raw) != data {
+		t.Errorf("data %x, want %s", raw, data)
+	}
+	if want := "transfer(address to = 0x60d8c2D6A6B6d7e36D1b2f1E3b11a02f3B1309E5, uint256 amount = 100000)"; res.Notes[0].Call != want {
+		t.Errorf("note call %q, want %q", res.Notes[0].Call, want)
+	}
+	for _, c := range *calls {
+		if c.Method == "eth_estimateGas" && c.Params[0].(map[string]any)["data"] != "0x"+data {
+			t.Errorf("estimated %v", c.Params[0])
+		}
+	}
+	// A transaction that gave data has no call to show.
+	res, err = chainfill.Fill(context.Background(), ethKey, nets, txs(t, `[{"network":"eth","ethereum":{"to":"AQIDBAUGBwgJCgsMDQ4PEBESExQ=","data":"0x`+data+`"}}]`), at(url))
+	if err != nil || res.Notes[0].Call != "" {
+		t.Errorf("data note %+v, err %v", res.Notes[0], err)
 	}
 }

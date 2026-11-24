@@ -249,7 +249,8 @@ type server struct {
 	ctx       context.Context   // Run's, set before any handler runs; bounds the join
 	started   time.Time         // when Run began, for `node usage` uptime
 
-	holds aliasHolds // Key aliases waiting on a mint, from session accept --alias
+	holds  aliasHolds // Key aliases waiting on a mint, from session accept --alias
+	drafts drafts     // what chain_fill completed, for sign_propose (ADR 0043)
 
 	replicaMu sync.Mutex
 	replica   *raftx.Replica // nil until the Group is valid

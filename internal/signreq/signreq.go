@@ -102,7 +102,11 @@ func Build(spec Spec, nets []network.Network) (*coslv1.SignRequest, error) {
 	if out.DeadlineSeconds == 0 {
 		out.DeadlineSeconds = DefaultDeadlineSeconds
 	}
-	for i, t := range spec.Transactions {
+	txs, _, err := Normalize(spec.Transactions)
+	if err != nil {
+		return nil, err
+	}
+	for i, t := range txs {
 		n, err := network.Get(nets, t.Network)
 		if err != nil {
 			return nil, err
@@ -237,7 +241,7 @@ func Validate(r *coslv1.SignRequest, k key.Key) error {
 		var err error
 		switch in := tx.Intent.(type) {
 		case *coslv1.SignTransaction_Ethereum:
-			err = checkEthereum(in.Ethereum)
+			err = checkEthereum(in.Ethereum, false)
 		case *coslv1.SignTransaction_Bitcoin:
 			err = checkBitcoin(k, in.Bitcoin)
 		case *coslv1.SignTransaction_Solana:
@@ -250,25 +254,38 @@ func Validate(r *coslv1.SignRequest, k key.Key) error {
 	return nil
 }
 
-func checkEthereum(in *coslv1.EthereumIntent) error {
+// CheckUnfilled is Validate's check of an Ethereum intent on chain c
+// that chain_fill has yet to complete: what it gives must pass, and only
+// what chain_fill fills (and to, which it refuses itself) may be missing.
+// It is not wrapped in ErrInvalid.
+func CheckUnfilled(in *coslv1.EthereumIntent, c network.Chain) error {
+	if in.ChainId != 0 && in.ChainId != c.ChainID {
+		return fmt.Errorf("the intent names chain_id %d", in.ChainId)
+	}
+	return checkEthereum(in, true)
+}
+
+// checkEthereum checks in, complete, or unfilled: lacking its to, gas
+// limit or fees, but with what it gives valid.
+func checkEthereum(in *coslv1.EthereumIntent, unfilled bool) error {
 	switch {
-	case len(in.To) != 20:
+	case len(in.To) != 20 && !(unfilled && len(in.To) == 0):
 		return fmt.Errorf("to must be 20 bytes, got %d", len(in.To))
-	case in.GasLimit == 0:
+	case in.GasLimit == 0 && !unfilled:
 		return errors.New("gas_limit must be > 0")
 	}
 	if _, err := amount(in.Value, true); err != nil {
 		return fmt.Errorf("value %q: %v", in.Value, err)
 	}
-	maxFee, err := amount(in.MaxFeePerGas, false)
-	if err != nil || maxFee.Sign() == 0 {
+	maxFee, err := amount(in.MaxFeePerGas, unfilled)
+	if err != nil || maxFee.Sign() == 0 && !(unfilled && in.MaxFeePerGas == "") {
 		return fmt.Errorf("max_fee_per_gas %q must be an integer > 0 below 2^256", in.MaxFeePerGas)
 	}
 	tip, err := amount(in.MaxPriorityFeePerGas, true)
 	if err != nil {
 		return fmt.Errorf("max_priority_fee_per_gas %q: %v", in.MaxPriorityFeePerGas, err)
 	}
-	if tip.Cmp(maxFee) > 0 {
+	if in.MaxFeePerGas != "" && tip.Cmp(maxFee) > 0 {
 		return errors.New("max_priority_fee_per_gas exceeds max_fee_per_gas")
 	}
 	return nil

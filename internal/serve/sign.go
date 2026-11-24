@@ -86,7 +86,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest, handle
 	// signing Session starts once t Nodes have accepted.
 	if svc := s.sessionLayer(); svc != nil && s.opts.NewSigner != nil {
 		if err := svc.AcceptProposed(signed.MsgID); err != nil {
-			return SendView{}, err
+			return v, err // the request landed all the same
 		}
 	}
 	return v, nil

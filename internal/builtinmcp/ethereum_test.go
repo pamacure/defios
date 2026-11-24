@@ -96,7 +96,7 @@ func TestEthereumTxOffersItsTools(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	if !slices.Equal(names, []string{"address", "decode_calldata", "encode_calldata", "units"}) {
+	if !slices.Equal(names, []string{"address", "decode_calldata", "units"}) {
 		t.Fatalf("tools %v", names)
 	}
 }
@@ -290,31 +290,19 @@ func TestUnits(t *testing.T) {
 	}
 }
 
-// encode_calldata writes the call data a signature and its arguments make,
-// in base64 for an intent and in hex, and decode_calldata reads it back.
-func TestEncodeCalldata(t *testing.T) {
+// decode_calldata reads an intent in the form chain_fill takes it, so a
+// to and data in 0x hex, and a call the Node encodes (ADR 0043).
+func TestDecodeCalldataTakesAnIntentsInputForm(t *testing.T) {
 	cs := ethTx(t)
-	text := ok(t, cs, "encode_calldata", map[string]any{
-		"signature": "transfer(address to, uint256 amount)",
-		"args":      []any{alice, "1000000"},
-	})
-	// transfer's selector, alice's word and 1000000's
-	want, _ := hex.DecodeString("a9059cbb" +
-		"0000000000000000000000005aaeb6053f3e94c9b9a09f33669435e7ef1beaed" +
-		"00000000000000000000000000000000000000000000000000000000000f4240")
-	says(t, text, "base64: "+b64(want), "hex: 0x"+hex.EncodeToString(want))
-	says(t, ok(t, cs, "decode_calldata", map[string]any{"data": b64(want)}), "transfer", alice, "1000000")
-	// an array is a JSON array of strings
-	says(t, ok(t, cs, "encode_calldata", map[string]any{"signature": "f(uint256[] xs)", "args": []any{[]any{"1", "2"}}}), "f(uint256[] xs)", "hex: 0x")
-	for _, args := range []map[string]any{
-		{"signature": "transfer(address,uint256)", "args": []any{alice}},
-		{"signature": "transfer(address,uint256)", "args": []any{"0x1234", "1"}},
-		{"signature": "nope", "args": []any{}},
-		{"signature": "transfer(address,uint256)", "args": []any{alice, 9007199254740993}},
-		{"signature": "f(uint256[])", "args": []any{[]any{1, 2}}},
-	} {
-		if text, failed := call(t, cs, "encode_calldata", args); !failed {
-			t.Errorf("%v was taken: %s", args, text)
-		}
+	says(t, ok(t, cs, "decode_calldata", map[string]any{"intent": map[string]any{
+		"to": bob, "value": "0", "data": "0x" + hex.EncodeToString(calldata(t, "transfer(address,uint256)", alice, "9")),
+	}}), "ERC-20 transfer", "amount (uint256): 9")
+	says(t, ok(t, cs, "decode_calldata", map[string]any{"intent": map[string]any{
+		"to": bob, "call": map[string]any{"signature": "transfer(address to, uint256 amount)", "args": []any{alice, "1000000"}},
+	}}), "ERC-20 transfer", alice, "amount (uint256): 1000000")
+	if text, failed := call(t, cs, "decode_calldata", map[string]any{"intent": map[string]any{
+		"to": bob, "call": map[string]any{"signature": "transfer(address,uint256)", "args": []any{alice, 9}},
+	}}); !failed {
+		t.Errorf("a number argument was taken: %s", text)
 	}
 }

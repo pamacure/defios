@@ -96,7 +96,7 @@ defios conversation send "@auditor, introduce yourself"
 # Sign an Ethereum transfer (each machine adds the Network)
 defios secret set ETH_RPC
 defios network add mainnet --type ethereum --chain-id 1 --rpc-url '$ETH_RPC'
-echo '[{"network": "mainnet", "ethereum": {"to": "<base64 20 bytes>", "value": "1000"}}]' \
+echo '[{"network": "mainnet", "ethereum": {"to": "0x<address>", "value": "1000"}}]' \
   | defios sign fill --key ecdsa:<hex> --transactions - > tx.json
 defios sign propose --key ecdsa:<hex> --reason "pay the invoice" --transactions tx.json   # on A
 defios sign accept <msg-id>                                                               # on B

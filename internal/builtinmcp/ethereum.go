@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -17,6 +16,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"defios.com/internal/evmabi"
+	"defios.com/internal/signreq"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -28,17 +28,11 @@ func ethereumTx() *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "decode_calldata",
 		Description: "Decode an Ethereum transaction's call data into its function and named, typed arguments. " +
-			"Give the intent as sign_propose takes it (protobuf-JSON, bytes base64), or its data (0x hex or base64) and optionally value. " +
+			"Give the intent as chain_fill takes it (protobuf-JSON, bytes 0x hex or base64, or a call in place of data), or its data (0x hex or base64) and optionally value. " +
 			"With a signature or ABI, it decodes as that function. With neither, it recognises ERC-20, ERC-721, ERC-1155 and Permit2 calls by selector; " +
 			"a selector shared by standards gives every reading, and an unknown one is said to be unknown. " +
 			"It knows no protocol's own contracts (routers etc.): give their signature or ABI. Approvals of the maximum amount, and setApprovalForAll(true), are marked unlimited.",
 	}, decodeCalldata)
-	mcp.AddTool(s, &mcp.Tool{
-		Name: "encode_calldata",
-		Description: "Encode a contract call's data from the function's signature and its arguments, for an Ethereum intent's data: " +
-			"base64, as an intent holds it, and 0x hex. An address or bytes is 0x hex, an integer decimal or 0x hex, a bool true or false, " +
-			"a string itself; an array or tuple is a JSON array of its elements. Amounts are in the token's base units: convert them with units first.",
-	}, encodeCalldata)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "address",
 		Description: "Read an Ethereum address, 0x hex in any case or 20 bytes base64, and give its EIP-55 checksummed form, its base64 form, and whether a mixed-case input's checksum is valid.",
@@ -52,7 +46,7 @@ func ethereumTx() *mcp.Server {
 }
 
 type decodeIn struct {
-	Intent    any    `json:"intent,omitempty" jsonschema:"an Ethereum intent as sign_propose takes it: protobuf-JSON, to and data base64, value decimal wei"`
+	Intent    any    `json:"intent,omitempty" jsonschema:"an Ethereum intent as chain_fill takes it: protobuf-JSON, to and data 0x hex or base64, or a call in place of data; value decimal wei"`
 	Data      string `json:"data,omitempty" jsonschema:"call data, 0x hex or base64, when no intent is given"`
 	Value     string `json:"value,omitempty" jsonschema:"wei sent with the call, decimal, when no intent is given"`
 	Signature string `json:"signature,omitempty" jsonschema:"the function's signature, such as transfer(address to, uint256 amount)"`
@@ -157,9 +151,12 @@ func (in decodeIn) call() (data []byte, value string, to []byte, err error) {
 	if err != nil {
 		return nil, "", nil, err
 	}
+	if raw, _, err = signreq.NormalizeEthereum(raw); err != nil {
+		return nil, "", nil, err
+	}
 	var intent coslv1.EthereumIntent
 	if err := protojson.Unmarshal(raw, &intent); err != nil {
-		return nil, "", nil, fmt.Errorf("the intent is not an Ethereum intent as sign_propose takes it: %w", err)
+		return nil, "", nil, fmt.Errorf("the intent is not an Ethereum intent as chain_fill takes it: %w", err)
 	}
 	return intent.Data, intent.Value, intent.To, nil
 }
@@ -195,11 +192,7 @@ func abiFuncs(abi any) ([]evmabi.Func, error) {
 
 // signature is f with its parameters' names: transfer(address to, uint256 amount).
 func signature(f evmabi.Func) string {
-	parts := make([]string, len(f.Inputs))
-	for i, t := range f.Inputs {
-		parts[i] = strings.TrimSpace(t + " " + f.Names[i])
-	}
-	return f.Name + "(" + strings.Join(parts, ", ") + ")"
+	return f.Name + "(" + strings.Join(f.Params(), ", ") + ")"
 }
 
 // render writes f's decoded arguments, one per line, marking an unlimited
@@ -323,52 +316,6 @@ func standardsFor(sel []byte) []reading {
 		}
 	}
 	return out
-}
-
-type encodeIn struct {
-	Signature string `json:"signature" jsonschema:"the function's signature, such as transfer(address to, uint256 amount)"`
-	Args      []any  `json:"args" jsonschema:"its arguments in order: each a string, or a JSON array for an array or tuple; give integers as strings"`
-}
-
-func encodeCalldata(_ context.Context, _ *mcp.CallToolRequest, in encodeIn) (*mcp.CallToolResult, any, error) {
-	f, err := evmabi.Parse(in.Signature)
-	if err != nil {
-		return nil, nil, err
-	}
-	args := make([]string, len(in.Args))
-	for i, a := range in.Args {
-		if hasNumber(a) {
-			// JSON numbers reach here as float64, which rounds large ones
-			return nil, nil, fmt.Errorf("argument %d: give each integer as a string, such as \"1000000\", so none is rounded", i+1)
-		}
-		switch v := a.(type) {
-		case string:
-			args[i] = v
-		default:
-			// a bool or array, as the JSON evmabi reads it
-			raw, err := json.Marshal(v)
-			if err != nil {
-				return nil, nil, fmt.Errorf("argument %d: %w", i+1, err)
-			}
-			args[i] = string(raw)
-		}
-	}
-	data, err := evmabi.Call(in.Signature, args)
-	if err != nil {
-		return nil, nil, err
-	}
-	return text(fmt.Sprintf("%s\nbase64: %s\nhex: 0x%x\n", signature(f), base64.StdEncoding.EncodeToString(data), data)), nil, nil
-}
-
-// hasNumber is whether v, decoded JSON, holds a number anywhere.
-func hasNumber(v any) bool {
-	switch v := v.(type) {
-	case float64:
-		return true
-	case []any:
-		return slices.ContainsFunc(v, hasNumber)
-	}
-	return false
 }
 
 type addressIn struct {

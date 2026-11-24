@@ -378,6 +378,9 @@ stdout, ready for sign propose --transactions -; what was filled, and from where
 					from = " from " + n.Endpoint
 				}
 				fmt.Fprintf(g.app.Stderr, "transaction %d (%s, %s): filled %s%s\n", n.Index, n.Network, n.Chain, filled, from)
+				if n.Call != "" {
+					fmt.Fprintf(g.app.Stderr, "transaction %d: calls %s\n", n.Index, n.Call)
+				}
 				if n.Warning != "" {
 					fmt.Fprintf(g.app.Stderr, "transaction %d: %s\n", n.Index, n.Warning)
 				}

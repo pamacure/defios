@@ -7,13 +7,18 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"defios.com/internal/chainfill"
 	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/signreq"
+	coslv1 "defios.com/proto/cosl/v1"
 )
 
 // generator is the secp256k1 generator, compressed: a Key with an
@@ -60,18 +65,20 @@ func fillPair(t *testing.T, tools string) (a *node, provider *fakeProvider, conv
 const partialEth = `[{"network":"eth","ethereum":{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000"}}]`
 
 // sign fill completes a transaction from the Key's Network, which sign
-// propose then takes; Bitcoin is refused with its own kind.
+// propose then takes, as `sign fill | sign propose` pipes it: a call is
+// encoded, and the proposal carries its data. Bitcoin is refused with its
+// own kind.
 func TestSignFillCompletesForSignPropose(t *testing.T) {
 	a, _, _ := fillPair(t, `["talk_write"]`)
 	ctx := context.Background()
 	ref := "ecdsa:" + hex.EncodeToString(generator)
-	var txs []signreq.TxSpec
-	json.Unmarshal([]byte(partialEth), &txs)
+	txs := []signreq.TxSpec{{Network: "eth", Ethereum: json.RawMessage(`{"to":"0x0000000000000000000000000000000000000000","value":"1000",` +
+		`"call":{"signature":"approve(address,uint256)","args":["0x0000000000000000000000000000000000000001","7"]}}`)}}
 	res, err := a.client().SignFill(ctx, ref, txs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := res.Notes[0]; len(n.Filled) != 5 || n.Chain != "ethereum chain 1" || n.Endpoint == "" {
+	if n := res.Notes[0]; len(n.Filled) != 5 || n.Chain != "ethereum chain 1" || n.Endpoint == "" || n.Call != "approve(address = 0x0000000000000000000000000000000000000001, uint256 = 7)" {
 		t.Errorf("note %+v", n)
 	}
 	v, err := a.client().SignPropose(ctx, ref, signreq.Spec{Reason: "pay", Transactions: res.Transactions}, "")
@@ -80,7 +87,7 @@ func TestSignFillCompletesForSignPropose(t *testing.T) {
 	}
 	d := waitSign(t, a, v.MsgID, func(signreq.Detail) bool { return true })
 	lines := strings.Join(d.Details[0].Lines, "\n")
-	for _, want := range []string{"nonce 5", "gas_limit 21000", "max_fee_per_gas 21000000000", "max_priority_fee_per_gas 1000000000"} {
+	for _, want := range []string{"nonce 5", "gas_limit 21000", "max_fee_per_gas 21000000000", "max_priority_fee_per_gas 1000000000", "data 0x095ea7b3"} {
 		if !strings.Contains(lines, want) {
 			t.Errorf("proposed %s, lacking %q", lines, want)
 		}
@@ -91,26 +98,54 @@ func TestSignFillCompletesForSignPropose(t *testing.T) {
 	}
 }
 
-// An agent granted chain_fill fills a partial transaction, then proposes
-// what it returned. chain_fill is offered only in a Key's Conversation
-// and, writing nothing, is not an acted line.
-func TestAnAgentFillsThenProposes(t *testing.T) {
+// toolResult is the JSON a Tool answered, from the turn that carried it.
+func toolResult(t *testing.T, turn string) map[string]any {
+	t.Helper()
+	m := regexp.MustCompile(`"content":"((?:[^"\\]|\\.)*)"`).FindStringSubmatch(turn)
+	if m == nil {
+		t.Fatalf("no tool result in %s", turn)
+	}
+	var text string
+	json.Unmarshal([]byte(`"`+m[1]+`"`), &text)
+	var v map[string]any
+	if err := json.Unmarshal([]byte(text), &v); err != nil {
+		t.Fatalf("tool result %q: %v", text, err)
+	}
+	return v
+}
+
+// An agent granted chain_fill describes a contract call, fills it, and
+// proposes the Draft it got by its id: what is proposed is what was filled,
+// bytes and all, with nothing copied. chain_fill is offered only in a Key's
+// Conversation and, writing nothing, is not an acted line. A refused
+// proposal leaves the Draft; a successful one uses it up, and an id that
+// is no Draft's is refused.
+func TestAnAgentFillsThenProposesTheDraft(t *testing.T) {
 	a, provider, conv := fillPair(t, `["talk_write", "sign_propose", "chain_fill"]`)
-	var filled string
+	var draft string
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		streamParts(w)
+		if n == 2 {
+			draft, _ = toolResult(t, lastTurn(provider.seen()[1]))["draft"].(string)
+		}
 		switch n {
 		case 1:
-			endCall(w, "chain_fill", `{"transactions":`+partialEth+`}`)
+			endCall(w, "chain_fill", `{"transactions":[{"network":"eth","ethereum":{"to":"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48","value":"0",`+
+				`"call":{"signature":"transfer(address to, uint256 amount)","args":["0x60d8c2D6A6B6d7e36D1b2f1E3b11a02f3B1309E5","100000"]}}}]}`)
 		case 2:
-			endCall(w, "sign_propose", `{"reason":"pay invoice 7","transactions":`+filled+`}`)
+			endCall(w, "sign_propose", `{"reason":" ","draft":"`+draft+`"}`) // refused: no reason
+		case 3:
+			endCall(w, "sign_propose", `{"reason":"pay invoice 7","draft":"nope"}`)
+		case 4:
+			endCall(w, "sign_propose", `{"reason":"pay invoice 7","draft":"`+draft+`","transactions":`+partialEth+`}`)
+		case 5:
+			endCall(w, "sign_propose", `{"reason":"pay invoice 7","draft":"`+draft+`"}`)
+		case 6:
+			endCall(w, "sign_propose", `{"reason":"pay invoice 7","draft":"`+draft+`"}`) // used up
 		default:
 			endTalkWrite(w, "proposed")
 		}
 	})
-	// The model would copy the transactions from chain_fill's result; the
-	// fake copies what that result must be.
-	filled = `[{"network":"eth","ethereum":{"chainId":"1","gasLimit":"21000","maxFeePerGas":"21000000000","maxPriorityFeePerGas":"1000000000","nonce":"5","to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000"}}]`
 	chain, got := summonIn(t, a, conv, "@auditor pay invoice 7")
 	if !strings.HasSuffix(got, "commit:proposed end") {
 		t.Fatalf("events = %s", got)
@@ -119,19 +154,37 @@ func TestAnAgentFillsThenProposes(t *testing.T) {
 	if calls[0].Tools != "talk_write sign_propose chain_fill" {
 		t.Errorf("tools offered %q", calls[0].Tools)
 	}
-	answered := lastTurn(calls[1])
-	if strings.Contains(answered, `"is_error":true`) {
-		t.Fatalf("chain_fill answered %s", answered)
+	filled := toolResult(t, lastTurn(calls[1]))
+	if draft == "" || filled["draft"] != draft {
+		t.Fatalf("chain_fill answered %s", lastTurn(calls[1]))
 	}
-	compact, _ := json.Marshal(filled)
-	if want := strings.Trim(string(compact), `"`); !strings.Contains(answered, want) || !strings.Contains(answered, `\"filled\":[\"chainId\",\"nonce\"`) {
-		t.Errorf("chain_fill answered %s, want %s", answered, want)
+	note := filled["notes"].([]any)[0].(map[string]any)
+	if note["call"] != "transfer(address to = 0x60d8c2D6A6B6d7e36D1b2f1E3b11a02f3B1309E5, uint256 amount = 100000)" {
+		t.Errorf("note %v", note)
 	}
-	if proposed := lastTurn(calls[2]); strings.Contains(proposed, `"is_error":true`) || !strings.Contains(proposed, `\"seq\":`) {
+	for i, want := range map[int]string{2: "reason is required", 3: `no Draft \"nope\"`, 4: "transactions or a draft, not both", 6: "no Draft"} {
+		if turn := lastTurn(calls[i]); !strings.Contains(turn, `"is_error":true`) || !strings.Contains(turn, want) {
+			t.Errorf("call %d answered %s, want an error saying %s", i, turn, want)
+		}
+	}
+	proposed := lastTurn(calls[5])
+	if strings.Contains(proposed, `"is_error":true`) {
 		t.Fatalf("sign_propose answered %s", proposed)
 	}
 	if got := actedWords(convTranscript(t, a, conv, chain)); len(got) != 1 || !strings.HasPrefix(got[0], "sign_propose ") {
-		t.Errorf("acted lines = %q", got)
+		t.Fatalf("acted lines = %q", got)
+	}
+	d := waitSign(t, a, toolResult(t, proposed)["msg_id"].(string), func(signreq.Detail) bool { return true })
+	raw, _ := json.Marshal(filled["transactions"].([]any)[0].(map[string]any)["ethereum"])
+	var want, have coslv1.EthereumIntent
+	if err := protojson.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := protojson.Unmarshal(d.Details[0].Intent, &have); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(&want, &have) || len(have.Data) != 68 || have.Nonce != 5 {
+		t.Errorf("proposed %v, filled %v", &have, &want)
 	}
 }
 
