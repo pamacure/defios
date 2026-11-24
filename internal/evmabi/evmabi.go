@@ -1,6 +1,8 @@
 // Package evmabi encodes an Ethereum contract call as the Solidity ABI lays
 // it out, from the function's signature and its arguments written out as
-// text: what a person types to call a contract without its ABI file.
+// text: what a person types to call a contract without its ABI file. It
+// decodes call data back into those arguments, by a signature or a JSON
+// ABI's functions, and writes addresses in their EIP-55 form.
 //
 // An argument of an elementary type is its value as text: an address and
 // bytes as 0x hex, an integer in decimal or 0x hex, a bool as true or
@@ -28,7 +30,9 @@ type Func struct {
 	// Inputs are its parameters' types, canonical: uint for uint256, no
 	// names or data locations.
 	Inputs []string
-	types  []*typ
+	// Names are its parameters' names, "" where the signature gives none.
+	Names []string
+	types []*typ
 }
 
 // Signature is f as its selector is taken of: name(type,type).
@@ -58,12 +62,13 @@ func Parse(sig string) (Func, error) {
 		return Func{}, errors.New("the signature needs a function name before its (")
 	}
 	for _, p := range splitTop(s[open+1 : len(s)-1]) {
-		t, err := param(p)
+		t, name, err := param(p)
 		if err != nil {
 			return Func{}, err
 		}
 		f.types = append(f.types, t)
 		f.Inputs = append(f.Inputs, t.String())
+		f.Names = append(f.Names, name)
 	}
 	return f, nil
 }
@@ -113,6 +118,7 @@ type typ struct {
 	elem   *typ
 	length int // of an array; -1 when dynamic
 	comps  []*typ
+	names  []string // of a tuple's components, "" where unnamed
 }
 
 func (t *typ) String() string {
@@ -176,9 +182,11 @@ func (t *typ) headSize() int {
 	return 32
 }
 
-// param is a parameter's type, dropping any name and data location after it.
-func param(p string) (*typ, error) {
+// param is a parameter's type and name, dropping any data location: the
+// name is the last word after the type, unless that is a data location.
+func param(p string) (*typ, string, error) {
 	p = strings.TrimSpace(p)
+	rest := ""
 	depth := 0
 	for i, r := range p {
 		switch r {
@@ -188,14 +196,26 @@ func param(p string) (*typ, error) {
 			depth--
 		}
 		if depth == 0 && unicode.IsSpace(r) {
-			p = p[:i]
+			p, rest = p[:i], p[i:]
 			break
 		}
 	}
 	if p == "" {
-		return nil, errors.New("the signature has an empty parameter")
+		return nil, "", errors.New("the signature has an empty parameter")
 	}
-	return parseType(p)
+	t, err := parseType(p)
+	if err != nil {
+		return nil, "", err
+	}
+	name := ""
+	if words := strings.Fields(rest); len(words) > 0 {
+		switch last := words[len(words)-1]; last {
+		case "memory", "calldata", "storage", "indexed", "payable":
+		default:
+			name = last
+		}
+	}
+	return t, name, nil
 }
 
 func parseType(s string) (*typ, error) {
@@ -220,11 +240,12 @@ func parseType(s string) (*typ, error) {
 	if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") && balanced(s) {
 		t := &typ{kind: kTuple}
 		for _, p := range splitTop(s[1 : len(s)-1]) {
-			c, err := param(p)
+			c, name, err := param(p)
 			if err != nil {
 				return nil, err
 			}
 			t.comps = append(t.comps, c)
+			t.names = append(t.names, name)
 		}
 		if len(t.comps) == 0 {
 			return nil, errors.New("a tuple needs at least one component")
