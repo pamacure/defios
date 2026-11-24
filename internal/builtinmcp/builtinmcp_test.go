@@ -3,11 +3,13 @@ package builtinmcp_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"defios.com/internal/builtinmcp"
+	"defios.com/internal/network"
 	"defios.com/internal/plugin"
 )
 
@@ -67,6 +69,51 @@ func TestEveryBuiltInServerIsDeclaredAndImplemented(t *testing.T) {
 	for ref := range builtinmcp.Servers {
 		if !declared[ref] {
 			t.Errorf("built-in MCP Server %s is declared by no built-in Plugin", ref)
+		}
+	}
+}
+
+// Every built-in Plugin but defios is a chain Plugin, named exactly as a
+// Network type and offering the MCP Server tx, and every Network type has
+// one (ADR 0042). The Skills review-sign-request and propose are checked for
+// in a chain Plugin only once it has Skills, as their tickets land.
+func TestEveryChainPluginOffersTheSameItems(t *testing.T) {
+	all, err := plugin.All(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]bool{}
+	for _, typ := range network.Types() {
+		types[typ] = false
+	}
+	for _, p := range all {
+		if p.Name == "defios" {
+			continue
+		}
+		if _, ok := types[p.Name]; !ok {
+			t.Errorf("built-in Plugin %s is named after no Network type", p.Name)
+			continue
+		}
+		types[p.Name] = true
+		if !slices.Contains(p.ServerNames(), "tx") {
+			t.Errorf("built-in Plugin %s offers MCP Servers %v, missing tx", p.Name, p.ServerNames())
+		}
+		if len(p.Skills) == 0 {
+			continue
+		}
+		var skills []string
+		for _, s := range p.Skills {
+			skills = append(skills, s.Name)
+		}
+		for _, want := range []string{"propose", "review-sign-request"} {
+			if !slices.Contains(skills, want) {
+				t.Errorf("built-in Plugin %s offers Skills %v, missing %s", p.Name, skills, want)
+			}
+		}
+	}
+	for typ, ok := range types {
+		if !ok {
+			t.Errorf("Network type %s has no built-in Plugin", typ)
 		}
 	}
 }

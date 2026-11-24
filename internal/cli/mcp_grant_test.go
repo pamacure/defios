@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"defios.com/internal/config"
+	"defios.com/internal/network"
 	"defios.com/internal/nodedir"
 )
 
@@ -125,5 +126,26 @@ func TestMCPCommandRefusesAnUnknownBuiltInServer(t *testing.T) {
 	}
 	if r := run(t, nil, "", "--help"); strings.Contains(r.stdout, "\n  mcp ") {
 		t.Fatalf("help lists mcp:\n%s", r.stdout)
+	}
+}
+
+// Each chain's built-in Plugin is listed, and its tx MCP Server can be
+// granted (ADR 0042).
+func TestChainPluginsAreListedAndTheirTxServersGranted(t *testing.T) {
+	dir := agentGroup(t)
+	if r := run(t, nil, "", "--dir", dir, "agent", "add", "reviewer", "--provider", "claude"); r.code != 0 {
+		t.Fatalf("add: exit %d: %s", r.code, r.stderr)
+	}
+	listed := listPlugins(t, dir)
+	var granted string
+	for _, chain := range network.Types() {
+		if p, ok := listed[chain]; !ok || !p.BuiltIn {
+			t.Errorf("plugin list: %s = %#v, %v", chain, p, ok)
+		}
+		ref := chain + "/tx"
+		granted += ref + "\n"
+		if r := run(t, nil, "", "--dir", dir, "agent", "grant", "reviewer", ref); r.code != 0 || r.stdout != granted {
+			t.Errorf("grant %s: exit %d, stdout %q, stderr %q", ref, r.code, r.stdout, r.stderr)
+		}
 	}
 }

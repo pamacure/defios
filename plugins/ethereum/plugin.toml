@@ -1,0 +1,7 @@
+name = "ethereum"
+version = "0.1.0"
+description = "DeFiOS's own Plugin for working on Ethereum Networks."
+
+[mcp.tx]
+command = "defios"
+args = ["mcp", "ethereum/tx"]

@@ -47,6 +47,9 @@ var (
 // BitcoinNetworks are the networks a bitcoin Network may name.
 func BitcoinNetworks() []string { return slices.Clone(bitcoinNetworks) }
 
+// Types are the Network types.
+func Types() []string { return []string{Bitcoin, Ethereum, Solana} }
+
 // SolanaClusters are the clusters a solana Network may name.
 func SolanaClusters() []string { return slices.Clone(solanaClusters) }
 

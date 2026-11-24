@@ -1,0 +1,7 @@
+name = "solana"
+version = "0.1.0"
+description = "DeFiOS's own Plugin for working on Solana Networks."
+
+[mcp.tx]
+command = "defios"
+args = ["mcp", "solana/tx"]
