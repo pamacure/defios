@@ -143,10 +143,7 @@ func OutputScript(net, address string) ([]byte, error) {
 	if !bytes.Equal(sum[:4], raw[21:]) {
 		return nil, fmt.Errorf("address %q has a bad checksum", address)
 	}
-	p2pkh, p2sh := byte(0x00), byte(0x05)
-	if net != "mainnet" {
-		p2pkh, p2sh = 0x6f, 0xc4
-	}
+	p2pkh, p2sh := base58Versions(net)
 	switch raw[0] {
 	case p2pkh:
 		return append(append([]byte{0x76, 0xa9, 0x14}, raw[1:21]...), 0x88, 0xac), nil
@@ -235,16 +232,76 @@ func P2WPKHScript(publicKey []byte) []byte {
 // a Key's compressed public key (BIP-173): where that Key receives and the
 // one address it spends from.
 func BitcoinAddress(net string, publicKey []byte) (string, error) {
+	if len(publicKey) != 33 {
+		return "", fmt.Errorf("a P2WPKH address needs a 33-byte compressed public key, not %d bytes", len(publicKey))
+	}
+	return ScriptAddress(net, P2WPKHScript(publicKey))
+}
+
+// ScriptAddress is the address on the bitcoin network net that pays script,
+// the inverse of OutputScript: P2PKH and P2SH in base58check, witness v0
+// (20 or 32 bytes) in bech32 and v1 (P2TR, 32 bytes) in bech32m. A script
+// of any other form has no address.
+func ScriptAddress(net string, script []byte) (string, error) {
 	hrp, ok := bitcoinHRP[net]
 	if !ok {
 		return "", fmt.Errorf("unknown bitcoin network %q", net)
 	}
-	if len(publicKey) != 33 {
-		return "", fmt.Errorf("a P2WPKH address needs a 33-byte compressed public key, not %d bytes", len(publicKey))
+	p2pkh, p2sh := base58Versions(net)
+	switch ScriptType(script) {
+	case "P2PKH":
+		return base58check(p2pkh, script[3:23]), nil
+	case "P2SH":
+		return base58check(p2sh, script[2:22]), nil
+	case "P2WPKH", "P2WSH":
+		return segwitAddress(hrp, 0, script[2:]), nil
+	case "P2TR":
+		return segwitAddress(hrp, 1, script[2:]), nil
 	}
-	data := []byte{0} // witness version 0
+	return "", errors.New("the script is not P2PKH, P2SH, P2WPKH, P2WSH or P2TR, so has no address")
+}
+
+// ScriptType names the standard form of an output script: P2PKH, P2SH,
+// P2WPKH, P2WSH or P2TR, or "" for any other.
+func ScriptType(script []byte) string {
+	n := len(script)
+	switch {
+	case n == 25 && bytes.HasPrefix(script, []byte{0x76, 0xa9, 0x14}) && bytes.HasSuffix(script, []byte{0x88, 0xac}):
+		return "P2PKH"
+	case n == 23 && bytes.HasPrefix(script, []byte{0xa9, 0x14}) && script[22] == 0x87:
+		return "P2SH"
+	case n == 22 && script[0] == 0x00 && script[1] == 0x14:
+		return "P2WPKH"
+	case n == 34 && script[0] == 0x00 && script[1] == 0x20:
+		return "P2WSH"
+	case n == 34 && script[0] == 0x51 && script[1] == 0x20:
+		return "P2TR"
+	}
+	return ""
+}
+
+// base58Versions are the P2PKH and P2SH version bytes of net's base58check
+// addresses: mainnet's, or the one pair every test network shares.
+func base58Versions(net string) (p2pkh, p2sh byte) {
+	if net == "mainnet" {
+		return 0x00, 0x05
+	}
+	return 0x6f, 0xc4
+}
+
+// base58check is version, payload and their checksum, in base58.
+func base58check(version byte, payload []byte) string {
+	b := append([]byte{version}, payload...)
+	sum := doubleSHA(b)
+	return base58.Encode(append(b, sum[:4]...))
+}
+
+// segwitAddress is the segwit address under hrp of a witness program:
+// bech32 for version 0 (BIP-173), bech32m for 1 and later (BIP-350).
+func segwitAddress(hrp string, version byte, program []byte) string {
+	data := []byte{version}
 	var acc, bits uint32
-	for _, b := range P2WPKHScript(publicKey)[2:] {
+	for _, b := range program {
 		acc, bits = acc<<8|uint32(b), bits+8
 		for ; bits >= 5; bits -= 5 {
 			data = append(data, byte(acc>>(bits-5)&31))
@@ -261,7 +318,11 @@ func BitcoinAddress(net string, publicKey []byte) (string, error) {
 	for _, c := range hrp {
 		values = append(values, byte(c&31))
 	}
-	polymod := bech32Polymod(append(append(values, data...), 0, 0, 0, 0, 0, 0)) ^ 1
+	constant := uint32(1)
+	if version > 0 {
+		constant = 0x2bc830a3
+	}
+	polymod := bech32Polymod(append(append(values, data...), 0, 0, 0, 0, 0, 0)) ^ constant
 	var out strings.Builder
 	out.WriteString(hrp + "1")
 	for _, d := range data {
@@ -270,7 +331,7 @@ func BitcoinAddress(net string, publicKey []byte) (string, error) {
 	for i := range 6 {
 		out.WriteByte(bech32Charset[polymod>>(5*(5-i))&31])
 	}
-	return out.String(), nil
+	return out.String()
 }
 
 // AssembleBitcoin is the broadcastable segwit transaction for intent in on net,
