@@ -24,12 +24,14 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"defios.com/desktop/internal/prefs"
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/builtinmcp"
 	"defios.com/internal/node"
 	"defios.com/internal/nodedir"
 )
@@ -47,6 +49,15 @@ var appIcon []byte
 const loginFlag = "--login"
 
 func main() {
+	// The serve runs a built-in Plugin's MCP Server as this binary, `<exe>
+	// mcp <plugin>/<server>` (ADR 0030): serve it over stdio, as `defios
+	// mcp` does, rather than open a second app.
+	if len(os.Args) == 3 && os.Args[1] == "mcp" {
+		if err := builtinmcp.Serve(context.Background(), os.Args[2], &mcp.StdioTransport{}); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	dir := flag.String("dir", "", "the Node directory, as `defios --dir`")
 	atLogin := flag.Bool("login", false, "the OS started the app at login")
 	flag.Parse()
