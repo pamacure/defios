@@ -41,7 +41,7 @@ pre-release, so nothing is migrated.
   Digests, after its operator approved it; and the returning Nodes would still
   have the same 60–90 seconds to accept and sign. Durable nonces would be the
   Solana answer, and are out of scope
-  ([`.out-of-scope/solana-durable-nonces.md`](../../.out-of-scope/solana-durable-nonces.md)).
+  ([#88](https://github.com/pamacure/defios/issues/88)).
 - **Transcripts as the agents' source of truth.** Rejected: a Transcript holds
   only this Node's agents' output, never another Node's talk, and feeding it
   back would put thinking and tool calls into later turns, a separate decision
