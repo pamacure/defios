@@ -156,6 +156,10 @@ _Avoid_: keypair, wallet, wallet key
 A human-chosen label a Node gives one Key, used to name and select that Key on this machine. It starts as the label proposed when the Key's keygen Session began, unless this Node chose its own, and is this Node's alone from then on, so two Nodes may label the same Key differently. A Key with none goes by its curve and public key.
 _Avoid_: key name, label, nickname
 
+**Key's Network type**:
+The Network type a Node uses one Key for, such as Bitcoin for an ECDSA Key, which marks that Key's Conversation in the desktop. It is this Node's alone, like a Key alias, and restricts nothing the Key may sign. With none set, an EdDSA Key's is Solana and an ECDSA Key's is unset (ADR 0044).
+_Avoid_: chain, key type, used-for
+
 **Session**:
 One run of a threshold protocol (keygen or signing) coordinated among a Group's Nodes over the COSL. A signing Session signs one Sign Request's Digests; it completes as soon as a signature verifies against the Key, not when every Node agrees.
 _Avoid_: ceremony, run
