@@ -16,7 +16,7 @@ func TestTheBackupBannerShowsAfterAKeyIsMintedUntilABackup(t *testing.T) {
 		t.Fatal("a fresh app asks for a Backup before any Key")
 	}
 
-	ts := s.NewKey("ecdsa", 2, "treasury")
+	ts := s.NewKey("ecdsa", 2, "treasury", "")
 	if ts.Problem != nil || len(ts.Keygens) != 1 {
 		t.Fatalf("new key: %+v", ts)
 	}
@@ -57,7 +57,7 @@ func TestTheBackupBannerShowsAfterAKeyIsMintedUntilABackup(t *testing.T) {
 func TestAFailedBackupKeepsTheBanner(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)
-	ts := s.NewKey("ecdsa", 2, "")
+	ts := s.NewKey("ecdsa", 2, "", "")
 	r.node.mint(ts.Keygens[0].SessionID)
 	eventually(t, s, func(st shell.State) bool { return st.BackupDue })
 
@@ -78,7 +78,7 @@ func TestAFailedBackupKeepsTheBanner(t *testing.T) {
 func TestOnlyACompletedKeygenAsksForABackup(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)
-	ts := s.NewKey("ecdsa", 2, "")
+	ts := s.NewKey("ecdsa", 2, "", "")
 	s.AbortKeygen(ts.Keygens[0].SessionID, "no")
 	r.node.signed()
 	time.Sleep(50 * time.Millisecond)
@@ -101,7 +101,7 @@ func TestEachMintedKeyCounts(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)
 	for i := 1; i <= 2; i++ {
-		ts := s.NewKey("ecdsa", 2, "")
+		ts := s.NewKey("ecdsa", 2, "", "")
 		r.node.mint(ts.Keygens[len(ts.Keygens)-1].SessionID)
 		eventually(t, s, func(st shell.State) bool { return st.BackupDue && st.KeysMinted == i })
 	}

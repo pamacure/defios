@@ -72,7 +72,7 @@ func TestTwoDevicesTalkMakeAKeyAndQueueWithoutAMajority(t *testing.T) {
 	}
 
 	// A new Key: a provisional row on both devices, then a Key on both.
-	if ts := alice.NewKey("eddsa", 2, "treasury"); ts.Problem != nil {
+	if ts := alice.NewKey("eddsa", 2, "treasury", ""); ts.Problem != nil {
 		t.Fatalf("new key: %+v", ts.Problem)
 	}
 	ts = talkWithin(t, alice, 10*time.Second, func(ts shell.TalkState) bool { return len(ts.Keygens) == 1 })

@@ -103,7 +103,7 @@ func TestAJobThatFailsAfterTheStanceWasTakenNeedsNobody(t *testing.T) {
 func TestAKeygenFromAnotherDeviceNotifiesButOneStartedHereDoesNot(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)
-	if ts := s.NewKey("ecdsa", 2, "mine"); ts.Problem != nil {
+	if ts := s.NewKey("ecdsa", 2, "mine", ""); ts.Problem != nil {
 		t.Fatal(ts.Problem)
 	}
 	r.node.emit(node.Event{Session: &node.SessionEvent{Group: "alpha", Session: node.Session{

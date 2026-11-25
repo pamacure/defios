@@ -52,6 +52,12 @@ message SessionStart {
   // would make the whole session.start undecodable, and a proposal cannot
   // block a keygen.
   bytes proposed_alias = 8;
+  // The Network type proposed for the Key a keygen Session mints: bitcoin,
+  // ethereum or solana, one of its curve's
+  // (docs/adr/0044-a-key-is-marked-with-the-network-type-a-node-uses-it-for.md).
+  // Unset for a signing Session or none. Bytes for the reason proposed_alias
+  // is; one that is not a Network type of the curve is ignored.
+  bytes proposed_network_type = 9;
 }
 
 message SessionAbort {

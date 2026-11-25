@@ -42,9 +42,9 @@ func (s *Shell) RunTranscript(conv, chain, handle string) TranscriptView {
 }
 
 // NewKey starts a keygen Session for a Key on curve, with threshold t,
-// proposing alias ("" for none); this device accepts it.
-func (s *Shell) NewKey(curve string, t int, alias string) TalkState {
-	return s.talk.newKey(curve, t, alias)
+// proposing alias and networkType ("" for none); this device accepts it.
+func (s *Shell) NewKey(curve string, t int, alias, networkType string) TalkState {
+	return s.talk.newKey(curve, t, alias, networkType)
 }
 
 // AcceptKeygen accepts keygen Session id on this device, with alias as
@@ -184,7 +184,7 @@ func (t *talk) cancelChain(chain string) TalkState {
 	})
 }
 
-func (t *talk) newKey(curve string, threshold int, alias string) TalkState {
+func (t *talk) newKey(curve string, threshold int, alias, networkType string) TalkState {
 	t.mu.Lock()
 	t.starting++
 	t.mu.Unlock()
@@ -194,7 +194,7 @@ func (t *talk) newKey(curve string, threshold int, alias string) TalkState {
 		t.mu.Unlock()
 	}()
 	return t.act(func(a at) error {
-		sum, err := a.n.StartKeygen(t.ctx, a.group, node.Keygen{Curve: curve, T: threshold, Alias: alias})
+		sum, err := a.n.StartKeygen(t.ctx, a.group, node.Keygen{Curve: curve, T: threshold, Alias: alias, NetworkType: networkType})
 		if err == nil {
 			t.markAccepted(a, sum.SessionID)
 		}

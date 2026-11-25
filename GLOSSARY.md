@@ -157,7 +157,7 @@ A human-chosen label a Node gives one Key, used to name and select that Key on t
 _Avoid_: key name, label, nickname
 
 **Key's Network type**:
-The Network type a Node uses one Key for, such as Bitcoin for an ECDSA Key, which marks that Key's Conversation in the desktop. It is this Node's alone, like a Key alias, and restricts nothing the Key may sign. With none set, an EdDSA Key's is Solana and an ECDSA Key's is unset (ADR 0044).
+The Network type a Node uses one Key for, such as Bitcoin for an ECDSA Key, which marks that Key's Conversation in the desktop. Like a Key alias, it starts as the one proposed when the Key's keygen Session began and is this Node's alone from then on. It restricts nothing the Key may sign. With none set, an EdDSA Key's is Solana and an ECDSA Key's is unset (ADR 0044).
 _Avoid_: chain, key type, used-for
 
 **Session**:

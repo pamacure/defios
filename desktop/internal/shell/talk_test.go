@@ -394,15 +394,15 @@ func TestANewTranscriptLeavesALine(t *testing.T) {
 func TestANewKeyIsAProvisionalRowUntilItsKeygenCompletes(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)
-	if ts := s.NewKey("rsa", 2, ""); ts.Problem == nil || ts.Problem.Code != "bad-curve" {
+	if ts := s.NewKey("rsa", 2, "", ""); ts.Problem == nil || ts.Problem.Code != "bad-curve" {
 		t.Fatalf("bad curve: %+v", ts.Problem)
 	}
-	ts := s.NewKey("ecdsa", 2, "treasury")
+	ts := s.NewKey("ecdsa", 2, "treasury", "bitcoin")
 	if ts.Problem != nil || len(ts.Keygens) != 1 {
 		t.Fatalf("after NewKey: %+v", ts)
 	}
 	kg := ts.Keygens[0]
-	if kg.Curve != "ecdsa" || kg.T != 2 || kg.Alias != "treasury" || !kg.Accepted {
+	if kg.Curve != "ecdsa" || kg.T != 2 || kg.Alias != "treasury" || kg.NetworkType != "bitcoin" || !kg.Accepted {
 		t.Fatalf("keygen row: %+v", kg)
 	}
 

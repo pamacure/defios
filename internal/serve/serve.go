@@ -107,8 +107,9 @@ type Options struct {
 	OnTalk    func(conv []byte, m talk.Message)
 	OnSession func(session.Summary)
 	OnOutbox  func(queued []cosl.Signed)
-	// OnKeyAlias hears that this Node wrote a minted Key's alias to its
-	// Workspace config, which no row of the replica marks. May be nil.
+	// OnKeyAlias hears that this Node wrote a minted Key's alias or Network
+	// type to its Workspace config, which no row of the replica marks. May
+	// be nil.
 	OnKeyAlias func()
 	// OnSignRequest hears each Sign Request the replica holds whose status,
 	// stances, Session or Broadcast Receipts moved after it starts, one

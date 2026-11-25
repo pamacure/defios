@@ -22,6 +22,8 @@ type (
 		T     int    `json:"t"`
 		// Alias is the Key alias to propose; empty proposes none.
 		Alias string `json:"alias,omitempty"`
+		// NetworkType is the Network type to propose; empty proposes none.
+		NetworkType string `json:"network_type,omitempty"`
 	}
 	sessionIDRequest struct {
 		SessionID string `json:"session_id"`
@@ -64,7 +66,7 @@ func (s *server) sessionRoutes(mux *http.ServeMux) {
 		if !s.readLocal(w, r, &req) {
 			return
 		}
-		sum, err := s.sessionStart(r.Context(), req.Curve, req.T, req.Alias)
+		sum, err := s.sessionStart(r.Context(), req.Curve, req.T, req.Alias, req.NetworkType)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -123,7 +125,7 @@ func (s *server) waitingKeyAliases() WaitingKeyAliases {
 }
 
 // sessionStart starts a keygen Session proposing alias, "" for none.
-func (s *server) sessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error) {
+func (s *server) sessionStart(ctx context.Context, curve string, t int, alias, networkType string) (session.Summary, error) {
 	svc := s.sessionLayer()
 	if svc == nil {
 		return session.Summary{}, ErrNoReplica
@@ -132,7 +134,7 @@ func (s *server) sessionStart(ctx context.Context, curve string, t int, alias st
 	if err != nil {
 		return session.Summary{}, err
 	}
-	return svc.Start(ctx, curve, t, stored)
+	return svc.Start(ctx, curve, t, stored, networkType)
 }
 
 // sessionAccept is this Node's local accept of id, with its own Key alias
@@ -244,9 +246,9 @@ func (c Client) WaitingKeyAliases(ctx context.Context) (WaitingKeyAliases, error
 }
 
 // SessionStart is `session start`.
-func (c Client) SessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error) {
+func (c Client) SessionStart(ctx context.Context, curve string, t int, alias, networkType string) (session.Summary, error) {
 	var sum session.Summary
-	err := c.do(ctx, "/v1/session/start", sessionStartRequest{Curve: curve, T: t, Alias: alias}, &sum)
+	err := c.do(ctx, "/v1/session/start", sessionStartRequest{Curve: curve, T: t, Alias: alias, NetworkType: networkType}, &sum)
 	return sum, err
 }
 
@@ -280,11 +282,11 @@ func (r *Running) WaitingKeyAliases(context.Context) (WaitingKeyAliases, error) 
 func (r *Running) KeyShares(context.Context) ([]KeyShare, error) { return r.s.keyShares(), nil }
 
 // SessionStart is Client.SessionStart in this process.
-func (r *Running) SessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error) {
+func (r *Running) SessionStart(ctx context.Context, curve string, t int, alias, networkType string) (session.Summary, error) {
 	if err := r.tailnet(); err != nil {
 		return session.Summary{}, err
 	}
-	return r.s.sessionStart(ctx, curve, t, alias)
+	return r.s.sessionStart(ctx, curve, t, alias, networkType)
 }
 
 // SessionAccept is Client.SessionAccept in this process.

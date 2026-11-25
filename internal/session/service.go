@@ -405,10 +405,14 @@ func (s *Service) wakeAt(t time.Time) {
 // Start appends session.start. n is the Roster. The plaintext nonce is
 // sealed to each participant and is not a COSL field. This call is the
 // initiator's local accept. alias is the Key alias to propose, already
-// normalized, or empty for none (ADR 0033).
-func (s *Service) Start(ctx context.Context, curve string, t int, alias string) (Summary, error) {
+// normalized, or empty for none (ADR 0033); networkType the Network type
+// to propose, one of curve's, or empty for none (ADR 0044).
+func (s *Service) Start(ctx context.Context, curve string, t int, alias, networkType string) (Summary, error) {
 	if curve != "ecdsa" && curve != "eddsa" {
 		return Summary{}, ErrBadCurve
+	}
+	if networkType != "" && !FitsCurve(networkType, curve) {
+		return Summary{}, fmt.Errorf("%w: %q is not a Network type of %s", ErrBadNetworkType, networkType, curve)
 	}
 	if t < 0 {
 		return Summary{}, fmt.Errorf("session: t must be >= 0")
@@ -445,7 +449,8 @@ func (s *Service) Start(ctx context.Context, curve string, t int, alias string) 
 		Participants: parts,
 		NonceBoxes:   boxes,
 
-		ProposedAlias: []byte(alias),
+		ProposedAlias:       []byte(alias),
+		ProposedNetworkType: []byte(networkType),
 	}
 	if err := s.remember(id); err != nil {
 		return Summary{}, err
@@ -454,7 +459,7 @@ func (s *Service) Start(ctx context.Context, curve string, t int, alias string) 
 		s.forget(id)
 		return Summary{}, err
 	}
-	return Summary{SessionID: id.String(), Status: Open, Curve: curve, T: uint32(t), N: uint32(len(nodes)), ProposedAlias: alias}, nil
+	return Summary{SessionID: id.String(), Status: Open, Curve: curve, T: uint32(t), N: uint32(len(nodes)), ProposedAlias: alias, ProposedNetworkType: networkType}, nil
 }
 
 // Accept is this Node's local engine gate for a Session it did not start.

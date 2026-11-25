@@ -49,7 +49,7 @@ func idlePairTuned(t *testing.T, tune func(*serve.Options)) (a, b *node, gid gro
 // see it.
 func startOn(t *testing.T, a, b *node, proposal string) session.ID {
 	t.Helper()
-	sum, err := a.client().SessionStart(context.Background(), "ecdsa", 2, proposal)
+	sum, err := a.client().SessionStart(context.Background(), "ecdsa", 2, proposal, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestAWaitingAliasIsTaken(t *testing.T) {
 	if err := b.client().SessionAccept(ctx, session.ID{9}, "vAULT"); !errors.Is(err, serve.ErrBadAlias) {
 		t.Errorf("accept: err = %v", err)
 	}
-	if _, err := b.client().SessionStart(ctx, "ecdsa", 2, "VAULT"); !errors.Is(err, serve.ErrBadAlias) {
+	if _, err := b.client().SessionStart(ctx, "ecdsa", 2, "VAULT", ""); !errors.Is(err, serve.ErrBadAlias) {
 		t.Errorf("start: err = %v", err)
 	}
 	if err := b.client().SessionAccept(ctx, id, "Vault"); err != nil {
@@ -262,7 +262,7 @@ func TestAnAbortReleasesAWaitingAlias(t *testing.T) {
 
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		_, err := b.client().SessionStart(ctx, "ecdsa", 2, "Vault")
+		_, err := b.client().SessionStart(ctx, "ecdsa", 2, "Vault", "")
 		if err == nil {
 			break
 		}

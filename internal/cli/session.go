@@ -24,21 +24,23 @@ func sessionCommand(g *globals) *cobra.Command {
 		Short: "Start, accept, abort, and inspect keygen Sessions",
 	}
 	var (
-		curve string
-		t     int
-		alias string
+		curve       string
+		t           int
+		alias       string
+		networkType string
 	)
 	start := &cobra.Command{
 		Use:   "start",
 		Short: "Start a keygen Session (requires serve); this Node accepts it",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSessionStart(cmd, g, curve, t, alias)
+			return runSessionStart(cmd, g, curve, t, alias, networkType)
 		},
 	}
 	start.Flags().StringVar(&curve, "curve", "", "ecdsa or eddsa")
 	start.Flags().IntVar(&t, "t", 2, "min signers; n is the Roster")
 	start.Flags().StringVar(&alias, "alias", "", "Key alias to propose to every Node party to the Key")
+	start.Flags().StringVar(&networkType, "network-type", "", "Network type to propose the Key is used for: bitcoin or ethereum (ecdsa), solana (eddsa)")
 	root.AddCommand(start)
 
 	var ownAlias string
@@ -84,12 +86,15 @@ func sessionCommand(g *globals) *cobra.Command {
 	return root
 }
 
-func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int, alias string) error {
+func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int, alias, networkType string) error {
 	if curve != "ecdsa" && curve != "eddsa" {
 		return exitUsagef("--curve must be ecdsa or eddsa")
 	}
 	if t < 1 {
 		return exitUsagef("--t must be >= 1")
+	}
+	if cmd.Flags().Changed("network-type") && !session.FitsCurve(networkType, curve) {
+		return exitUsagef("--network-type %q is not a Network type of %s", networkType, curve)
 	}
 	alias, err := aliasFlag(cmd, alias)
 	if err != nil {
@@ -99,7 +104,7 @@ func runSessionStart(cmd *cobra.Command, g *globals, curve string, t int, alias 
 	if err != nil {
 		return err
 	}
-	sum, err := h.StartKeygen(cmd.Context(), node.ServedGroup, node.Keygen{Curve: curve, T: t, Alias: alias})
+	sum, err := h.StartKeygen(cmd.Context(), node.ServedGroup, node.Keygen{Curve: curve, T: t, Alias: alias, NetworkType: networkType})
 	if err != nil {
 		return sessionCallError(err)
 	}
@@ -196,6 +201,9 @@ func runSessionInspect(g *globals, hexID string) error {
 	if detail.ProposedAlias != "" {
 		fmt.Fprintf(g.app.Stdout, "proposed_alias %s\n", p.primary(detail.ProposedAlias))
 	}
+	if detail.ProposedNetworkType != "" {
+		fmt.Fprintf(g.app.Stdout, "proposed_network_type %s\n", detail.ProposedNetworkType)
+	}
 	if detail.Reason != "" {
 		fmt.Fprintf(g.app.Stdout, "reason %s\n", detail.Reason)
 	}
@@ -227,12 +235,17 @@ func aliasFlag(cmd *cobra.Command, alias string) (string, error) {
 	return stored, nil
 }
 
-// proposedSuffix ends a one-line Session with the Key alias it proposes.
+// proposedSuffix ends a one-line Session with the Key alias and Network
+// type it proposes.
 func proposedSuffix(p palette, s session.Summary) string {
-	if s.ProposedAlias == "" {
-		return ""
+	out := ""
+	if s.ProposedAlias != "" {
+		out += "  proposed_alias=" + p.primary(s.ProposedAlias)
 	}
-	return "  proposed_alias=" + p.primary(s.ProposedAlias)
+	if s.ProposedNetworkType != "" {
+		out += "  proposed_network_type=" + s.ProposedNetworkType
+	}
+	return out
 }
 
 func parseSessionID(s string) (session.ID, error) {
@@ -262,7 +275,7 @@ func sessionCallError(err error) error {
 	switch {
 	case errors.As(err, &invalid):
 		return exitUsagef("%v", err)
-	case errors.Is(err, session.ErrBadCurve), errors.Is(err, serve.ErrBadAlias), errors.Is(err, session.ErrNotKeygen):
+	case errors.Is(err, session.ErrBadCurve), errors.Is(err, session.ErrBadNetworkType), errors.Is(err, serve.ErrBadAlias), errors.Is(err, session.ErrNotKeygen):
 		return exitUsagef("%w", err)
 	case errors.Is(err, raftx.ErrNotInserted):
 		return &ExitError{Code: ExitProtocol, Err: err}

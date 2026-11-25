@@ -238,6 +238,7 @@ var errorKinds = []struct {
 	{key.ErrAmbiguous, "ambiguous-key", http.StatusConflict},
 	{cosl.ErrBadText, "bad-text", http.StatusBadRequest},
 	{session.ErrBadCurve, "bad-curve", http.StatusBadRequest},
+	{session.ErrBadNetworkType, "bad-network-type", http.StatusBadRequest},
 	{session.ErrUnknownSession, "unknown-session", http.StatusNotFound},
 	{session.ErrNotParticipant, "not-participant", http.StatusForbidden},
 	{session.ErrSignerSetFull, "signer-set-full", http.StatusConflict},

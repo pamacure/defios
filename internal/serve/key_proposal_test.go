@@ -72,6 +72,41 @@ func TestAProposalBecomesTheKeysAliasOnEveryNode(t *testing.T) {
 	waitAlias(t, b, name, "Cold")
 }
 
+// A Network type proposed on session.start is the Key's on every Node party
+// to it, written beside the alias; one not of the Key's curve is ignored.
+func TestAProposedNetworkTypeIsTheKeysOnEveryNode(t *testing.T) {
+	a, b := pair(t)
+	gid := formValid(t, a, b)
+	a.joins(t, gid, 2)
+	b.joins(t, gid, 2)
+
+	typeOn := func(n *node, name string) string {
+		t.Helper()
+		w, err := config.ReadWorkspace(n.paths.ConversationConfigFile(group.ImplicitAlias, name))
+		if err != nil {
+			t.Fatalf("%s: %v", n.name, err)
+		}
+		return w.NetworkType
+	}
+	name := mintProposingType(t, a, b, gid, bytes.Repeat([]byte{0x4a}, 33), "Cold", "bitcoin")
+	waitAlias(t, a, name, "Cold")
+	waitAlias(t, b, name, "Cold")
+	for _, n := range []*node{a, b} {
+		if got := typeOn(n, name); got != "bitcoin" {
+			t.Errorf("%s: network_type = %q, want bitcoin", n.name, got)
+		}
+	}
+
+	odd := mintProposingType(t, a, b, gid, bytes.Repeat([]byte{0x4b}, 33), "Odd", "solana")
+	waitAlias(t, a, odd, "Odd")
+	waitAlias(t, b, odd, "Odd")
+	for _, n := range []*node{a, b} {
+		if got := typeOn(n, odd); got != "" {
+			t.Errorf("%s: an ECDSA Key took network_type %q", n.name, got)
+		}
+	}
+}
+
 // Writing a Key's alias is news no row carries: OnKeyAlias tells of it,
 // once the alias reads back, so a page that listed the Key before it can
 // list it again.
@@ -221,13 +256,13 @@ func TestSessionStartProposesAnAliasOrRefusesItAppendingNothing(t *testing.T) {
 	writeConfig(t, file, "alias = \"Cold\"\n")
 
 	for _, bad := range []string{"cOLD", " spaced", "a\x01b", strings.Repeat("x", 64)} {
-		if _, err := a.client().SessionStart(ctx, "ecdsa", 2, bad); !errors.Is(err, serve.ErrBadAlias) {
+		if _, err := a.client().SessionStart(ctx, "ecdsa", 2, bad, ""); !errors.Is(err, serve.ErrBadAlias) {
 			t.Errorf("%q: err = %v", bad, err)
 		}
 	}
 	// A config.toml that did not read might hold the alias, so it refuses too.
 	writeConfig(t, file, "alias = \n")
-	if _, err := a.client().SessionStart(ctx, "ecdsa", 2, "Warm"); err == nil || !strings.Contains(err.Error(), file) {
+	if _, err := a.client().SessionStart(ctx, "ecdsa", 2, "Warm", ""); err == nil || !strings.Contains(err.Error(), file) {
 		t.Errorf("broken config.toml: err = %v", err)
 	}
 	if got := len(sessionStarts(t, a)); got != 1 {
@@ -235,7 +270,7 @@ func TestSessionStartProposesAnAliasOrRefusesItAppendingNothing(t *testing.T) {
 	}
 	writeConfig(t, file, "alias = \"Cold\"\n")
 
-	sum, err := a.client().SessionStart(ctx, "ecdsa", 2, "Cafe\u0301")
+	sum, err := a.client().SessionStart(ctx, "ecdsa", 2, "Cafe\u0301", "")
 	if err != nil {
 		t.Fatal(err)
 	}

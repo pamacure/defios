@@ -297,7 +297,7 @@ func (n *fakeNode) StartKeygen(_ context.Context, group string, k node.Keygen) (
 		return node.Session{}, session.ErrBadCurve
 	}
 	t := n.tk()
-	s := node.Session{SessionID: fmt.Sprintf("5e55%028d", len(t.keygens)+1), Status: session.Open, Curve: k.Curve, T: uint32(k.T), N: 2, ProposedAlias: k.Alias}
+	s := node.Session{SessionID: fmt.Sprintf("5e55%028d", len(t.keygens)+1), Status: session.Open, Curve: k.Curve, T: uint32(k.T), N: 2, ProposedAlias: k.Alias, ProposedNetworkType: k.NetworkType}
 	t.keygens = append(t.keygens, s)
 	n.mu.Unlock()
 	n.emit(node.Event{Session: &node.SessionEvent{Group: group, Session: s}})

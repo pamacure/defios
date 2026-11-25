@@ -31,6 +31,9 @@ type Key struct {
 	// Workspace; from then on config.toml alone decides (ADR 0033).
 	ProposedAlias   string
 	ProposalInvalid bool
+	// ProposedNetworkType is the Network type its keygen proposed, if one
+	// of its curve's, which likewise matters only then (ADR 0044).
+	ProposedNetworkType string
 }
 
 // Ref is the CLI form curve:hex.
@@ -88,7 +91,7 @@ func List(rows []cosl.Row) ([]Key, error) {
 	for i, m := range minted {
 		out[i] = Key{
 			SessionID: m.SessionID, Curve: m.Curve, PublicKey: m.PublicKey, T: m.T, N: m.N,
-			ProposedAlias: m.ProposedAlias, ProposalInvalid: m.ProposalInvalid,
+			ProposedAlias: m.ProposedAlias, ProposalInvalid: m.ProposalInvalid, ProposedNetworkType: m.ProposedNetworkType,
 		}
 	}
 	return out, nil

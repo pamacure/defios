@@ -6,6 +6,7 @@ import (
 
 	"defios.com/internal/cosl"
 	"defios.com/internal/keyalias"
+	"defios.com/internal/network"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -29,6 +30,9 @@ type Keygen struct {
 	Curve string // ecdsa or eddsa
 	T     int    // min signers; n is the Roster
 	Alias string
+	// NetworkType is the Network type to propose for the Key, one of its
+	// curve's, or "" for none (ADR 0044).
+	NetworkType string
 }
 
 // StartKeygen starts a keygen Session in groupAlias, which must be served;
@@ -40,6 +44,9 @@ func (h *Host) StartKeygen(ctx context.Context, groupAlias string, k Keygen) (Se
 	if k.T < 1 {
 		return Session{}, invalidf("t must be >= 1")
 	}
+	if k.NetworkType != "" && !session.FitsCurve(k.NetworkType, k.Curve) {
+		return Session{}, invalidf("network type must be one of %s's: %s", k.Curve, strings.Join(curveNetworkTypes(k.Curve), ", "))
+	}
 	alias, err := storedAlias(k.Alias)
 	if err != nil {
 		return Session{}, err
@@ -48,8 +55,19 @@ func (h *Host) StartKeygen(ctx context.Context, groupAlias string, k Keygen) (Se
 	if err != nil {
 		return Session{}, err
 	}
-	sum, err := api.SessionStart(ctx, k.Curve, k.T, alias)
+	sum, err := api.SessionStart(ctx, k.Curve, k.T, alias, k.NetworkType)
 	return sum, wrapServed(err)
+}
+
+// curveNetworkTypes are the Network types whose Keys sign with curve.
+func curveNetworkTypes(curve string) []string {
+	var out []string
+	for _, t := range network.Types() {
+		if session.FitsCurve(t, curve) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // AcceptSession accepts Session id here so this Node's engine may start,

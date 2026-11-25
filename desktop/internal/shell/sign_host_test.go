@@ -76,7 +76,7 @@ func TestTwoDevicesProposeAcceptSignAndBroadcastASignRequest(t *testing.T) {
 	talkWithin(t, bob, 20*time.Second, ready)
 	var ts shell.TalkState
 	for {
-		if ts = alice.NewKey("eddsa", 2, "treasury"); ts.Problem == nil {
+		if ts = alice.NewKey("eddsa", 2, "treasury", ""); ts.Problem == nil {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)

@@ -12,6 +12,7 @@ import (
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
 	"defios.com/internal/keyalias"
+	"defios.com/internal/network"
 	coslv1 "defios.com/proto/cosl/v1"
 )
 
@@ -27,6 +28,9 @@ type Summary struct {
 	// ProposedAlias is the Key alias a keygen Session proposes, if valid. It
 	// comes from another Node, so an invalid one is never shown (ADR 0033).
 	ProposedAlias string `json:"proposed_alias,omitempty"`
+	// ProposedNetworkType is the Network type it proposes for its Key, if
+	// one of its curve's; any other is ignored (ADR 0044).
+	ProposedNetworkType string `json:"proposed_network_type,omitempty"`
 	// StartSeq and Started are where and when its session.start was
 	// written; EndSeq and Ended, where and when the row that ended it was,
 	// the complete that counts or the first abort: 0 and "" while open.
@@ -180,7 +184,8 @@ func (r *rec) gate() ID {
 func (r *rec) summary() Summary {
 	sum := Summary{
 		SessionID: r.id.String(), Status: r.status, Curve: r.curve, T: r.t, N: r.n, ProposedAlias: r.proposal.alias,
-		StartSeq: r.startSeq, Started: rfc3339(r.createdAt),
+		ProposedNetworkType: r.proposal.networkType,
+		StartSeq:            r.startSeq, Started: rfc3339(r.createdAt),
 	}
 	switch r.status {
 	case Complete:
@@ -281,7 +286,7 @@ func (f *fold) add(rows []cosl.Row) error {
 			if req, ok := idBytes(p.SignRequestId); ok {
 				r.isSign, r.signReq = true, req
 			} else {
-				r.proposal = proposalOf(string(p.ProposedAlias))
+				r.proposal = proposalOf(string(p.ProposedAlias), string(p.ProposedNetworkType), p.Curve)
 			}
 			for _, raw := range p.Participants {
 				pid, ok := idBytes(raw)
@@ -433,19 +438,32 @@ func agreement(r *rec) (agreed bool, at uint64, conflict bool) {
 	return len(seen) == int(r.n), at, false
 }
 
-// proposal is what a keygen session.start says of a Key alias: alias in the
-// form it is stored, or invalid when it held something that cannot be one.
+// proposal is what a keygen session.start says of its Key: a Key alias in
+// the form it is stored, or invalid when it held something that cannot be
+// one; and a Network type of its curve, or "" for none or one that is not.
 type proposal struct {
-	alias   string
-	invalid bool
+	alias       string
+	invalid     bool
+	networkType string
 }
 
-func proposalOf(raw string) proposal {
-	if raw == "" {
-		return proposal{}
+func proposalOf(raw, networkType, curve string) proposal {
+	var p proposal
+	if raw != "" {
+		var err error
+		p.alias, err = keyalias.Normalize(raw)
+		p.invalid = err != nil
 	}
-	alias, err := keyalias.Normalize(raw)
-	return proposal{alias: alias, invalid: err != nil}
+	if FitsCurve(networkType, curve) {
+		p.networkType = networkType
+	}
+	return p
+}
+
+// FitsCurve reports whether networkType is a Network type whose Keys sign
+// with curve.
+func FitsCurve(networkType, curve string) bool {
+	return slices.Contains(network.Types(), networkType) && (network.Chain{Type: networkType}).Curve() == curve
 }
 
 // Completed is a Key the replica has minted: n session.complete rows agree
@@ -459,6 +477,9 @@ type Completed struct {
 	// ProposalInvalid is a proposal that could not be one, which is not shown.
 	ProposedAlias   string
 	ProposalInvalid bool
+	// ProposedNetworkType is the Network type its keygen proposed, if one
+	// of its curve's.
+	ProposedNetworkType string
 }
 
 // CompletedSessions reads minted Keys off the replica. There is no keys table.
@@ -479,8 +500,9 @@ func CompletedSessions(rows []cosl.Row) ([]Completed, error) {
 			T:         int(r.t),
 			N:         int(r.n),
 
-			ProposedAlias:   r.proposal.alias,
-			ProposalInvalid: r.proposal.invalid,
+			ProposedAlias:       r.proposal.alias,
+			ProposalInvalid:     r.proposal.invalid,
+			ProposedNetworkType: r.proposal.networkType,
 		})
 	}
 	return out, nil

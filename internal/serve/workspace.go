@@ -102,15 +102,31 @@ func (w *workspaceWatcher) catchUp(wk cosl.Wake) error {
 		}
 		w.made[id] = true
 		chosen := w.s.holds.of(k.SessionID)
+		wrote := false
+		// The proposed Network type, like the alias, goes only into a
+		// Workspace this call made: from then on config.toml alone decides
+		// (ADR 0044). It is written first, so an alias that reads back
+		// finds it there too.
+		if created && k.ProposedNetworkType != "" {
+			file := w.s.opts.Paths.ConversationConfigFile(w.s.opts.Alias, name)
+			if err := config.WriteKeyNetworkType(file, k.ProposedNetworkType); err != nil {
+				w.s.opts.Logf("serve: warning: Key %s keeps no Network type on this Node: %v", k.Ref(), err)
+			} else {
+				wrote = true
+			}
+		}
 		if created && (chosen != "" || k.ProposedAlias != "" || k.ProposalInvalid) {
 			if aliases == nil {
 				aliases = config.ReadKeyAliases(w.s.opts.Paths, w.s.opts.Alias, keys)
 			}
 			if err := applyAlias(k, chosen, keys, aliases); err != nil {
 				w.s.opts.Logf("serve: warning: Key %s keeps no alias on this Node: %v", k.Ref(), err)
-			} else if w.s.opts.OnKeyAlias != nil {
-				w.s.opts.OnKeyAlias()
+			} else {
+				wrote = true
 			}
+		}
+		if wrote && w.s.opts.OnKeyAlias != nil {
+			w.s.opts.OnKeyAlias()
 		}
 		w.s.holds.release(k.SessionID) // only now, for its config.toml now says it is taken
 	}

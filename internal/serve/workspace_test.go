@@ -38,6 +38,12 @@ func mintPublicKey(t *testing.T, a, b *node, gid group.ID, pk []byte) string {
 // mintProposing is mintPublicKey of a keygen whose session.start proposes alias.
 func mintProposing(t *testing.T, a, b *node, gid group.ID, pk []byte, alias string) string {
 	t.Helper()
+	return mintProposingType(t, a, b, gid, pk, alias, "")
+}
+
+// mintProposingType is mintProposing proposing networkType too.
+func mintProposingType(t *testing.T, a, b *node, gid group.ID, pk []byte, alias, networkType string) string {
+	t.Helper()
 	var sid [32]byte
 	copy(sid[:], pk)
 	sign := func(n *node, msg proto.Message, typ uint32) cosl.Signed {
@@ -50,7 +56,7 @@ func mintProposing(t *testing.T, a, b *node, gid group.ID, pk []byte, alias stri
 	}
 	commitEnvelope(t, a, b, sign(a, &coslv1.SessionStart{
 		SessionId: sid[:], Curve: "ecdsa", T: 2, N: 2, Participants: [][]byte{a.id.NodeID[:], b.id.NodeID[:]},
-		ProposedAlias: []byte(alias),
+		ProposedAlias: []byte(alias), ProposedNetworkType: []byte(networkType),
 	}, cosl.TypeSessionStart))
 	complete := &coslv1.SessionComplete{SessionId: sid[:], Curve: "ecdsa", PublicKey: pk}
 	commitEnvelope(t, a, b, sign(a, complete, cosl.TypeSessionComplete))

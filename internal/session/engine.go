@@ -11,6 +11,7 @@ import (
 // Sentinels the CLI and the local API map onto exit codes.
 var (
 	ErrBadCurve       = errors.New("session: curve must be ecdsa or eddsa")
+	ErrBadNetworkType = errors.New("session: bad network type")
 	ErrUnknownSession = errors.New("session: no such session")
 	ErrNotParticipant = errors.New("session: this Node is not a participant")
 	ErrClosedSession  = errors.New("session: session is not open")

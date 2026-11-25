@@ -158,6 +158,8 @@ type Keygen struct {
 	Curve     string
 	T, N      int
 	Alias     string // the Key alias it proposes, "" for none
+	// NetworkType is the Network type it proposes, "" for none.
+	NetworkType string
 	// Accepted: this device has accepted it, so its engine may start.
 	Accepted bool
 }
@@ -913,7 +915,7 @@ func (t *talk) snapshot() TalkState {
 	for _, s := range t.convs.Keygens {
 		st.Keygens = append(st.Keygens, Keygen{
 			SessionID: s.SessionID, Curve: s.Curve, T: int(s.T), N: int(s.N), Alias: s.ProposedAlias,
-			Accepted: t.accepted[s.SessionID],
+			NetworkType: s.ProposedNetworkType, Accepted: t.accepted[s.SessionID],
 		})
 	}
 	st.Items = t.items()

@@ -79,7 +79,7 @@ type servedAPI interface {
 	ConversationStream(ctx context.Context, conversationID []byte) (*serve.ChainStream, error)
 	OutboxDrop(ctx context.Context, msgID string) (serve.DropView, error)
 
-	SessionStart(ctx context.Context, curve string, t int, alias string) (session.Summary, error)
+	SessionStart(ctx context.Context, curve string, t int, alias, networkType string) (session.Summary, error)
 	SessionAccept(ctx context.Context, id session.ID, alias string) error
 	SessionAbort(ctx context.Context, id session.ID, reason string) error
 	KeyShares(ctx context.Context) ([]serve.KeyShare, error)
