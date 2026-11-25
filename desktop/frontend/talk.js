@@ -34,7 +34,7 @@ const tui = {
   detailsSig: "", // what the details were read against (detailsSig)
   earlier: null, // { handle, runs? , problem? }: the selected run's agent's live Transcript, opened from "Earlier runs"
   drafts: new Map(), // Conversation ID -> what was typed there
-  form: { curve: "ecdsa", networkType: "", t: "", alias: "", reason: "", keyAlias: "" },
+  form: { networkType: "bitcoin", t: "", alias: "", reason: "", keyAlias: "" },
   shownOpen: null, // the Conversation the composer's draft belongs to
   // The message being sent, shown at once: Send returns only once it
   // commits, or after Raft's ApplyTimeout once it is queued.
@@ -123,8 +123,9 @@ const curveName = (c) => ({ ecdsa: "ECDSA", eddsa: "EdDSA" }[c] ?? c);
 // convIcon marks a row of the rack: the Group's for Group talk, else what
 // this device uses the Key for, or its curve's while that is unset.
 const NETWORK_TYPES = { bitcoin: "Bitcoin", ethereum: "Ethereum and EVM chains", solana: "Solana" };
-// CURVE_TYPES are the Network types each curve signs for, as the Node has them.
-const CURVE_TYPES = { ecdsa: ["bitcoin", "ethereum"], eddsa: ["solana"] };
+// TYPE_CURVE is the curve each Network type's Keys sign with, as the Node
+// has it: the New Key form asks the network and makes the Key on its curve.
+const TYPE_CURVE = { bitcoin: "ecdsa", ethereum: "ecdsa", solana: "eddsa" };
 const convIcon = (c) => {
   if (c.ID === GROUP_TALK) return groupIcon(ts.Roster.length, ts.Online);
   const kind = NETWORK_TYPES[c.NetworkType] ? c.NetworkType : c.Curve;
@@ -380,42 +381,27 @@ function newKey() {
   }
   const n = ts.Roster.length || 1;
   if (!tui.form.t) tui.form.t = String(Math.min(2, n));
-  // Used for follows the curve: an EdDSA Key is for Solana unless said
-  // otherwise, an ECDSA one for nothing in particular.
-  const curve = h("select", {
-    class: "field", "aria-label": "Curve",
-    onchange: (e) => {
-      tui.form.curve = e.target.value;
-      tui.form.networkType = tui.form.curve === "eddsa" ? "solana" : "";
-      draw();
-    },
-  },
-  h("option", { value: "ecdsa", selected: tui.form.curve === "ecdsa" }, "ECDSA (Ethereum, Bitcoin)"),
-  h("option", { value: "eddsa", selected: tui.form.curve === "eddsa" }, "EdDSA (Solana)"));
-  const types = CURVE_TYPES[tui.form.curve] ?? [];
-  const usedFor = h("select", { class: "field", "aria-label": "Used for", onchange: (e) => { tui.form.networkType = e.target.value; } },
-    tui.form.curve === "ecdsa" && h("option", { value: "", selected: !tui.form.networkType }, "Not set"),
-    types.map((t) => h("option", { value: t, selected: t === tui.form.networkType }, NETWORK_TYPES[t])));
+  const curve = TYPE_CURVE[tui.form.networkType];
+  const network = h("select", { class: "field", "aria-label": "Network", onchange: (e) => { tui.form.networkType = e.target.value; draw(); } },
+    Object.keys(TYPE_CURVE).map((t) => h("option", { value: t, selected: t === tui.form.networkType }, NETWORK_TYPES[t])));
   return h("form", {
     class: "newkey-form",
     onsubmit: async (e) => {
       e.preventDefault();
-      const next = await act("NewKey", tui.form.curve, Number(tui.form.t), tui.form.alias.trim(), tui.form.networkType);
+      const next = await act("NewKey", curve, Number(tui.form.t), tui.form.alias.trim(), tui.form.networkType);
       if (next && !next.Problem) {
         tui.newKey = false;
         tui.form.alias = "";
-        tui.form.curve = "ecdsa";
-        tui.form.networkType = "";
+        tui.form.networkType = "bitcoin";
         draw();
       }
     },
   },
   h("strong", {}, "New Key"),
-  h("label", {}, "Curve", curve),
-  h("label", {}, "Used for", usedFor),
+  h("label", {}, "Network", network, h("span", { class: "hint" }, `Signs with ${curveName(curve)}.`)),
   h("label", {}, `Signers needed, of ${n} devices`, input("t", { type: "number", min: 1, max: n, required: true })),
   h("label", {}, "Name (optional)", input("alias", { placeholder: "e.g. treasury" })),
-  h("p", { class: "hint" }, "Every device in the Group takes part in making it, and each must accept. The name and what it is used for are proposed to them; each device can change its own later."),
+  h("p", { class: "hint" }, "Every device in the Group takes part in making it, and each must accept."),
   h("div", { class: "row" },
     h("button", { class: "btn small", type: "button", onclick: () => { tui.newKey = false; draw(); } }, "Cancel"),
     h("button", { class: "btn small bright", type: "submit", disabled: tui.busy }, "Make Key")));
