@@ -123,6 +123,11 @@ type Workspace struct {
 	// a Group's refuses it and Merge drops it, for it names one Key
 	// (ADR 0033).
 	Alias string `toml:"alias,omitempty"`
+	// NetworkType is the Network type this Node uses this Key for, in a
+	// Conversation's config.toml only, as alias is: what the desktop marks
+	// its Conversation with. It restricts nothing the Key may sign
+	// (ADR 0044).
+	NetworkType string `toml:"network_type,omitempty"`
 	// Networks are this Node's Networks, by alias: the chains it signs for
 	// and the endpoints it reaches them by (ADR 0023). ReadFile fills no
 	// Alias; network.List does.
@@ -399,6 +404,14 @@ func (w Workspace) validate(md toml.MetaData, complete bool) error {
 			return err
 		}
 	}
+	if md.IsDefined("network_type") {
+		if complete {
+			return errors.New("network_type is one Key's, so it belongs in that Key's Conversation config.toml, not the Group's")
+		}
+		if !slices.Contains(network.Types(), w.NetworkType) {
+			return fmt.Errorf("network_type %q must be %s", w.NetworkType, strings.Join(network.Types(), ", "))
+		}
+	}
 	if _, err := network.List(w.Networks); err != nil {
 		return fmt.Errorf("[networks]: %w", err)
 	}
@@ -459,8 +472,8 @@ func ValidateHandle(h string) error {
 	return nil
 }
 
-// Merge is w with over laid on it table by table, an alias being no part of
-// it: a whole Network table, a Provider's base_url, api_path or api_key, an [agent] profiles list (even
+// Merge is w with over laid on it table by table, an alias or Network type
+// being no part of it: a whole Network table, a Provider's base_url, api_path or api_key, an [agent] profiles list (even
 // an empty one), or a max_depth that over sets wins, and everything over
 // leaves unset comes from w. A Provider's body in over merges over w's as a
 // profile's body does. Neither input is changed. Merged Networks that name

@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 
 	"defios.com/internal/base58"
 	"defios.com/internal/config"
 	"defios.com/internal/key"
 	"defios.com/internal/keyalias"
+	"defios.com/internal/network"
 	"defios.com/internal/serve"
 	"defios.com/internal/vault"
 )
@@ -56,6 +59,11 @@ type Key struct {
 	// Address is where the Key funds and spends: an ECDSA Key's Ethereum
 	// address, an EdDSA Key's Solana address (its public key in base58).
 	Address string
+	// NetworkType is the Network type this Node uses it for (ADR 0044):
+	// its config.toml's network_type when that fits its curve, else
+	// solana for an EdDSA Key and "" for an ECDSA one, which may be
+	// either bitcoin or ethereum.
+	NetworkType string
 }
 
 // Passphrase gives the Vault passphrase when one is needed, ok false when
@@ -148,6 +156,41 @@ func (h *Host) SetKeyAlias(ctx context.Context, groupAlias, query, alias string)
 		}
 	}
 	own.Alias = alias
+	return keyOf(k, nil, own, key.WorkspaceNames(keys)), nil
+}
+
+// SetKeyNetworkType sets the Network type this Node uses the Key query
+// names in groupAlias for, or with typ "" clears it to its curve's
+// default. typ must be a Network type of the Key's curve. Like an alias it
+// is this Node's alone and needs no serve.
+func (h *Host) SetKeyNetworkType(ctx context.Context, groupAlias, query, typ string) (Key, error) {
+	keys, err := h.readKeys(groupAlias)
+	if err != nil {
+		return Key{}, err
+	}
+	aliases := config.ReadKeyAliases(h.p, groupAlias, keys)
+	k, err := config.ResolveKey(keys, aliases, query)
+	if err != nil {
+		return Key{}, err
+	}
+	if typ != "" {
+		if !slices.Contains(network.Types(), typ) {
+			return Key{}, &InvalidError{Field: "network_type", Err: fmt.Errorf("network type %q must be %s", typ, strings.Join(network.Types(), ", "))}
+		}
+		if c := (network.Chain{Type: typ}).Curve(); c != k.Curve {
+			return Key{}, &InvalidError{Field: "network_type", Err: fmt.Errorf("a %s Key cannot be used for %s, which signs with %s", k.Curve, typ, c)}
+		}
+	}
+	own := aliases[k.Ref()]
+	if own.Err != nil {
+		return Key{}, own.Err
+	}
+	if own.NetworkType != typ {
+		if err := config.WriteKeyNetworkType(own.File, typ); err != nil {
+			return Key{}, err
+		}
+	}
+	own.NetworkType = typ
 	return keyOf(k, nil, own, key.WorkspaceNames(keys)), nil
 }
 
@@ -260,6 +303,10 @@ func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byt
 		v.Address, _ = key.EthereumAddress(k.PublicKey)
 	case "eddsa":
 		v.Address = base58.Encode(k.PublicKey)
+		v.NetworkType = network.Solana
+	}
+	if a.NetworkType != "" && (network.Chain{Type: a.NetworkType}).Curve() == k.Curve {
+		v.NetworkType = a.NetworkType
 	}
 	return v
 }

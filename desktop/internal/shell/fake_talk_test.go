@@ -255,6 +255,19 @@ func (n *fakeNode) DropQueued(_ context.Context, group, msgID string) (string, e
 	return "", outbox.ErrNotQueued
 }
 
+func (n *fakeNode) SetKeyNetworkType(_ context.Context, group, query, typ string) (node.Key, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	t := n.tk()
+	for i := range t.keys {
+		if t.keys[i].ConversationID == query || t.keys[i].Key == query {
+			t.keys[i].NetworkType = typ
+			return t.keys[i], nil
+		}
+	}
+	return node.Key{}, fmt.Errorf("no Key %s", query)
+}
+
 func (n *fakeNode) SetKeyAlias(_ context.Context, group, query, alias string) (node.Key, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

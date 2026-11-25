@@ -3,6 +3,7 @@ package shell
 import (
 	"cmp"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"reflect"
@@ -11,12 +12,16 @@ import (
 	"sync"
 	"time"
 
+	"defios.com/internal/base58"
 	"defios.com/internal/config"
 	"defios.com/internal/jobrun"
+	"defios.com/internal/key"
 	"defios.com/internal/mention"
+	"defios.com/internal/network"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/session"
+	"defios.com/internal/signreq"
 	"defios.com/internal/transcript"
 	"defios.com/internal/trigger"
 )
@@ -33,6 +38,7 @@ type TalkNode interface {
 	Handles(ctx context.Context, group, conv string) ([]string, error)
 	DropQueued(ctx context.Context, group, msgID string) (string, error)
 	SetKeyAlias(ctx context.Context, group, query, alias string) (node.Key, error)
+	SetKeyNetworkType(ctx context.Context, group, query, typ string) (node.Key, error)
 	StartKeygen(ctx context.Context, group string, k node.Keygen) (node.Session, error)
 	AcceptSession(ctx context.Context, group, id, alias string) error
 	AbortSession(ctx context.Context, group, id, reason string) error
@@ -133,7 +139,10 @@ type Conversation struct {
 	// Alias is the Key's alias here, "" for none; Curve and ShortKey name
 	// it otherwise. All "" for Group talk.
 	Alias, Curve, ShortKey string
-	T, N                   int
+	// NetworkType is what this device uses the Key for, which picks its
+	// icon: bitcoin, ethereum, solana, or "" for an ECDSA Key not yet set.
+	NetworkType string
+	T, N        int
 	// OpenSignRequests counts its Sign Requests not yet settled.
 	OpenSignRequests int
 	// Unread counts what people on other devices said here past this
@@ -299,12 +308,57 @@ type LiveBlock struct {
 
 // KeyDetail is a Key as the right column shows it.
 type KeyDetail struct {
-	Key, Alias, Curve, PublicKey, Address string
-	T, N                                  int
-	Share                                 bool // this device holds a share
+	Key, Alias, Curve, PublicKey string
+	NetworkType                  string // as Conversation's
+	// Addresses are where it funds and spends for its Network type: one
+	// for Ethereum or Solana, one per bitcoin network of this
+	// Conversation's Networks for Bitcoin (mainnet with none), and both
+	// Ethereum's and Bitcoin's for an ECDSA Key whose type is unset.
+	Addresses []KeyAddress
+	// NetworkTypes are those its curve allows, for choosing among.
+	NetworkTypes []string
+	T, N         int
+	Share        bool // this device holds a share
 	// Reachable of its devices are reachable now; CanSign once t are.
 	Reachable int
 	CanSign   bool
+}
+
+// KeyAddress is one of a Key's addresses and what it is: "Ethereum
+// address", "Bitcoin testnet address".
+type KeyAddress struct{ Label, Address string }
+
+// keyAddresses are k's KeyDetail.Addresses, its Bitcoin ones on nets.
+// An address that cannot be made (a malformed public key) is left out.
+func keyAddresses(k node.Key, nets []string) []KeyAddress {
+	pub, _ := hex.DecodeString(k.PublicKey)
+	var out []KeyAddress
+	add := func(label string, addr string, err error) {
+		if err == nil && addr != "" {
+			out = append(out, KeyAddress{Label: label, Address: addr})
+		}
+	}
+	switch {
+	case k.Curve == "eddsa":
+		add("Solana address", base58.Encode(pub), nil)
+	case k.NetworkType == network.Ethereum || k.NetworkType == "":
+		addr, err := key.EthereumAddress(pub)
+		add("Ethereum address", addr, err)
+	}
+	if k.Curve == "ecdsa" && k.NetworkType != network.Ethereum {
+		if len(nets) == 0 {
+			nets = []string{"mainnet"}
+		}
+		for _, net := range nets {
+			label := "Bitcoin address"
+			if net != "mainnet" {
+				label = "Bitcoin " + net + " address"
+			}
+			addr, err := signreq.BitcoinAddress(net, pub)
+			add(label, addr, err)
+		}
+	}
+	return out
 }
 
 // Agent is an Agent Profile of this device, its party key and Livery,
@@ -376,10 +430,13 @@ type talk struct {
 	sizes    []node.LiveTranscript
 	agents   []Agent
 	over     []Override
-	system   map[string][]Item // by Conversation
-	live     map[string][]*LiveChain
-	accepted map[string]bool // keygen Sessions this device accepted
-	starting int             // StartKeygen calls under way
+	// bitcoinNets are the bitcoin networks of the open Conversation's
+	// Networks, which a Bitcoin Key's addresses are on.
+	bitcoinNets []string
+	system      map[string][]Item // by Conversation
+	live        map[string][]*LiveChain
+	accepted    map[string]bool // keygen Sessions this device accepted
+	starting    int             // StartKeygen calls under way
 	// reqs are the Group's Sign Requests, in log order; cards are the
 	// open Conversation's, decoded, by msg_id.
 	reqs  []node.SignRequest
@@ -415,7 +472,7 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 		t.gen++
 		t.convs, t.msgs, t.said, t.summoned, t.unposted, t.jobRuns, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, nil, nil, true, nil
 		t.saidVer++
-		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
+		t.handles, t.sizes, t.agents, t.over, t.bitcoinNets = nil, nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.proposed = map[string]bool{}, nil
 		t.reqs, t.cards, t.focus = nil, map[string]node.SignRequestDetail{}, ""
@@ -668,7 +725,7 @@ func (t *talk) loadSide() {
 		return
 	}
 	t.loadMu.Lock()
-	handles, agents, over, err := t.readSide(a)
+	sd, err := t.readSide(a)
 	// An agent added here was given a Livery.
 	liveries, lerr := a.n.Liveries(t.ctx)
 	t.loadMu.Unlock()
@@ -679,7 +736,7 @@ func (t *talk) loadSide() {
 	}
 	t.setLiveries(liveries, lerr)
 	if t.read("side", err) {
-		t.handles, t.agents, t.over = handles, agents, over
+		t.handles, t.agents, t.over, t.bitcoinNets = sd.handles, sd.agents, sd.over, sd.bitcoinNets
 	}
 	t.mu.Unlock()
 	t.emit()
@@ -711,41 +768,51 @@ func (t *talk) setLiveries(l map[string]string, err error) {
 	}
 }
 
-func (t *talk) readSide(a at) ([]string, []Agent, []Override, error) {
-	handles, err := a.n.Handles(t.ctx, a.group, a.conv)
-	if err != nil {
-		return nil, nil, nil, err
+// side is what the open Conversation's side columns show beside its talk.
+type side struct {
+	handles     []string
+	agents      []Agent
+	over        []Override
+	bitcoinNets []string
+}
+
+func (t *talk) readSide(a at) (side, error) {
+	var sd side
+	var err error
+	if sd.handles, err = a.n.Handles(t.ctx, a.group, a.conv); err != nil {
+		return side{}, err
 	}
 	included, err := a.n.IncludedAgents(t.ctx, a.group, a.conv)
 	if err != nil {
-		return nil, nil, nil, err
+		return side{}, err
 	}
 	profiles, err := a.n.AgentProfiles(t.ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return side{}, err
 	}
-	agents := make([]Agent, 0, len(profiles))
+	sd.agents = make([]Agent, 0, len(profiles))
 	for _, p := range profiles {
-		agents = append(agents, Agent{Handle: p.Handle, Party: node.AgentParty(p.Handle), Included: slices.Contains(included, p.Handle)})
+		sd.agents = append(sd.agents, Agent{Handle: p.Handle, Party: node.AgentParty(p.Handle), Included: slices.Contains(included, p.Handle)})
 	}
-	over, err := t.overrides(a)
-	return handles, agents, over, err
+	sd.over, sd.bitcoinNets, err = t.overrides(a)
+	return sd, err
 }
 
 // overrides are the Providers and Networks in force in a's Conversation
-// that are not the Group's own.
-func (t *talk) overrides(a at) ([]Override, error) {
+// that are not the Group's own, and the bitcoin networks of all its
+// Networks in force.
+func (t *talk) overrides(a at) ([]Override, []string, error) {
 	if a.conv == node.GroupTalk {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var out []Override
 	here, err := a.n.Providers(t.ctx, a.group, a.conv)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	base, err := a.n.Providers(t.ctx, a.group, node.GroupTalk)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, p := range here {
 		if !slices.ContainsFunc(base, func(b node.Provider) bool { return reflect.DeepEqual(b, p) }) {
@@ -754,18 +821,22 @@ func (t *talk) overrides(a at) ([]Override, error) {
 	}
 	nets, err := a.n.Networks(t.ctx, a.group, a.conv)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	baseNets, err := a.n.Networks(t.ctx, a.group, node.GroupTalk)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var btc []string
 	for _, nw := range nets {
 		if !slices.ContainsFunc(baseNets, func(b node.Network) bool { return reflect.DeepEqual(b, nw) }) {
 			out = append(out, Override{Kind: OverrideNetwork, Alias: nw.Alias, Detail: nw.Chain})
 		}
+		if nw.Type == network.Bitcoin && !slices.Contains(btc, nw.BitcoinNetwork) {
+			btc = append(btc, nw.BitcoinNetwork)
+		}
 	}
-	return out, nil
+	return out, btc, nil
 }
 
 // State is the Talk page now.
@@ -832,6 +903,7 @@ func (t *talk) snapshot() TalkState {
 		}
 		if k := c.Key; k != nil {
 			row.Alias, row.Curve, row.ShortKey, row.T, row.N = k.Alias, k.Curve, shortKey(k.PublicKey), k.T, k.N
+			row.NetworkType = k.NetworkType
 			if c.ID == t.open {
 				st.Key = t.keyDetail(*k)
 			}
@@ -895,7 +967,13 @@ func (t *talk) devices() []Device {
 }
 
 func (t *talk) keyDetail(k node.Key) *KeyDetail {
-	d := &KeyDetail{Key: k.Key, Alias: k.Alias, Curve: k.Curve, PublicKey: k.PublicKey, Address: k.Address, T: k.T, N: k.N, Share: k.Share}
+	d := &KeyDetail{Key: k.Key, Alias: k.Alias, Curve: k.Curve, PublicKey: k.PublicKey, NetworkType: k.NetworkType, T: k.T, N: k.N, Share: k.Share}
+	d.Addresses = keyAddresses(k, t.bitcoinNets)
+	for _, typ := range network.Types() {
+		if (network.Chain{Type: typ}).Curve() == k.Curve {
+			d.NetworkTypes = append(d.NetworkTypes, typ)
+		}
+	}
 	for _, r := range t.status.Keys {
 		if r.Key == k.Key {
 			d.Reachable, d.CanSign = r.Reachable, r.CanSign

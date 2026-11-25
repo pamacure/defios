@@ -12,11 +12,13 @@ import (
 	"defios.com/internal/nodedir"
 )
 
-// KeyAlias is what one Key's Conversation config.toml says of its alias.
+// KeyAlias is what one Key's Conversation config.toml says of its alias
+// and its Network type.
 type KeyAlias struct {
 	// File is that config.toml, present or not.
-	File  string
-	Alias string
+	File        string
+	Alias       string
+	NetworkType string
 	// Err is why File did not read or parse, naming it. The alias might be
 	// in it, so an alias lookup fails on it (ADR 0033).
 	Err error
@@ -32,7 +34,7 @@ func ReadKeyAliases(p nodedir.Paths, groupAlias string, keys []key.Key) map[stri
 	for _, k := range keys {
 		a := KeyAlias{File: p.ConversationConfigFile(groupAlias, names[key.ConversationID(k.Curve, k.PublicKey)])}
 		w, err := ReadWorkspace(a.File)
-		a.Alias, a.Err = w.Alias, err
+		a.Alias, a.NetworkType, a.Err = w.Alias, w.NetworkType, err
 		out[k.Ref()] = a
 	}
 	return out
@@ -41,11 +43,21 @@ func ReadKeyAliases(p nodedir.Paths, groupAlias string, keys []key.Key) map[stri
 // WriteKeyAlias sets alias in the Conversation config.toml at path, keeping
 // the rest of it. An empty alias removes it.
 func WriteKeyAlias(path, alias string) error {
+	return editWorkspace(path, func(w *Workspace) { w.Alias = alias })
+}
+
+// WriteKeyNetworkType sets typ, a Network type, in the Conversation
+// config.toml at path, keeping the rest of it. An empty typ removes it.
+func WriteKeyNetworkType(path, typ string) error {
+	return editWorkspace(path, func(w *Workspace) { w.NetworkType = typ })
+}
+
+func editWorkspace(path string, edit func(*Workspace)) error {
 	w, err := ReadWorkspace(path)
 	if err != nil {
 		return err
 	}
-	w.Alias = alias
+	edit(&w)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

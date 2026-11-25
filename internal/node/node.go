@@ -108,6 +108,7 @@ type Node interface {
 	Keys(ctx context.Context, group string, passphrase Passphrase) ([]Key, error)
 	InspectKey(ctx context.Context, group, query string, passphrase Passphrase) (Key, error)
 	SetKeyAlias(ctx context.Context, group, query, alias string) (Key, error)
+	SetKeyNetworkType(ctx context.Context, group, query, typ string) (Key, error)
 	StartKeygen(ctx context.Context, group string, k Keygen) (Session, error)
 	AcceptSession(ctx context.Context, group, id, alias string) error
 	AbortSession(ctx context.Context, group, id, reason string) error

@@ -545,6 +545,12 @@ func TestAKeysConversationShowsItsKeyAndWhetherItCanSign(t *testing.T) {
 	if ts := s.SetKeyAlias("cold"); ts.Problem != nil || ts.Key.Alias != "cold" || ts.Conversations[1].Alias != "cold" {
 		t.Fatalf("rename: %+v", ts)
 	}
+	if got := strings.Join(ts.Key.NetworkTypes, ","); got != "bitcoin,ethereum" {
+		t.Fatalf("an ECDSA Key's network types: %s", got)
+	}
+	if ts := s.SetKeyNetworkType("bitcoin"); ts.Problem != nil || ts.Key.NetworkType != "bitcoin" || ts.Conversations[1].NetworkType != "bitcoin" {
+		t.Fatalf("set network type: %+v", ts)
+	}
 }
 
 func TestIncludingAnAgentInAConversationKeepsTheGroupsAgents(t *testing.T) {

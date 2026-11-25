@@ -120,7 +120,34 @@ async function act(method, ...args) {
 }
 
 const curveName = (c) => ({ ecdsa: "ECDSA", eddsa: "EdDSA" }[c] ?? c);
-const addressLabel = (c) => (c === "eddsa" ? "Solana address" : "Ethereum address");
+// convIcon marks a row of the rack: the Group's for Group talk, else what
+// this device uses the Key for, or its curve's while that is unset.
+const NETWORK_TYPES = { bitcoin: "Bitcoin", ethereum: "Ethereum and EVM chains", solana: "Solana" };
+const convIcon = (c) => {
+  if (c.ID === GROUP_TALK) return groupIcon(ts.Roster.length, ts.Online);
+  const kind = NETWORK_TYPES[c.NetworkType] ? c.NetworkType : c.Curve;
+  return h("span", { class: `conv-icon conv-icon-${kind}`, "aria-hidden": "true" });
+};
+
+// groupIcon is the Group's devices as n dots round a ring, the first m,
+// those online, filled; clockwise from the top, or from the top's right
+// for an even n, so the ring sits level.
+function groupIcon(n, m) {
+  const span = h("span", { class: "conv-icon conv-icon-drawn", title: n ? `${m} of ${n} devices online` : "Connecting…" });
+  n = Math.max(n, 1); // one hollow dot until the Roster is known
+  const R = n > 1 ? 8 : 0;
+  const chord = n > 1 ? 2 * R * Math.sin(Math.PI / n) : 24;
+  const r = Math.max(0.9, Math.min(2.4, (chord - 2.6) / 2)); // a stroke's width and a gap apart
+  const start = -Math.PI / 2 + (n % 2 ? 0 : Math.PI / n);
+  let dots = "";
+  for (let i = 0; i < n; i++) {
+    const a = start + (2 * Math.PI * i) / n;
+    const x = (12 + R * Math.cos(a)).toFixed(2), y = (12 + R * Math.sin(a)).toFixed(2);
+    dots += `<circle cx="${x}" cy="${y}" r="${r.toFixed(2)}"${i < m ? ' fill="currentColor"' : ""}/>`;
+  }
+  span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">${dots}</svg>`;
+  return span;
+}
 const convName = (c) => (c.ID === GROUP_TALK ? "Group" : c.Alias || `${curveName(c.Curve)} ${c.ShortKey}`);
 const shortID = (id) => (id.length > 16 ? `${id.slice(0, 16)}…` : id);
 
@@ -249,6 +276,7 @@ function left() {
   const rows = ts.Conversations.map((c) => h("button", {
     class: "conv", "aria-current": c.ID === ts.Open ? "true" : null, onclick: open(c.ID),
   },
+  convIcon(c),
   h("span", { class: "name" }, convName(c)),
   c.ID === GROUP_TALK ? h("span", { class: "sub" }, "Everyone in the Group")
     : h("span", { class: "sub" }, `${curveName(c.Curve)} · ${c.T} of ${c.N}`),
@@ -1235,10 +1263,25 @@ function keyDetails(k) {
   return fold("Key",
     row("Name", alias),
     row("Curve", h("div", { class: "value" }, curveName(k.Curve))),
+    row("Used for", usedFor(k)),
     row("Signers", h("div", { class: "value" }, `${k.T} of ${k.N} devices`)),
     row("Public key", copyable(k.PublicKey, "Public key")),
-    k.Address && row(addressLabel(k.Curve), copyable(k.Address, "Address")),
+    (k.Addresses ?? []).map((ad) => row(ad.Label, copyable(ad.Address, ad.Label))),
     row("This device", h("div", { class: "value" }, k.Share ? "Holds a share" : "Holds no share")));
+}
+
+// usedFor picks what this device uses Key k for, among the Network types
+// of its curve; it only marks the Key's row. An ECDSA Key may be unset.
+function usedFor(k) {
+  const types = k.NetworkTypes ?? [];
+  return h("div", { class: "value" },
+    h("select", {
+      class: "field left", "aria-label": "Used for", disabled: tui.busy,
+      onchange: (e) => act("SetKeyNetworkType", e.target.value),
+    },
+    !types.includes(k.NetworkType) && h("option", { value: "", selected: true }, "Not set"),
+    types.map((t) => h("option", { value: t, selected: t === k.NetworkType }, NETWORK_TYPES[t] ?? t))),
+    h("p", { class: "hint" }, "Marks this Key's conversation. Only this device sees it."));
 }
 
 // copyable is text shown whole that a click copies, saying so for a

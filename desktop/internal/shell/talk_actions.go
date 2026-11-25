@@ -58,6 +58,10 @@ func (s *Shell) AbortKeygen(id, reason string) TalkState { return s.talk.abortKe
 // its alias.
 func (s *Shell) SetKeyAlias(alias string) TalkState { return s.talk.setKeyAlias(alias) }
 
+// SetKeyNetworkType sets what this device uses the open Conversation's Key
+// for, a Network type of its curve; "" clears it to the curve's default.
+func (s *Shell) SetKeyNetworkType(typ string) TalkState { return s.talk.setKeyNetworkType(typ) }
+
 // SetAgentIncluded includes this device's agent handle in the open
 // Conversation, or excludes it.
 func (s *Shell) SetAgentIncluded(handle string, on bool) TalkState {
@@ -231,6 +235,16 @@ func (t *talk) setKeyAlias(alias string) TalkState {
 			return nil
 		}
 		_, err := a.n.SetKeyAlias(t.ctx, a.group, a.conv, alias)
+		return err
+	}, t.loadConversations)
+}
+
+func (t *talk) setKeyNetworkType(typ string) TalkState {
+	return t.act(func(a at) error {
+		if a.conv == node.GroupTalk {
+			return nil
+		}
+		_, err := a.n.SetKeyNetworkType(t.ctx, a.group, a.conv, typ)
 		return err
 	}, t.loadConversations)
 }

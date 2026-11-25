@@ -99,6 +99,8 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
 #app { height: 100%; }
+/* Selected text: the luminous brand green, dark text on it in either theme. */
+::selection { background: var(--accent-bright); color: var(--on-bright); }
 button, input, select { font: inherit; color: inherit; }
 code { font-family: var(--mono); font-size: 0.92em; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 
@@ -297,10 +299,23 @@ textarea.field[rows="1"]::placeholder { white-space: nowrap; overflow: hidden; t
 .conv .name { font-weight: 600; overflow-wrap: anywhere; }
 .conv .sub { color: var(--muted); font-size: 12px; }
 /* A row's marks sit beside its name, so a long name wraps short of them. */
-button.conv { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: start; }
-button.conv > .name { grid-column: 1; grid-row: 1; }
-button.conv > .sub { grid-column: 1 / -1; }
-.conv .marks { grid-column: 2; grid-row: 1; margin-block: -2px; display: flex; align-items: center; gap: 4px; }
+button.conv { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 8px; align-items: start; }
+button.conv > .name { grid-column: 2; grid-row: 1; }
+button.conv > .sub { grid-column: 2 / -1; }
+/* A row's icon: what its Key is used for, or the Group's, drawn in
+   currentColor through its SVG as a mask, as a brick is. */
+.conv-icon { grid-column: 1; grid-row: 1 / 3; align-self: center; width: 20px; height: 20px; color: var(--muted); background-color: currentColor; -webkit-mask: var(--conv-icon) center / contain no-repeat; mask: var(--conv-icon) center / contain no-repeat; }
+.conv:hover .conv-icon { color: var(--text-soft); }
+.conv[aria-current="true"] .conv-icon { color: var(--accent-strong); }
+/* The Group's is drawn in place, its devices' dots, not masked. */
+.conv-icon-drawn { background: none; -webkit-mask: none; mask: none; }
+.conv-icon-drawn svg { display: block; width: 100%; height: 100%; }
+.conv-icon-bitcoin { --conv-icon: url(convicons/key-bitcoin.svg); }
+.conv-icon-ethereum { --conv-icon: url(convicons/key-evm.svg); }
+.conv-icon-solana { --conv-icon: url(convicons/key-solana.svg); }
+.conv-icon-ecdsa { --conv-icon: url(convicons/key-ecdsa.svg); }
+.conv-icon-eddsa { --conv-icon: url(convicons/key-eddsa.svg); }
+.conv .marks { grid-column: 3; grid-row: 1; margin-block: -2px; display: flex; align-items: center; gap: 4px; }
 .conv .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-s); background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; }
 .conv .badge.unread { background: var(--text-soft); color: var(--surface); }
 .conv .dot-unread { width: 8px; height: 8px; margin: 0 2px; border-radius: 50%; background: var(--muted); }

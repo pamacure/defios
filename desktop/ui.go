@@ -164,6 +164,7 @@ func (u *UI) ReadTo(conv string, seq uint64) error          { return u.shell.Rea
 func (u *UI) CancelChain(chain string) shell.TalkState      { return u.shell.CancelChain(chain) }
 func (u *UI) DropQueued(msgID string) shell.TalkState       { return u.shell.DropQueued(msgID) }
 func (u *UI) SetKeyAlias(alias string) shell.TalkState      { return u.shell.SetKeyAlias(alias) }
+func (u *UI) SetKeyNetworkType(typ string) shell.TalkState  { return u.shell.SetKeyNetworkType(typ) }
 func (u *UI) AcceptKeygen(id, alias string) shell.TalkState { return u.shell.AcceptKeygen(id, alias) }
 func (u *UI) AbortKeygen(id, reason string) shell.TalkState { return u.shell.AbortKeygen(id, reason) }
 func (u *UI) NewKey(curve string, t int, alias string) shell.TalkState {
