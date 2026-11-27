@@ -409,9 +409,6 @@ func TestSolanaFillsFeePayerBlockhashAndCluster(t *testing.T) {
 	if w := []string{"feePayer", "recentBlockhash", "cluster", "genesisHash"}; !slices.Equal(n.Filled, w) {
 		t.Errorf("filled %v, want %v", n.Filled, w)
 	}
-	if !strings.Contains(n.Warning, "expires") {
-		t.Errorf("warning %q does not say the blockhash expires", n.Warning)
-	}
 	for _, c := range *calls {
 		if c.Method == "getLatestBlockhash" {
 			if opts, _ := c.Params[0].(map[string]any); opts["commitment"] != "finalized" {

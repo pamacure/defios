@@ -109,6 +109,10 @@ type Config struct {
 	NewSigner func() Engine
 	// SignInfo resolves a sign.request by msg_id. Nil refuses to sign.
 	SignInfo func(requestID [32]byte) (SignInfo, error)
+	// Refresh reads a sign.request's fresh chain fields for the
+	// session.start this Node is about to append (ADR 0045). Nil, or nil
+	// returned, refreshes nothing; it never fails the start.
+	Refresh func(ctx context.Context, requestID [32]byte) *coslv1.SignRefresh
 	// SignInfoReads are the message types SignInfo reads. A commit of one can
 	// change its answer, so it wakes the layer. Nil means sign.request,
 	// sign.accept and sign.refuse, which any SignInfo reads.

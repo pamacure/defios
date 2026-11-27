@@ -56,12 +56,11 @@ type SignNetwork struct {
 }
 
 // ReviewTx is one filled transaction, to check before proposing: its
-// fields, which Fill completed, and any warning.
+// fields, and which Fill completed.
 type ReviewTx struct {
 	Network, Chain string
 	Fields         []ReviewField
 	Filled         []string
-	Warning        string
 }
 
 // ReviewField is one field of an intent, as a person reads it.
@@ -139,7 +138,7 @@ func (t *talk) fillSign(d SignDraft) SignFormView {
 		rv := ReviewTx{Network: tx.Network, Fields: append(callFields(d.Transactions[i]), reviewFields(tx)...), Filled: []string{}}
 		for _, n := range f.Notes {
 			if n.Index == i {
-				rv.Chain, rv.Filled, rv.Warning = n.Chain, append(rv.Filled, n.Filled...), n.Warning
+				rv.Chain, rv.Filled = n.Chain, append(rv.Filled, n.Filled...)
 			}
 		}
 		out.Review = append(out.Review, rv)

@@ -113,6 +113,21 @@ func (n *fakeNode) answer(msgID, nodeID, handle string, refuse bool, reason stri
 	n.emit(node.Event{SignRequest: &node.SignRequestEvent{Group: n.servedGroup(), Request: sum}})
 }
 
+// fail records a Transaction Outcome of result for the signed request's
+// one transaction, which fails it, and emits its event.
+func (n *fakeNode) fail(msgID, result, detail string) {
+	n.mu.Lock()
+	r := n.request(msgID)
+	n.tk().seq++
+	at := time.Now().UTC().Format(time.RFC3339)
+	r.Outcomes = append(r.Outcomes, signreq.Outcome{Seq: n.tk().seq, Node: n.NodeID(), At: at, Chain: "ethereum chain 1", Result: result, Detail: detail})
+	r.History = append(r.History, signreq.Event{Kind: signreq.EventOutcome, Seq: n.tk().seq, At: at, Node: n.NodeID(), Result: result, Reason: detail})
+	r.Status, r.Failure, r.Retry = signreq.Failed, result, signreq.Retryable(result)
+	sum := r.Summary
+	n.mu.Unlock()
+	n.emit(node.Event{SignRequest: &node.SignRequestEvent{Group: n.servedGroup(), Request: sum}})
+}
+
 // hookRun records run on its Sign Request and emits its event.
 func (n *fakeNode) hookRun(run node.HookRun) {
 	n.mu.Lock()
@@ -276,7 +291,7 @@ func (n *fakeNode) commitStances() {
 func (n *fakeNode) BroadcastSignRequest(_ context.Context, group, msgID string) (node.Broadcast, error) {
 	n.mu.Lock()
 	r := n.request(msgID)
-	if r == nil || r.Status != signreq.Done {
+	if r == nil || r.Status != signreq.Done && r.Status != signreq.Failed {
 		n.mu.Unlock()
 		return node.Broadcast{}, signreq.ErrNotSigned
 	}
@@ -287,6 +302,7 @@ func (n *fakeNode) BroadcastSignRequest(_ context.Context, group, msgID string) 
 	})
 	r.History = append(r.History, signreq.Event{Kind: signreq.EventBroadcast, Seq: n.tk().seq, At: time.Now().UTC().Format(time.RFC3339), Node: n.NodeID()})
 	r.Broadcasts, r.FullyBroadcast = len(r.BroadcastReceipts), true
+	r.Status, r.Failure, r.Retry = signreq.Broadcast, "", false
 	sum := r.Summary
 	n.mu.Unlock()
 	n.emit(node.Event{SignRequest: &node.SignRequestEvent{Group: group, Request: sum}})

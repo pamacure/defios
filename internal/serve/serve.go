@@ -124,6 +124,10 @@ type Options struct {
 	// MCPCallTimeout bounds an MCP Server's start and each call of its
 	// tools; zero is DefaultMCPCallTimeout (ADR 0030).
 	MCPCallTimeout time.Duration
+	// ManualBroadcast keeps this Node from broadcasting what it signs on its
+	// own: only `sign broadcast` does (tests of it). It still watches what
+	// it broadcast (ADR 0045).
+	ManualBroadcast bool
 }
 
 // Run binds the socket and answers the local API at once, then joins the

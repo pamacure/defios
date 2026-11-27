@@ -20,6 +20,7 @@ type networkFlags struct {
 	btcNetwork  string
 	cluster     string
 	genesisHash string
+	confs       uint64
 }
 
 func (f *networkFlags) bind(cmd *cobra.Command) {
@@ -29,6 +30,7 @@ func (f *networkFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.btcNetwork, "bitcoin-network", "", "bitcoin: mainnet | testnet | signet | regtest")
 	cmd.Flags().StringVar(&f.cluster, "cluster", "", "solana: mainnet-beta | devnet | testnet | localnet")
 	cmd.Flags().StringVar(&f.genesisHash, "genesis-hash", "", "solana: genesis hash (base58), optional")
+	cmd.Flags().Uint64Var(&f.confs, "confirmations", 0, "ethereum: blocks deep a transaction must be to count as confirmed, optional (default 1; 0 restores it)")
 }
 
 // edit is the node.NetworkEdit of each field whose flag cmd was given.
@@ -52,6 +54,9 @@ func (f *networkFlags) edit(cmd *cobra.Command) node.NetworkEdit {
 	}
 	if fl.Changed("genesis-hash") {
 		e.GenesisHash = &f.genesisHash
+	}
+	if fl.Changed("confirmations") {
+		e.Confirmations = &f.confs
 	}
 	return e
 }
@@ -171,20 +176,22 @@ func networkError(err error) error {
 // networkView is one Network, human or JSON. RPCURLs are as written: a
 // reference is shown, never resolved, which would print a Secret.
 type networkView struct {
-	Alias       string   `json:"alias"`
-	Type        string   `json:"type"`
-	Chain       string   `json:"chain"`
-	Curve       string   `json:"curve"`
-	ChainID     uint64   `json:"chain_id,omitempty"`
-	Network     string   `json:"network,omitempty"`
-	Cluster     string   `json:"cluster,omitempty"`
-	GenesisHash string   `json:"genesis_hash,omitempty"`
-	RPCURLs     []string `json:"rpc_urls"`
+	Alias       string `json:"alias"`
+	Type        string `json:"type"`
+	Chain       string `json:"chain"`
+	Curve       string `json:"curve"`
+	ChainID     uint64 `json:"chain_id,omitempty"`
+	Network     string `json:"network,omitempty"`
+	Cluster     string `json:"cluster,omitempty"`
+	GenesisHash string `json:"genesis_hash,omitempty"`
+	// Confirmations is the ethereum depth in force.
+	Confirmations uint64   `json:"confirmations,omitempty"`
+	RPCURLs       []string `json:"rpc_urls"`
 }
 
 func networkViewOf(n node.Network) networkView {
 	return networkView{Alias: n.Alias, Type: n.Type, Chain: n.Chain, Curve: n.Curve, ChainID: n.ChainID,
-		Network: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash, RPCURLs: n.RPCURLs}
+		Network: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash, Confirmations: n.Depth, RPCURLs: n.RPCURLs}
 }
 
 func runNetworkList(ctx context.Context, g *globals, keyQuery string) error {
@@ -227,6 +234,9 @@ func runNetworkShow(ctx context.Context, g *globals, keyQuery, alias string) err
 	}
 	out, p := g.app.Stdout, g.out()
 	fmt.Fprintf(out, "alias %s\ntype %s\nchain %s\ncurve %s\n", p.primary(v.Alias), v.Type, v.Chain, v.Curve)
+	if v.Confirmations != 0 {
+		fmt.Fprintf(out, "confirmations %d\n", v.Confirmations)
+	}
 	for _, u := range v.RPCURLs {
 		fmt.Fprintf(out, "rpc_url %s\n", u)
 	}

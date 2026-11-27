@@ -38,6 +38,10 @@ const (
 	// provider.remove. They are reserved and never reused: a Provider is
 	// Node-local config (docs/adr/0022-members-are-trusted-for-their-own-messages.md),
 	// and a reader treats a row under a retired id like any unknown type.
+
+	// TypeSignOutcome is a Transaction Outcome
+	// (docs/adr/0045-a-signing-session-refreshes-broadcasts-and-confirms.md).
+	TypeSignOutcome uint32 = 17
 )
 
 // kind is one registry entry: its wire name and its payload schema.
@@ -59,6 +63,7 @@ var registry = map[uint32]kind{
 	TypeSignAccept:      {"sign.accept", func() proto.Message { return &coslv1.SignAccept{} }},
 	TypeSignBroadcast:   {"sign.broadcast", func() proto.Message { return &coslv1.SignBroadcast{} }},
 	TypeSignRefuse:      {"sign.refuse", func() proto.Message { return &coslv1.SignRefuse{} }},
+	TypeSignOutcome:     {"sign.outcome", func() proto.Message { return &coslv1.SignOutcome{} }},
 }
 
 // ErrUnknownType is returned by DecodePayload for ids outside the registry.

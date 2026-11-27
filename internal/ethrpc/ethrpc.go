@@ -84,3 +84,66 @@ func send(ctx context.Context, endpoint string, raw []byte, hash [32]byte) (bool
 	}
 	return false, sendErr
 }
+
+// Receipt is a mined transaction's receipt: whether it succeeded, and the
+// block that mined it.
+type Receipt struct {
+	OK    bool
+	Block uint64
+}
+
+// TransactionReceipt is the receipt of the transaction hash, nil while it is
+// not mined.
+func (e Endpoint) TransactionReceipt(ctx context.Context, hash [32]byte) (*Receipt, error) {
+	var got *struct {
+		Status      string `json:"status"`
+		BlockNumber string `json:"blockNumber"`
+	}
+	if err := e.Call(ctx, "eth_getTransactionReceipt", []any{"0x" + hex.EncodeToString(hash[:])}, &got); err != nil {
+		return nil, err
+	}
+	if got == nil || got.BlockNumber == "" {
+		return nil, nil
+	}
+	block, err := quantity("blockNumber", got.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	status, err := quantity("status", got.Status)
+	if err != nil {
+		return nil, err
+	}
+	return &Receipt{OK: status == 1, Block: block}, nil
+}
+
+// BlockNumber is the latest block's number.
+func (e Endpoint) BlockNumber(ctx context.Context) (uint64, error) {
+	var got string
+	if err := e.Call(ctx, "eth_blockNumber", nil, &got); err != nil {
+		return 0, err
+	}
+	return quantity("eth_blockNumber", got)
+}
+
+// Nonce is how many transactions address has had mined: the next nonce
+// the latest block takes from it.
+func (e Endpoint) Nonce(ctx context.Context, address string) (uint64, error) {
+	var got string
+	if err := e.Call(ctx, "eth_getTransactionCount", []any{address, "latest"}, &got); err != nil {
+		return 0, err
+	}
+	return quantity("eth_getTransactionCount", got)
+}
+
+// quantity is a hex quantity that fits a uint64.
+func quantity(what, s string) (uint64, error) {
+	digits, ok := strings.CutPrefix(strings.ToLower(s), "0x")
+	if !ok || digits == "" {
+		return 0, fmt.Errorf("%s: %q is not a hex quantity", what, s)
+	}
+	v, err := strconv.ParseUint(digits, 16, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a hex quantity", what, s)
+	}
+	return v, nil
+}

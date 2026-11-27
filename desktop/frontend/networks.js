@@ -160,15 +160,17 @@ function networkForm(n) {
   const where = n ? `network:${n.Alias}` : "new-network";
   const d = draft ?? (n
     ? { ...n, RPCURLs: n.RPCURLs.map((u) => ({ ...u })) }
-    : { Alias: "", Type: "ethereum", ChainID: "", BitcoinNetwork: "mainnet", Cluster: "mainnet-beta", GenesisHash: "", RPCURLs: [{ URL: "", Secret: "" }] });
+    : { Alias: "", Type: "ethereum", ChainID: "", Confirmations: "", BitcoinNetwork: "mainnet", Cluster: "mainnet-beta", GenesisHash: "", RPCURLs: [{ URL: "", Secret: "" }] });
   const alias = text(d.Alias, { placeholder: "eth" });
   const type = choose(nv.Types ?? Object.keys(TYPES), d.Type, TYPES);
   let fields = [];
   let readType = () => ({});
   if (d.Type === "ethereum") {
     const id = text(d.ChainID, { inputmode: "numeric", placeholder: "1" });
-    fields = [row(where, "chain_id", "Chain ID", id, "1 for Ethereum mainnet, 8453 for Base, 11155111 for Sepolia.")];
-    readType = () => ({ ChainID: id.value.trim() });
+    const confs = text(d.Confirmations, { inputmode: "numeric", placeholder: "1" });
+    fields = [row(where, "chain_id", "Chain ID", id, "1 for Ethereum mainnet, 8453 for Base, 11155111 for Sepolia."),
+      row(where, "confirmations", "Confirmations", confs, "Optional: how many blocks deep a transaction must be to count as confirmed. 1 is the block that mines it.")];
+    readType = () => ({ ChainID: id.value.trim(), Confirmations: confs.value.trim() });
   } else if (d.Type === "bitcoin") {
     const net = choose(nv.BitcoinNetworks ?? [], d.BitcoinNetwork || "mainnet");
     fields = [row(where, "bitcoin_network", "Network", net)];

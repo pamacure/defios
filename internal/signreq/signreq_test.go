@@ -766,14 +766,14 @@ func TestListAndInspectNeedOnlyMsgTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := list[0]; got.Status != "signed" || len(got.Accepted) != 2 || got.Needed != 2 || !got.KeyKnown || got.Broadcasts != 1 {
+	if got := list[0]; got.Status != Broadcast || len(got.Accepted) != 2 || got.Needed != 2 || !got.KeyKnown || got.Broadcasts != 1 {
 		t.Fatalf("summary from MsgTypes rows = %+v", got)
 	}
 	d, err := Inspect(narrow, "a1", within)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Status != "signed" || len(d.BroadcastReceipts) != 1 || len(d.Details) != 1 || len(d.Details[0].Digests) != 1 {
+	if d.Status != Broadcast || len(d.BroadcastReceipts) != 1 || len(d.Details) != 1 || len(d.Details[0].Digests) != 1 {
 		t.Fatalf("detail from MsgTypes rows = %+v", d)
 	}
 }

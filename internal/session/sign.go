@@ -248,8 +248,14 @@ func (s *Service) startRequest(ctx context.Context, id ID, busy bool) {
 	}
 }
 
+// refreshTimeout bounds reading a request's fresh chain fields: the Session
+// layer waits on it, and a chain that does not answer keeps its proposed
+// fields.
+const refreshTimeout = 15 * time.Second
+
 // appendSignStart mints the Session's nonce and seals it to the signers,
-// which are in sorted order (SignInfo.signers).
+// which are in sorted order (SignInfo.signers), and carries the request's
+// fresh chain fields (Config.Refresh).
 func (s *Service) appendSignStart(ctx context.Context, requestID ID, info SignInfo, signers []identity.ID) error {
 	nodes := s.cfg.Roster.Nodes()
 	var id ID
@@ -274,6 +280,12 @@ func (s *Service) appendSignStart(ctx context.Context, requestID ID, info SignIn
 		boxes = append(boxes, &coslv1.SealedBox{To: append([]byte(nil), sg[:]...), EphemeralPublicKey: eph, Nonce: nn, Ciphertext: ct})
 		parts = append(parts, append([]byte(nil), sg[:]...))
 	}
+	var refresh *coslv1.SignRefresh
+	if s.cfg.Refresh != nil {
+		rctx, cancel := context.WithTimeout(ctx, refreshTimeout)
+		refresh = s.cfg.Refresh(rctx, requestID)
+		cancel()
+	}
 	return s.signAndAppend(ctx, cosl.TypeSessionStart, &coslv1.SessionStart{
 		SessionId:     append([]byte(nil), id[:]...),
 		Curve:         info.Curve,
@@ -282,6 +294,7 @@ func (s *Service) appendSignStart(ctx context.Context, requestID ID, info SignIn
 		Participants:  parts,
 		NonceBoxes:    boxes,
 		SignRequestId: append([]byte(nil), requestID[:]...),
+		SignRefresh:   refresh,
 	})
 }
 

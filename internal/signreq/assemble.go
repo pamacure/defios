@@ -26,7 +26,9 @@ type SignedTx struct {
 // Signed assembles every transaction of the sign.request msgID from sigs, one
 // signature per Digest, flattened across the transactions in order (as a
 // Session completes with them): one per Ethereum or Solana transaction, one
-// per input of a Bitcoin one. Each is bound to the chain it names.
+// per input of a Bitcoin one. Each is bound to the chain it names, and is the
+// transaction as its Session's start refreshed it; rows must hold the
+// session.start rows.
 func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte) ([]SignedTx, error) {
 	row, err := match(rows, fmt.Sprintf("%x", msgID))
 	if err != nil {
@@ -34,6 +36,9 @@ func Signed(rows []cosl.Row, msgID [32]byte, sigs [][]byte) ([]SignedTx, error) 
 	}
 	req, err := decodeRow(row)
 	if err != nil {
+		return nil, err
+	}
+	if req, err = signedAs(rows, row, req); err != nil {
 		return nil, err
 	}
 	need := 0

@@ -58,6 +58,26 @@ message SessionStart {
   // Unset for a signing Session or none. Bytes for the reason proposed_alias
   // is; one that is not a Network type of the curve is ignored.
   bytes proposed_network_type = 9;
+  // A signing Session's fresh chain fields, read by the Node that appends
+  // the start and applied by every Node before it derives the Digests
+  // (docs/adr/0045-a-signing-session-refreshes-broadcasts-and-confirms.md).
+  // Unset for keygen, or when nothing was refreshed.
+  SignRefresh sign_refresh = 10;
+}
+
+// SignRefresh is the fields a signing start replaces in its sign.request's
+// transactions. Each transaction appears at most once.
+message SignRefresh {
+  repeated RefreshedTx transactions = 1;
+}
+
+// RefreshedTx is one transaction's fresh field, of its chain type.
+message RefreshedTx {
+  uint32 tx_index = 1;                // position in the request's transactions[]
+  oneof field {
+    uint64 nonce = 2;                 // ethereum
+    string recent_blockhash = 3;      // solana, base58
+  }
 }
 
 message SessionAbort {
@@ -146,6 +166,19 @@ message BroadcastedTx {
   reserved "network_config_id";
   bytes tx_hash = 2;                  // the transaction's id: hash (32) or Solana signature (64)
   uint32 tx_index = 3;                // position in the request's transactions[]
+}
+
+// SignOutcome is the payload of sign.outcome, a Transaction Outcome
+// (docs/adr/0045-a-signing-session-refreshes-broadcasts-and-confirms.md):
+// what became of one broadcast transaction. Scoped and sent as
+// sign.broadcast is; its sender is the Node that watched the transaction.
+message SignOutcome {
+  bytes sign_request_id = 1;          // msg_id of the sign.request; 32
+  uint32 tx_index = 2;                // position in the request's transactions[]
+  bytes tx_hash = 3;                  // as in its receipt; empty when rejected before one
+  string result = 4;                  // confirmed | reverted | rejected | dropped
+  uint64 block = 5;                   // block number or slot of a mined transaction
+  string detail = 6;                  // why, for a failure; UTF-8
 }
 
 // SignTransaction is one transaction of a Sign Request. Its intent names the

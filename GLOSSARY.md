@@ -217,7 +217,7 @@ The input and output tokens a Node's agents consumed calling their Providers, co
 _Avoid_: usage (alone), agent usage, cost, quota
 
 **Sign Request**:
-One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several chains of the Key's curve, each naming its chain's identity, but each signed transaction is broadcastable on exactly one chain. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `refused` (too many Sign Refusals for t accepts ever to exist), `aborted` or `expired`.
+One Node's proposal that a Group's Key sign one or more transactions, scoped to that Key and carrying a natural-language reason. Its transactions may target several chains of the Key's curve, each naming its chain's identity, but each signed transaction is broadcastable on exactly one chain. The proposing Node's signature on the request is its own acceptance. A request's status is `open`, `waiting` (t accepts, no Session yet), `signing`, `signed`, `broadcast` (every transaction went out), `confirmed` (every transaction mined), `failed` (a transaction's latest Transaction Outcome is a failure), `refused` (too many Sign Refusals for t accepts ever to exist), `aborted` or `expired`. The t-th accept is the last step anyone takes: the Node that starts the Session refreshes its chain fields, then broadcasts and watches it once signed.
 _Avoid_: transaction request, signing job, order
 
 **Draft**:
@@ -239,3 +239,11 @@ _Avoid_: hash, message, sighash
 **Broadcast Receipt**:
 A Node's record on the COSL that it submitted signed transactions to one chain, carrying the resulting transaction hash and request position of each (`sign.broadcast`); a request spanning several chains gets one receipt per chain that went out, and is fully broadcast once every transaction appears in some receipt; its sender is the broadcaster and its timestamp the broadcast time, so broadcasting is provable and visible to the Group. Any Node may broadcast and record one; a repeat broadcast is harmless and simply records another.
 _Avoid_: confirmation, txid record, acknowledgement
+
+**Transaction Outcome**:
+A Node's record on the COSL (`sign.outcome`) of what became of one transaction it broadcast: `confirmed` (mined, as deep as the chain needs), `reverted` (mined but failed), `rejected` (the chain's node refused it) or `dropped` (it can no longer be mined, or was not in time). Only a rejected or dropped transaction can be retried with `sign broadcast`; a reverted one is mined, so retrying it means a new Sign Request.
+_Avoid_: confirmation receipt, result, status
+
+**Refresh**:
+The chain fields a signing Session's start reads fresh and carries for every Node to sign with: a Solana transaction's recent blockhash and an Ethereum transaction's nonce. It keeps a request that waited for accepts from going stale; fees are never refreshed.
+_Avoid_: refill, re-fill, update

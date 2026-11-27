@@ -30,7 +30,10 @@ type Network struct {
 	BitcoinNetwork string // bitcoin
 	Cluster        string // solana
 	GenesisHash    string // solana, optional
-	RPCURLs        []string
+	// Confirmations is the ethereum depth as written, 0 for the default;
+	// Depth is the one in force.
+	Confirmations, Depth uint64
+	RPCURLs              []string
 }
 
 // NetworkEdit is what AddNetwork sets, or EditNetwork changes: a nil field
@@ -41,6 +44,7 @@ type NetworkEdit struct {
 	BitcoinNetwork *string
 	Cluster        *string
 	GenesisHash    *string
+	Confirmations  *uint64
 	RPCURLs        []string
 }
 
@@ -60,6 +64,9 @@ func (e NetworkEdit) apply(n *network.Network) {
 	}
 	if e.GenesisHash != nil {
 		n.GenesisHash = *e.GenesisHash
+	}
+	if e.Confirmations != nil {
+		n.Confirmations = *e.Confirmations
 	}
 	if e.RPCURLs != nil {
 		n.RPCURLs = slices.Clone(e.RPCURLs)
@@ -232,6 +239,10 @@ func networkOf(n network.Network) Network {
 	if urls == nil {
 		urls = []string{}
 	}
-	return Network{Alias: n.Alias, Type: n.Type, Chain: n.Chain().String(), Curve: n.Curve(), ChainID: n.ChainID,
+	out := Network{Alias: n.Alias, Type: n.Type, Chain: n.Chain().String(), Curve: n.Curve(), ChainID: n.ChainID,
 		BitcoinNetwork: n.BitcoinNetwork, Cluster: n.Cluster, GenesisHash: n.GenesisHash, RPCURLs: urls}
+	if n.Type == network.Ethereum {
+		out.Confirmations, out.Depth = n.Confirmations, n.Depth()
+	}
+	return out
 }

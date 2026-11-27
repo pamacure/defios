@@ -50,11 +50,6 @@ var (
 // proposer names none.
 const DefaultDeadlineSeconds = 300
 
-// SolanaDeadlineSeconds is the tighter default for a request with a Solana
-// transaction: its recentBlockhash expires in about 60–90 seconds, so a
-// longer window could only collect signatures that can no longer land.
-const SolanaDeadlineSeconds = 60
-
 // MaxDeadlineSeconds bounds a request's window (one year), keeping deadline
 // arithmetic far from overflow.
 const MaxDeadlineSeconds = 365 * 24 * 3600
@@ -110,9 +105,6 @@ func Build(spec Spec, nets []network.Network) (*coslv1.SignRequest, error) {
 		n, err := network.Get(nets, t.Network)
 		if err != nil {
 			return nil, err
-		}
-		if n.Type == network.Solana && spec.DeadlineSeconds == 0 {
-			out.DeadlineSeconds = min(out.DeadlineSeconds, SolanaDeadlineSeconds)
 		}
 		tx := &coslv1.SignTransaction{}
 		set := 0
@@ -364,19 +356,24 @@ func checkSolana(k key.Key, in *coslv1.SolanaIntent) error {
 // its Session. A request with no Session is refused once more than n − t
 // Nodes have refused it, so t accepts can no longer exist, and else expired
 // once its deadline passes; a Session outlives the deadline, so signed and
-// aborted beat refused and expired.
+// aborted beat refused and expired. A signed request is then broadcast once
+// every transaction went out, confirmed once every one is, or failed while
+// any's latest Transaction Outcome is a failure (ADR 0045).
 const (
-	Open    = "open"
-	Waiting = "waiting"
-	Signing = "signing"
-	Done    = "signed"
-	Aborted = "aborted"
-	Refused = "refused"
-	Expired = "expired"
+	Open      = "open"
+	Waiting   = "waiting"
+	Signing   = "signing"
+	Done      = "signed"
+	Aborted   = "aborted"
+	Refused   = "refused"
+	Expired   = "expired"
+	Broadcast = "broadcast"
+	Confirmed = "confirmed"
+	Failed    = "failed"
 )
 
 // Statuses is every status a Sign Request may have.
-var Statuses = []string{Open, Waiting, Signing, Done, Aborted, Refused, Expired}
+var Statuses = []string{Open, Waiting, Signing, Done, Broadcast, Confirmed, Failed, Aborted, Refused, Expired}
 
 // This Node's own stance on a request, as list and inspect show it.
 const (
@@ -523,6 +520,11 @@ type Summary struct {
 	Broadcasts int `json:"broadcasts"`
 	// FullyBroadcast is true once every transaction appears in some receipt.
 	FullyBroadcast bool `json:"fully_broadcast"`
+	// Failure is the result that failed a failed request: reverted,
+	// rejected or dropped. Retry is whether broadcasting it again may
+	// still land it (rejected or dropped); a reverted one is mined.
+	Failure string `json:"failure,omitempty"`
+	Retry   bool   `json:"retry"`
 }
 
 // BroadcastedTx is one transaction a Broadcast Receipt says was submitted.
@@ -573,6 +575,8 @@ type Detail struct {
 	Details         []TxDetail `json:"details"`
 	// BroadcastReceipts are the request's sign.broadcast rows, in log order.
 	BroadcastReceipts []BroadcastReceipt `json:"broadcast_receipts"`
+	// Outcomes are its Transaction Outcomes, in log order.
+	Outcomes []Outcome `json:"outcomes"`
 	// History is what happened to the request, in log order.
 	History []Event `json:"history"`
 }
@@ -583,6 +587,7 @@ const (
 	EventAccepted  = "accepted"  // a sign.accept
 	EventRefusal   = "refusal"   // a sign.refuse, with its Reason
 	EventBroadcast = "broadcast" // a sign.broadcast; Node broadcast it
+	EventOutcome   = "outcome"   // a sign.outcome: Result, with Reason its detail
 	// Changes of status: Waiting at the t-th accept, Refused at the
 	// refusal that leaves too few to accept, Signing at its Session's
 	// start, Done or Aborted at its end, Expired at the deadline.
@@ -598,11 +603,26 @@ type Event struct {
 	Node   string `json:"node,omitempty"`
 	Handle string `json:"handle,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Tx and Result are an outcome's transaction and result; Block its
+	// block number or slot, 0 for none.
+	Tx     uint32 `json:"tx,omitempty"`
+	Result string `json:"result,omitempty"`
+	Block  uint64 `json:"block,omitempty"`
 }
 
 // status derives a request's status. sessions are the log's Sessions in start
 // order, of which the first for the request is the one that counts.
-func status(r cosl.Row, req *coslv1.SignRequest, sessions []session.Summary, accepted, refused int, k threshold, now time.Time) string {
+// states are its transactions' latest words, which settle a signed one;
+// failure is the result that failed it.
+func status(r cosl.Row, req *coslv1.SignRequest, sessions []session.Summary, accepted, refused int, k threshold, now time.Time, states []TxState) (st, failure string) {
+	if st = signing(r, req, sessions, accepted, refused, k, now); st == Done {
+		return settled(states)
+	}
+	return st, ""
+}
+
+// signing is a request's status up to signed.
+func signing(r cosl.Row, req *coslv1.SignRequest, sessions []session.Summary, accepted, refused int, k threshold, now time.Time) string {
 	id := hex.EncodeToString(r.MsgID[:])
 	for _, s := range sessions {
 		if s.SignRequest != id {
@@ -682,7 +702,9 @@ func summarise(rows []cosl.Row, sessions []session.Summary, keys map[string]thre
 	sum.FullyBroadcast = len(covered) == len(req.Transactions)
 	k, known := keys[string(r.ConversationID)]
 	sum.Needed, sum.KeyKnown = k.t, known
-	sum.Status = status(r, req, sessions, len(sum.Accepted), len(sum.Refused), k, now)
+	states := txStates(len(req.Transactions), receipts, outcomes(rows, r, req))
+	sum.Status, sum.Failure = status(r, req, sessions, len(sum.Accepted), len(sum.Refused), k, now, states)
+	sum.Retry = sum.Status == Failed && Retryable(sum.Failure)
 	return sum
 }
 
@@ -750,7 +772,11 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 		return Detail{}, err
 	}
 	d := Detail{Summary: summarise(rows, sessions, keys, m, req, now), DeadlineSeconds: req.DeadlineSeconds, Details: []TxDetail{}, BroadcastReceipts: []BroadcastReceipt{}}
-	for _, tx := range req.Transactions {
+	signed := req // as its Session signs it; a refresh that is not valid aborts the Session, so the proposal is what is shown
+	if r, err := signedAs(rows, m, req); err == nil {
+		signed = r
+	}
+	for _, tx := range signed.Transactions {
 		c := ChainOf(tx)
 		td := TxDetail{Chain: c.String(), Type: c.Type}
 		if err := c.Validate(); err != nil {
@@ -787,7 +813,18 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 		d.Details = append(d.Details, td)
 	}
 	receipts := broadcasts(rows, m, req)
-	d.History = history(rows, sessions, keys[string(m.ConversationID)], m, req, receipts, d.Status)
+	outs := outcomes(rows, m, req)
+	d.History = history(rows, sessions, keys[string(m.ConversationID)], m, req, receipts, outs, d.Status)
+	d.Outcomes = []Outcome{}
+	for _, o := range outs {
+		c := ChainOf(req.Transactions[o.msg.TxIndex])
+		oc := Outcome{Seq: o.row.Seq, Node: o.row.Sender.String(), At: rfc3339(o.row.CreatedAt), Index: o.msg.TxIndex,
+			Chain: c.String(), Result: o.msg.Result, Block: o.msg.Block, Detail: o.msg.Detail}
+		if len(o.msg.TxHash) > 0 {
+			oc.TxHash = TxIDString(c, o.msg.TxHash)
+		}
+		d.Outcomes = append(d.Outcomes, oc)
+	}
 	for _, b := range receipts {
 		rc := BroadcastReceipt{
 			Seq: b.row.Seq, Broadcaster: b.row.Sender.String(), At: rfc3339(b.row.CreatedAt),
@@ -803,8 +840,9 @@ func Inspect(rows []cosl.Row, query string, now time.Time) (Detail, error) {
 
 // history is the History of the request at r, whose status is now
 // status: its stances, and the change of status each brought about; its
-// signing Session's start and end; its receipts; and its lapsing.
-func history(rows []cosl.Row, sessions []session.Summary, k threshold, r cosl.Row, req *coslv1.SignRequest, receipts []receipt, status string) []Event {
+// signing Session's start and end; its receipts and Transaction Outcomes;
+// and its lapsing.
+func history(rows []cosl.Row, sessions []session.Summary, k threshold, r cosl.Row, req *coslv1.SignRequest, receipts []receipt, outs []outcome, status string) []Event {
 	var out []Event
 	accepted, refused := 0, 0
 	for i, st := range Stances(rows, r, req) {
@@ -845,6 +883,10 @@ func history(rows []cosl.Row, sessions []session.Summary, k threshold, r cosl.Ro
 	}
 	for _, b := range receipts {
 		out = append(out, Event{Kind: EventBroadcast, Seq: b.row.Seq, At: rfc3339(b.row.CreatedAt), Node: b.row.Sender.String()})
+	}
+	for _, o := range outs {
+		out = append(out, Event{Kind: EventOutcome, Seq: o.row.Seq, At: rfc3339(o.row.CreatedAt), Node: o.row.Sender.String(),
+			Tx: o.msg.TxIndex, Result: o.msg.Result, Block: o.msg.Block, Reason: o.msg.Detail})
 	}
 	slices.SortStableFunc(out, func(a, b Event) int { return cmp.Compare(a.Seq, b.Seq) })
 	if status == Expired {

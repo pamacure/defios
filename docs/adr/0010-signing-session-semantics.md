@@ -128,6 +128,12 @@ signer set for t ≥ 3 that is not yet known when the request is proposed.
 
 ## As built (broadcasting Ethereum)
 
+_Amended by [ADR 0045](0045-a-signing-session-refreshes-broadcasts-and-confirms.md): a
+signed request is broadcast on its own by the Node that started its Session, a
+rejected transaction is recorded as a `sign.outcome` and the transactions of its
+chain that went out still get a receipt, and each broadcast transaction is watched
+to a Transaction Outcome. Solana no longer has a 60-second default deadline._
+
 - **`sign.broadcast`** (registry id 12), body `{ sign_request_id, transactions: [{ network_config_id, tx_hash, tx_index }] }`,
   scoped to the Key's Conversation. Its sender is the broadcasting Node and its
   envelope `created_at` is the broadcast time, so the receipt adds no fields for them.

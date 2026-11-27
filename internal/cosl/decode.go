@@ -123,6 +123,8 @@ func Summary(msgType uint32, payload []byte) string {
 		return fmt.Sprintf("sign_request=%s txs=%d", short(p.SignRequestId), len(p.Transactions))
 	case *coslv1.SignRefuse:
 		return fmt.Sprintf("sign_request=%s reason=%s", short(p.SignRequestId), oneLine(p.Reason))
+	case *coslv1.SignOutcome:
+		return fmt.Sprintf("sign_request=%s tx=%d result=%s", short(p.SignRequestId), p.TxIndex, oneLine(p.Result))
 	}
 	return ""
 }

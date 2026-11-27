@@ -25,7 +25,10 @@ const STATUS = {
   open: ["Waiting for devices", "warn"],
   waiting: ["Enough accepted · waiting to sign", "warn"],
   signing: ["Signing…", "ok"],
-  signed: ["Signed", "ok"],
+  signed: ["Signed · broadcasting", "warn"],
+  broadcast: ["Broadcast · waiting to be mined", "warn"],
+  confirmed: ["Confirmed", "ok"],
+  failed: ["Failed", "bad"],
   refused: ["Refused", "bad"],
   aborted: ["Aborted", "bad"],
   expired: ["Expired", "bad"],
@@ -80,8 +83,8 @@ export function signActions(c, busy) {
 }
 
 // signSections are the rest of its details: what it signs, each device's
-// stance, its Broadcast Receipts, this device's Hooks on it, and its
-// History.
+// stance, its Broadcast Receipts and what became of each transaction, this
+// device's Hooks on it, and its History.
 export function signSections(c) {
   return [
     h("section", {},
@@ -95,6 +98,13 @@ export function signSections(c) {
       h("div", { class: "receipts" }, c.Receipts.map((r) => h("div", { class: "receipt" },
         h("span", {}, `${r.Device} · ${hhmm(r.At)}`),
         r.Transactions.map((tx) => h("code", { title: tx.TxHash }, `${tx.Chain}: ${tx.TxHash}`)))))),
+    c.Outcomes.length > 0 && h("section", {},
+      h("h3", {}, "Outcomes"),
+      h("div", { class: "receipts" }, c.Outcomes.map((o) => h("div", { class: "receipt" },
+        h("span", {}, `${c.Transactions.length > 1 ? `${o.Index + 1}. ` : ""}${o.Chain} · ${o.Device} · ${hhmm(o.At)}`),
+        h("span", { class: `chip ${RESULT[o.Result]?.[1] ?? ""}` }, RESULT[o.Result]?.[0] ?? o.Result),
+        o.Block > 0 && h("span", { class: "hint" }, `block ${o.Block}`),
+        o.Detail && h("span", { class: "why" }, o.Detail))))),
     c.Runs.length > 0 && h("section", {},
       h("h3", {}, "This device's Hooks"),
       h("div", { class: "runs" }, c.Runs.map(runRow))),
@@ -105,11 +115,19 @@ export function signSections(c) {
   ];
 }
 
-// chips are its status, and whether it was broadcast.
+// RESULT labels a Transaction Outcome's result.
+const RESULT = {
+  confirmed: ["Confirmed", "ok"],
+  reverted: ["Reverted", "bad"],
+  rejected: ["Rejected", "bad"],
+  dropped: ["Dropped", "bad"],
+};
+
+// chips are its status and, for a failed one, what failed it.
 function chips(c) {
   return h("span", { class: "chips" },
-    c.Receipts.length > 0 && h("span", { class: "chip ok" }, "Broadcast"),
-    statusChip(c.Status));
+    statusChip(c.Status),
+    c.Failure && h("span", { class: "chip bad" }, RESULT[c.Failure]?.[0] ?? c.Failure));
 }
 
 // stances are its meter and each device's stance; key names the meter
@@ -124,11 +142,14 @@ function stances(c, key) {
 function hints(c) {
   const lapses = c.Status === "open" && c.Deadline && h("p", { class: "hint" }, `Lapses at ${hhmm(c.Deadline)} unless enough devices accept.`);
   const queued = c.Queued && h("p", { class: "hint queued" }, "This device's stance waits here and is sent once enough devices are online.");
-  return (lapses || queued) && h("div", { class: "hints" }, lapses, queued);
+  const retry = c.CanBroadcast && h("p", { class: "hint" }, "It was never mined, so broadcasting it again may still land it.");
+  const reverted = c.Failure === "reverted" && h("p", { class: "hint" }, "It was mined but failed on chain; trying again needs a new Sign Request.");
+  return (lapses || queued || retry || reverted) && h("div", { class: "hints" }, lapses, queued, retry, reverted);
 }
 
 // cardActions are the card's: Review, which opens its details, where it
-// is accepted or refused under what it signs; or Broadcast.
+// is accepted or refused under what it signs; or, once it failed in a way
+// a rebroadcast may fix, Broadcast again.
 function cardActions(it, busy) {
   const c = it.Sign;
   const row = [];
@@ -136,8 +157,7 @@ function cardActions(it, busy) {
     row.push(h("button", { class: "btn small bright", type: "button", onclick: () => ctx.select(it) }, "Review"));
   }
   if (c.CanBroadcast) {
-    row.push(h("button", { class: "btn small bright", type: "button", disabled: busy, onclick: () => ctx.act("BroadcastSign", c.MsgID) },
-      c.Receipts.length ? "Broadcast again" : "Broadcast"));
+    row.push(h("button", { class: "btn small bright", type: "button", disabled: busy, onclick: () => ctx.act("BroadcastSign", c.MsgID) }, "Broadcast again"));
   }
   return row.length > 0 && h("div", { class: "row" }, row);
 }
@@ -190,8 +210,7 @@ function actions(c, busy) {
     row.push(h("button", { class: "btn small", type: "button", disabled: busy, onclick: () => { cui.refusing = c.MsgID; cui.reason = ""; ctx.draw(); } }, "Refuse"));
   }
   if (c.CanBroadcast) {
-    row.push(h("button", { class: "btn small bright", type: "button", disabled: busy, onclick: () => ctx.act("BroadcastSign", c.MsgID) },
-      c.Receipts.length ? "Broadcast again" : "Broadcast"));
+    row.push(h("button", { class: "btn small bright", type: "button", disabled: busy, onclick: () => ctx.act("BroadcastSign", c.MsgID) }, "Broadcast again"));
   }
   return row.length > 0 && h("div", { class: "row" }, row);
 }
@@ -508,8 +527,7 @@ function review() {
       h("dl", {}, rv.Fields.map((fd) => [
         h("dt", {}, fd.Name, rv.Filled.includes(fd.Name) && h("span", { class: "chip ok" }, "filled")),
         h("dd", {}, h("code", {}, fd.Value)),
-      ])),
-      rv.Warning && h("p", { class: "warn-text" }, rv.Warning))),
+      ])))),
     h("div", { class: "row end" },
       h("button", { class: "btn small", type: "button", onclick: () => { form.step = "edit"; ctx.draw(); } }, "Back"),
       h("button", { class: "btn small bright", type: "button", disabled: form.busy, onclick: propose }, form.busy ? "Proposing…" : "Propose")));

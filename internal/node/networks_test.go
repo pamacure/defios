@@ -23,10 +23,16 @@ func TestAGroupsNetworksAreAddedEditedAndRemoved(t *testing.T) {
 	got, err := h.AddNetwork(ctx, "alpha", node.GroupTalk, "eth", node.NetworkEdit{
 		Type: ptr("ethereum"), ChainID: ptr(uint64(1)), RPCURLs: []string{"https://rpc.example", "$ALCHEMY"},
 	})
-	want := node.Network{Alias: "eth", Type: "ethereum", Chain: "ethereum chain 1", Curve: "ecdsa", ChainID: 1,
+	want := node.Network{Alias: "eth", Type: "ethereum", Chain: "ethereum chain 1", Curve: "ecdsa", ChainID: 1, Depth: 1,
 		RPCURLs: []string{"https://rpc.example", "$ALCHEMY"}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("add eth: %#v, %v\nwant %#v", got, err, want)
+	}
+	if got, err := h.EditNetwork(ctx, "alpha", node.GroupTalk, "eth", node.NetworkEdit{Confirmations: ptr(uint64(3))}); err != nil || got.Confirmations != 3 || got.Depth != 3 {
+		t.Fatalf("confirmations 3: %#v, %v", got, err)
+	}
+	if _, err := h.EditNetwork(ctx, "alpha", node.GroupTalk, "eth", node.NetworkEdit{Confirmations: ptr(uint64(0))}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := h.AddNetwork(ctx, "alpha", node.GroupTalk, "btc", node.NetworkEdit{Type: ptr("bitcoin"), BitcoinNetwork: ptr("testnet")}); err != nil {
 		t.Fatal(err)

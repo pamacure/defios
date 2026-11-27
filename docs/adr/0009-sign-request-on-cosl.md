@@ -10,7 +10,10 @@ intent (target, value, calldata, inputs/outputs, instructions), never opaque
 bytes, so every Node independently reconstructs the canonical unsigned
 transaction(s) and derives the identical set of **Digests** to sign. Design in
 the [Signing Design doc](https://claude.ai/artifact/1hHd6qfr2nUpq1Evp3jnBz);
-tickets to follow.
+tickets to follow. *Amended by
+[ADR 0045](0045-a-signing-session-refreshes-broadcasts-and-confirms.md): the
+Digests are derived from the request as its signing Session's start refreshed
+its blockhash or nonce.*
 
 ## Considered options
 

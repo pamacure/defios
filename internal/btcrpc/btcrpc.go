@@ -18,14 +18,63 @@ import (
 // transaction (in its mempool, or mined) is success with known set:
 // identical bytes give an identical txid, so submitting twice is harmless.
 func Send(ctx context.Context, urls []string, network string, raw []byte, txid [32]byte) (known bool, err error) {
-	err = jsonrpc.Failover("btcrpc", urls, func(u string) error {
-		if err := serves(ctx, u, network); err != nil {
-			return err
-		}
-		known, err = send(ctx, u, raw, txid)
+	err = Use(ctx, urls, network, func(e Endpoint) error {
+		known, err = send(ctx, e.URL, raw, txid)
 		return err
 	})
 	return known, err
+}
+
+// Endpoint is one endpoint checked to be on the network it was used for.
+type Endpoint struct{ URL string }
+
+// Use runs fn on the first of urls that is on the bitcoin network and on
+// which fn succeeds, in failover order. A node on another chain is skipped
+// (ADR 0023). Only http(s) endpoints are used.
+func Use(ctx context.Context, urls []string, network string, fn func(Endpoint) error) error {
+	return jsonrpc.Failover("btcrpc", urls, func(u string) error {
+		if err := serves(ctx, u, network); err != nil {
+			return err
+		}
+		return fn(Endpoint{URL: u})
+	})
+}
+
+// Mined is the height of the block that mined txid, 0 while the node
+// cannot see it mined. It asks getrawtransaction, which sees a mined
+// transaction only with a txindex, and then gettxout for its first output,
+// which a node sees without one while that output is unspent.
+func (e Endpoint) Mined(ctx context.Context, txid [32]byte) (uint64, error) {
+	id := hex.EncodeToString(txid[:])
+	var confs int64
+	var tx struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := jsonrpc.Call(ctx, e.URL, "getrawtransaction", []any{id, true}, &tx); err == nil {
+		confs = tx.Confirmations
+	}
+	if confs <= 0 {
+		var out *struct {
+			Confirmations int64 `json:"confirmations"`
+		}
+		if err := jsonrpc.Call(ctx, e.URL, "gettxout", []any{id, 0, false}, &out); err != nil {
+			return 0, err
+		}
+		if out != nil {
+			confs = out.Confirmations
+		}
+	}
+	if confs <= 0 {
+		return 0, nil
+	}
+	var height int64
+	if err := jsonrpc.Call(ctx, e.URL, "getblockcount", nil, &height); err != nil {
+		return 0, err
+	}
+	if h := height - confs + 1; h > 0 {
+		return uint64(h), nil
+	}
+	return 0, nil
 }
 
 // chains are the names Bitcoin Core's getblockchaininfo gives each network.

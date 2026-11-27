@@ -10,6 +10,7 @@ import (
 	"defios.com/desktop/internal/shell"
 	"defios.com/internal/jobrun"
 	"defios.com/internal/node"
+	"defios.com/internal/signreq"
 	"defios.com/internal/transcript"
 	"defios.com/internal/trigger"
 )
@@ -92,7 +93,9 @@ func TestAnotherDevicesSignRequestIsACardOnTheLeftAwaitingThisDevice(t *testing.
 	}
 }
 
-func TestAcceptingSignsOnceEnoughAcceptAndBroadcastListsAReceipt(t *testing.T) {
+// A signed request is broadcast on its own (ADR 0045): Broadcast is only
+// offered again once a transaction was dropped or rejected.
+func TestAcceptingSignsOnceEnoughAcceptAndBroadcastIsOnlyARetry(t *testing.T) {
 	r := newRig(t, "alpha")
 	s, k := keyServed(t, r)
 	id := r.node.propose(k.ConversationID, "b0b", "", "pay rent", 2)
@@ -103,18 +106,36 @@ func TestAcceptingSignsOnceEnoughAcceptAndBroadcastListsAReceipt(t *testing.T) {
 	}
 	_, it := card(t, s, id, func(c *shell.SignCard) bool { return c.Status == "signed" })
 	c := it.Sign
-	if c.Mine != "accepted" || c.CanAnswer || !c.CanBroadcast || c.Queued {
+	if c.Mine != "accepted" || c.CanAnswer || c.CanBroadcast || c.Queued {
 		t.Fatalf("signed card: %+v", c)
 	}
 	if st := c.Stances[1]; !st.Self || st.Stance != "accepted" || st.Queued {
 		t.Fatalf("this device's stance: %+v", st)
 	}
+
+	r.node.fail(id, signreq.ResultReverted, "out of gas")
+	_, it = card(t, s, id, func(c *shell.SignCard) bool { return c.Status == "failed" })
+	if c := it.Sign; c.CanBroadcast || c.Failure != "reverted" || len(c.Outcomes) != 1 {
+		t.Fatalf("reverted card: %+v", c)
+	}
+	if h := it.Sign.History[len(it.Sign.History)-1]; !strings.Contains(h.Text, "out of gas") {
+		t.Errorf("history ends %+v", h)
+	}
+	r.node.fail(id, signreq.ResultDropped, "its blockhash expired before it landed")
+	_, it = card(t, s, id, func(c *shell.SignCard) bool { return c.CanBroadcast })
+	if it.Sign.Failure != "dropped" {
+		t.Fatalf("dropped card: %+v", it.Sign)
+	}
+
 	if ts := s.BroadcastSign(id); ts.Problem != nil {
 		t.Fatalf("broadcast: %+v", ts.Problem)
 	}
 	_, it = card(t, s, id, func(c *shell.SignCard) bool { return len(c.Receipts) == 1 })
 	if rc := it.Sign.Receipts[0]; rc.Device != "This Device" || len(rc.Transactions) != 1 || rc.Transactions[0].TxHash != "0xabc" {
 		t.Fatalf("receipt: %+v", rc)
+	}
+	if it.Sign.Status != "broadcast" || it.Sign.CanBroadcast {
+		t.Fatalf("rebroadcast card: %+v", it.Sign)
 	}
 }
 

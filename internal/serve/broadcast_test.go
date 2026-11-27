@@ -46,6 +46,11 @@ type chain struct {
 	sent   int               // eth_sendRawTransaction calls
 	reject bool              // answer every send with an error
 	auth   string            // the Authorization header of the last call
+	// nonce is the Key's transaction count, pending and latest; mines
+	// makes each transaction it takes mined at once, in block 16, the
+	// head, reverted if reverts.
+	nonce          uint64
+	mines, reverts bool
 }
 
 // newChain is a fake node of Ethereum chain 1.
@@ -93,6 +98,20 @@ func newChainOn(t *testing.T, id uint64) *chain {
 			} else {
 				resp["result"] = nil
 			}
+		case "eth_getTransactionCount":
+			resp["result"] = fmt.Sprintf("0x%x", c.nonce)
+		case "eth_blockNumber":
+			resp["result"] = "0x10"
+		case "eth_getTransactionReceipt":
+			if _, ok := c.raws[req.Params[0]]; ok && c.mines {
+				status := "0x1"
+				if c.reverts {
+					status = "0x0"
+				}
+				resp["result"] = map[string]any{"status": status, "blockNumber": "0x10"}
+			} else {
+				resp["result"] = nil
+			}
 		}
 		json.NewEncoder(w).Encode(resp)
 	}))
@@ -106,11 +125,15 @@ type solanaChain struct {
 	mu   sync.Mutex
 	raws map[string][]byte // base58 signature -> raw tx
 	sent int
+	// blockhash is its latest; loses takes a transaction and never lands it,
+	// and the blockhash it names then reads expired.
+	blockhash string
+	loses     bool
 }
 
 func newSolanaChain(t *testing.T) *solanaChain {
 	t.Helper()
-	c := &solanaChain{raws: map[string][]byte{}}
+	c := &solanaChain{raws: map[string][]byte{}, blockhash: base58.Encode(bytes.Repeat([]byte{9}, 32))}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     json.RawMessage `json:"id"`
@@ -128,6 +151,10 @@ func newSolanaChain(t *testing.T) *solanaChain {
 			c.sent++
 			raw, _ := base64.StdEncoding.DecodeString(req.Params[0].(string))
 			id := base58.Encode(raw[1:65])
+			if c.loses {
+				resp["result"] = id
+				break
+			}
 			if _, dup := c.raws[id]; dup {
 				resp["error"] = map[string]any{"code": -32002, "message": "This transaction has already been processed"}
 			} else {
@@ -136,10 +163,14 @@ func newSolanaChain(t *testing.T) *solanaChain {
 			}
 		case "getSignatureStatuses":
 			if _, ok := c.raws[req.Params[0].([]any)[0].(string)]; ok {
-				resp["result"] = map[string]any{"value": []any{map[string]any{"err": nil}}}
+				resp["result"] = map[string]any{"value": []any{map[string]any{"err": nil, "slot": 77, "confirmationStatus": "confirmed"}}}
 			} else {
 				resp["result"] = map[string]any{"value": []any{nil}}
 			}
+		case "getLatestBlockhash":
+			resp["result"] = map[string]any{"value": map[string]any{"blockhash": c.blockhash}}
+		case "isBlockhashValid":
+			resp["result"] = map[string]any{"value": !c.loses}
 		}
 		json.NewEncoder(w).Encode(resp)
 	}))
@@ -197,6 +228,13 @@ func signedRequest(t *testing.T, rpcURL string, otherURL ...string) (a, b *node,
 // one at otherURL. Each Node's Networks are its Group config.toml's.
 func signedRequestOn(t *testing.T, kind string, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
 	t.Helper()
+	return signedRequestWith(t, false, kind, rpcURL, otherURL...)
+}
+
+// signedRequestWith is signedRequestOn, whose Nodes broadcast what they
+// sign on their own when auto is set (ADR 0045).
+func signedRequestWith(t *testing.T, auto bool, kind string, rpcURL string, otherURL ...string) (a, b *node, gid group.ID, msgID string, conv []byte) {
+	t.Helper()
 	solana := kind == "solana"
 	curve := "ecdsa"
 	var pk []byte
@@ -224,6 +262,7 @@ func signedRequestOn(t *testing.T, kind string, rpcURL string, otherURL ...strin
 		}
 		n.tune = func(o *serve.Options) {
 			o.Vault = store
+			o.ManualBroadcast = !auto
 			o.NewEngine = func() session.Engine { return session.Unavailable{} }
 			o.NewSigner = func() session.Engine {
 				return &signerDouble{priv: priv, ed: edPriv, done: make(chan session.Result, 1), got: make(chan session.Params, 1)}
@@ -380,11 +419,12 @@ func newBitcoinChain(t *testing.T) *bitcoinChain {
 		var req struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
-			Params []string        `json:"params"`
+			Params []any           `json:"params"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Error(err)
 		}
+		param := func(i int) string { s, _ := req.Params[i].(string); return s }
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
@@ -392,7 +432,7 @@ func newBitcoinChain(t *testing.T) *bitcoinChain {
 		switch req.Method {
 		case "sendrawtransaction":
 			c.sent++
-			raw, err := hex.DecodeString(req.Params[0])
+			raw, err := hex.DecodeString(param(0))
 			tx := wire.NewMsgTx(0)
 			if err != nil || tx.Deserialize(bytes.NewReader(raw)) != nil {
 				fail("TX decode failed")
@@ -427,10 +467,14 @@ func newBitcoinChain(t *testing.T) *bitcoinChain {
 		case "getblockchaininfo":
 			resp["result"] = map[string]any{"chain": "main"}
 		case "getrawtransaction":
-			if _, ok := c.txs[req.Params[0]]; ok {
-				resp["result"] = "00"
-			} else {
+			verbose := len(req.Params) > 1 && req.Params[1] == true
+			switch _, ok := c.txs[param(0)]; {
+			case !ok:
 				fail("No such mempool or blockchain transaction")
+			case verbose:
+				resp["result"] = map[string]any{"txid": param(0)} // in the mempool: no confirmations
+			default:
+				resp["result"] = "00"
 			}
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -668,6 +712,11 @@ func TestSignBroadcastFailsPerNetwork(t *testing.T) {
 	if len(d.BroadcastReceipts) != 1 || d.BroadcastReceipts[0].Transactions[0].Chain != "ethereum chain 1" || d.FullyBroadcast {
 		t.Fatalf("receipts = %+v, fully %v", d.BroadcastReceipts, d.FullyBroadcast)
 	}
+	// The rejection is a Transaction Outcome every Node sees (ADR 0045).
+	if d.Status != signreq.Failed || d.Failure != signreq.ResultRejected || !d.Retry || len(d.Outcomes) != 1 ||
+		d.Outcomes[0].Index != 1 || d.Outcomes[0].Result != signreq.ResultRejected || !strings.Contains(d.Outcomes[0].Detail, "mempool is on fire") {
+		t.Fatalf("after a rejection: status %s, failure %s, retry %v, outcomes %+v", d.Status, d.Failure, d.Retry, d.Outcomes)
+	}
 
 	bad.setReject(false)
 	v, err = a.client().SignBroadcast(ctx, msgID[:8])
@@ -678,8 +727,8 @@ func TestSignBroadcastFailsPerNetwork(t *testing.T) {
 		t.Fatalf("retry = %+v", v)
 	}
 	waitReceipts(t, a, msgID, 3)
-	if d, _ = a.client().SignInspect(ctx, msgID[:8]); !d.FullyBroadcast {
-		t.Fatalf("not fully broadcast: %+v", d.BroadcastReceipts)
+	if d, _ = a.client().SignInspect(ctx, msgID[:8]); !d.FullyBroadcast || d.Status != signreq.Broadcast || d.Retry {
+		t.Fatalf("after the retry: status %s, retry %v, receipts %+v", d.Status, d.Retry, d.BroadcastReceipts)
 	}
 }
 

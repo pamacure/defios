@@ -57,13 +57,33 @@ func SolanaClusters() []string { return slices.Clone(solanaClusters) }
 // fields, and the RPC endpoints, each a plain URL or a "$NAME" Secret
 // reference, in failover order.
 type Network struct {
-	Alias          string   `toml:"-"`
-	Type           string   `toml:"type"`
-	ChainID        uint64   `toml:"chain_id,omitzero"`      // ethereum
-	BitcoinNetwork string   `toml:"network,omitempty"`      // bitcoin
-	Cluster        string   `toml:"cluster,omitempty"`      // solana
-	GenesisHash    string   `toml:"genesis_hash,omitempty"` // solana, optional
-	RPCURLs        []string `toml:"rpc_urls,omitempty"`
+	Alias          string `toml:"-"`
+	Type           string `toml:"type"`
+	ChainID        uint64 `toml:"chain_id,omitzero"`      // ethereum
+	BitcoinNetwork string `toml:"network,omitempty"`      // bitcoin
+	Cluster        string `toml:"cluster,omitempty"`      // solana
+	GenesisHash    string `toml:"genesis_hash,omitempty"` // solana, optional
+	// Confirmations is how many blocks deep an ethereum transaction's
+	// receipt must be before it counts as confirmed; 0 means
+	// DefaultConfirmations (ADR 0045).
+	Confirmations uint64   `toml:"confirmations,omitzero"` // ethereum, optional
+	RPCURLs       []string `toml:"rpc_urls,omitempty"`
+}
+
+// DefaultConfirmations is an ethereum Network's depth when it names none:
+// the block that mines the transaction.
+const DefaultConfirmations = 1
+
+// MaxConfirmations bounds an ethereum Network's depth.
+const MaxConfirmations = 1000
+
+// Depth is how many blocks deep an ethereum transaction on n must be to
+// be confirmed.
+func (n Network) Depth() uint64 {
+	if n.Confirmations == 0 {
+		return DefaultConfirmations
+	}
+	return n.Confirmations
 }
 
 // Chain is the identity of the chain n is for.
@@ -162,6 +182,12 @@ func Validate(n Network) error {
 	}
 	if err := n.Chain().Validate(); err != nil {
 		return fmt.Errorf("%s: %w", n.Alias, err)
+	}
+	if n.Confirmations != 0 && n.Type != Ethereum {
+		return fmt.Errorf("%s: %w", n.Alias, invalidf("confirmations is for an ethereum Network only"))
+	}
+	if n.Confirmations > MaxConfirmations {
+		return fmt.Errorf("%s: %w", n.Alias, invalidf("confirmations %d is over %d", n.Confirmations, MaxConfirmations))
 	}
 	for i, u := range n.RPCURLs {
 		if err := validRPCEntry(u); err != nil {

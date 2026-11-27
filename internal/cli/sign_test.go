@@ -25,7 +25,7 @@ var (
 )
 
 const filled = `{"transactions":[{"network":"sol","solana":{"feePayer":"F","recentBlockhash":"H"}}],` +
-	`"notes":[{"index":0,"network":"sol","chain":"solana devnet","endpoint":"https://rpc.example","filled":["feePayer","recentBlockhash"],"warning":"recentBlockhash expires in about 60–90 seconds: propose promptly"}]}`
+	`"notes":[{"index":0,"network":"sol","chain":"solana devnet","endpoint":"https://rpc.example","filled":["feePayer","recentBlockhash"]}]}`
 
 // signServe is a fake serve for the sign verbs. A refusal answers with
 // refuseKind as its error, if set, or as queued.
@@ -171,7 +171,7 @@ func TestSignFill(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &txs); err != nil || len(txs) != 1 || txs[0]["network"] != "sol" {
 		t.Fatalf("stdout %q is not the transactions: %v", r.stdout, err)
 	}
-	if !strings.Contains(r.stderr, "transaction 0 (sol, solana devnet): filled feePayer, recentBlockhash from https://rpc.example") || !strings.Contains(r.stderr, "propose promptly") {
+	if !strings.Contains(r.stderr, "transaction 0 (sol, solana devnet): filled feePayer, recentBlockhash from https://rpc.example") {
 		t.Errorf("stderr %q", r.stderr)
 	}
 	if len(ss.fills) != 1 || !strings.Contains(ss.fills[0], `"key":"eddsa:ab"`) || !strings.Contains(ss.fills[0], `"network":"sol"`) {

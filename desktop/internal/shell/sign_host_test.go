@@ -13,11 +13,13 @@ import (
 	"defios.com/internal/base58"
 )
 
-// solanaRPC is a Solana cluster's RPC endpoint as Fill and Broadcast use
-// it: a blockhash to fill, and every transaction sent taken.
+// solanaRPC is a Solana cluster's RPC endpoint as Fill, signing, Broadcast
+// and the watch after it use it: a blockhash to fill, every transaction
+// sent taken, and each confirmed at once.
 type solanaRPC struct {
 	mu   sync.Mutex
 	sent int
+	took map[string]bool // signatures sent
 }
 
 func (s *solanaRPC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -34,10 +36,27 @@ func (s *solanaRPC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var b64 string
 		json.Unmarshal(req.Params[0], &b64)
 		raw, _ := base64.StdEncoding.DecodeString(b64)
+		result = base58.Encode(raw[1:65]) // the one signature, after its count
 		s.mu.Lock()
 		s.sent++
+		if s.took == nil {
+			s.took = map[string]bool{}
+		}
+		s.took[result.(string)] = true
 		s.mu.Unlock()
-		result = base58.Encode(raw[1:65]) // the one signature, after its count
+	case "getSignatureStatuses":
+		var sigs []string
+		json.Unmarshal(req.Params[0], &sigs)
+		s.mu.Lock()
+		took := len(sigs) == 1 && s.took[sigs[0]]
+		s.mu.Unlock()
+		var st any
+		if took {
+			st = map[string]any{"slot": 5, "confirmationStatus": "confirmed", "err": nil}
+		}
+		result = map[string]any{"value": []any{st}}
+	case "isBlockhashValid":
+		result = map[string]any{"value": true}
 	default:
 		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"message": "unknown method"}})
 		return
@@ -61,7 +80,9 @@ func addSolana(t *testing.T, s *shell.Shell, url, secret string) {
 	}
 }
 
-func TestTwoDevicesProposeAcceptSignAndBroadcastASignRequest(t *testing.T) {
+// The proposer and the one other device each press one button: the last
+// accept signs, broadcasts and confirms it (ADR 0045).
+func TestTwoDevicesProposeAndAcceptASignRequestThroughToConfirmed(t *testing.T) {
 	if testing.Short() {
 		t.Skip("forms a Group, makes a Key and signs with it")
 	}
@@ -94,7 +115,7 @@ func TestTwoDevicesProposeAcceptSignAndBroadcastASignRequest(t *testing.T) {
 	filled := alice.FillSign(shell.SignDraft{Conversation: conv, Reason: "pay the rent", Transactions: []shell.DraftTx{
 		{Network: "sol", Type: "solana", To: base58.Encode(append(make([]byte, 31), 9)), Amount: "5000"},
 	}})
-	if filled.Problem != nil || len(filled.Review) != 1 || filled.Review[0].Warning == "" {
+	if filled.Problem != nil || len(filled.Review) != 1 {
 		t.Fatalf("fill: %+v %+v", filled.Problem, filled.Review)
 	}
 	p := alice.ProposeSign(conv, "pay the rent", filled.Transactions)
@@ -124,18 +145,21 @@ func TestTwoDevicesProposeAcceptSignAndBroadcastASignRequest(t *testing.T) {
 		t.Fatalf("bob's card: %+v %+v", it, it.Sign)
 	}
 
-	// bob accepts: 2 of 2, so it signs.
+	// bob accepts: 2 of 2, so it signs, and the device that started
+	// signing broadcasts it and watches it confirmed.
 	if ts := bob.AcceptSign(p.MsgID); ts.Problem != nil {
 		t.Fatalf("accept: %+v", ts.Problem)
 	}
-	signed := func(c *shell.SignCard) bool { return c.Status == "signed" && c.CanBroadcast }
-	within(bob, signed)
-	within(alice, signed)
-	if ts := alice.BroadcastSign(p.MsgID); ts.Problem != nil {
-		t.Fatalf("broadcast: %+v", ts.Problem)
+	confirmed := func(c *shell.SignCard) bool { return c.Status == "confirmed" }
+	within(bob, confirmed)
+	it = within(alice, confirmed)
+	if it.Sign.CanBroadcast {
+		t.Error("a confirmed request offers Broadcast")
 	}
-	it = within(bob, func(c *shell.SignCard) bool { return len(c.Receipts) == 1 })
-	if rc := it.Sign.Receipts[0]; rc.Device != "alice" || len(rc.Transactions) != 1 || rc.Transactions[0].TxHash == "" {
-		t.Fatalf("receipt on bob: %+v", rc)
+	if len(it.Sign.Receipts) != 1 || it.Sign.Receipts[0].Transactions[0].TxHash == "" {
+		t.Fatalf("receipts on alice: %+v", it.Sign.Receipts)
+	}
+	if o := it.Sign.Outcomes; len(o) != 1 || o[0].Result != "confirmed" || o[0].Block != 5 || o[0].Device != it.Sign.Receipts[0].Device {
+		t.Fatalf("outcomes on alice: %+v, want one by the device that broadcast", o)
 	}
 }

@@ -16,9 +16,10 @@ const KindSign ItemKind = "sign"
 // SignCard is a Sign Request as its card shows it.
 type SignCard struct {
 	MsgID, Reason string
-	// Status is open, waiting, signing, signed, refused, aborted or
-	// expired.
-	Status string
+	// Status is open, waiting, signing, signed, broadcast, confirmed,
+	// failed, refused, aborted or expired. Failure is what failed a failed
+	// one: reverted, rejected or dropped.
+	Status, Failure string
 	// Transactions are decoded, each by the chain it names; Summary
 	// counts them and names their chains, for the card.
 	Transactions []SignTx
@@ -34,9 +35,13 @@ type SignCard struct {
 	Queued bool
 	// CanAnswer: this device may still accept or refuse it.
 	CanAnswer bool
-	// CanBroadcast: it is signed, so any device may broadcast it.
+	// CanBroadcast: it failed in a way broadcasting again may fix (a
+	// transaction rejected or dropped). A signed request is broadcast on
+	// its own, so this is only ever a retry (ADR 0045).
 	CanBroadcast bool
 	Receipts     []SignReceipt
+	// Outcomes are what became of each transaction broadcast, in log order.
+	Outcomes []SignOutcome
 	// Runs are this device's Hooks' firings on it.
 	Runs []SignRun
 	// Deadline is when it lapses unless signing started.
@@ -91,6 +96,20 @@ type SignReceipt struct {
 	Transactions []SignBroadcastTx
 }
 
+// SignOutcome is a Transaction Outcome: what became of one transaction,
+// by the device that watched it.
+type SignOutcome struct {
+	Device string
+	At     time.Time
+	Index  uint32
+	Chain  string
+	TxHash string
+	// Result is confirmed, reverted, rejected or dropped; Block the block
+	// or slot that mined it, 0 for none; Detail why it failed.
+	Result, Detail string
+	Block          uint64
+}
+
 // SignBroadcastTx is one transaction a Broadcast Receipt says went out.
 type SignBroadcastTx struct {
 	Chain, TxHash string
@@ -121,8 +140,8 @@ type SignRow struct {
 // card is d as its card shows it; t.mu is held.
 func (t *talk) card(d node.SignRequestDetail) *SignCard {
 	c := &SignCard{
-		MsgID: d.MsgID, Reason: d.Reason, Status: d.Status, Needed: d.Needed, Mine: d.Stance,
-		Transactions: []SignTx{}, Stances: []SignStance{}, Receipts: []SignReceipt{}, Runs: []SignRun{},
+		MsgID: d.MsgID, Reason: d.Reason, Status: d.Status, Failure: d.Failure, Needed: d.Needed, Mine: d.Stance,
+		Transactions: []SignTx{}, Stances: []SignStance{}, Receipts: []SignReceipt{}, Outcomes: []SignOutcome{}, Runs: []SignRun{},
 	}
 	if at, err := time.Parse(time.RFC3339, d.CreatedAt); err == nil {
 		c.Deadline = at.Add(time.Duration(d.DeadlineSeconds) * time.Second)
@@ -180,7 +199,7 @@ func (t *talk) card(d node.SignRequestDetail) *SignCard {
 		c.Stances = append(c.Stances, st)
 	}
 	c.CanAnswer = d.Status == signreq.Open && d.Stance == signreq.StanceUnaddressed
-	c.CanBroadcast = d.Status == signreq.Done
+	c.CanBroadcast = d.Retry
 	for _, b := range d.BroadcastReceipts {
 		rc := SignReceipt{Device: t.device(b.Broadcaster), Transactions: []SignBroadcastTx{}}
 		rc.At, _ = time.Parse(time.RFC3339, b.At)
@@ -188,6 +207,11 @@ func (t *talk) card(d node.SignRequestDetail) *SignCard {
 			rc.Transactions = append(rc.Transactions, SignBroadcastTx{Chain: tx.Chain, TxHash: tx.TxHash})
 		}
 		c.Receipts = append(c.Receipts, rc)
+	}
+	for _, o := range d.Outcomes {
+		oc := SignOutcome{Device: t.device(o.Node), Index: o.Index, Chain: o.Chain, TxHash: o.TxHash, Result: o.Result, Detail: o.Detail, Block: o.Block}
+		oc.At, _ = time.Parse(time.RFC3339, o.At)
+		c.Outcomes = append(c.Outcomes, oc)
 	}
 	for _, h := range d.Hooks {
 		run := SignRun{Trigger: h.Trigger, Jobs: []SignJob{}}
@@ -218,6 +242,8 @@ func (t *talk) eventText(ev signreq.Event) string {
 		return fmt.Sprintf("%s refused: “%s”", who, ev.Reason)
 	case signreq.EventBroadcast:
 		return who + " broadcast it."
+	case signreq.EventOutcome:
+		return outcomeText(ev)
 	case signreq.Waiting:
 		return "Enough devices accepted; waiting for signing to start."
 	case signreq.Signing:
@@ -311,4 +337,25 @@ func (t *talk) setRun(run node.HookRun) {
 		d.Hooks = set(d.Hooks)
 		t.cards[id] = d
 	}
+}
+
+// outcomeText says a Transaction Outcome event: what became of which
+// transaction.
+func outcomeText(ev signreq.Event) string {
+	tx := fmt.Sprintf("Transaction %d", ev.Tx+1)
+	in := ""
+	if ev.Block != 0 {
+		in = fmt.Sprintf(" in block %d", ev.Block)
+	}
+	switch ev.Result {
+	case signreq.ResultConfirmed:
+		return tx + " was confirmed" + in + "."
+	case signreq.ResultReverted:
+		return tx + " was mined" + in + " but failed: " + ev.Reason
+	case signreq.ResultRejected:
+		return tx + " was rejected: " + ev.Reason
+	case signreq.ResultDropped:
+		return tx + " was dropped: " + ev.Reason
+	}
+	return tx + ": " + ev.Result
 }

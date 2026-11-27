@@ -127,6 +127,39 @@ func Signatures(rows []cosl.Row, requestID [32]byte, opts ...ReadOption) (sigs [
 	return nil, false
 }
 
+// SignedSession is a signing Session that completed: the sign.request it
+// signed, the Node that started it, its signers, and when the complete
+// that counts was written.
+type SignedSession struct {
+	Request   [32]byte
+	Starter   identity.ID
+	Signers   []identity.ID
+	Completed time.Time
+}
+
+// SignedSessions are the signing Sessions in rows that completed, in start
+// order: what a Node broadcasts once signed (ADR 0045).
+func SignedSessions(rows []cosl.Row, opts ...ReadOption) ([]SignedSession, error) {
+	recs, err := parse(rows, verifierOf(opts))
+	if err != nil {
+		return nil, err
+	}
+	var out []SignedSession
+	seen := map[[32]byte]bool{}
+	for _, r := range recs {
+		if !r.isSign || !r.agreed || seen[r.signReq] {
+			continue
+		}
+		seen[r.signReq] = true
+		for _, c := range r.completes {
+			if c.seq == r.completeSeq {
+				out = append(out, SignedSession{Request: r.signReq, Starter: r.sender, Signers: slices.Clone(r.participants), Completed: time.Unix(0, c.at)})
+			}
+		}
+	}
+	return out, nil
+}
+
 // rec is one Session reconstructed from the replica.
 type rec struct {
 	id           ID

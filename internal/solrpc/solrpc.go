@@ -90,3 +90,48 @@ func send(ctx context.Context, endpoint string, raw, sig []byte) (bool, error) {
 	}
 	return false, sendErr
 }
+
+// Status is what a cluster knows of a transaction it has seen: the slot it
+// landed in, how settled it is (processed, confirmed or finalized), and its
+// error, "" when it succeeded.
+type Status struct {
+	Slot         uint64
+	Confirmation string
+	Err          string
+}
+
+// SignatureStatus is the status of the transaction whose first signature
+// is sig, nil when the cluster has not seen it.
+func (e Endpoint) SignatureStatus(ctx context.Context, sig []byte) (*Status, error) {
+	var got struct {
+		Value []*struct {
+			Slot               uint64          `json:"slot"`
+			ConfirmationStatus string          `json:"confirmationStatus"`
+			Err                json.RawMessage `json:"err"`
+		} `json:"value"`
+	}
+	params := []any{[]string{base58.Encode(sig)}, map[string]any{"searchTransactionHistory": true}}
+	if err := e.Call(ctx, "getSignatureStatuses", params, &got); err != nil {
+		return nil, err
+	}
+	if len(got.Value) != 1 || got.Value[0] == nil {
+		return nil, nil
+	}
+	v := got.Value[0]
+	st := &Status{Slot: v.Slot, Confirmation: v.ConfirmationStatus}
+	if len(v.Err) > 0 && string(v.Err) != "null" {
+		st.Err = string(v.Err)
+	}
+	return st, nil
+}
+
+// BlockhashValid is whether a transaction with blockhash may still land.
+func (e Endpoint) BlockhashValid(ctx context.Context, blockhash string) (bool, error) {
+	var got struct {
+		Value bool `json:"value"`
+	}
+	if err := e.Call(ctx, "isBlockhashValid", []any{blockhash, map[string]any{"commitment": "processed"}}, &got); err != nil {
+		return false, err
+	}
+	return got.Value, nil
+}

@@ -33,10 +33,6 @@ import (
 // ErrBitcoin is a Bitcoin transaction, which chain_fill cannot complete.
 var ErrBitcoin = errors.New("a bitcoin transaction cannot be filled: choosing inputs (UTXOs) and a fee needs an indexer, which a bitcoind endpoint does not keep; that is a Plugin's job")
 
-// BlockhashWarning is the warning on a Solana transaction whose recentBlockhash
-// was filled.
-const BlockhashWarning = "recentBlockhash expires in about 60–90 seconds: propose promptly"
-
 // Endpoints are the RPC URLs of a Network, in failover order, each "$NAME"
 // resolved.
 type Endpoints func(network.Network) ([]string, error)
@@ -57,7 +53,6 @@ type Note struct {
 	// was read, its path and query dropped; empty when none was needed.
 	Endpoint string   `json:"endpoint,omitempty"`
 	Filled   []string `json:"filled"`
-	Warning  string   `json:"warning,omitempty"`
 	// Call is an Ethereum intent's call, read back from its encoded data
 	// by the signature it gave: what will be signed. Empty for an intent
 	// that gave data and no call (ADR 0043).
@@ -470,26 +465,16 @@ func fillSolana(ctx context.Context, k key.Key, g []*tx, endpoints Endpoints) er
 		}
 		var hash, endpoint string
 		err = solrpc.Use(ctx, urls, n.GenesisHash, func(e solrpc.Endpoint) error {
-			var got struct {
-				Value struct {
-					Blockhash string `json:"blockhash"`
-				} `json:"value"`
-			}
-			if err := e.Call(ctx, "getLatestBlockhash", []any{map[string]any{"commitment": "finalized"}}, &got); err != nil {
-				return err
-			}
-			if got.Value.Blockhash == "" {
-				return errors.New("getLatestBlockhash: no blockhash")
-			}
-			hash, endpoint = got.Value.Blockhash, e.String()
-			return nil
+			h, err := latestBlockhash(ctx, e)
+			hash, endpoint = h, e.String()
+			return err
 		})
 		if err != nil {
 			return reads[0].wrap(err)
 		}
 		for _, t := range reads {
 			t.set("recentBlockhash", hash)
-			t.note.Endpoint, t.note.Warning = endpoint, BlockhashWarning
+			t.note.Endpoint = endpoint
 		}
 	}
 	for _, t := range g {

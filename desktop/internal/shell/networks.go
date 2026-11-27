@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,8 @@ type NetworksNode interface {
 const (
 	FieldType    = "type"
 	FieldChainID = "chain_id"
+	// FieldConfirmations is an ethereum Network's confirmation depth.
+	FieldConfirmations = "confirmations"
 )
 
 // NetworksView is the Networks page.
@@ -54,11 +57,12 @@ type NetworksView struct {
 }
 
 // NetworkView is one Network. Chain is how it is named, such as
-// "ethereum chain 1", and Curve the curve its Keys sign with. ChainID is
-// "" but for ethereum.
+// "ethereum chain 1", and Curve the curve its Keys sign with. ChainID and
+// Confirmations are "" but for ethereum, Confirmations "" too when the
+// Network takes the default depth.
 type NetworkView struct {
 	Alias, Type, Chain, Curve            string
-	ChainID                              string
+	ChainID, Confirmations               string
 	BitcoinNetwork, Cluster, GenesisHash string
 	RPCURLs                              []RPCURL
 }
@@ -74,7 +78,7 @@ type RPCURL struct {
 // fields are read; an empty RPCURL is none.
 type NetworkDraft struct {
 	New                                  bool
-	Alias, Type, ChainID                 string
+	Alias, Type, ChainID, Confirmations  string
 	BitcoinNetwork, Cluster, GenesisHash string
 	RPCURLs                              []RPCURL
 }
@@ -161,6 +165,9 @@ func (s *Shell) fillNetworks(n Node, v *NetworksView) {
 			Cluster: nw.Cluster, GenesisHash: nw.GenesisHash, RPCURLs: []RPCURL{}}
 		if nw.Type == network.Ethereum {
 			nv.ChainID = strconv.FormatUint(nw.ChainID, 10)
+			if nw.Confirmations != 0 {
+				nv.Confirmations = strconv.FormatUint(nw.Confirmations, 10)
+			}
 		}
 		for _, u := range nw.RPCURLs {
 			if name, ok := secretName(u); ok {
@@ -183,7 +190,7 @@ func networkEditOf(d NetworkDraft) (node.NetworkEdit, error) {
 	}
 	var (
 		typ                   = d.Type
-		chainID               uint64
+		chainID, confs        uint64
 		btc, cluster, genesis string
 	)
 	switch d.Type {
@@ -193,6 +200,13 @@ func networkEditOf(d NetworkDraft) (node.NetworkEdit, error) {
 			return node.NetworkEdit{}, refuse(FieldChainID, "a chain ID is a whole number above 0, such as 1 for Ethereum mainnet")
 		}
 		chainID = id
+		if c := strings.TrimSpace(d.Confirmations); c != "" {
+			n, err := strconv.ParseUint(c, 10, 64)
+			if err != nil || n == 0 || n > network.MaxConfirmations {
+				return node.NetworkEdit{}, refuse(FieldConfirmations, fmt.Sprintf("confirmations is a whole number from 1 to %d, or empty for 1", network.MaxConfirmations))
+			}
+			confs = n
+		}
 	case network.Bitcoin:
 		btc = d.BitcoinNetwork
 	case network.Solana:
@@ -200,7 +214,7 @@ func networkEditOf(d NetworkDraft) (node.NetworkEdit, error) {
 	default:
 		return node.NetworkEdit{}, refuse(FieldType, "choose ethereum, bitcoin or solana")
 	}
-	e := node.NetworkEdit{Type: &typ, ChainID: &chainID, BitcoinNetwork: &btc, Cluster: &cluster, GenesisHash: &genesis, RPCURLs: []string{}}
+	e := node.NetworkEdit{Type: &typ, ChainID: &chainID, BitcoinNetwork: &btc, Cluster: &cluster, GenesisHash: &genesis, Confirmations: &confs, RPCURLs: []string{}}
 	for _, u := range d.RPCURLs {
 		switch url := strings.TrimSpace(u.URL); {
 		case u.Secret != "":

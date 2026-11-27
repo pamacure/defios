@@ -28,13 +28,13 @@ type BroadcastedTx struct {
 	AlreadyKnown bool `json:"already_known"`
 }
 
-// ChainBroadcast is the outcome for one chain's transactions: they all
-// went out and a receipt was committed, or Error says why none was.
+// ChainBroadcast is the outcome for one chain's transactions: those that
+// went out, in a committed receipt, and Error saying why the rest did not.
 type ChainBroadcast struct {
 	Chain        string          `json:"chain"` // never an alias
 	Transactions []BroadcastedTx `json:"transactions"`
-	// Receipt is the committed or queued Broadcast Receipt; nil when the
-	// group failed.
+	// Receipt is the committed or queued Broadcast Receipt; nil when none
+	// went out.
 	Receipt *SendView `json:"receipt,omitempty"`
 	Error   string    `json:"error,omitempty"`
 }
@@ -55,16 +55,7 @@ func (v BroadcastView) Failed() bool {
 	return false
 }
 
-// signBroadcast assembles the request's signed transactions, groups them by
-// chain, submits each group through this Node's Network for that chain, and
-// commits one sign.broadcast receipt per
-// group that went out. Chains are independent: a group whose submission is
-// rejected commits no receipt and reports its error, and the others are still
-// attempted. Within a group the transactions go out in request order and a
-// failure stops the group. Any Node may do this, any number of times: identical
-// bytes give identical hashes and a node that already has the transaction is
-// not an error, so a repeat is harmless, shows as one more receipt, and retries
-// only what failed (ADR 0010).
+// signBroadcast is `sign broadcast` on the running replica.
 func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (BroadcastView, error) {
 	ob, store, running := s.writer()
 	if !running {
@@ -75,6 +66,25 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 		return BroadcastView{}, err
 	}
 	id, err := signreq.Resolve(rows, req.MsgID)
+	if err != nil {
+		return BroadcastView{}, err
+	}
+	return s.broadcast(ctx, store, ob, id)
+}
+
+// broadcast assembles the request's signed transactions, groups them by
+// chain, submits each group through this Node's Network for that chain, and
+// commits one sign.broadcast receipt per group for the transactions that went
+// out. Chains are independent: within a group the transactions go out in
+// request order, and a rejected one stops the group, is recorded as a
+// rejected Transaction Outcome (ADR 0045) and reported, while the other groups
+// are still attempted. Any Node may do this, any number of times: identical
+// bytes give identical hashes and a node that already has the transaction is
+// not an error, so a repeat is harmless, shows as one more receipt, and retries
+// only what failed (ADR 0010). It takes the store and Outbox, not the server's,
+// so the settle watcher can call it while a stop waits on it.
+func (s *server) broadcast(ctx context.Context, store *cosl.Store, ob *outbox.Outbox, id [32]byte) (BroadcastView, error) {
+	rows, err := store.Log(cosl.Query{MsgTypes: signreq.MsgTypes})
 	if err != nil {
 		return BroadcastView{}, err
 	}
@@ -123,21 +133,28 @@ func (s *server) signBroadcast(ctx context.Context, req signInspectRequest) (Bro
 			continue
 		}
 		receipt := &coslv1.SignBroadcast{SignRequestId: id[:]}
+		var rejected *coslv1.SignOutcome
 		for _, tx := range group {
 			known, err := submit(ctx, c, urls, tx)
 			if err != nil {
 				out.Error = fmt.Sprintf("broadcasting transaction %d to %s: %v", tx.Index, c, err)
+				rejected = &coslv1.SignOutcome{SignRequestId: id[:], TxIndex: tx.Index, TxHash: tx.ID, Result: signreq.ResultRejected, Detail: err.Error()}
 				break
 			}
 			receipt.Transactions = append(receipt.Transactions, &coslv1.BroadcastedTx{TxHash: tx.ID, TxIndex: tx.Index})
 			out.Transactions = append(out.Transactions, BroadcastedTx{Index: tx.Index, Chain: c.String(), TxHash: signreq.TxIDString(c, tx.ID), AlreadyKnown: known})
 		}
-		if out.Error == "" {
+		if len(receipt.Transactions) > 0 {
 			sv, err := s.commitReceipt(ctx, ob, info.Conversation, receipt)
 			if err != nil {
 				return BroadcastView{}, err
 			}
 			out.Receipt = &sv
+		}
+		if rejected != nil {
+			if _, err := s.commitOutcome(ctx, ob, info.Conversation, rejected); err != nil {
+				return BroadcastView{}, err
+			}
 		}
 		view.Chains = append(view.Chains, out)
 	}
@@ -190,6 +207,20 @@ func (s *server) commitReceipt(ctx context.Context, ob *outbox.Outbox, conversat
 		return SendView{}, ErrNoReplica
 	}
 	signed, err := (cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}).Sign(cosl.TypeSignBroadcast, conversation, receipt)
+	if err != nil {
+		return SendView{}, fmt.Errorf("serve: %w", err)
+	}
+	return write(ctx, ob, signed)
+}
+
+// commitOutcome appends a signed sign.outcome to the Key's Conversation, or
+// queues it in the Outbox.
+func (s *server) commitOutcome(ctx context.Context, ob *outbox.Outbox, conversation []byte, o *coslv1.SignOutcome) (SendView, error) {
+	rec, held := s.slot.Current()
+	if !held {
+		return SendView{}, ErrNoReplica
+	}
+	signed, err := (cosl.Author{Node: s.opts.Node, GroupID: rec.GroupID()}).Sign(cosl.TypeSignOutcome, conversation, o)
 	if err != nil {
 		return SendView{}, fmt.Errorf("serve: %w", err)
 	}

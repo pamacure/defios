@@ -132,8 +132,12 @@ Every chain must be of the Key's curve.`,
 				return g.emitJSON(d.Detail)
 			}
 			out, p := g.app.Stdout, g.out()
-			fmt.Fprintf(out, "sign_request %s\nstatus %s\nstance %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
-				p.primary(d.MsgID), p.status(d.Status), p.status(d.Stance), talk.Speaker(d.Proposer, d.ProposerHandle), p.dim(d.CreatedAt), d.DeadlineSeconds, d.Conversation, d.Reason)
+			fmt.Fprintf(out, "sign_request %s\nstatus %s\n", p.primary(d.MsgID), p.status(d.Status))
+			if d.Failure != "" {
+				fmt.Fprintf(out, "failure %s%s\n", p.status(d.Failure), p.dim(retryHint(d.Retry)))
+			}
+			fmt.Fprintf(out, "stance %s\nproposer %s\ncreated_at %s\ndeadline %ds\nconversation %s\nreason %s\n",
+				p.status(d.Stance), talk.Speaker(d.Proposer, d.ProposerHandle), p.dim(d.CreatedAt), d.DeadlineSeconds, d.Conversation, d.Reason)
 			fmt.Fprintf(out, "accepted %s\n", acceptedOf(d.Summary))
 			for _, a := range d.Accepts {
 				fmt.Fprintf(out, "  %s %s\n", talk.Speaker(a.Node, a.Handle), p.dim(fmt.Sprintf("(seq %d)", a.Seq)))
@@ -149,6 +153,12 @@ Every chain must be of the Key's curve.`,
 				fmt.Fprintf(out, "broadcast by %s at %s %s\n", b.Broadcaster, p.dim(b.At), p.dim(fmt.Sprintf("(seq %d)", b.Seq)))
 				for _, t := range b.Transactions {
 					fmt.Fprintf(out, "  tx %d  %s  %s\n", t.Index, t.Chain, t.TxHash)
+				}
+			}
+			for _, o := range d.Outcomes {
+				fmt.Fprintf(out, "tx %d %s %s%s by %s at %s %s\n", o.Index, p.status(o.Result), o.Chain, blockOf(o.Block), o.Node, p.dim(o.At), p.dim(fmt.Sprintf("(seq %d)", o.Seq)))
+				if o.Detail != "" {
+					fmt.Fprintf(out, "  %s\n", cosl.EscapeNewlines(o.Detail))
 				}
 			}
 			for i, t := range d.Details {
@@ -274,14 +284,21 @@ turn a request down before its Session, with a reason every Node sees, use sign 
 
 	broadcast := &cobra.Command{
 		Use:   "broadcast <msg-id>",
-		Short: "Broadcast a signed request's transactions and record a receipt (requires serve)",
-		Long: `Assembles each transaction of a signed Sign Request, groups them by chain, submits each chain's through the
-rpc urls of this Node's Network for it (see network), and commits a sign.broadcast receipt for each chain.
-Each endpoint is first checked to serve the request's chain (eth_chainId, getblockchaininfo, or a pinned
-solana genesis hash); one that serves another is skipped and the next tried. Chains are independent: if one
-fails, the others are still broadcast and receipted, the failure is reported, and the command exits non-zero.
-Any Node may broadcast; the proposer goes first by convention. Broadcasting again is harmless: a node that
-already has a transaction is not an error, the repeat shows as one more receipt, and a failed chain is retried.`,
+		Short: "Broadcast a signed request's transactions again and record a receipt (requires serve)",
+		Long: `A signed request is broadcast on its own: the Node that started its signing Session does it, and the
+other signers if it has not within 30 s. Each Node that broadcast watches its transactions until they are
+mined (solana: confirmed; ethereum: a receipt as many blocks deep as its Network's confirmations, 1 by
+default; bitcoin: one confirmation), rejected or dropped, and records a sign.outcome. This command is the
+retry, for a request whose status is failed with a rejected or dropped transaction.
+
+Assembles each transaction of a signed Sign Request, groups them by chain, submits each chain's through the
+rpc urls of this Node's Network for it (see network), and commits a sign.broadcast receipt for each chain's
+transactions that went out. Each endpoint is first checked to serve the request's chain (eth_chainId,
+getblockchaininfo, or a pinned solana genesis hash); one that serves another is skipped and the next tried.
+Chains are independent: within one, a rejected transaction stops the rest and is recorded as a rejected
+sign.outcome; the other chains are still broadcast, the failure is reported, and the command exits non-zero.
+Any Node may broadcast. Broadcasting again is harmless: a node that already has a transaction is not an
+error, the repeat shows as one more receipt, and a failed chain is retried.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			h, err := openNode(g)
@@ -336,8 +353,11 @@ whatever its value (nonce 0 is kept). Nothing is proposed or written.
             a filled one is one past the transaction before it, given or filled, and never below
             the pending nonce. Given nonces out of order, or a filled one that cannot fit below the
             next given one, are an error.
-  solana    feePayer (the Key's address), recentBlockhash (finalized; it expires in about 60-90 s, so
-            propose promptly), cluster and genesisHash. The instructions are yours.
+  solana    feePayer (the Key's address), recentBlockhash (finalized), cluster and genesisHash. The
+            instructions are yours.
+
+The nonce and recentBlockhash are read again when the signing Session starts, so a request waiting
+for accepts does not go stale.
   bitcoin   refused: choosing inputs and a fee needs an indexer, which is a Plugin's job.
 
 Each endpoint is checked to serve the chain first, as broadcast does. The completed transactions go to
@@ -380,9 +400,6 @@ stdout, ready for sign propose --transactions -; what was filled, and from where
 				fmt.Fprintf(g.app.Stderr, "transaction %d (%s, %s): filled %s%s\n", n.Index, n.Network, n.Chain, filled, from)
 				if n.Call != "" {
 					fmt.Fprintf(g.app.Stderr, "transaction %d: calls %s\n", n.Index, n.Call)
-				}
-				if n.Warning != "" {
-					fmt.Fprintf(g.app.Stderr, "transaction %d: %s\n", n.Index, n.Warning)
 				}
 			}
 			return nil
@@ -448,4 +465,20 @@ func signError(err error) error {
 		}
 	}
 	return sendError(err)
+}
+
+// retryHint says whether `sign broadcast` may still land a failed request.
+func retryHint(retry bool) string {
+	if retry {
+		return " (sign broadcast may still land it)"
+	}
+	return " (mined: retrying means a new Sign Request)"
+}
+
+// blockOf names the block or slot that mined a transaction, "" for none.
+func blockOf(block uint64) string {
+	if block == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" in block %d", block)
 }

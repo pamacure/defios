@@ -95,13 +95,14 @@ func rlpLength(n int, offset byte) []byte {
 var LookupMsgTypes = slices.Concat([]uint32{cosl.TypeSignRequest, cosl.TypeSignAccept, cosl.TypeSignRefuse}, key.MsgTypes)
 
 // MsgTypes are every row this package's readers fold (List, Inspect, Resolve,
-// Signed and Lookup) and the Session fold shown beside them: LookupMsgTypes
-// and the sign.broadcast receipts. A Sign Request verb asks the replica for
+// Signed and Lookup) and the Session fold shown beside them: LookupMsgTypes,
+// the sign.broadcast receipts and the sign.outcome Transaction Outcomes. A Sign Request verb asks the replica for
 // these only, so talk and round traffic are never read (ADR 0014).
-var MsgTypes = slices.Concat(LookupMsgTypes, []uint32{cosl.TypeSignBroadcast})
+var MsgTypes = slices.Concat(LookupMsgTypes, []uint32{cosl.TypeSignBroadcast, cosl.TypeSignOutcome})
 
 // Lookup reads the sign.request with msgID off rows and derives what signing
 // it needs (the Key, its Digests, the deadline, who accepted): the Digests are
+// of the request as its first Session's start refreshed it, if one has, and
 // flattened across its transactions in order, a keccak256 hash for Ethereum
 // the compiled message for Solana, and one BIP-143 sighash per input for
 // Bitcoin. Every Node reaches the same answer from the request alone: the
@@ -122,8 +123,12 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	if err != nil {
 		return session.SignInfo{}, err
 	}
+	proposed := req
+	if req, err = signedAs(rows, *row, req); err != nil {
+		return session.SignInfo{}, err
+	}
 	var refused []identity.ID
-	for _, st := range Stances(rows, *row, req) {
+	for _, st := range Stances(rows, *row, proposed) {
 		if st.Refused {
 			refused = append(refused, st.Node)
 		}
@@ -132,7 +137,7 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 	if err != nil {
 		return session.SignInfo{}, err
 	}
-	out := session.SignInfo{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, req), Refused: refused}
+	out := session.SignInfo{Curve: k.Curve, PublicKey: k.PublicKey, T: k.T, Conversation: row.ConversationID, Accepted: Accepts(rows, *row, proposed), Refused: refused}
 	for i, tx := range req.Transactions {
 		if err := ChainOf(tx).Validate(); err != nil {
 			return session.SignInfo{}, fmt.Errorf("%w: transaction %d: %v", ErrInvalid, i, err)
@@ -164,7 +169,7 @@ func Lookup(rows []cosl.Row, msgID [32]byte) (session.SignInfo, error) {
 		}
 		out.Digests = append(out.Digests, dgs...)
 	}
-	out.Deadline = Deadline(row.CreatedAt, req)
+	out.Deadline = Deadline(row.CreatedAt, proposed)
 	return out, nil
 }
 

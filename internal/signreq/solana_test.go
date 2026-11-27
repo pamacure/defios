@@ -119,7 +119,7 @@ func TestAssembleSolanaPrefixesTheSignature(t *testing.T) {
 	}
 }
 
-func TestBuildDefaultsASolanaRequestToATighterDeadline(t *testing.T) {
+func TestBuildGivesASolanaRequestTheDefaultDeadline(t *testing.T) {
 	spec := func(deadline uint64, networks ...string) Spec {
 		s := Spec{Reason: "r", DeadlineSeconds: deadline}
 		for _, n := range networks {
@@ -137,8 +137,8 @@ func TestBuildDefaultsASolanaRequestToATighterDeadline(t *testing.T) {
 		spec Spec
 		want uint64
 	}{
-		"solana":          {spec(0, "sol"), SolanaDeadlineSeconds},
-		"solana with eth": {spec(0, "eth", "sol"), SolanaDeadlineSeconds},
+		"solana":          {spec(0, "sol"), DefaultDeadlineSeconds},
+		"solana with eth": {spec(0, "eth", "sol"), DefaultDeadlineSeconds},
 		"ethereum":        {spec(0, "eth"), DefaultDeadlineSeconds},
 		"explicit solana": {spec(200, "sol"), 200},
 	} {
