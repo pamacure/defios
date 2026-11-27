@@ -148,8 +148,8 @@ func printRuns(g *globals, runs []transcript.Run) {
 			fmt.Fprintf(out, "%s %s on Sign Request %s\n", at, a.Tool, shortChain(a.MsgID))
 		}
 		switch r.Outcome {
-		case transcript.OutcomeSaid:
-			fmt.Fprintf(out, "%s said msg_id %s\n", at, shortChain(r.MsgID))
+		case transcript.OutcomeWrote:
+			fmt.Fprintf(out, "%s wrote msg_id %s\n", at, shortChain(r.MsgID))
 		case transcript.OutcomeSilent:
 			fmt.Fprintln(out, at+" stayed silent")
 		case transcript.OutcomeError:

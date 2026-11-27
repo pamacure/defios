@@ -188,25 +188,25 @@ const jsonMark = "json:"
 func asJSON(body string) []string { return []string{jsonMark + body} }
 
 // jsonSays is each shape's JSON reply that thinks thought, writes text,
-// then says said: the same blocks as the streamed fakes, all at once.
-var jsonSays = map[agent.Shape]func(thought, text, said string) []string{
-	agent.Messages: func(thought, text, said string) []string {
+// then a talk_write of wrote: the same blocks as the streamed fakes, all at once.
+var jsonSays = map[agent.Shape]func(thought, text, wrote string) []string{
+	agent.Messages: func(thought, text, wrote string) []string {
 		return asJSON(`{"id":"m","type":"message","role":"assistant","content":[` +
 			`{"type":"thinking","thinking":` + jsonString(thought) + `,"signature":"sig"},` +
 			`{"type":"text","text":` + jsonString(text) + `},` +
-			`{"type":"tool_use","id":"toolu_1","name":"talk_write","input":` + talkWriteInput(said) + `}],` +
+			`{"type":"tool_use","id":"toolu_1","name":"talk_write","input":` + talkWriteInput(wrote) + `}],` +
 			`"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`)
 	},
-	agent.ChatCompletions: func(thought, text, said string) []string {
+	agent.ChatCompletions: func(thought, text, wrote string) []string {
 		return asJSON(`{"id":"c","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":` + jsonString(text) + `,` +
-			`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"talk_write","arguments":` + jsonString(talkWriteInput(said)) + `}}]},` +
+			`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"talk_write","arguments":` + jsonString(talkWriteInput(wrote)) + `}}]},` +
 			`"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
 	},
-	agent.Responses: func(thought, text, said string) []string {
+	agent.Responses: func(thought, text, wrote string) []string {
 		return asJSON(`{"id":"resp_1","object":"response","status":"completed","output":[` +
 			`{"id":"rs_0","type":"reasoning","summary":[{"type":"summary_text","text":` + jsonString(thought) + `}],"encrypted_content":"gAAAA-enc"},` +
 			`{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":` + jsonString(text) + `,"annotations":[]}]},` +
-			`{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_1","name":"talk_write","arguments":` + jsonString(talkWriteInput(said)) + `}],` +
+			`{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_1","name":"talk_write","arguments":` + jsonString(talkWriteInput(wrote)) + `}],` +
 			responsesUsage + `}`)
 	},
 }
@@ -405,7 +405,7 @@ func TestAnthropicSayIsTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Silent || res.Said != "all good" {
+	if res.Silent || res.Wrote != "all good" {
 		t.Fatalf("result = %+v", res)
 	}
 	if rec.String() != `text:let me think tool:talk_write {"text":"all good"}` {
@@ -451,7 +451,7 @@ func TestAnthropicStreamsEveryBlockWithItsKind(t *testing.T) {
 	reply = append(reply, anthropicEnd("tool_use")...)
 	s := newScript(t, reply)
 	var rec recorder
-	if res, err := run(s, agent.Messages, rec.events()); err != nil || res.Said != "done" {
+	if res, err := run(s, agent.Messages, rec.events()); err != nil || res.Wrote != "done" {
 		t.Fatalf("result %+v err %v", res, err)
 	}
 	if want := `thinking:hmm, ok text:so tool:talk_write {}` + "\n" + `talk_write {"text":"done"}`; rec.String() != want {
@@ -469,7 +469,7 @@ func TestOpenAISayIsTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:talk_write {"text":"all good"}` {
+	if res.Silent || res.Wrote != "all good" || rec.String() != `text:hmm tool:talk_write {"text":"all good"}` {
 		t.Fatalf("result = %+v, events %s", res, &rec)
 	}
 	if s.headers[0].Get("Authorization") != "Bearer sk-secret" {
@@ -502,7 +502,7 @@ func TestResponsesSayIsTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Silent || res.Said != "all good" || rec.String() != `text:hmm tool:talk_write {"text":"all good"}` {
+	if res.Silent || res.Wrote != "all good" || rec.String() != `text:hmm tool:talk_write {"text":"all good"}` {
 		t.Fatalf("result = %+v, events %s", res, &rec)
 	}
 	if s.headers[0].Get("Authorization") != "Bearer sk-secret" || s.headers[0].Get("x-api-key") != "" {
@@ -540,7 +540,7 @@ func TestResponsesReplaysItsOutputItems(t *testing.T) {
 	s := newScript(t, first, responsesSays("again", "done"))
 	var rec recorder
 	res, err := run(s, agent.Responses, rec.events())
-	if err != nil || res.Said != "done" {
+	if err != nil || res.Wrote != "done" {
 		t.Fatalf("result %+v err %v", res, err)
 	}
 	if want := `thinking:weighing it tool:talk_write {"text":""} text:again tool:talk_write {"text":"done"}`; rec.String() != want {
@@ -598,7 +598,7 @@ func TestAnIncompleteResponseIsAnError(t *testing.T) {
 func TestAFailedResponseIsAnError(t *testing.T) {
 	failed := []string{responsesEvent("response.failed", `"response":{"id":"resp_1","status":"failed","error":{"code":"server_error","message":"boom"}}`)}
 	s := newScript(t, failed, failed, failed, responsesSays("ok", "fine"))
-	if res, err := run(s, agent.Responses, agent.Events{}); err != nil || res.Said != "fine" || s.calls() != 4 {
+	if res, err := run(s, agent.Responses, agent.Events{}); err != nil || res.Wrote != "fine" || s.calls() != 4 {
 		t.Fatalf("server_error: result %+v err %v after %d calls", res, err, s.calls())
 	}
 	bad := []string{responsesEvent("error", `"code":"invalid_prompt","message":"no way"`)}
@@ -623,7 +623,7 @@ func TestARefusedSayIsRewritten(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", p, err)
 		}
-		if res.Said != "short" || s.calls() != 3 {
+		if res.Wrote != "short" || s.calls() != 3 {
 			t.Fatalf("%s: result %+v after %d calls", p, res, s.calls())
 		}
 		second, _ := json.Marshal(messages(s.body(2)))
@@ -657,7 +657,7 @@ func TestAToolResultIsFedBackAndTheRunGoesOn(t *testing.T) {
 		s := newScript(t, callsTool[p]("lookup", `{"q":"x"}`), says("so", "it is 42"))
 		var rec recorder
 		res, err := runWith(s, p, rec.events(), agent.TalkWrite, lookup)
-		if err != nil || res.Said != "it is 42" || s.calls() != 2 {
+		if err != nil || res.Wrote != "it is 42" || s.calls() != 2 {
 			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
 		}
 		if fmt.Sprint(got) != `[{"q":"x"}]` {
@@ -687,7 +687,7 @@ func TestAnUnofferedOrFailingToolIsAToolError(t *testing.T) {
 		s := newScript(t, callsTool[p]("sign_list", `{}`), callsTool[p]("broken", `{}`), says("ok", "done"))
 		var rec recorder
 		res, err := runWith(s, p, rec.events(), agent.TalkWrite, broken)
-		if err != nil || res.Said != "done" || s.calls() != 3 {
+		if err != nil || res.Wrote != "done" || s.calls() != 3 {
 			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
 		}
 		second, _ := json.Marshal(messages(s.body(2)))
@@ -712,7 +712,7 @@ func TestARunWithNoToolsOffersNone(t *testing.T) {
 	for p, says := range says {
 		s := newScript(t, says("hmm", "let me speak"), texts[p]("nothing then"))
 		res, err := runWith(s, p, agent.Events{})
-		if err != nil || !res.Silent || res.Said != "" || s.calls() != 2 {
+		if err != nil || !res.Silent || res.Wrote != "" || s.calls() != 2 {
 			t.Fatalf("%s: result %+v err %v after %d calls", p, res, err, s.calls())
 		}
 		if tools, ok := s.body(1)["tools"]; ok {
@@ -906,7 +906,7 @@ func TestAReplayedCallToARevokedToolIsAccepted(t *testing.T) {
 		s := newScript(t, says("", "ok"))
 		res, err := agent.Client{}.Run(context.Background(), agent.Request{Shape: p, URL: s.URL, Earlier: revoked, Turn: "two",
 			Tools: []agent.Tool{agent.TalkWrite}}, agent.Events{})
-		if err != nil || res.Said != "ok" {
+		if err != nil || res.Wrote != "ok" {
 			t.Fatalf("%s: %+v, %v", p, res, err)
 		}
 		if got := toolNames(s.body(1)); got != "talk_write" {
@@ -992,7 +992,7 @@ func TestEndingWithoutSayIsSilent(t *testing.T) {
 	for p, reply := range map[agent.Shape][]string{agent.Messages: anthropicText("nothing to add"), agent.ChatCompletions: openaiText("nothing to add"), agent.Responses: responsesText("nothing to add")} {
 		s := newScript(t, reply)
 		res, err := run(s, p, agent.Events{})
-		if err != nil || !res.Silent || res.Said != "" || s.calls() != 1 {
+		if err != nil || !res.Silent || res.Wrote != "" || s.calls() != 1 {
 			t.Fatalf("%s: result %+v, err %v, after %d calls", p, res, err, s.calls())
 		}
 	}
@@ -1077,7 +1077,7 @@ func TestANonStreamedReplyIsRead(t *testing.T) {
 		s := newScript(t, says("hmm", "let me see", ""), says("ok", "now", "all good"))
 		var rec recorder
 		res, err := run(s, p, rec.events())
-		if err != nil || res.Silent || res.Said != "all good" || s.calls() != 2 {
+		if err != nil || res.Silent || res.Wrote != "all good" || s.calls() != 2 {
 			t.Fatalf("%s: result %+v, err %v after %d calls", p, res, err, s.calls())
 		}
 		want := `thinking:hmm text:let me see tool:talk_write {"text":""} thinking:ok text:now tool:talk_write {"text":"all good"}`
@@ -1113,7 +1113,7 @@ func TestATruncatedJSONReplyIsRetried(t *testing.T) {
 		cut := asJSON(whole[:len(whole)/2])
 		s := newScript(t, cut, cut, says("hmm", "ok", "fine"))
 		res, err := run(s, p, agent.Events{})
-		if err != nil || res.Said != "fine" || s.calls() != 3 {
+		if err != nil || res.Wrote != "fine" || s.calls() != 3 {
 			t.Fatalf("%s: result %+v, err %v after %d calls", p, res, err, s.calls())
 		}
 		s = newScript(t, cut)
@@ -1168,7 +1168,7 @@ func TestAJSONReplyAtItsTokenBoundIsAnError(t *testing.T) {
 func TestAFailedJSONReplyIsAnError(t *testing.T) {
 	failed := asJSON(`{"id":"resp_1","status":"failed","output":[],"error":{"code":"server_error","message":"boom"}}`)
 	s := newScript(t, failed, jsonSays[agent.Responses]("a", "b", "fine"))
-	if res, err := run(s, agent.Responses, agent.Events{}); err != nil || res.Said != "fine" || s.calls() != 2 {
+	if res, err := run(s, agent.Responses, agent.Events{}); err != nil || res.Wrote != "fine" || s.calls() != 2 {
 		t.Fatalf("responses: result %+v err %v after %d calls", res, err, s.calls())
 	}
 	s = newScript(t, asJSON(`{"type":"error","error":{"type":"invalid_request_error","message":"no way"}}`))
@@ -1307,7 +1307,7 @@ func TestRetryableFailuresRetry(t *testing.T) {
 		})
 		var rec recorder
 		res, err := generate(srv, rec.events())
-		if err != nil || res.Said != "fine" || *calls != 4 || rec.String() != `text:ok tool:talk_write {"text":"fine"}` {
+		if err != nil || res.Wrote != "fine" || *calls != 4 || rec.String() != `text:ok tool:talk_write {"text":"fine"}` {
 			t.Errorf("%s: result %+v err %v after %d calls, events %s", name, res, err, *calls, &rec)
 		}
 	}
@@ -1322,7 +1322,7 @@ func TestRetryableFailuresRetry(t *testing.T) {
 	})
 	var rec recorder
 	res, err := generate(srv, rec.events())
-	if err != nil || res.Said != "fine" || *calls != 3 {
+	if err != nil || res.Wrote != "fine" || *calls != 3 {
 		t.Fatalf("dropped: result %+v err %v after %d calls", res, err, *calls)
 	}
 	if rec.String() != `text:partial reset text:partial reset text:ok tool:talk_write {"text":"fine"}` {

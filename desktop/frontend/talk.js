@@ -956,7 +956,7 @@ async function copyText(e, text) {
 }
 
 const OUTCOME = {
-  said: ["Posted", "ok"],
+  wrote: ["Posted", "ok"],
   silent: ["Stayed silent", ""],
   error: ["Failed", "bad"],
   cancelled: ["Cancelled", "bad"],
@@ -1216,13 +1216,13 @@ function chainSteps(steps, chain) {
   return h("section", {},
     h("h3", {}, "Its chain"),
     h("ol", { class: "steps" }, steps.map((st) => {
-      const said = st.MsgID
+      const posted = st.MsgID
         ? ts.Items.find((it) => it.MsgID === st.MsgID)
         : ts.Items.find((it) => it.Kind === "run" && it.Chain === chain && it.Step === st.Step);
       const label = h("span", { class: "who" }, h("span", { class: "n" }, `${st.Step}.`), h("strong", {}, `@${st.Handle}`));
       return h("li", { style: `padding-left: ${(st.Depth - 1) * 14}px` },
-        said
-          ? h("button", { class: "step", type: "button", title: said.Kind === "run" ? "Show its run" : "Show what it posted", onclick: () => select(said) }, label, outcomeChip(st.State))
+        posted
+          ? h("button", { class: "step", type: "button", title: posted.Kind === "run" ? "Show its run" : "Show what it posted", onclick: () => select(posted) }, label, outcomeChip(st.State))
           : h("div", { class: "step" }, label, outcomeChip(st.State)),
         st.Error && h("pre", { class: "error-text" }, st.Error));
     })));

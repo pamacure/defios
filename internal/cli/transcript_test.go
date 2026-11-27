@@ -16,7 +16,7 @@ import (
 const transcribedChain = "abab0000cdcd"
 
 // transcriptLines are a chain's: @auditor called a tool there is none of
-// and said, summoning @scribe, who stayed silent; @critic was cut off by a
+// and wrote, summoning @scribe, who stayed silent; @critic was cut off by a
 // stop; @quant refused a Sign Request, then failed.
 var transcriptLines = []transcript.Line{
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
@@ -27,7 +27,7 @@ var transcriptLines = []transcript.Line{
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"tool_use","id":"t1","name":"talk_write","input":{"text":"ok @scribe"}}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindUsage, Usage: json.RawMessage(`{"input_tokens":3}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"text","text":"done"}`)},
-	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSaid, MsgID: "cdcdcdcdcdcd", Seq: 7},
+	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeWrote, MsgID: "cdcdcdcdcdcd", Seq: 7},
 	{Step: 2, Handle: "scribe", Depth: 2, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent},
 	{Step: 3, Handle: "critic", Depth: 2, Kind: transcript.KindRequest, Request: json.RawMessage(`{}`)},
 	{Step: 4, Handle: "quant", Depth: 1, Kind: transcript.KindActed, Tool: "sign_refuse", MsgID: "efefefefefef"},
@@ -72,7 +72,7 @@ func TestConversationTranscriptShowsEachRun(t *testing.T) {
 @auditor (tool result): no such tool
 @auditor (tool): talk_write {"text":"ok @scribe"}
 @auditor (text): done
-@auditor said msg_id cdcdcdcd
+@auditor wrote msg_id cdcdcdcd
 step 2: @scribe, depth 2
 @scribe stayed silent
 step 3: @critic, depth 2
@@ -225,7 +225,7 @@ func TestConversationClearClosesOneAgentsTranscript(t *testing.T) {
 	if got := liveTranscripts(t, dir, nil); !slices.Equal(got, []string{"critic", "quant", "scribe"}) {
 		t.Fatalf("live = %v", got)
 	}
-	if r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab"); r.code != 0 || !strings.Contains(r.stdout, "@auditor said msg_id cdcdcdcd") {
+	if r := run(t, nil, "", "--dir", dir, "conversation", "transcript", "abab"); r.code != 0 || !strings.Contains(r.stdout, "@auditor wrote msg_id cdcdcdcd") {
 		t.Fatalf("the closed Transcript is not readable: exit %d: %s%s", r.code, r.stdout, r.stderr)
 	}
 	// With none live, there is nothing to clear, which is no error.

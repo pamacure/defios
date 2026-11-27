@@ -280,7 +280,7 @@ func TestReadsOfAGroupWithNoReplicaSaySo(t *testing.T) {
 	}
 }
 
-func TestAConversationCountsWhatWasSaidPastItsReadMark(t *testing.T) {
+func TestAConversationCountsWhatWasWrittenPastItsReadMark(t *testing.T) {
 	alice, bob := formed(t)
 	ctx := context.Background()
 	groupTalk := func(mb *member) node.ConversationSummary {

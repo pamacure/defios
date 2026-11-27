@@ -49,11 +49,11 @@ func blockTexts(es []talk.Expanded) [][]string {
 	return out
 }
 
-// An agent's message this Node's agent said comes with the blocks of the
-// run that said it, whichever chain of its Transcript that run was in, a
+// An agent's message this Node's agent wrote comes with the blocks of the
+// run that wrote it, whichever chain of its Transcript that run was in, a
 // failed run's left out; a person's, another Node's agent's, and one whose
 // Transcript is gone come with none.
-func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {
+func TestExpandPairsEachMessageWithTheRunThatWroteIt(t *testing.T) {
 	f := newFixture(t)
 	f.say(f.alice, "check this")
 	fixed := f.agentSays(f.alice, "auditor", "fixed")
@@ -67,13 +67,13 @@ func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {
 	f.transcribe("abab",
 		l(run(1, "auditor", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("looking") }),
 		l(run(1, "auditor", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("found it") }),
-		l(run(1, "auditor", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeSaid, fixed, 2 }),
+		l(run(1, "auditor", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeWrote, fixed, 2 }),
 		l(run(2, "quant", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("failed try") }),
 		l(run(2, "quant", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.Error = transcript.OutcomeError, "boom" }),
 	)
 	f.transcribe("cdcd",
 		l(run(1, "auditor", transcript.KindBlock), func(l *transcript.Line) { l.Block = block("second look") }),
-		l(run(1, "auditor", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeSaid, again, 5 }),
+		l(run(1, "auditor", transcript.KindOutcome), func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeWrote, again, 5 }),
 	)
 
 	got, err := f.reader().Expand(nil, f.read(nil).Chat())
@@ -86,11 +86,11 @@ func TestExpandPairsEachMessageWithTheRunThatSaidIt(t *testing.T) {
 	}
 }
 
-// A message comes with the Handles the run that said it summoned, in the
+// A message comes with the Handles the run that wrote it summoned, in the
 // order it summoned them (ADR 0041).
-func TestExpandGivesTheSummonsOfTheRunThatSaidIt(t *testing.T) {
+func TestExpandGivesTheSummonsOfTheRunThatWroteIt(t *testing.T) {
 	f := newFixture(t)
-	said := f.agentSays(f.alice, "router", "over to them")
+	wrote := f.agentSays(f.alice, "router", "over to them")
 	line := func(kind string, set func(*transcript.Line)) transcript.Line {
 		l := transcript.Line{Step: 1, Handle: "router", Depth: 1, Kind: kind}
 		set(&l)
@@ -99,7 +99,7 @@ func TestExpandGivesTheSummonsOfTheRunThatSaidIt(t *testing.T) {
 	f.transcribe("abab",
 		line(transcript.KindSummoned, func(l *transcript.Line) { l.Summoned = "auditor" }),
 		line(transcript.KindSummoned, func(l *transcript.Line) { l.Summoned = "scribe" }),
-		line(transcript.KindOutcome, func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeSaid, said, 1 }),
+		line(transcript.KindOutcome, func(l *transcript.Line) { l.Outcome, l.MsgID, l.Seq = transcript.OutcomeWrote, wrote, 1 }),
 	)
 	got, err := f.reader().Expand(nil, f.read(nil).Chat())
 	if err != nil {

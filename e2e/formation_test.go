@@ -139,9 +139,9 @@ func TestFormation(t *testing.T) {
 	if sentB.Seq <= sentA.Seq {
 		t.Fatalf("sends out of order: alice seq %d, bob seq %d", sentA.Seq, sentB.Seq)
 	}
-	bothSaid := func(rows []messageLine) bool { return len(rows) == 2 }
-	ma, talkA := alice.conversationLog(t, bothSaid)
-	_, talkB := bob.conversationLog(t, bothSaid)
+	bothWrote := func(rows []messageLine) bool { return len(rows) == 2 }
+	ma, talkA := alice.conversationLog(t, bothWrote)
+	_, talkB := bob.conversationLog(t, bothWrote)
 	if talkA != talkB {
 		t.Fatalf("conversation log differs:\nalice %s\nbob   %s", talkA, talkB)
 	}

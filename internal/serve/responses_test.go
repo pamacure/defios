@@ -23,8 +23,8 @@ func responsesEvent(w http.ResponseWriter, typ, fields string) {
 const responsesUsage = `"usage":{"input_tokens":11,"output_tokens":4,"output_tokens_details":{"reasoning_tokens":3}}`
 
 // responsesReply streams a reasoning item, a message of text and a talk_write of
-// said, then completes, or with incomplete set ends incomplete for it.
-func responsesReply(w http.ResponseWriter, text, said, incomplete string) {
+// wrote, then completes, or with incomplete set ends incomplete for it.
+func responsesReply(w http.ResponseWriter, text, wrote, incomplete string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	responsesEvent(w, "response.output_item.added", `"output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[]}`)
 	responsesEvent(w, "response.reasoning_summary_text.delta", `"output_index":0,"delta":"pondering"`)
@@ -37,7 +37,7 @@ func responsesReply(w http.ResponseWriter, text, said, incomplete string) {
 		responsesEvent(w, "response.incomplete", `"response":{"status":"incomplete","incomplete_details":{"reason":"`+incomplete+`"},`+responsesUsage+`}`)
 		return
 	}
-	in, _ := json.Marshal(map[string]string{"text": said})
+	in, _ := json.Marshal(map[string]string{"text": wrote})
 	args, _ := json.Marshal(string(in))
 	responsesEvent(w, "response.output_item.added", `"output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"talk_write","arguments":""}`)
 	responsesEvent(w, "response.function_call_arguments.delta", fmt.Sprintf(`"output_index":2,"delta":%s`, args))

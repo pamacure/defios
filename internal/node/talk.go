@@ -112,11 +112,11 @@ type Recap struct {
 }
 
 // ChatMessage is one message of the chat, with the Transcript blocks of
-// the run of this Node's that said it when asked for and it has one.
+// the run of this Node's that wrote it when asked for and it has one.
 type ChatMessage struct {
 	Message
 	Blocks []json.RawMessage
-	// Chain, with transcripts, is the chain of the run that said it.
+	// Chain, with transcripts, is the chain of the run that wrote it.
 	Chain string
 	// Summoned, with transcripts, are the Handles that run summoned with
 	// talk_summon, in order (ADR 0041).
@@ -416,7 +416,7 @@ func (h *Host) Lean(_ context.Context, groupAlias, conv string) (Lean, error) {
 }
 
 // Chat is conv's readable talk, the latest limit of it (0 for all); with
-// transcripts, each message this Node's chain said carries its run's
+// transcripts, each message this Node's chain wrote carries its run's
 // Transcript blocks.
 func (h *Host) Chat(_ context.Context, groupAlias, conv string, limit int, transcripts bool) ([]ChatMessage, error) {
 	v, r, id, done, err := h.read(groupAlias, conv)

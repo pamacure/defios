@@ -313,7 +313,7 @@ type Event struct {
 	Outbox *OutboxEvent
 	// Chain is an event of agents answering in a Conversation on this
 	// Node: a chain's start and end, each agent's output as it generates
-	// it (thinking, text, tool calls), and what it said. A Trigger of this
+	// it (thinking, text, tool calls), and what it wrote. A Trigger of this
 	// Node's firing (trigger.fire), a Job run by hand starting (job.run),
 	// and how each Job ended (job.end) come this way too, in the
 	// Conversation of what it fired or ran on.

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// A run's closing outcome. Once its talk_write has committed, it is `said` with
+// A run's closing outcome. Once its talk_write has committed, it is `wrote` with
 // its msg_id and seq whatever fails after, even a stop; a run cut off by a
 // stop before that has none (ADR 0018).
 func TestRunOutcome(t *testing.T) {
@@ -14,29 +14,29 @@ func TestRunOutcome(t *testing.T) {
 	posted := SendView{Seq: 9, MsgID: strings.Repeat("ab", 32)}
 	for _, tc := range []struct {
 		name               string
-		said               SendView
+		wrote              SendView
 		err                error
 		cancelled, stopped bool
 		want               string // outcome, "" for none
 	}{
-		{name: "said", said: posted, want: OutcomeSaid},
+		{name: "wrote", wrote: posted, want: OutcomeWrote},
 		{name: "silent", want: OutcomeSilent},
-		{name: "committed, then the wait failed", said: posted, err: failed, want: OutcomeSaid},
-		{name: "committed, then the serve stopped", said: posted, err: failed, stopped: true, want: OutcomeSaid},
+		{name: "committed, then the wait failed", wrote: posted, err: failed, want: OutcomeWrote},
+		{name: "committed, then the serve stopped", wrote: posted, err: failed, stopped: true, want: OutcomeWrote},
 		{name: "failed", err: failed, want: OutcomeError},
 		{name: "cancelled", err: failed, cancelled: true, stopped: true, want: OutcomeCancelled},
 		{name: "cut off", err: failed, stopped: true, want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			l, ok := runOutcome(tc.said, tc.err, tc.cancelled, tc.stopped)
+			l, ok := runOutcome(tc.wrote, tc.err, tc.cancelled, tc.stopped)
 			if tc.want == "" {
 				if ok {
 					t.Fatalf("outcome %+v, want none", l)
 				}
 				return
 			}
-			if !ok || l.Kind != KindOutcome || l.Outcome != tc.want || l.Seq != tc.said.Seq || l.MsgID != tc.said.MsgID {
-				t.Fatalf("outcome %+v (%v), want %s %+v", l, ok, tc.want, tc.said)
+			if !ok || l.Kind != KindOutcome || l.Outcome != tc.want || l.Seq != tc.wrote.Seq || l.MsgID != tc.wrote.MsgID {
+				t.Fatalf("outcome %+v (%v), want %s %+v", l, ok, tc.want, tc.wrote)
 			}
 			if tc.want == OutcomeError && l.Error != failed.Error() {
 				t.Fatalf("error = %q", l.Error)

@@ -54,9 +54,9 @@ type Step struct {
 type Outcome struct {
 	// Summons are the Handles the step's run summoned with talk_summon,
 	// in the order it called it, each accepted when called; they run
-	// after it whether or not it said anything (ADR 0041).
+	// after it whether or not it wrote anything (ADR 0041).
 	Summons []string
-	// MsgID names the message the run said, "" if it was silent.
+	// MsgID names the message the run wrote, "" if it was silent.
 	MsgID string
 	// Stop ends the chain there: a failure or a cancel.
 	Stop bool

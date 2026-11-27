@@ -66,14 +66,14 @@ func talkWriteArgs(text string) string {
 	return string(raw)
 }
 
-// messagesReply thinks "pondering", writes text and says said, streamed or
+// messagesReply thinks "pondering", writes text and a talk_write of wrote, streamed or
 // as one JSON reply.
-func messagesReply(w http.ResponseWriter, streamed bool, text, said string) {
+func messagesReply(w http.ResponseWriter, streamed bool, text, wrote string) {
 	if !streamed {
 		writeJSON(w, `{"id":"m","type":"message","role":"assistant","content":[`+
 			`{"type":"thinking","thinking":"pondering","signature":"sig-1"},`+
 			`{"type":"text","text":`+quoted(text)+`},`+
-			`{"type":"tool_use","id":"toolu_1","name":"talk_write","input":`+talkWriteArgs(said)+`}],`+
+			`{"type":"tool_use","id":"toolu_1","name":"talk_write","input":`+talkWriteArgs(wrote)+`}],`+
 			`"stop_reason":"tool_use","usage":{"input_tokens":7,"output_tokens":3}}`)
 		return
 	}
@@ -87,24 +87,24 @@ func messagesReply(w http.ResponseWriter, streamed bool, text, said string) {
 	event(w, "content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":`+quoted(text)+`}}`)
 	event(w, "content_block_stop", `{"type":"content_block_stop","index":1}`)
 	event(w, "content_block_start", `{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"talk_write","input":{}}}`)
-	event(w, "content_block_delta", `{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":`+quoted(talkWriteArgs(said))+`}}`)
+	event(w, "content_block_delta", `{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":`+quoted(talkWriteArgs(wrote))+`}}`)
 	event(w, "content_block_stop", `{"type":"content_block_stop","index":2}`)
 	endTurn(w, "tool_use")
 }
 
-// chatReply writes text and says said, streamed or as one JSON reply.
-func chatReply(w http.ResponseWriter, streamed bool, text, said string) {
+// chatReply writes text and a talk_write of wrote, streamed or as one JSON reply.
+func chatReply(w http.ResponseWriter, streamed bool, text, wrote string) {
 	const usage = `"usage":{"prompt_tokens":7,"completion_tokens":3}`
 	if !streamed {
 		writeJSON(w, `{"id":"c","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":`+quoted(text)+`,`+
-			`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"talk_write","arguments":`+quoted(talkWriteArgs(said))+`}}]},`+
+			`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"talk_write","arguments":`+quoted(talkWriteArgs(wrote))+`}}]},`+
 			`"finish_reason":"tool_calls"}],`+usage+`}`)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	for _, data := range []string{
 		`{"choices":[{"index":0,"delta":{"role":"assistant","content":` + quoted(text) + `},"finish_reason":null}]}`,
-		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"talk_write","arguments":` + quoted(talkWriteArgs(said)) + `}}]},"finish_reason":null}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"talk_write","arguments":` + quoted(talkWriteArgs(wrote)) + `}}]},"finish_reason":null}]}`,
 		`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
 		`{"choices":[],` + usage + `}`,
 		`[DONE]`,
@@ -115,8 +115,8 @@ func chatReply(w http.ResponseWriter, streamed bool, text, said string) {
 }
 
 // responsesWhole is responsesReply as one JSON reply: the same items.
-func responsesWhole(w http.ResponseWriter, text, said string) {
-	args, _ := json.Marshal(talkWriteArgs(said))
+func responsesWhole(w http.ResponseWriter, text, wrote string) {
+	args, _ := json.Marshal(talkWriteArgs(wrote))
 	writeJSON(w, `{"id":"resp_1","object":"response","status":"completed","output":[`+
 		`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"pondering"}],"encrypted_content":"enc-1"},`+
 		`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":`+quoted(text)+`}]},`+
@@ -159,17 +159,17 @@ func runLines(t *testing.T, a *node, chain string) string {
 func TestAnAgentReadsAReplyThatIsNotStreamed(t *testing.T) {
 	for _, tc := range []struct {
 		apiPath string
-		reply   func(w http.ResponseWriter, streamed bool, text, said string)
+		reply   func(w http.ResponseWriter, streamed bool, text, wrote string)
 		think   string // what follow shows as thinking before the text
 	}{
 		{"/v1/messages", messagesReply, "thinking:pondering "},
 		{"/v1/chat/completions", chatReply, ""},
-		{"/v1/responses", func(w http.ResponseWriter, streamed bool, text, said string) {
+		{"/v1/responses", func(w http.ResponseWriter, streamed bool, text, wrote string) {
 			if streamed {
-				responsesReply(w, text, said, "")
+				responsesReply(w, text, wrote, "")
 				return
 			}
-			responsesWhole(w, text, said)
+			responsesWhole(w, text, wrote)
 		}, "thinking:pondering "},
 	} {
 		t.Run(strings.TrimPrefix(tc.apiPath, "/v1/"), func(t *testing.T) {
@@ -202,7 +202,7 @@ func TestAnAgentReadsAReplyThatIsNotStreamed(t *testing.T) {
 			if lines["whole"] != lines["streamed"] {
 				t.Errorf("transcripts differ:\nwhole:\n%s\nstreamed:\n%s", lines["whole"], lines["streamed"])
 			}
-			for _, want := range []string{`"kind":"usage"`, `"outcome":"said"`, `"kind":"block"`} {
+			for _, want := range []string{`"kind":"usage"`, `"outcome":"wrote"`, `"kind":"block"`} {
 				if !strings.Contains(lines["whole"], want) {
 					t.Errorf("transcript lacks %s:\n%s", want, lines["whole"])
 				}
@@ -238,7 +238,7 @@ func TestAJSONReplyCutOffIsRetriedAndOneAtItsBoundIsAnError(t *testing.T) {
 	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, `tool:talk_write {"text":"fine"} commit:fine end`) {
 		t.Fatalf("events = %s", got)
 	}
-	if got := lineWords(transcript(t, a, v.MsgID)); strings.Count(got, ":request") != 2 || !strings.HasSuffix(got, "outcome=said") {
+	if got := lineWords(transcript(t, a, v.MsgID)); strings.Count(got, ":request") != 2 || !strings.HasSuffix(got, "outcome=wrote") {
 		t.Fatalf("transcript = %s", got)
 	}
 	v, err = a.client().ConversationSend(context.Background(), "@whole", nil)

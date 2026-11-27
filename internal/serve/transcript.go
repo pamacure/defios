@@ -4,7 +4,7 @@ import "defios.com/internal/transcript"
 
 // Transcript outcomes: how a run ended (ADR 0018); see package transcript.
 const (
-	OutcomeSaid      = transcript.OutcomeSaid
+	OutcomeWrote     = transcript.OutcomeWrote
 	OutcomeSilent    = transcript.OutcomeSilent
 	OutcomeError     = transcript.OutcomeError
 	OutcomeCancelled = transcript.OutcomeCancelled
@@ -24,8 +24,8 @@ const (
 // TranscriptLine is one line of an Agent's Transcript.
 type TranscriptLine = transcript.Line
 
-// runOutcome is the closing line of a run that posted said (its MsgID empty
+// runOutcome is the closing line of a run that posted wrote (its MsgID empty
 // if nothing) and ended with err: see transcript.Outcome.
-func runOutcome(said SendView, err error, cancelled, stopped bool) (TranscriptLine, bool) {
-	return transcript.Outcome(said.MsgID, said.Seq, err, cancelled, stopped)
+func runOutcome(wrote SendView, err error, cancelled, stopped bool) (TranscriptLine, bool) {
+	return transcript.Outcome(wrote.MsgID, wrote.Seq, err, cancelled, stopped)
 }

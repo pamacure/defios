@@ -101,7 +101,7 @@ func TestConversationLogChat(t *testing.T) {
 }
 
 // --chat --transcripts is the talk as chat with each agent message this
-// Node's chain said preceded by the blocks of the run that said it, set
+// Node's chain wrote preceded by the blocks of the run that wrote it, set
 // apart by indent; a message with no Transcript here shows as plain chat.
 // With --json each line carries its blocks, none for the rest.
 func TestConversationLogChatTranscripts(t *testing.T) {
@@ -115,7 +115,7 @@ func TestConversationLogChatTranscripts(t *testing.T) {
 	msgID := last[0]["msg_id"].(string)
 	w := transcript.NewWriter(nodedir.Resolve(nodedir.Lookup{Dir: dir}), group.ImplicitAlias, nil, transcribedChain, t.Logf)
 	for _, l := range transcriptLines {
-		if l.Outcome == transcript.OutcomeSaid {
+		if l.Outcome == transcript.OutcomeWrote {
 			l.MsgID = msgID
 		}
 		w.Write(l)

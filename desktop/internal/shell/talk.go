@@ -249,7 +249,7 @@ type Item struct {
 	// runGap ends a run.
 	Author, Avatar bool
 	sender         string // who wrote it, for runs; "" off the left
-	// Chain is the chain of this device's agent's run that said it, or
+	// Chain is the chain of this device's agent's run that wrote it, or
 	// with KindRun, of that run, which Step and Outcome name in it. The
 	// panel's Details give the run (MessageDetails, RunDetails).
 	Chain   string
@@ -411,21 +411,21 @@ type talk struct {
 	convs  node.Conversations
 	status node.Status
 	msgs   []node.Message
-	said   map[string]string // by msg_id, the chain of this device's run that said it
-	// summoned are, by msg_id, the Handles the run that said it summoned.
+	wrote  map[string]string // by msg_id, the chain of this device's run that wrote it
+	// summoned are, by msg_id, the Handles the run that wrote it summoned.
 	summoned map[string][]string
 	// unposted are this device's runs here that posted nothing.
 	unposted []node.Run
 	// jobRuns are this device's Job Runs in the Group, newest first.
 	jobRuns []node.JobRun
-	// saidStale: a run, chain or Job ended, a Trigger fired, or a
-	// Conversation opened, so said, unposted and jobRuns are read again
+	// wroteStale: a run, chain or Job ended, a Trigger fired, or a
+	// Conversation opened, so wrote, unposted and jobRuns are read again
 	// with the messages. Reading them reads every Transcript there and
 	// every Job Run, so they are not read on every message.
-	saidStale bool
-	// saidVer counts each time said went stale, so a read that began
+	wroteStale bool
+	// wroteVer counts each time wrote went stale, so a read that began
 	// before the last time leaves it stale for the next.
-	saidVer uint64
+	wroteVer uint64
 	// liveries are this Node's, by party key (ADR 0037).
 	liveries map[string]string
 	handles  []string
@@ -448,7 +448,7 @@ type talk struct {
 	// whole, so a read that overlapped one is read again, not applied.
 	signVer uint64
 	// proposed is, by Sign Request msg_id, the run of this device's agent
-	// or the Job Run of its exec Job that proposed it, read with said.
+	// or the Job Run of its exec Job that proposed it, read with wrote.
 	proposed map[string]SignCause
 	// failed is why each read last failed, by what it reads; while one
 	// has, the next status change reads everything again, as a Group just
@@ -472,8 +472,8 @@ func (t *talk) serve(n TalkNode, self, group string, st node.Status) {
 	if !same {
 		t.n, t.self, t.group, t.open = n, self, group, node.GroupTalk
 		t.gen++
-		t.convs, t.msgs, t.said, t.summoned, t.unposted, t.jobRuns, t.saidStale, t.liveries = node.Conversations{}, nil, nil, nil, nil, nil, true, nil
-		t.saidVer++
+		t.convs, t.msgs, t.wrote, t.summoned, t.unposted, t.jobRuns, t.wroteStale, t.liveries = node.Conversations{}, nil, nil, nil, nil, nil, true, nil
+		t.wroteVer++
 		t.handles, t.sizes, t.agents, t.over, t.bitcoinNets = nil, nil, nil, nil, nil
 		t.system, t.live = map[string][]Item{}, map[string][]*LiveChain{}
 		t.accepted, t.proposed = map[string]bool{}, nil
@@ -657,7 +657,7 @@ func (t *talk) loadMessages() {
 		return
 	}
 	t.mu.Lock()
-	withSaid, ver := t.saidStale, t.saidVer
+	withWrote, ver := t.wroteStale, t.wroteVer
 	t.mu.Unlock()
 	t.loadMu.Lock()
 	msgs, err := a.n.Messages(t.ctx, a.group, a.conv)
@@ -665,7 +665,7 @@ func (t *talk) loadMessages() {
 	var unposted []node.Run
 	var jobRuns []node.JobRun
 	var signRuns []node.Run
-	if err == nil && withSaid {
+	if err == nil && withWrote {
 		chat, err = a.n.Chat(t.ctx, a.group, a.conv, 0, true)
 		if err == nil {
 			unposted, err = a.n.UnpostedRuns(t.ctx, a.group, a.conv)
@@ -689,11 +689,11 @@ func (t *talk) loadMessages() {
 	t.setLiveries(liveries, lerr)
 	if t.read("messages", err) {
 		t.msgs = msgs
-		if withSaid {
-			t.said, t.summoned, t.unposted, t.jobRuns, t.saidStale = map[string]string{}, map[string][]string{}, unposted, jobRuns, t.saidVer != ver
+		if withWrote {
+			t.wrote, t.summoned, t.unposted, t.jobRuns, t.wroteStale = map[string]string{}, map[string][]string{}, unposted, jobRuns, t.wroteVer != ver
 			for _, m := range chat {
 				if m.Chain != "" {
-					t.said[m.MsgID] = m.Chain
+					t.wrote[m.MsgID] = m.Chain
 				}
 				if len(m.Summoned) > 0 {
 					t.summoned[m.MsgID] = m.Summoned
@@ -1185,7 +1185,7 @@ func (t *talk) item(m node.Message) Item {
 	case it.From == "":
 		it.From = shortKey(m.NodeID)
 	}
-	it.Chain = t.said[m.MsgID]
+	it.Chain = t.wrote[m.MsgID]
 	it.Summoned = t.summons(t.summoned[m.MsgID])
 	return it
 }
@@ -1275,8 +1275,8 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 		t.setRun(ev.HookRun.Run)
 	case ev.Chain != nil && ev.Chain.Group == group:
 		if t.chain(ev.Chain.Conversation, ev.Chain.Event) && ev.Chain.Conversation == open {
-			t.saidStale = true
-			t.saidVer++
+			t.wroteStale = true
+			t.wroteVer++
 			reload = func() {
 				t.loadMessages()
 				t.loadSizes()
@@ -1298,7 +1298,7 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 
 // chain applies a chain event in conv, and reports whether a run or the
 // chain ended, or a Trigger fired, a Job was run by hand or a Job ended,
-// so what it said, its Transcript and the Job Runs are to be read; t.mu
+// so what it wrote, its Transcript and the Job Runs are to be read; t.mu
 // is held.
 func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 	find := func() *LiveChain {
@@ -1319,7 +1319,7 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 		}
 		return &c.Agents[len(c.Agents)-1]
 	}
-	// done takes the agent that ended out of the live chain: what it said
+	// done takes the agent that ended out of the live chain: what it wrote
 	// shows as a message of its own. An event that names no Handle is the
 	// one answering now, the last to start.
 	done := func() {
@@ -1348,7 +1348,7 @@ func (t *talk) chain(conv string, ev node.ChainEvent) (ended bool) {
 	case serve.EventAgentReset:
 		agent().Blocks = nil
 	case serve.EventAgentCommit:
-		// Its summons stay on what it said: the Transcript, read again
+		// Its summons stay on what it wrote: the Transcript, read again
 		// once the chain ends, has them too.
 		if a := agent(); len(a.Summoned) > 0 && ev.MsgID != "" {
 			if t.summoned == nil {

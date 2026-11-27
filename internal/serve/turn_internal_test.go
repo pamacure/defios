@@ -38,14 +38,14 @@ func TestATurnStartsAfterWhatTheReplicaHeld(t *testing.T) {
 		t.Fatalf("first turn's summoner: by %q job %q summons %q", first.By, first.Job, first.Summons)
 	}
 	again := msg(12, alice, "", "@bob again")
-	said := talk.Messages{msg(7, alice, "", "old"), msg(8, sam, "", "eight"), msg(9, sam, "bob", "sam's bob"), summon, msg(11, alice, "bob", "bob's own"), again}
+	msgs := talk.Messages{msg(7, alice, "", "old"), msg(8, sam, "", "eight"), msg(9, sam, "bob", "sam's bob"), summon, msg(11, alice, "bob", "bob's own"), again}
 	last := transcript.Run{Turn: first.Turn, TalkSeq: first.Seq, TalkUnapplied: first.Unapplied}
-	second := runTurn(said, alice, "bob", summoner{msgID: again.MsgID()}, &last, "(facts)")
+	second := runTurn(msgs, alice, "bob", summoner{msgID: again.MsgID()}, &last, "(facts)")
 	want := "(Talk since your last run:)\n[8 2026-11-19 09:08] sam: eight\n[9 2026-11-19 09:09] sam/@bob: sam's bob\n(You are summoned by:)\n[12 2026-11-19 09:12] alice: @bob again\n(facts)"
 	if second.Turn != want || second.Seq != 12 || second.Unapplied != nil {
 		t.Fatalf("second turn = %+v\nwant %s", second, want)
 	}
-	job := runTurn(said, alice, "bob", summoner{msgID: "ffff", job: "(the Job's prompt)", jobName: "nightly"}, &last, "(facts)")
+	job := runTurn(msgs, alice, "bob", summoner{msgID: "ffff", job: "(the Job's prompt)", jobName: "nightly"}, &last, "(facts)")
 	if !strings.HasSuffix(job.Turn, "[12 2026-11-19 09:12] alice: @bob again\n(the Job's prompt)\n(facts)") {
 		t.Fatalf("a Job's turn = %s", job.Turn)
 	}
@@ -65,9 +65,9 @@ func TestATurnsGapLinesStopAtTheAgentsOwnMessage(t *testing.T) {
 	}
 	pruned := func(seq uint64) talk.Message { m := msg(seq, "", ""); m.Pruned = true; return m }
 	summon := msg(10, "", "@bob again")
-	said := talk.Messages{msg(4, "", "old"), pruned(5), msg(6, "bob", "bob's own"), pruned(7), pruned(8), pruned(9), summon}
+	msgs := talk.Messages{msg(4, "", "old"), pruned(5), msg(6, "bob", "bob's own"), pruned(7), pruned(8), pruned(9), summon}
 	last := transcript.Run{TalkSeq: 4}
-	got := runTurn(said, alice, "bob", summoner{msgID: summon.MsgID()}, &last, "(facts)").Turn
+	got := runTurn(msgs, alice, "bob", summoner{msgID: summon.MsgID()}, &last, "(facts)").Turn
 	want := "(Talk since your last run:)\n[5 pruned on this Node]\n[7–9 pruned on this Node]\n(You are summoned by:)\n[10 2026-11-19 09:10] alice: @bob again\n(facts)"
 	if got != want {
 		t.Fatalf("turn =\n%s\nwant\n%s", got, want)
@@ -83,9 +83,9 @@ func TestAnAgentSummonedTurnFramesItsSummoner(t *testing.T) {
 		return talk.Message{Row: cosl.Row{Seq: seq, MsgID: [32]byte{byte(seq)}, Sender: alice, CreatedAt: writtenAt(seq)}, Handle: handle, Text: text, Sender: "alice"}
 	}
 	summon := msg(10, "", "@router price this")
-	said := talk.Messages{msg(4, "", "old"), summon}
+	msgs := talk.Messages{msg(4, "", "old"), summon}
 	last := transcript.Run{TalkSeq: 3}
-	got := runTurn(said, alice, "quant", summoner{agent: "router", msgID: summon.MsgID()}, &last, "(facts)")
+	got := runTurn(msgs, alice, "quant", summoner{agent: "router", msgID: summon.MsgID()}, &last, "(facts)")
 	want := "(Talk since your last run:)\n[4 2026-11-19 09:04] alice: old\n(@router summoned you on account of:)\n[10 2026-11-19 09:10] alice: @router price this\n(facts)"
 	if got.Turn != want {
 		t.Fatalf("turn =\n%s\nwant\n%s", got.Turn, want)
@@ -93,11 +93,11 @@ func TestAnAgentSummonedTurnFramesItsSummoner(t *testing.T) {
 	if also := TurnBesides(got.Turn, got.Summons); also != "(Talk since your last run:)\n[4 2026-11-19 09:04] alice: old\n(facts)" {
 		t.Fatalf("besides = %q", also)
 	}
-	job := runTurn(said, alice, "quant", summoner{agent: "router", msgID: "ffff", job: "(the Job's prompt)", jobName: "nightly"}, &last, "(facts)")
+	job := runTurn(msgs, alice, "quant", summoner{agent: "router", msgID: "ffff", job: "(the Job's prompt)", jobName: "nightly"}, &last, "(facts)")
 	if !strings.HasSuffix(job.Turn, "(@router summoned you on account of:)\n(the Job's prompt)\n(facts)") {
 		t.Fatalf("a Job's turn = %s", job.Turn)
 	}
-	none := runTurn(said, alice, "quant", summoner{agent: "router", msgID: "ffff"}, &last, "(facts)")
+	none := runTurn(msgs, alice, "quant", summoner{agent: "router", msgID: "ffff"}, &last, "(facts)")
 	if !strings.HasSuffix(none.Turn, "(@router summoned you on account of a message your Node does not hold.)\n(facts)") {
 		t.Fatalf("an unheld summoner's turn = %s", none.Turn)
 	}

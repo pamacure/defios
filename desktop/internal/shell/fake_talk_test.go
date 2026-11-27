@@ -178,7 +178,7 @@ func (n *fakeNode) Chat(_ context.Context, group, conv string, limit int, transc
 		if transcripts {
 			for chain, runs := range n.sg().runs {
 				for _, r := range runs {
-					if r.Outcome == transcript.OutcomeSaid && r.MsgID == m.MsgID {
+					if r.Outcome == transcript.OutcomeWrote && r.MsgID == m.MsgID {
 						cm.Chain, cm.Summoned = chain, r.Summoned
 					}
 				}

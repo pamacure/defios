@@ -61,15 +61,15 @@ func (a *postingAPI) lastSystem() string {
 	return a.systems[len(a.systems)-1]
 }
 
-func saidBy(handle string, n int) func(shell.TalkState) bool {
+func wroteBy(handle string, n int) func(shell.TalkState) bool {
 	return func(ts shell.TalkState) bool {
-		said := 0
+		wrote := 0
 		for _, it := range ts.Items {
 			if it.Handle == handle && it.Text == "checked" {
-				said++
+				wrote++
 			}
 		}
-		return said >= n
+		return wrote >= n
 	}
 }
 
@@ -122,7 +122,7 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsBrief(t *testing.T) {
 	if ts := alice.SendMessage("@auditor look"); ts.Refused != nil || ts.Problem != nil {
 		t.Fatalf("send: %+v %+v", ts.Refused, ts.Problem)
 	}
-	talkWithin(t, alice, 20*time.Second, saidBy("auditor", 1))
+	talkWithin(t, alice, 20*time.Second, wroteBy("auditor", 1))
 	if !strings.Contains(api.lastSystem(), "You audit, v1.") {
 		t.Fatalf("system prompt %s", api.lastSystem())
 	}
@@ -133,7 +133,7 @@ func TestAProfileMadeInTheAppAnswersInTalkWithItsBrief(t *testing.T) {
 		t.Fatalf("Brief after save: %q", v.Open.Brief)
 	}
 	alice.SendMessage("@auditor again")
-	talkWithin(t, alice, 20*time.Second, saidBy("auditor", 2))
+	talkWithin(t, alice, 20*time.Second, wroteBy("auditor", 2))
 	if s := api.lastSystem(); !strings.Contains(s, "You audit, v2.") || strings.Contains(s, "v1") {
 		t.Fatalf("system prompt after the edit %s", s)
 	}

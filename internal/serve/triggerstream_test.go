@@ -50,7 +50,7 @@ func TestTriggersAndJobsShowOnTheStream(t *testing.T) {
 				"fail": {Exec: []string{"false"}},
 			}
 			o.Config.Hooks = map[string]config.Hook{
-				"said": {Text: "^hi$", Jobs: []string{"ok", "fail"}},
+				"greeted": {Text: "^hi$", Jobs: []string{"ok", "fail"}},
 			}
 		}
 	})
@@ -63,8 +63,8 @@ func TestTriggersAndJobsShowOnTheStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	fire := nextOfTypes(t, s, serve.EventTriggerFire, serve.EventJobEnd)
-	if fire.Type != serve.EventTriggerFire || fire.Trigger != "said" || fire.Event == nil || fire.Event.Type != "app.freeform" || fire.Event.Text != "hi" {
-		t.Fatalf("first = %+v, want said's trigger.fire on the message", fire)
+	if fire.Type != serve.EventTriggerFire || fire.Trigger != "greeted" || fire.Event == nil || fire.Event.Type != "app.freeform" || fire.Event.Text != "hi" {
+		t.Fatalf("first = %+v, want greeted's trigger.fire on the message", fire)
 	}
 	runs := func() []jobrun.Run {
 		t.Helper()
@@ -74,7 +74,7 @@ func TestTriggersAndJobsShowOnTheStream(t *testing.T) {
 		}
 		return runs
 	}
-	if got := runs(); len(got) != 2 || got[1].Job != "ok" || got[1].Trigger != "said" {
+	if got := runs(); len(got) != 2 || got[1].Job != "ok" || got[1].Trigger != "greeted" {
 		t.Fatalf("Job Runs at trigger.fire: %+v", got)
 	}
 	if ev := nextOfTypes(t, s, serve.EventTriggerFire, serve.EventJobEnd); ev.Type != serve.EventJobEnd || ev.Job != "ok" || ev.OK == nil || !*ev.OK || ev.Error != "" {

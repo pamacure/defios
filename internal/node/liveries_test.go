@@ -200,11 +200,11 @@ func TestDevicesAndTheirAgentsAreGivenLiveriesAndFreedWithTheirGroup(t *testing.
 	if _, err := bob.h.IncludeAgent(ctx, "alpha", node.GroupTalk, "scout"); err != nil {
 		t.Fatal(err)
 	}
-	said, err := bob.h.Send(ctx, "alpha", node.GroupTalk, node.Outgoing{Text: "found it", Handle: "scout", Depth: 1})
+	sent, err := bob.h.Send(ctx, "alpha", node.GroupTalk, node.Outgoing{Text: "found it", Handle: "scout", Depth: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	applied(t, alice, said)
+	applied(t, alice, sent)
 	if all, _ := alice.h.Liveries(ctx); all["node:"+bob.id+"/scout"] == "" {
 		t.Fatalf("alice's Liveries after scout spoke = %v; want node:%s/scout", all, bob.id)
 	}

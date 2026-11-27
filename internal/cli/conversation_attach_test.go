@@ -215,7 +215,7 @@ func TestConversationSendJSONPrintsWhatTheChainSays(t *testing.T) {
 
 // What an agent says prints when it commits, under its Handle, and not the
 // text it streamed; a silent agent is shown as silent.
-func TestConversationSendPrintsSaidTextAndSilence(t *testing.T) {
+func TestConversationSendPrintsWrittenTextAndSilence(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	newChainServe(t, dir, &chainServe{events: []serve.ChainEvent{

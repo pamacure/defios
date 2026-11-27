@@ -1350,7 +1350,7 @@ func TestARunClearedMidwayCompletesIntoTheOldTranscript(t *testing.T) {
 	}
 	for i, chain := range []string{first.MsgID, second.MsgID} {
 		runs := transcripts.Runs(ts[i].Lines)
-		if len(runs) != 1 || runs[0].Chain != chain || runs[0].Outcome != serve.OutcomeSaid {
+		if len(runs) != 1 || runs[0].Chain != chain || runs[0].Outcome != serve.OutcomeWrote {
 			t.Errorf("Transcript %d holds %+v, want the whole run of chain %s", i, runs, chain)
 		}
 	}

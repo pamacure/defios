@@ -71,7 +71,7 @@ func TestAHooksFiringKeepsItsJobRuns(t *testing.T) {
 				"after": {Exec: []string{"true"}},
 			}
 			o.Config.Hooks = map[string]config.Hook{
-				"said": {Text: "^hi$", Jobs: []string{"say", "web", "fail", "after"}},
+				"greeted": {Text: "^hi$", Jobs: []string{"say", "web", "fail", "after"}},
 			}
 		}
 	})
@@ -87,7 +87,7 @@ func TestAHooksFiringKeepsItsJobRuns(t *testing.T) {
 	runs := waitJobRuns(t, b, ended)
 	say, web, fail, after := runs[3], runs[2], runs[1], runs[0]
 	for _, r := range runs {
-		if r.Trigger != "said" || r.Event.Type != "app.freeform" || r.Event.Text != "hi" || r.Firing != say.ID || r.Fired.IsZero() {
+		if r.Trigger != "greeted" || r.Event.Type != "app.freeform" || r.Event.Text != "hi" || r.Firing != say.ID || r.Fired.IsZero() {
 			t.Errorf("run %d: trigger %q on %+v, firing %d", r.ID, r.Trigger, r.Event, r.Firing)
 		}
 	}
@@ -134,7 +134,7 @@ func TestAnExecJobsMessagesAreRecordedOnItsJobRun(t *testing.T) {
 			o.Config.Jobs = map[string]config.Job{
 				"talk": {Exec: []string{"sh", "-c", `echo "$DEFIOS_JOB_RUN" > "$0.tmp"; mv "$0.tmp" "$0"; while [ ! -e "$1" ]; do sleep 0.02; done`, tokFile, goFile}},
 			}
-			o.Config.Hooks = map[string]config.Hook{"said": {Text: "^hi$", Jobs: []string{"talk"}}}
+			o.Config.Hooks = map[string]config.Hook{"greeted": {Text: "^hi$", Jobs: []string{"talk"}}}
 		}
 	})
 	gid := formValid(t, a, b)

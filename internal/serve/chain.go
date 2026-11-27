@@ -511,7 +511,7 @@ func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish fun
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: st.Handle, Reason: st.Reason})
 		return plan.Outcome{}
 	}
-	_, said, summoned, err := s.runAgent(c, tr, st, publish)
+	_, wrote, summoned, err := s.runAgent(c, tr, st, publish)
 	if c.ctx.Err() != nil {
 		return plan.Outcome{Stop: true}
 	}
@@ -528,7 +528,7 @@ func (s *server) step(c *chain, tr *transcript.Writer, st plan.Step, publish fun
 		return plan.Outcome{Stop: true}
 	}
 	// A silent run's summons run too (ADR 0041).
-	return plan.Outcome{Summons: summoned, MsgID: said.MsgID}
+	return plan.Outcome{Summons: summoned, MsgID: wrote.MsgID}
 }
 
 // errSkipped is an agent the chain passes over because it is no longer
@@ -548,17 +548,17 @@ type summoner struct {
 
 // runAgent runs st's agent, as step st of c: replaying its live Transcript
 // and summoned by the message that mentions it, by c's Job, or by the agent
-// that summoned it; writes what it says, committed or queued, as said, or
+// that summoned it; writes what it says, committed or queued, returning it as wrote, or
 // reports it silent, and returns how it ended, with the Handles it
 // summoned, each recorded and published as talk_summon accepts it. The
 // run's turn, everything it generates and how it ended go through tr to
 // that agent's live Transcript, marked with c (ADR 0036); a run cut off by
 // the serve stopping records no outcome.
-func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) (res agent.Result, said SendView, summoned []string, err error) {
+func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish func(ChainEvent)) (res agent.Result, wrote SendView, summoned []string, err error) {
 	handle, depth := st.Handle, st.Depth
 	ob, store, ok := s.writer()
 	if !ok {
-		return res, said, nil, ErrNoReplica
+		return res, wrote, nil, ErrNoReplica
 	}
 	line := func(l TranscriptLine) {
 		l.Step, l.Handle, l.Depth = st.N, handle, depth
@@ -580,10 +580,10 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 	req, turn, err := s.agentRequest(c.ctx, ob, store, c.conv, handle, depth, by, tr, did, sum, publish)
 	if errors.Is(err, errSkipped) {
 		publish(ChainEvent{Type: EventAgentSkipped, Handle: handle, Reason: fmt.Sprintf("@%s is no longer in [agent] profiles here", handle)})
-		return res, said, nil, err
+		return res, wrote, nil, err
 	}
 	defer func() {
-		if l, ok := runOutcome(said, err, c.cancelled.Load(), c.ctx.Err() != nil); ok {
+		if l, ok := runOutcome(wrote, err, c.cancelled.Load(), c.ctx.Err() != nil); ok {
 			line(l)
 			if l.Outcome == OutcomeSilent {
 				// After its outcome line, so a reader the event sends to
@@ -593,7 +593,7 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 		}
 	}()
 	if err != nil {
-		return res, said, nil, err
+		return res, wrote, nil, err
 	}
 	publish(ChainEvent{Type: EventAgentStart, Handle: handle, Depth: depth})
 	line(turn)
@@ -622,24 +622,24 @@ func (s *server) runAgent(c *chain, tr *transcript.Writer, st plan.Step, publish
 		err = fmt.Errorf("its context is too long for the model; Clear @%s's Transcript to continue (%w)", handle, err)
 	}
 	if err != nil {
-		return res, said, nil, err
+		return res, wrote, nil, err
 	}
 	if res.Silent {
-		return res, said, nil, nil // its outcome line publishes it
+		return res, wrote, nil, nil // its outcome line publishes it
 	}
 	// Once a talk_write is accepted, a cancel no longer cuts it: an append in
 	// flight could land anyway, and agent.commit must report it if it does.
 	commit := context.WithoutCancel(c.ctx)
-	v, err := s.conversationSend(commit, res.Said, handle, depth, "", c.conv)
+	v, err := s.conversationSend(commit, res.Wrote, handle, depth, "", c.conv)
 	if err != nil {
-		return res, said, nil, err
+		return res, wrote, nil, err
 	}
 	// It is posted: whatever fails from here, the Transcript says so.
-	said = v
+	wrote = v
 	// The next agent reads it from this Node's view of the talk at once,
 	// applied or not (ADR 0025).
-	publish(ChainEvent{Type: EventAgentCommit, MsgID: v.MsgID, Seq: v.Seq, Queued: v.Queued, Text: res.Said})
-	return res, said, nil, nil
+	publish(ChainEvent{Type: EventAgentCommit, MsgID: v.MsgID, Seq: v.Seq, Queued: v.Queued, Text: res.Wrote})
+	return res, wrote, nil, nil
 }
 
 // agentRequest is the call to the Provider that answers as handle, and the
@@ -703,7 +703,7 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 			return fail(fmt.Errorf("[providers.%s] api_key: %w", p.Provider, err))
 		}
 	}
-	where, err := s.whereSaid(store, conv)
+	where, err := s.whereTalk(store, conv)
 	if err != nil {
 		return fail(err)
 	}
@@ -730,7 +730,7 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 	}
 	var last *transcript.Run
 	for _, r := range replays {
-		req.Earlier = append(req.Earlier, agent.Earlier{Turn: r.Turn, Blocks: r.Blocks, Posted: r.Outcome == OutcomeSaid, Binding: r.Binding})
+		req.Earlier = append(req.Earlier, agent.Earlier{Turn: r.Turn, Blocks: r.Blocks, Posted: r.Outcome == OutcomeWrote, Binding: r.Binding})
 		last = &r
 	}
 	v, err := s.talk(ob, store, conv)
@@ -799,7 +799,7 @@ const (
 )
 
 // runTurn is the user turn of a run of node's agent handle, as its
-// Transcript's line (ADR 0036): the talk in said since last, the run its
+// Transcript's line (ADR 0036): the talk in msgs since last, the run its
 // replay ends with, leaving out its own messages, which are its talk_write
 // calls there; then what summons it, by's message or Job; then facts. With
 // no last, a new Transcript's first run, it holds no earlier talk. The
@@ -810,10 +810,10 @@ const (
 // before it may not have arrived (ADR 0025). Summoned by an agent's
 // talk_summon, the turn frames what summons it as what that agent
 // summoned it on account of (ADR 0041).
-func runTurn(said talk.Messages, node identity.ID, handle string, by summoner, last *transcript.Run, facts string) TranscriptLine {
+func runTurn(msgs talk.Messages, node identity.ID, handle string, by summoner, last *transcript.Run, facts string) TranscriptLine {
 	l := TranscriptLine{Kind: KindTurn}
 	var summons *talk.Message
-	for _, m := range said {
+	for _, m := range msgs {
 		id := m.MsgID()
 		if m.Unapplied {
 			l.Unapplied = append(l.Unapplied, id)
@@ -839,7 +839,7 @@ func runTurn(said talk.Messages, node identity.ID, handle string, by summoner, l
 		return true
 	}
 	var b strings.Builder
-	if lines := said.Lines(leftOut, displayName); len(lines) > 0 {
+	if lines := msgs.Lines(leftOut, displayName); len(lines) > 0 {
 		b.WriteString(turnTalkSince + "\n" + strings.Join(lines, "\n") + "\n")
 	}
 	frame, none := turnSummonedBy+"\n", turnNoSummoner
@@ -888,9 +888,9 @@ func TurnBesides(turn, summons string) string {
 	return turn
 }
 
-// whereSaid names where conv's talk is: a Key's Conversation by its curve
+// whereTalk names where conv's talk is: a Key's Conversation by its curve
 // and short public key, or Group-level talk.
-func (s *server) whereSaid(store *cosl.Store, conv []byte) (string, error) {
+func (s *server) whereTalk(store *cosl.Store, conv []byte) (string, error) {
 	if conv == nil {
 		return "Group-level talk, which belongs to no Key", nil
 	}

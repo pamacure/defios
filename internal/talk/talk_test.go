@@ -101,7 +101,7 @@ func (f *fixture) sign(by cosl.Author, conv []byte, payload proto.Message) cosl.
 	return s
 }
 
-func said(text string) *coslv1.AppFreeform {
+func freeform(text string) *coslv1.AppFreeform {
 	return &coslv1.AppFreeform{Text: text, ContentType: "text/plain"}
 }
 
@@ -117,7 +117,7 @@ func (f *fixture) commit(s cosl.Signed) cosl.Signed {
 
 // say commits by's text in Group-level talk.
 func (f *fixture) say(by cosl.Author, text string) cosl.Signed {
-	return f.commit(f.sign(by, nil, said(text)))
+	return f.commit(f.sign(by, nil, freeform(text)))
 }
 
 // texts is each message's text, or [pruned] or [unreadable], then "#<seq>"
@@ -149,8 +149,8 @@ func TestAMessageInBothShowsOnceAsCommitted(t *testing.T) {
 	f := newFixture(t)
 	one := f.say(f.alice, "one")
 	f.say(f.bob, "two")
-	three := f.sign(f.alice, nil, said("three"))
-	waiting := f.sign(f.alice, nil, said("waiting"))
+	three := f.sign(f.alice, nil, freeform("three"))
+	waiting := f.sign(f.alice, nil, freeform("waiting"))
 	f.mine = []outbox.Entry{{Signed: one, Seq: 1}, {Signed: three, Seq: 3}, {Signed: waiting}}
 	if got := texts(f.read(nil).Messages); got != "one#1 two#2 three#3 waiting#queued" {
 		t.Fatalf("view = %s", got)
@@ -161,7 +161,7 @@ func TestAMessageInBothShowsOnceAsCommitted(t *testing.T) {
 // between the two reads is in both, and shows once.
 func TestTheOutboxIsReadBeforeTheReplica(t *testing.T) {
 	f := newFixture(t)
-	s := f.sign(f.alice, nil, said("draining"))
+	s := f.sign(f.alice, nil, freeform("draining"))
 	f.mine = []outbox.Entry{{Signed: s}}
 	f.mineRead = func() { f.commit(s) }
 	if got := texts(f.read(nil).Messages); got != "draining#1" {
@@ -176,12 +176,12 @@ func TestTheViewIsOneConversations(t *testing.T) {
 	conv := make([]byte, 32)
 	conv[0] = 1
 	f.say(f.alice, "group-level")
-	f.commit(f.sign(f.bob, conv, said("committed here")))
+	f.commit(f.sign(f.bob, conv, freeform("committed here")))
 	abort, err := f.alice.Sign(cosl.TypeSessionAbort, conv, &coslv1.SessionAbort{Reason: "noise"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("queued group-level"))}, {Signed: f.sign(f.alice, conv, said("here"))}, {Signed: abort}}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, freeform("queued group-level"))}, {Signed: f.sign(f.alice, conv, freeform("here"))}, {Signed: abort}}
 	if got := texts(f.read(conv).Messages); got != "committed here#2 here#queued" {
 		t.Fatalf("view = %s", got)
 	}
@@ -235,7 +235,7 @@ func TestTheRecapCutsTheLeanView(t *testing.T) {
 	for _, s := range []string{"a", "b", "c", "d", "e"} {
 		f.say(f.alice, s)
 	}
-	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("queued"))}}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, freeform("queued"))}}
 	if _, err := f.store.Prune(nil, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestChatStartsAtTheFirstMessage(t *testing.T) {
 	for _, s := range []string{"a", "b", "c", "d"} {
 		f.say(f.alice, s)
 	}
-	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("queued"))}}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, freeform("queued"))}}
 	f.writeRecap(3, "a to c")
 	if _, err := f.store.Prune(nil, 1); err != nil {
 		t.Fatal(err)
@@ -422,7 +422,7 @@ func TestAPagesLinesAreJSONWithTimestamps(t *testing.T) {
 	if _, err := f.store.Prune(nil, 1); err != nil {
 		t.Fatal(err)
 	}
-	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("later"))}}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, freeform("later"))}}
 	v := f.read(nil)
 	at := func(i int) string { return v.Messages[i].Written() }
 	want := []string{
@@ -441,7 +441,7 @@ func TestAPageShowsQueuedMessages(t *testing.T) {
 	f := newFixture(t)
 	f.say(f.alice, "a")
 	f.say(f.bob, "b")
-	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, said("later"))}}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.alice, nil, freeform("later"))}}
 	v := f.read(nil)
 	if got := page(v, 2, 0); got != "[1] alice: a | [2] bob: b | [queued] alice: later" {
 		t.Errorf("latest 2 = %s", got)
@@ -498,7 +498,7 @@ func TestLinesAreTheWholeTalkAsATurnReadsIt(t *testing.T) {
 	if _, err := f.store.Prune(nil, 2); err != nil {
 		t.Fatal(err)
 	}
-	f.mine = []outbox.Entry{{Signed: f.sign(f.bob, nil, said("later"))}}
+	f.mine = []outbox.Entry{{Signed: f.sign(f.bob, nil, freeform("later"))}}
 	v := f.read(nil)
 	at := func(i int) string { return v.Messages[i].Written() }
 	lines := v.Messages.Lines(nil, func(m talk.Message) string { return m.Sender })

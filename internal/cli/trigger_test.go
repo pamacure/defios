@@ -233,7 +233,7 @@ func TestConversationFollowShowsTriggersAndJobs(t *testing.T) {
 	mustInit(t, dir)
 	ok, failed := true, false
 	newChainServe(t, dir, &chainServe{playAtOnce: true, events: []serve.ChainEvent{
-		{Type: serve.EventTriggerFire, Trigger: "said", Event: &trigger.Event{Type: "app.freeform", Trigger: "said", Seq: 4}},
+		{Type: serve.EventTriggerFire, Trigger: "greeted", Event: &trigger.Event{Type: "app.freeform", Trigger: "greeted", Seq: 4}},
 		{Type: serve.EventJobEnd, Job: "notify", OK: &ok},
 		{Type: serve.EventJobEnd, Job: "sign_refuse", OK: &failed, Error: "exit status 1"},
 		{Type: serve.EventTriggerFire, Trigger: "daily", Event: &trigger.Event{Type: trigger.ScheduleEvent, Trigger: "daily", Time: "2026-11-09T09:00:00+01:00"}},
@@ -242,7 +242,7 @@ func TestConversationFollowShowsTriggersAndJobs(t *testing.T) {
 		{Type: serve.EventJobEnd, Job: "ping", OK: &ok},
 	}})
 	r := run(t, nil, "", "--dir", dir, "conversation", "follow")
-	want := `[hook said fired on app.freeform at seq 4]
+	want := `[hook greeted fired on app.freeform at seq 4]
 [job notify done]
 [job sign_refuse failed: exit status 1]
 [schedule daily fired for 2026-11-09T09:00:00+01:00]
@@ -255,9 +255,9 @@ func TestConversationFollowShowsTriggersAndJobs(t *testing.T) {
 	}
 }
 
-// jobRunsNode is a Node keeping seven Job Runs: Hook said's firing of
+// jobRunsNode is a Node keeping seven Job Runs: Hook greeted's firing of
 // say, fail and after; Schedule daily's of summary, an agent Job; Hook
-// said's of notify, a webhook; and say run by hand, on no event, then on
+// greeted's of notify, a webhook; and say run by hand, on no event, then on
 // a request.open.
 func jobRunsNode(t *testing.T) string {
 	t.Helper()
@@ -267,20 +267,20 @@ func jobRunsNode(t *testing.T) string {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
-	said := trigger.Event{Type: "app.freeform", Trigger: "said", Seq: 7, Text: "hi"}
+	greeted := trigger.Event{Type: "app.freeform", Trigger: "greeted", Seq: 7, Text: "hi"}
 	one, zero := 1, 0
 	firings := [][]jobrun.Run{
 		{
-			{Trigger: "said", Event: said, Fired: at, Job: "say", Kind: "exec", State: jobrun.OK, Started: at, Ended: at.Add(time.Second),
+			{Trigger: "greeted", Event: greeted, Fired: at, Job: "say", Kind: "exec", State: jobrun.OK, Started: at, Ended: at.Add(time.Second),
 				Output:   trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"sh", "-c", "echo said"}, ExitCode: &zero, Stdout: "said\n"}},
 				Messages: []string{"ab12", "cd34"}},
-			{Trigger: "said", Event: said, Fired: at, Job: "fail", Kind: "exec", State: jobrun.Failed, Error: "exit status 1", Started: at, Ended: at,
+			{Trigger: "greeted", Event: greeted, Fired: at, Job: "fail", Kind: "exec", State: jobrun.Failed, Error: "exit status 1", Started: at, Ended: at,
 				Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"false"}, ExitCode: &one, Stderr: "no\n"}}},
-			{Trigger: "said", Event: said, Fired: at, Job: "after", Kind: "exec", State: jobrun.NotRun},
+			{Trigger: "greeted", Event: greeted, Fired: at, Job: "after", Kind: "exec", State: jobrun.NotRun},
 		},
 		{{Trigger: "daily", Event: trigger.Event{Type: "schedule", Trigger: "daily", Time: "2026-11-19T11:00:00Z"}, Fired: at.Add(time.Hour),
 			Job: "summary", Kind: "agent", Handle: "auditor", Chain: "c0ffee", State: jobrun.OK, Started: at.Add(time.Hour), Ended: at.Add(time.Hour)}},
-		{{Trigger: "said", Event: said, Fired: at.Add(2 * time.Hour), Job: "notify", Kind: "webhook", State: jobrun.OK,
+		{{Trigger: "greeted", Event: greeted, Fired: at.Add(2 * time.Hour), Job: "notify", Kind: "webhook", State: jobrun.OK,
 			Output: trigger.Output{Webhook: &trigger.WebhookOutput{Method: "POST", URL: "$HOOK_URL",
 				Attempts: []trigger.Attempt{{Status: 503, Error: "webhook: 503 Service Unavailable"}, {Status: 200}}, Body: "thanks", ContentType: "text/plain"}}}},
 		{{ByHand: true, Fired: at.Add(3 * time.Hour), Job: "say", Kind: "exec", State: jobrun.OK}},
@@ -301,16 +301,16 @@ func TestTriggerRunsListsJobRuns(t *testing.T) {
 	r := run(t, nil, "", "--dir", dir, "trigger", "runs")
 	want := "7  2026-11-19T14:00:00Z  run by hand  say exec  ok\n" +
 		"6  2026-11-19T13:00:00Z  run by hand  say exec  ok\n" +
-		"5  2026-11-19T12:00:00Z  hook said  notify webhook  ok\n" +
+		"5  2026-11-19T12:00:00Z  hook greeted  notify webhook  ok\n" +
 		"4  2026-11-19T11:00:00Z  schedule daily  summary agent @auditor  ok\n" +
-		"3  2026-11-19T10:00:00Z  hook said  after exec  not_run\n" +
-		"2  2026-11-19T10:00:00Z  hook said  fail exec  failed: exit status 1\n" +
-		"1  2026-11-19T10:00:00Z  hook said  say exec  ok\n"
+		"3  2026-11-19T10:00:00Z  hook greeted  after exec  not_run\n" +
+		"2  2026-11-19T10:00:00Z  hook greeted  fail exec  failed: exit status 1\n" +
+		"1  2026-11-19T10:00:00Z  hook greeted  say exec  ok\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("trigger runs exit %d:\n%s%s\nwant:\n%s", r.code, r.stdout, r.stderr, want)
 	}
 	r = run(t, nil, "", "--dir", dir, "trigger", "runs", "--job", "fail")
-	if r.code != 0 || r.stdout != "2  2026-11-19T10:00:00Z  hook said  fail exec  failed: exit status 1\n" {
+	if r.code != 0 || r.stdout != "2  2026-11-19T10:00:00Z  hook greeted  fail exec  failed: exit status 1\n" {
 		t.Errorf("--job fail:\n%s%s", r.stdout, r.stderr)
 	}
 	r = run(t, nil, "", "--dir", dir, "trigger", "runs", "--last", "2", "--json")
@@ -328,7 +328,7 @@ func TestTriggerRunsListsJobRuns(t *testing.T) {
 func TestTriggerRunShowsAJobRun(t *testing.T) {
 	dir := jobRunsNode(t)
 	for id, wants := range map[string][]string{
-		"2": {"Job Run 2", "hook said on app.freeform at seq 7", "fail (exec)", "failed: exit status 1",
+		"2": {"Job Run 2", "hook greeted on app.freeform at seq 7", "fail (exec)", "failed: exit status 1",
 			"started    2026-11-19T10:00:00Z", "command    false", "exit code  1", "stderr\n  no\n"},
 		"1": {"stdout\n  said\n", "ended      2026-11-19T10:00:01Z", "messages\n  ab12\n  cd34\n"},
 		"4": {"schedule daily for 2026-11-19T11:00:00Z", "summary (agent)", "agent      @auditor in Group-level talk", "chain      c0ffee"},

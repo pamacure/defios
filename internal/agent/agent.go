@@ -28,7 +28,7 @@ import (
 )
 
 // DefaultMaxTurns is max_turns when a Request sets none: how many model
-// calls a run may make before it must have said something or stayed
+// calls a run may make before it must have written something or stayed
 // silent.
 const DefaultMaxTurns = 8
 
@@ -224,10 +224,10 @@ func (e Earlier) settle(call pastCall) (results []ToolResult, whole bool) {
 	return results, whole
 }
 
-// Result is how a run ended: with Said, what its accepted talk_write carried, or
+// Result is how a run ended: with Wrote, what its accepted talk_write carried, or
 // Silent when the model ended its turn without one.
 type Result struct {
-	Said   string
+	Wrote  string
 	Silent bool
 }
 
@@ -392,9 +392,9 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 			if b.Type != "tool_use" {
 				continue
 			}
-			text, said, res := answer(ctx, req.Tools, b)
-			if said {
-				return Result{Said: text}, nil
+			text, wrote, res := answer(ctx, req.Tools, b)
+			if wrote {
+				return Result{Wrote: text}, nil
 			}
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
@@ -410,10 +410,10 @@ func (c Client) Run(ctx context.Context, req Request, ev Events) (Result, error)
 	return Result{}, fmt.Errorf("agent: %d model calls without an accepted talk_write", req.maxTurns())
 }
 
-// answer answers the tool call b among tools: with said set, an accepted
+// answer answers the tool call b among tools: with wrote set, an accepted
 // talk_write of text; otherwise the result for the model, an error when b names
 // no tool offered, its input is refused, or the Tool fails.
-func answer(ctx context.Context, tools []Tool, b Block) (text string, said bool, res ToolResult) {
+func answer(ctx context.Context, tools []Tool, b Block) (text string, wrote bool, res ToolResult) {
 	res = ToolResult{Type: "tool_result", ToolUseID: b.ID}
 	i := slices.IndexFunc(tools, func(t Tool) bool { return t.Name == b.Name })
 	switch {

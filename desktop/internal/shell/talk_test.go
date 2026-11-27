@@ -176,22 +176,22 @@ func TestAnAgentsChainStreamsLiveCancelsAndLeavesATranscript(t *testing.T) {
 		t.Fatalf("cancel: %+v %v", ts.Problem, r.node.tk().cancelled)
 	}
 
-	// It said its piece before the cancel landed.
-	said := fmt.Sprintf("%064x", 77)
+	// It wrote its piece before the cancel landed.
+	wrote := fmt.Sprintf("%064x", 77)
 	r.node.mu.Lock()
-	r.node.sg().runs[chain] = []transcript.Run{{Chain: chain, Step: 1, Handle: "auditor", Depth: 1, Outcome: transcript.OutcomeSaid, MsgID: said,
+	r.node.sg().runs[chain] = []transcript.Run{{Chain: chain, Step: 1, Handle: "auditor", Depth: 1, Outcome: transcript.OutcomeWrote, MsgID: wrote,
 		Blocks: []json.RawMessage{json.RawMessage(`{"type":"text","text":"Looks fine"}`)}}}
 	r.node.mu.Unlock()
-	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentCommit, Chain: chain, MsgID: said})
-	r.node.commit(node.GroupTalk, node.Message{MsgID: said, NodeID: r.node.NodeID(), Handle: "auditor", Depth: 1, Text: "Looks fine"})
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentCommit, Chain: chain, MsgID: wrote})
+	r.node.commit(node.GroupTalk, node.Message{MsgID: wrote, NodeID: r.node.NodeID(), Handle: "auditor", Depth: 1, Text: "Looks fine"})
 	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventChainEnd, Chain: chain, Cancelled: true})
 
 	ts = eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Live) == 0 && len(ts.Items) >= 2 })
 	reply := ts.Items[1]
-	if reply.MsgID != said || reply.Chain != chain || reply.From != "This Device" || reply.Handle != "auditor" {
+	if reply.MsgID != wrote || reply.Chain != chain || reply.From != "This Device" || reply.Handle != "auditor" {
 		t.Fatalf("reply: %+v", reply)
 	}
-	if d := s.MessageDetails(said); d.Problem != nil || d.Run == nil || len(d.Run.Output) != 1 {
+	if d := s.MessageDetails(wrote); d.Problem != nil || d.Run == nil || len(d.Run.Output) != 1 {
 		t.Fatalf("details: %+v", d)
 	}
 }
@@ -236,7 +236,7 @@ func TestAnAgentThatStaysSilentLeavesAMessageWithItsTranscript(t *testing.T) {
 
 // A summon shows on the agent that made it: live as talk_summon accepts
 // it, then from its Transcript on what its run left, the faded row of a
-// silent run or the message it said, each Handle in its agent's Livery
+// silent run or the message it wrote, each Handle in its agent's Livery
 // (ADR 0041).
 func TestSummonsShowOnTheRunThatMadeThem(t *testing.T) {
 	r := newRig(t, "alpha")
@@ -258,15 +258,15 @@ func TestSummonsShowOnTheRunThatMadeThem(t *testing.T) {
 		return len(ts.Live) == 1 && len(ts.Live[0].Agents) == 1 && slices.Equal(ts.Live[0].Agents[0].Summoned, []shell.Party{auditor})
 	})
 
-	said := fmt.Sprintf("%064x", 78)
+	wrote := fmt.Sprintf("%064x", 78)
 	r.node.mu.Lock()
 	r.node.sg().runs[chain] = []transcript.Run{
 		{Chain: chain, Step: 1, Handle: "router", Depth: 1, Outcome: transcript.OutcomeSilent, Ended: time.Now(), Summoned: []string{"auditor"}},
-		{Chain: chain, Step: 2, Handle: "auditor", Depth: 2, Outcome: transcript.OutcomeSaid, MsgID: said, Summoned: []string{"scribe"}},
+		{Chain: chain, Step: 2, Handle: "auditor", Depth: 2, Outcome: transcript.OutcomeWrote, MsgID: wrote, Summoned: []string{"scribe"}},
 	}
 	r.node.mu.Unlock()
 	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentSilent, Chain: chain, Handle: "router"})
-	r.node.commit(node.GroupTalk, node.Message{MsgID: said, NodeID: r.node.NodeID(), Handle: "auditor", Depth: 2, Text: "scribe, note this"})
+	r.node.commit(node.GroupTalk, node.Message{MsgID: wrote, NodeID: r.node.NodeID(), Handle: "auditor", Depth: 2, Text: "scribe, note this"})
 	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventChainEnd, Chain: chain})
 
 	ts := eventuallyTalk(t, s, func(ts shell.TalkState) bool {
@@ -276,33 +276,33 @@ func TestSummonsShowOnTheRunThatMadeThem(t *testing.T) {
 		t.Fatalf("silent run: %+v", run)
 	}
 	scribe := shell.Party{Party: node.AgentParty("scribe"), Handle: "scribe"}
-	if msg := ts.Items[2]; msg.MsgID != said || !slices.Equal(msg.Summoned, []shell.Party{scribe}) {
-		t.Fatalf("said message: %+v", msg)
+	if msg := ts.Items[2]; msg.MsgID != wrote || !slices.Equal(msg.Summoned, []shell.Party{scribe}) {
+		t.Fatalf("written message: %+v", msg)
 	}
 }
 
-// A run's summons stay on the message it said from its commit, while the
+// A run's summons stay on the message it wrote from its commit, while the
 // agents it summoned answer, before the chain ends (ADR 0041).
-func TestASaidRunsSummonsStayOnItsMessageWhileTheChainGoesOn(t *testing.T) {
+func TestAWritingRunsSummonsStayOnItsMessageWhileTheChainGoesOn(t *testing.T) {
 	r := newRig(t, "alpha")
 	r.node.tk().included[node.GroupTalk] = []string{"router", "auditor"}
 	s := served(t, r)
 	s.SendMessage("@router who should look?")
 	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
-	said := fmt.Sprintf("%064x", 79)
+	wrote := fmt.Sprintf("%064x", 79)
 	for _, ev := range []node.ChainEvent{
 		{Type: serve.EventChainStart, Chain: chain},
 		{Type: serve.EventAgentStart, Chain: chain, Handle: "router", Depth: 1},
 		{Type: serve.EventAgentSummoned, Chain: chain, Handle: "auditor", By: "router"},
-		{Type: serve.EventAgentCommit, Chain: chain, MsgID: said},
+		{Type: serve.EventAgentCommit, Chain: chain, MsgID: wrote},
 	} {
 		chainEvent(r.node, node.GroupTalk, ev)
 	}
-	r.node.commit(node.GroupTalk, node.Message{MsgID: said, NodeID: r.node.NodeID(), Handle: "router", Depth: 1, Text: "over to auditor"})
+	r.node.commit(node.GroupTalk, node.Message{MsgID: wrote, NodeID: r.node.NodeID(), Handle: "router", Depth: 1, Text: "over to auditor"})
 	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventAgentStart, Chain: chain, Handle: "auditor", Depth: 2})
 	auditor := []shell.Party{{Party: node.AgentParty("auditor"), Handle: "auditor"}}
 	eventuallyTalk(t, s, func(ts shell.TalkState) bool {
-		return len(ts.Items) == 2 && ts.Items[1].MsgID == said && slices.Equal(ts.Items[1].Summoned, auditor) &&
+		return len(ts.Items) == 2 && ts.Items[1].MsgID == wrote && slices.Equal(ts.Items[1].Summoned, auditor) &&
 			len(ts.Live) == 1 && len(ts.Live[0].Agents) == 1 && ts.Live[0].Agents[0].Handle == "auditor"
 	})
 }
@@ -320,7 +320,7 @@ func TestRunsThatPostedNothingAreFadedMessagesFromTheirAgent(t *testing.T) {
 	r.node.sg().runs["a1"] = []transcript.Run{{Chain: "a1", Step: 1, Handle: "auditor", Depth: 1, Outcome: transcript.OutcomeSilent, Ended: t0.Add(15 * time.Minute)}}
 	r.node.sg().runs["b2"] = []transcript.Run{{Chain: "b2", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeError, Error: long, Ended: t0.Add(5 * time.Minute)}}
 	r.node.sg().runs["c3"] = []transcript.Run{
-		{Chain: "c3", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeSaid, MsgID: "ab", Ended: t0.Add(24 * time.Minute)},
+		{Chain: "c3", Step: 1, Handle: "scribe", Depth: 1, Outcome: transcript.OutcomeWrote, MsgID: "ab", Ended: t0.Add(24 * time.Minute)},
 		{Chain: "c3", Step: 2, Handle: "auditor", Depth: 2, Outcome: transcript.OutcomeCancelled, Ended: t0.Add(25 * time.Minute)},
 	}
 	r.node.sg().cleared["c3"] = []int{1, 2}
@@ -463,7 +463,7 @@ func withKey(t *testing.T, r *rig) node.Key {
 	return r.node.mint("k3y")
 }
 
-func TestARowCountsWhatWasSaidPastTheReadMarkAndTheOpenOneShowsNone(t *testing.T) {
+func TestARowCountsWhatWasWrittenPastTheReadMarkAndTheOpenOneShowsNone(t *testing.T) {
 	r := newRig(t, "alpha")
 	k := withKey(t, r)
 	s := served(t, r)

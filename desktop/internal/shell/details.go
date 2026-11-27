@@ -53,7 +53,7 @@ type RunView struct {
 	Depth  uint32
 	// Outcome is how it ended, a transcript.Outcome*, "" if it was cut off
 	// or is running; Error is why, with OutcomeError, and MsgID what it
-	// said, with OutcomeSaid.
+	// wrote, with OutcomeWrote.
 	Outcome, Error, MsgID string
 	// InputTokens and OutputTokens are its model calls' added up.
 	InputTokens, OutputTokens int64
@@ -175,7 +175,7 @@ const (
 
 // ChainStep is one step of a chain: its agent, and State, its run's
 // Outcome or a Step* state, with Error why it failed and MsgID what it
-// said.
+// wrote.
 type ChainStep struct {
 	Step   int
 	Handle string
@@ -224,7 +224,7 @@ func (t *talk) messageDetails(msgID string) Details {
 		t.mu.Unlock()
 		return Details{Problem: errNoMessage}
 	}
-	chain := t.said[msgID]
+	chain := t.wrote[msgID]
 	job := m.NodeID == t.self && m.Depth > 0 && (m.Handle == "" || chain != "")
 	d := Details{MsgID: m.MsgID, Seq: m.Seq, Depth: m.Depth, DeviceID: m.NodeID, Device: t.device(m.NodeID), Online: t.online(m.NodeID)}
 	t.mu.Unlock()
@@ -243,7 +243,7 @@ func (t *talk) messageDetails(msgID string) Details {
 			break
 		}
 		for _, r := range tr.Runs {
-			if r.Outcome == transcript.OutcomeSaid && r.MsgID == msgID {
+			if r.Outcome == transcript.OutcomeWrote && r.MsgID == msgID {
 				t.mu.Lock()
 				v := t.runView(r, slices.Contains(tr.Cleared, r.Step))
 				t.mu.Unlock()
@@ -259,7 +259,7 @@ func (t *talk) messageDetails(msgID string) Details {
 }
 
 // jobRunOf is the Job Run of this device's Job that wrote m: an exec
-// Job's, recording it, or an agent Job's whose agent said it, running as
+// Job's, recording it, or an agent Job's whose agent wrote it, running as
 // chain; nil for none kept, or if they do not read, as the rest of m's
 // details stand without it. They are read afresh: a Job Run records a
 // message as it is written.
@@ -471,7 +471,7 @@ func (t *talk) chainSteps(a at, m node.Message) ([]ChainStep, error) {
 				st.State = StepCutOff
 			}
 			out = append(out, st)
-			if r.Outcome != transcript.OutcomeSaid && r.Outcome != transcript.OutcomeSilent {
+			if r.Outcome != transcript.OutcomeWrote && r.Outcome != transcript.OutcomeSilent {
 				return false // the chain stopped here
 			}
 			if !walk(r.Summoned, depth+1) {

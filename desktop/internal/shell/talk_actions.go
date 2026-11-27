@@ -122,8 +122,8 @@ func (t *talk) openConversation(conv string) TalkState {
 		return t.State()
 	}
 	if t.open != conv {
-		t.open, t.msgs, t.said, t.summoned, t.unposted, t.saidStale = conv, nil, nil, nil, nil, true
-		t.saidVer++
+		t.open, t.msgs, t.wrote, t.summoned, t.unposted, t.wroteStale = conv, nil, nil, nil, nil, true
+		t.wroteVer++
 		t.handles, t.sizes, t.agents, t.over = nil, nil, nil, nil
 		t.cards = map[string]node.SignRequestDetail{}
 	}

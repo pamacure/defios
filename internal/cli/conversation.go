@@ -107,7 +107,7 @@ func conversationCommand(g *globals) *cobra.Command {
 	log.Flags().BoolVar(&opts.full, "full", false, "also show the messages this Node has pruned, as metadata only")
 	log.Flags().BoolVar(&opts.lean, "lean", false, "only \"<display name>: <text>\" lines, this Node's RECAP.md then every message after it")
 	log.Flags().BoolVar(&opts.chat, "chat", false, "the talk as chat: \"<display name>: <text>\" with its newlines, every message this Node holds from the first, a blank line between")
-	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each message this Node's agents said preceded by the Transcript blocks of the run that said it: thinking, text, tool calls and their results")
+	log.Flags().BoolVar(&opts.transcripts, "transcripts", false, "with --chat, each message this Node's agents wrote preceded by the Transcript blocks of the run that wrote it: thinking, text, tool calls and their results")
 	bindGroupFlag(g, log)
 	root.AddCommand(log)
 	var baseSeq uint64
@@ -957,7 +957,7 @@ func emitLean(g *globals, v node.Lean, limit int) error {
 }
 
 // chatLine is one --chat entry; with --transcripts, also the blocks of
-// the run that said it, none for the rest.
+// the run that wrote it, none for the rest.
 type chatLine struct {
 	leanLine
 	Blocks *[]json.RawMessage `json:"blocks,omitempty"`
@@ -965,7 +965,7 @@ type chatLine struct {
 
 // emitChat prints the talk as chat: each message as `<speaker>: <text>`,
 // its newlines kept, a blank line between messages; with --json, one line
-// per message. With transcripts, each agent message this Node's chain said
+// per message. With transcripts, each agent message this Node's chain wrote
 // is preceded by its run's blocks as conversation transcript shows them,
 // indented apart from what was said, and each --json line has its blocks.
 func emitChat(g *globals, msgs []node.ChatMessage, transcripts bool) error {

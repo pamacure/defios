@@ -9,11 +9,11 @@ import (
 	"defios.com/internal/trigger"
 )
 
-// firing is n Job Runs of one firing of Hook said, all pending.
+// firing is n Job Runs of one firing of Hook greeted, all pending.
 func firing(jobs ...string) []jobrun.Run {
 	var out []jobrun.Run
 	for _, j := range jobs {
-		out = append(out, jobrun.Run{Trigger: "said", Event: trigger.Event{Type: "app.freeform", Trigger: "said"}, Job: j, Kind: "exec", State: jobrun.Pending, Fired: time.Now()})
+		out = append(out, jobrun.Run{Trigger: "greeted", Event: trigger.Event{Type: "app.freeform", Trigger: "greeted"}, Job: j, Kind: "exec", State: jobrun.Pending, Fired: time.Now()})
 	}
 	return out
 }

@@ -54,7 +54,7 @@ func record(path string) config.Job {
 // restarted serve starts from. A Hook added to config.toml while serve runs
 // fires from the next event on.
 func TestAHookFiresOnLiveTalkOnly(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "said")
+	out := filepath.Join(t.TempDir(), "greeted")
 	never := filepath.Join(t.TempDir(), "never")
 	var bobLog logLines
 	a, b := pairWith(t, func(n *node) {
@@ -70,8 +70,8 @@ func TestAHookFiresOnLiveTalkOnly(t *testing.T) {
 				"after":  {Exec: []string{"touch", never}},
 			}
 			o.Config.Hooks = map[string]config.Hook{
-				"said":   {Events: []string{"app.freeform"}, From: config.Names{"others"}, Jobs: []string{"record"}},
-				"broken": {Events: []string{"app.freeform"}, Jobs: []string{"fail", "after"}},
+				"greeted": {Events: []string{"app.freeform"}, From: config.Names{"others"}, Jobs: []string{"record"}},
+				"broken":  {Events: []string{"app.freeform"}, Jobs: []string{"fail", "after"}},
 			}
 		}
 	})

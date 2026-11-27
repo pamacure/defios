@@ -24,19 +24,19 @@ func raws(js ...string) []json.RawMessage {
 	return out
 }
 
-// sayAs commits text as this device's agent handle's at depth, said by run
+// sayAs commits text as this device's agent handle's at depth, written by run
 // of chain: what a chain leaves once the agent answered.
 func sayAs(r *rig, conv, chain, handle string, depth uint32, run transcript.Run, text string) node.Message {
 	r.t.Helper()
 	r.node.mu.Lock()
 	msgID := fmt.Sprintf("a9%062x", len(r.node.sg().runs[chain])+run.Step*16)
-	run.Chain, run.Handle, run.Depth, run.Outcome, run.MsgID = chain, handle, depth, transcript.OutcomeSaid, msgID
+	run.Chain, run.Handle, run.Depth, run.Outcome, run.MsgID = chain, handle, depth, transcript.OutcomeWrote, msgID
 	r.node.sg().runs[chain] = append(r.node.sg().runs[chain], run)
 	r.node.mu.Unlock()
 	return r.node.commit(conv, node.Message{MsgID: msgID, NodeID: r.node.NodeID(), DisplayName: "laptop", Handle: handle, Depth: depth, Text: text})
 }
 
-// ended ends chain in conv, and waits for the page to show msgID as said
+// ended ends chain in conv, and waits for the page to show msgID as written
 // in it.
 func ended(r *rig, s *shell.Shell, conv, chain, msgID string) {
 	r.t.Helper()
@@ -59,7 +59,7 @@ func TestAnAgentsMessageDetailsAreItsRun(t *testing.T) {
 	chain := r.node.tk().committed[node.GroupTalk][0].MsgID
 	req := r.node.propose(node.GroupTalk, r.node.NodeID(), "auditor", "pay the auditor", 2)
 	summons := "[1 2026-11-19 09:01] laptop: @auditor check this"
-	said := sayAs(r, node.GroupTalk, chain, "auditor", 1, transcript.Run{
+	msg := sayAs(r, node.GroupTalk, chain, "auditor", 1, transcript.Run{
 		Step: 1, By: chain, Summons: summons,
 		Turn:     "(Talk since your last run:)\n[0 2026-11-19 09:00] bob: hi\n(You are summoned by:)\n" + summons + "\n(facts)",
 		Provider: "anthropic", ModelID: "claude-opus-5-5", Shape: "messages",
@@ -69,12 +69,12 @@ func TestAnAgentsMessageDetailsAreItsRun(t *testing.T) {
 		Acted:  []transcript.Acted{{Tool: "sign_accept", MsgID: req}},
 	}, "Looks fine")
 
-	ended(r, s, node.GroupTalk, chain, said.MsgID)
-	d := s.MessageDetails(said.MsgID)
+	ended(r, s, node.GroupTalk, chain, msg.MsgID)
+	d := s.MessageDetails(msg.MsgID)
 	if d.Problem != nil {
 		t.Fatalf("details: %+v", d.Problem)
 	}
-	if d.MsgID != said.MsgID || d.Seq != said.Seq || d.Chain != chain || d.Step != 1 || d.Depth != 1 ||
+	if d.MsgID != msg.MsgID || d.Seq != msg.Seq || d.Chain != chain || d.Step != 1 || d.Depth != 1 ||
 		d.Device != "This Device" || d.DeviceID != r.node.NodeID() || len(d.Steps) != 0 {
 		t.Fatalf("details: %+v", d)
 	}
@@ -83,7 +83,7 @@ func TestAnAgentsMessageDetailsAreItsRun(t *testing.T) {
 		t.Fatal("no run")
 	}
 	want := shell.RunView{
-		Handle: "auditor", Chain: chain, Step: 1, Depth: 1, Outcome: transcript.OutcomeSaid, MsgID: said.MsgID,
+		Handle: "auditor", Chain: chain, Step: 1, Depth: 1, Outcome: transcript.OutcomeWrote, MsgID: msg.MsgID,
 		InputTokens: 35, OutputTokens: 5, Provider: "anthropic", ModelID: "claude-opus-5-5", Shape: "messages",
 		Signs: []shell.RunSign{{Tool: "sign_accept", MsgID: req, Reason: "pay the auditor"}},
 		Tools: []string{"talk_write", "sign_accept"}, Skills: []string{"base/audit"},
@@ -102,7 +102,7 @@ func TestAnAgentsMessageDetailsAreItsRun(t *testing.T) {
 // step as the chain walks them: each agent its message mentions, each
 // followed by those its run summoned with talk_summon, whether it spoke or
 // stayed silent, with how its run ended or that it was skipped, and what
-// it said. What an agent's text mentions summons nobody. A step that
+// it wrote. What an agent's text mentions summons nobody. A step that
 // failed ends the chain there.
 func TestYourMessageDetailsListItsChainsSteps(t *testing.T) {
 	r := newRig(t, "alpha")
@@ -122,11 +122,11 @@ func TestYourMessageDetailsListItsChainsSteps(t *testing.T) {
 
 	d := s.MessageDetails(chain)
 	want := []shell.ChainStep{
-		{Step: 1, Handle: "auditor", Depth: 1, State: transcript.OutcomeSaid, MsgID: a.MsgID},
+		{Step: 1, Handle: "auditor", Depth: 1, State: transcript.OutcomeWrote, MsgID: a.MsgID},
 		{Step: 2, Handle: "critic", Depth: 2, State: transcript.OutcomeSilent},
 		{Step: 3, Handle: "scribe", Depth: 3, State: transcript.OutcomeSilent},
 		{Step: 4, Handle: "ghost", Depth: 2, State: shell.StepSkipped},
-		{Step: 5, Handle: "scribe", Depth: 1, State: transcript.OutcomeSaid, MsgID: b.MsgID},
+		{Step: 5, Handle: "scribe", Depth: 1, State: transcript.OutcomeWrote, MsgID: b.MsgID},
 	}
 	if d.Problem != nil || d.Chain != chain || d.Run != nil || !reflect.DeepEqual(d.Steps, want) {
 		t.Fatalf("details: %+v\nsteps %+v\nwant  %+v", d, d.Steps, want)
@@ -220,11 +220,11 @@ func TestAJobLinesDetailsAreItsJobRun(t *testing.T) {
 	fired := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
 	exit := 3
 	r.node.addJobRuns(
-		node.JobRun{Trigger: "said", Event: ev, Fired: fired, Job: "say", Kind: "exec", State: node.JobFailed, Started: fired, Ended: fired.Add(time.Second), Error: "exit status 3",
+		node.JobRun{Trigger: "greeted", Event: ev, Fired: fired, Job: "say", Kind: "exec", State: node.JobFailed, Started: fired, Ended: fired.Add(time.Second), Error: "exit status 3",
 			Output: trigger.Output{Exec: &trigger.ExecOutput{Command: []string{"sh", "-c", "echo hi"}, ExitCode: &exit, Stdout: "hi\n", Stderr: "oops\n"}}},
-		node.JobRun{Trigger: "said", Event: ev, Fired: fired, Job: "web", Kind: "webhook", State: node.JobNotRun},
+		node.JobRun{Trigger: "greeted", Event: ev, Fired: fired, Job: "web", Kind: "webhook", State: node.JobNotRun},
 	)
-	r.node.addJobRuns(node.JobRun{Trigger: "said", Event: ev, Fired: fired, Job: "web", Kind: "webhook", State: node.JobOK, Started: fired, Ended: fired,
+	r.node.addJobRuns(node.JobRun{Trigger: "greeted", Event: ev, Fired: fired, Job: "web", Kind: "webhook", State: node.JobOK, Started: fired, Ended: fired,
 		Output: trigger.Output{Webhook: &trigger.WebhookOutput{Method: "POST", URL: "$HOOK_URL", Attempts: []trigger.Attempt{{Status: 502, Error: "HTTP 502"}, {Status: 200}}, Body: "got it", ContentType: "text/plain"}}})
 	s := served(t, r)
 	eventuallyTalk(t, s, items(4))
@@ -234,7 +234,7 @@ func TestAJobLinesDetailsAreItsJobRun(t *testing.T) {
 	if d.Problem != nil || j == nil || d.Device != "This Device" || d.DeviceID != r.node.NodeID() || !d.Online || d.Run != nil {
 		t.Fatalf("exec details: %+v", d)
 	}
-	if j.ID != 1 || j.Trigger != "said" || j.Event != "app.freeform" || j.EventMsgID != "e1" || j.Job != "say" || j.Kind != "exec" ||
+	if j.ID != 1 || j.Trigger != "greeted" || j.Event != "app.freeform" || j.EventMsgID != "e1" || j.Job != "say" || j.Kind != "exec" ||
 		j.State != node.JobFailed || j.Error != "exit status 3" || !j.Fired.Equal(fired) || !j.Started.Equal(fired) || !j.Ended.Equal(fired.Add(time.Second)) ||
 		!slices.Equal(j.Command, []string{"sh", "-c", "echo hi"}) || j.ExitCode == nil || *j.ExitCode != 3 || j.Stdout != "hi\n" || j.Stderr != "oops\n" || j.Method != "" {
 		t.Fatalf("exec Job Run: %+v", j)
@@ -261,25 +261,25 @@ func TestAJobsMessageGivesItsJobRun(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := served(t, r)
 	chain := fmt.Sprintf("c4%062x", 1)
-	said := sayAs(r, node.GroupTalk, chain, "scout", 1, transcript.Run{Step: 1, Job: "nightly", Summons: "(the prompt)", Turn: "(the prompt)"}, "All quiet")
+	msg := sayAs(r, node.GroupTalk, chain, "scout", 1, transcript.Run{Step: 1, Job: "nightly", Summons: "(the prompt)", Turn: "(the prompt)"}, "All quiet")
 	reply := sayAs(r, node.GroupTalk, chain, "auditor", 2, transcript.Run{Step: 2}, "Agreed")
 	wrote := r.node.commit(node.GroupTalk, node.Message{NodeID: r.node.NodeID(), DisplayName: "laptop", Depth: 1, Text: "checked"})
 	other := r.node.commit(node.GroupTalk, node.Message{NodeID: "b0b", DisplayName: "bob", Depth: 1, Text: "theirs"})
 	now := time.Now()
 	r.node.addJobRuns(node.JobRun{Trigger: "night", Event: trigger.Event{Type: trigger.ScheduleEvent}, Fired: now, Job: "nightly", Kind: "agent", State: node.JobOK,
 		Started: now, Ended: now, Handle: "scout", Chain: chain})
-	r.node.addJobRuns(node.JobRun{Trigger: "said", Event: trigger.Event{Type: "app.freeform"}, Fired: now, Job: "check", Kind: "exec", State: node.JobOK,
+	r.node.addJobRuns(node.JobRun{Trigger: "greeted", Event: trigger.Event{Type: "app.freeform"}, Fired: now, Job: "check", Kind: "exec", State: node.JobOK,
 		Started: now, Ended: now, Messages: []string{wrote.MsgID}})
-	ended(r, s, node.GroupTalk, chain, said.MsgID)
-	eventuallyTalk(t, s, func(ts shell.TalkState) bool { // read with said, but perhaps not by the same read
+	ended(r, s, node.GroupTalk, chain, msg.MsgID)
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { // read with wrote, but perhaps not by the same read
 		return slices.ContainsFunc(ts.Items, func(it shell.Item) bool { return it.MsgID == reply.MsgID && it.Chain == chain })
 	})
 
 	d := s.JobRunDetails(1)
-	if d.Problem != nil || d.Job == nil || d.Job.Handle != "scout" || d.Run == nil || d.Run.MsgID != said.MsgID || d.Chain != chain || d.Step != 1 {
+	if d.Problem != nil || d.Job == nil || d.Job.Handle != "scout" || d.Run == nil || d.Run.MsgID != msg.MsgID || d.Chain != chain || d.Step != 1 {
 		t.Fatalf("agent Job Run: %+v", d)
 	}
-	d = s.MessageDetails(said.MsgID)
+	d = s.MessageDetails(msg.MsgID)
 	if d.Problem != nil || d.Job == nil || d.Job.ID != 1 || d.Run == nil || d.Run.Opening.Heading != "Job nightly" {
 		t.Fatalf("agent Job's message: %+v", d)
 	}

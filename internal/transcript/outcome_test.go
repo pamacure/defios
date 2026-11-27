@@ -8,7 +8,7 @@ import (
 	"defios.com/internal/transcript"
 )
 
-// A run's closing line. Once its talk_write has committed it is `said` with its
+// A run's closing line. Once its talk_write has committed it is `wrote` with its
 // msg_id and seq whatever fails after, even a stop; a run cut off by a
 // stop before that has none (ADR 0018).
 func TestOutcome(t *testing.T) {
@@ -22,9 +22,9 @@ func TestOutcome(t *testing.T) {
 		cancelled, stopped bool
 		want               string // outcome, "" for none
 	}{
-		{name: "said", msgID: msgID, seq: 9, want: transcript.OutcomeSaid},
+		{name: "wrote", msgID: msgID, seq: 9, want: transcript.OutcomeWrote},
 		{name: "silent", want: transcript.OutcomeSilent},
-		{name: "committed, then the serve stopped", msgID: msgID, seq: 9, err: failed, stopped: true, want: transcript.OutcomeSaid},
+		{name: "committed, then the serve stopped", msgID: msgID, seq: 9, err: failed, stopped: true, want: transcript.OutcomeWrote},
 		{name: "failed", err: failed, want: transcript.OutcomeError},
 		{name: "cancelled", err: failed, cancelled: true, stopped: true, want: transcript.OutcomeCancelled},
 		{name: "stopped", err: failed, stopped: true},

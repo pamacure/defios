@@ -26,7 +26,7 @@ import (
 // Outcomes: how a run ended (ADR 0018). A run cut off by a serve stop has
 // none.
 const (
-	OutcomeSaid      = "said"      // msg_id, and seq once it has a row: the message
+	OutcomeWrote     = "wrote"     // msg_id, and seq once it has a row: the message
 	OutcomeSilent    = "silent"    // ended its turn without talk_write
 	OutcomeError     = "error"     // error: why
 	OutcomeCancelled = "cancelled" // a cancel stopped it
@@ -98,16 +98,16 @@ type Line struct {
 	At time.Time `json:"at,omitzero"`
 }
 
-// Outcome is the closing line of a run that said msgID, hex, at seq
+// Outcome is the closing line of a run that wrote msgID, hex, at seq
 // (msgID "" if nothing), and ended with err, recording when, now, UTC; a run that commits nothing
 // and ends without an error is silent. Once a talk_write has committed it is
-// `said`, whatever failed after. A run cut off by the serve stopping
+// `wrote`, whatever failed after. A run cut off by the serve stopping
 // before that has none: ok is false.
 func Outcome(msgID string, seq uint64, err error, cancelled, stopped bool) (l Line, ok bool) {
 	l.Kind, l.At = KindOutcome, time.Now().UTC()
 	switch {
 	case msgID != "":
-		l.Outcome, l.MsgID, l.Seq = OutcomeSaid, msgID, seq
+		l.Outcome, l.MsgID, l.Seq = OutcomeWrote, msgID, seq
 	case err == nil:
 		l.Outcome = OutcomeSilent
 	case cancelled:
@@ -496,8 +496,8 @@ type Run struct {
 	// (ADR 0041).
 	Summoned []string
 	Outcome  string
-	MsgID    string // with OutcomeSaid: what it said, hex
-	Seq      uint64 // with OutcomeSaid, once it has a row
+	MsgID    string // with OutcomeWrote: what it wrote, hex
+	Seq      uint64 // with OutcomeWrote, once it has a row
 	Error    string // with OutcomeError: why
 	// Ended is when it ended, as its outcome line records it: zero for a
 	// run with no outcome.

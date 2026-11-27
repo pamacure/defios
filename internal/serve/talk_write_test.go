@@ -278,7 +278,7 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	events := untilEnd(t, s, v.MsgID)
 	lines := transcript(t, a, v.MsgID)
 	want := "1/auditor/1:turn 1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:block " +
-		"1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:outcome=said " +
+		"1/auditor/1:request 1/auditor/1:block 1/auditor/1:block 1/auditor/1:usage 1/auditor/1:outcome=wrote " +
 		"2/scribe/1:turn 2/scribe/1:request 2/scribe/1:block 2/scribe/1:usage 2/scribe/1:outcome=silent"
 	if got := lineWords(lines); got != want {
 		t.Fatalf("transcript = %s\nwant         %s", got, want)
@@ -295,8 +295,8 @@ func TestTheTranscriptRecordsEachRun(t *testing.T) {
 	if res, _ := lines[5]["block"].(map[string]any); res["type"] != "tool_result" || res["is_error"] != true || !strings.Contains(fmt.Sprint(res["content"]), "empty") {
 		t.Fatalf("the refused talk_write's answer = %v", lines[5])
 	}
-	if said := lines[10]; commit.Text != "ok" || said["seq"] != float64(commit.Seq) || said["msg_id"] != commit.MsgID || commit.MsgID == "" {
-		t.Fatalf("said seq %v, agent.commit %+v", said, commit)
+	if wrote := lines[10]; commit.Text != "ok" || wrote["seq"] != float64(commit.Seq) || wrote["msg_id"] != commit.MsgID || commit.MsgID == "" {
+		t.Fatalf("wrote seq %v, agent.commit %+v", wrote, commit)
 	}
 	req, _ := lines[6]["request"].(map[string]any)
 	if req["model"] != "claude-test" || len(req["messages"].([]any)) != 3 {

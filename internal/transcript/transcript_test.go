@@ -31,12 +31,12 @@ func write(t *testing.T, p nodedir.Paths, conv []byte, chain string, lines ...tr
 	}
 }
 
-// Step 1 said; step 2 stayed silent; step 3 failed.
+// Step 1 wrote; step 2 stayed silent; step 3 failed.
 var lines = []transcript.Line{
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindRequest, Request: json.RawMessage(`{"model":"m"}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindBlock, Block: json.RawMessage(`{"type":"text","text":"ok @scribe"}`)},
 	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindUsage, Usage: json.RawMessage(`{"input_tokens":3}`)},
-	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
+	{Step: 1, Handle: "auditor", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeWrote, MsgID: "cdcd", Seq: 7},
 	{Step: 2, Handle: "scribe", Depth: 2, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeSilent},
 	{Step: 3, Handle: "critic", Depth: 1, Kind: transcript.KindOutcome, Outcome: transcript.OutcomeError, Error: "boom"},
 }
@@ -133,7 +133,7 @@ func TestAChainIsRebuiltFromItsRunsByStep(t *testing.T) {
 			Requests: []json.RawMessage{json.RawMessage(`{"model":"m"}`)},
 			Blocks:   []json.RawMessage{json.RawMessage(`{"type":"text","text":"ok @scribe"}`)},
 			Usage:    []json.RawMessage{json.RawMessage(`{"input_tokens":3}`)},
-			Outcome:  transcript.OutcomeSaid, MsgID: "cdcd", Seq: 7},
+			Outcome:  transcript.OutcomeWrote, MsgID: "cdcd", Seq: 7},
 		{Chain: chainID, Step: 2, Handle: "scribe", Depth: 2, Outcome: transcript.OutcomeSilent},
 		{Chain: chainID, Step: 3, Handle: "critic", Depth: 1, Outcome: transcript.OutcomeError, Error: "boom"},
 		{Chain: chainID, Step: 4, Handle: "auditor", Depth: 2, Requests: []json.RawMessage{json.RawMessage(`{}`)}},
@@ -450,10 +450,10 @@ func TestAnOutcomeRecordsWhenTheRunEnded(t *testing.T) {
 
 // The runs that posted nothing are those that stayed silent, failed or
 // were cancelled, in live and cleared Transcripts alike; not one that
-// said something, nor one cut off with no outcome.
+// wrote something, nor one cut off with no outcome.
 func TestUnpostedRunsAreTheSilentFailedAndCancelledOnes(t *testing.T) {
 	p := paths(t)
-	write(t, p, nil, "cd34", lines...) // said, silent, failed
+	write(t, p, nil, "cd34", lines...) // wrote, silent, failed
 	if _, err := transcript.Clear(p, group.ImplicitAlias, nil, ""); err != nil {
 		t.Fatal(err)
 	}
