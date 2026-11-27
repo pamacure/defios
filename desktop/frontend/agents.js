@@ -4,6 +4,7 @@
 // side reports (main.UI.Agents) and redraws only on its own changes or a
 // new edit-target Group, so a redraw of the app never drops what is
 // being typed. UI text says "device" for a Node.
+import { combo, setOptions } from "./combo.js";
 import { call, grow, h, put } from "./dom.js";
 import { avatar, forgetPicks, liveryPicker, randomFree } from "./livery.js";
 import { callFailed, markInvalid, problemBox, showProblem } from "./notice.js";
@@ -39,6 +40,12 @@ const groupMount = h("div", { class: "agents" });
 let pending = null; // the load under way: its promise
 
 const NEW = "\u0000new";
+
+// The models each Provider lists, by the Provider as it is configured, so
+// a form asks again only for one changed since. A list that failed is not
+// kept: the next form asks again.
+const modelLists = new Map(); // alias, URL and key Secret → Promise<ModelsView>
+const MODEL_HINT = "The model its Provider runs, sent as the body's model.";
 
 // agentsDevicePart is This Device's part: the Agent Profiles. The app
 // shows it only once agentsReady.
@@ -221,12 +228,15 @@ function profileForm(o) {
   const inputs = {
     Handle: text(d.Handle, { placeholder: "auditor" }),
     Provider: providerSelect(d.Provider, !o),
-    Model: text(d.Model, { placeholder: "claude-opus-5-5" }),
+    Model: combo(text(d.Model, { placeholder: "claude-opus-5-5" })),
     MaxTurns: text(d.MaxTurns, { inputmode: "numeric", placeholder: "Default" }),
     Body: area(d.Body, { rows: 1, placeholder: '{"max_tokens": 4096}' }),
     Brief: area(d.Brief, { rows: 12, class: "field left area mono", placeholder: o ? "" : "A placeholder Agent Brief is written if this is left empty." }),
   };
   profInputs = o ? inputs : null;
+  const modelHint = h("span", {}, MODEL_HINT);
+  inputs.Provider.addEventListener("change", () => suggestModels(inputs.Provider.value, inputs.Model, modelHint));
+  suggestModels(d.Provider, inputs.Model, modelHint);
   const saved = h("span", { class: "saved", "aria-live": "polite" }, av.Where === where && av.Saved ? "Saved." : "");
   for (const el of Object.values(inputs)) el.addEventListener("input", () => { saved.textContent = ""; });
   const key = o ? o.Handle : NEW;
@@ -266,7 +276,7 @@ function profileForm(o) {
     cell(where, "provider", "Provider", inputs.Provider, providers.length
       ? `A Provider of ${group}, called by this name in each Group it answers in.`
       : `${group} has no Providers yet: add one under Group below.`),
-    cell(where, "model", "Model ID", inputs.Model, "The model its Provider runs, sent as the body's model."),
+    cell(where, "model", "Model ID", inputs.Model, modelHint),
     cell(where, "max_turns", "Max turns", inputs.MaxTurns, o?.MaxTurns
       ? "How many turns one run may take. Once set, it can be changed but not cleared."
       : "How many turns one run may take. Leave empty for the default."),
@@ -289,6 +299,49 @@ function liveryCell(where, now, picker) {
     h("span", { class: "label" }, "Livery ", now),
     picker,
     h("p", { class: "hint" }, "The colour and brick Talk marks it with, wherever it writes or is mentioned. Only this device sees it."));
+}
+
+// suggestModels has the Model ID field suggest what Provider alias lists,
+// saying in hint how that went; the field takes any Model ID whatever it
+// lists.
+async function suggestModels(alias, input, hint) {
+  input.dataset.provider = alias;
+  setOptions(input, []);
+  const got = providerModels(alias);
+  if (!got) {
+    hint.textContent = MODEL_HINT;
+    return;
+  }
+  hint.textContent = `Asking ${alias} for its models…`;
+  const m = await got;
+  if (!input.isConnected || input.dataset.provider !== alias) return;
+  if (m.Problem) {
+    hint.textContent = `${m.Problem.Message} Type the Model ID instead.`;
+    hint.title = m.Problem.Detail || "";
+    return;
+  }
+  hint.title = "";
+  setOptions(input, m.Models.map((x) => ({ value: x.ID, label: x.Name })));
+  hint.textContent = m.Models.length
+    ? `Pick one of the ${m.Models.length} models ${alias} lists, or type any Model ID.`
+    : `${alias} lists no models: type the Model ID.`;
+}
+
+// providerModels is the list Provider alias gives, asked once per Provider
+// as configured; null when the Group has no Provider by that name.
+function providerModels(alias) {
+  const p = alias && (av.Providers ?? []).find((x) => x.Alias === alias);
+  if (!p) return null;
+  const k = [alias, p.URL, p.APIKey].join("\u0000");
+  let got = modelLists.get(k);
+  if (!got) {
+    const forget = () => { if (modelLists.get(k) === got) modelLists.delete(k); };
+    got = call("ProviderModels", alias).then(
+      (m) => { if (m.Problem) forget(); return m; },
+      (err) => { forget(); return { Models: [], Problem: callFailed(err) }; });
+    modelLists.set(k, got);
+  }
+  return got;
 }
 
 function providerSelect(value, isNew) {

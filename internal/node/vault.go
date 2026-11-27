@@ -129,7 +129,14 @@ func (h *Host) lookupSecret(group, name string, passphrase Passphrase, held bool
 	if err := h.knownGroup(group); err != nil {
 		return "", "", err
 	}
-	r := h.resolver(group, func() (map[string]string, error) {
+	return h.vaultResolver(group, passphrase, held).Lookup(name)
+}
+
+// vaultResolver is resolver opening group's Vault only when a Secret is
+// not in the environment; held says whether it may open with this host's
+// passphrase.
+func (h *Host) vaultResolver(group string, passphrase Passphrase, held bool) *secret.Resolver {
+	return h.resolver(group, func() (map[string]string, error) {
 		var stored map[string]string
 		err := h.withSecrets(group, passphrase, held, func(s map[string]string, _ string) error {
 			stored = s
@@ -137,7 +144,6 @@ func (h *Host) lookupSecret(group, name string, passphrase Passphrase, held bool
 		})
 		return stored, err
 	})
-	return r.Lookup(name)
 }
 
 // resolver finds group's Secrets as serving it does: the environment

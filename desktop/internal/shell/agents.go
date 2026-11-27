@@ -9,11 +9,13 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"defios.com/internal/agent"
 	"defios.com/internal/config"
 	"defios.com/internal/node"
 	"defios.com/internal/provider"
+	"defios.com/internal/secret"
 )
 
 // The Agents page: this Node's Agent Profiles, and the edit-target
@@ -36,6 +38,7 @@ type AgentsNode interface {
 	AddProvider(ctx context.Context, group, conv, alias string, e node.ProviderEdit) (node.Provider, error)
 	EditProvider(ctx context.Context, group, conv, alias string, e node.ProviderEdit) (node.Provider, error)
 	RemoveProvider(ctx context.Context, group, conv, alias string) error
+	ProviderModels(ctx context.Context, group, conv, alias string, passphrase node.Passphrase) ([]node.Model, error)
 	Secrets(ctx context.Context, group string, passphrase node.Passphrase) ([]node.Secret, error)
 	Liveries(ctx context.Context) (map[string]string, error)
 	FreeLiveries(ctx context.Context) ([]string, error)
@@ -422,6 +425,61 @@ func (s *Shell) RemoveProvider(alias string) AgentsView {
 	}
 	s.fillAgents(n, &v, "")
 	return v
+}
+
+// ModelsView is what Provider Alias lists, for a profile's Model ID to
+// pick from. Models is never nil; Problem is why none could be listed, and
+// the Model ID is typed then.
+type ModelsView struct {
+	Alias   string
+	Models  []ModelOption
+	Problem *Problem
+}
+
+// ModelOption is one model a Provider lists; Name is "" when it gives
+// none.
+type ModelOption struct {
+	ID, Name string
+}
+
+// modelsWait bounds how long a Provider has to list its models.
+const modelsWait = 15 * time.Second
+
+// ProviderModels asks the edit-target Group's Provider alias for the
+// models it serves, with its key from the environment or the Vault the
+// app holds open.
+func (s *Shell) ProviderModels(alias string) ModelsView {
+	m := ModelsView{Alias: alias, Models: []ModelOption{}}
+	v, ok := s.agentsTarget()
+	if !ok {
+		m.Problem = problemOf(node.ErrLocked)
+		return m
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, modelsWait)
+	defer cancel()
+	list, err := s.node().ProviderModels(ctx, v.Group, node.GroupTalk, alias, s.held())
+	if err != nil {
+		m.Problem = modelsProblem(err)
+		return m
+	}
+	for _, x := range list {
+		m.Models = append(m.Models, ModelOption{ID: x.ID, Name: x.Name})
+	}
+	return m
+}
+
+// modelsProblem is problemOf for listing a Provider's models, whose
+// failures besides the Vault's are the Provider's own.
+func modelsProblem(err error) *Problem {
+	switch {
+	case errors.Is(err, provider.ErrUnknown):
+		return &Problem{Code: "unknown-provider", Message: "This Group has no Provider by that name."}
+	case errors.Is(err, secret.ErrUnresolved):
+		return withDetail("no-key", "Its API key's Secret is not set, so its models can't be listed.", err)
+	case errors.Is(err, node.ErrNoPassphrase), errors.Is(err, node.ErrLocked):
+		return problemOf(err)
+	}
+	return withDetail("models-unlisted", "The Provider did not list its models.", err)
 }
 
 // agentsTarget is the view's Group and whether it is served; ok false,

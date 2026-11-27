@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"defios.com/internal/agent"
 	"defios.com/internal/config"
 	"defios.com/internal/group"
 	"defios.com/internal/provider"
@@ -124,6 +125,45 @@ func (h *Host) Provider(ctx context.Context, group, conv, alias string) (Provide
 		return Provider{}, err
 	}
 	return providerOf(alias, p), nil
+}
+
+// Model is one model a Provider lists: its Model ID, and the name the list
+// gives it, "" when it gives none.
+type Model struct {
+	ID, Name string
+}
+
+// ProviderModels lists the models Provider alias, in force in group's
+// Group-level talk or Conversation conv, says it serves, sorted by ID. Its
+// key is found as serving finds it, in the environment and then the
+// Vault, opened with this host's passphrase while it is unlocked, else the
+// one passphrase gives: ErrNoPassphrase when neither does. The Group need
+// not be served.
+func (h *Host) ProviderModels(ctx context.Context, group, conv, alias string, passphrase Passphrase) ([]Model, error) {
+	e, err := h.loadConfig(group, conv)
+	if err != nil {
+		return nil, err
+	}
+	p, err := e.Workspace.Provider(alias)
+	if err != nil {
+		return nil, err
+	}
+	var key string
+	if p.APIKey != "" {
+		if key, err = h.vaultResolver(group, passphrase, true).Resolve(p.APIKey); err != nil {
+			return nil, fmt.Errorf("[providers.%s] api_key: %w", alias, err)
+		}
+	}
+	at := p.Endpoint(alias)
+	list, err := agent.Client{}.Models(ctx, at.Shape(), at.ModelsURL(), key)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Model, len(list))
+	for i, m := range list {
+		out[i] = Model{ID: m.ID, Name: m.Name}
+	}
+	return out, nil
 }
 
 // AddProvider adds a Provider to group's config, or to Conversation

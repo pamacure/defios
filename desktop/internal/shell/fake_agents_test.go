@@ -43,6 +43,9 @@ func (n *fakeNode) EditProvider(context.Context, string, string, string, node.Pr
 	return node.Provider{}, errNotFaked
 }
 func (n *fakeNode) RemoveProvider(context.Context, string, string, string) error { return errNotFaked }
+func (n *fakeNode) ProviderModels(context.Context, string, string, string, node.Passphrase) ([]node.Model, error) {
+	return nil, errNotFaked
+}
 func (n *fakeNode) Secrets(context.Context, string, node.Passphrase) ([]node.Secret, error) {
 	return nil, nil
 }

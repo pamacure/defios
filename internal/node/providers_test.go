@@ -3,6 +3,9 @@ package node_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -127,5 +130,59 @@ func TestAConversationOverridesItsGroupsProvider(t *testing.T) {
 	}
 	if err := h.RemoveProvider(ctx, "alpha", conv, "anthropic"); !errors.Is(err, provider.ErrUnknown) {
 		t.Fatalf("removing an override not there: %v; want provider.ErrUnknown", err)
+	}
+}
+
+// A Provider's models are listed from its own endpoint with its key, found
+// in the environment or else the Vault; a key in a locked Vault needs a
+// passphrase.
+func TestAProvidersModelsAreListedWithItsKey(t *testing.T) {
+	var keys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gw/v1/models" {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		keys = append(keys, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"m-b"},{"id":"m-a"}]}`)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	env := map[string]string{"ENV_KEY": "from-env"}
+	h, err := node.Open(nodeDir(t), node.Options{Getenv: func(k string) string { return env[k] }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for alias, key := range map[string]string{"env": "$ENV_KEY", "sealed": "$SEALED_KEY", "none": ""} {
+		if _, err := h.AddProvider(ctx, "alpha", node.GroupTalk, alias, node.ProviderEdit{
+			BaseURL: ptr(srv.URL + "/gw"), APIPath: ptr("/v1/chat/completions"), APIKey: ptr(key),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.SetSecret(ctx, "alpha", "SEALED_KEY", "from-vault", given(passphrase)); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []node.Model{{ID: "m-a"}, {ID: "m-b"}}
+	for _, alias := range []string{"env", "sealed", "none"} {
+		got, err := h.ProviderModels(ctx, "alpha", node.GroupTalk, alias, given(passphrase))
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: %#v, %v; want %#v", alias, got, err, want)
+		}
+	}
+	if w := []string{"Bearer from-env", "Bearer from-vault", ""}; !reflect.DeepEqual(keys, w) {
+		t.Fatalf("keys sent %q, want %q", keys, w)
+	}
+
+	if _, err := h.ProviderModels(ctx, "alpha", node.GroupTalk, "sealed", nil); !errors.Is(err, node.ErrNoPassphrase) {
+		t.Fatalf("a sealed key with no passphrase: %v; want ErrNoPassphrase", err)
+	}
+	if _, err := h.ProviderModels(ctx, "alpha", node.GroupTalk, "env", nil); err != nil {
+		t.Fatalf("a key from the environment needs no passphrase: %v", err)
+	}
+	if _, err := h.ProviderModels(ctx, "alpha", node.GroupTalk, "ghost", nil); !errors.Is(err, provider.ErrUnknown) {
+		t.Fatalf("an unknown alias: %v; want provider.ErrUnknown", err)
 	}
 }

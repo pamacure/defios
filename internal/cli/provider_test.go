@@ -2,6 +2,9 @@ package cli_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -237,5 +240,43 @@ api_path = "/v1/chat/completions"
 func TestThereIsNoModelCommand(t *testing.T) {
 	if r := run(t, nil, "", "model", "list"); r.code == 0 {
 		t.Fatalf("model list exit 0: %s", r.stdout)
+	}
+}
+
+// provider models lists what a Provider's endpoint says it serves, with
+// its key, by ID and name; an alias in force nowhere is a usage error.
+func TestProviderModelsListsTheEndpointsModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("x-api-key") != "sk-test" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"claude-opus-5-5","display_name":"Claude Opus 5.5"},{"id":"claude-haiku-5-5"}],"has_more":false}`)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	mustInit(t, dir)
+	mustGroupNew(t, dir)
+	if r := run(t, nil, "", "--dir", dir, "provider", "add", "claude", "--preset", "anthropic", "--base-url", srv.URL, "--api-key", "$ANTHROPIC"); r.code != 0 {
+		t.Fatalf("add: exit %d, stderr %q", r.code, r.stderr)
+	}
+	env := map[string]string{"ANTHROPIC": "sk-test"}
+
+	r := run(t, env, "", "--dir", dir, "provider", "models", "claude")
+	if want := "claude-haiku-5-5\nclaude-opus-5-5  Claude Opus 5.5\n"; r.code != 0 || r.stdout != want {
+		t.Fatalf("models: exit %d, stdout %q, stderr %q\nwant %q", r.code, r.stdout, r.stderr, want)
+	}
+	r = run(t, env, "", "--dir", dir, "provider", "models", "claude", "--json")
+	var got []map[string]any
+	want := []map[string]any{{"id": "claude-haiku-5-5"}, {"id": "claude-opus-5-5", "name": "Claude Opus 5.5"}}
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &got) != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("models --json: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if r := run(t, map[string]string{"ANTHROPIC": "wrong"}, "", "--dir", dir, "provider", "models", "claude"); r.code == 0 || !strings.Contains(r.stderr, "401") {
+		t.Fatalf("a refused list: exit %d, stderr %q", r.code, r.stderr)
+	}
+	if r := run(t, env, "", "--dir", dir, "provider", "models", "ghost"); r.code != 1 || !strings.Contains(r.stderr, "no such provider") {
+		t.Fatalf("models ghost: exit %d, stderr %q", r.code, r.stderr)
 	}
 }

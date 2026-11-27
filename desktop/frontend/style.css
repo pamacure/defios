@@ -1207,6 +1207,9 @@ select:not([multiple]):not([size]):disabled { color: var(--muted); cursor: defau
   font-family: var(--display); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
 }
 .selectmenu .group:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--line); }
+/* A field's suggestions (combo.js): the value in mono, its name muted. */
+.combomenu .opt .mono { font-family: var(--mono); font-size: 12px; }
+.combomenu .opt .muted { color: var(--muted); }
 
 /* Settings, Dark backgrounds: one small window per choice, in its own
    colours (the forced-dark blocks above); the chosen one glows. */

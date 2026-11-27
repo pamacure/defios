@@ -47,6 +47,12 @@ func (p Provider) Shape() agent.Shape {
 // URL is where p is called: its base_url followed by its api_path.
 func (p Provider) URL() string { return strings.TrimRight(p.BaseURL, "/") + p.APIPath }
 
+// ModelsURL is where p lists its models: its base_url followed by its
+// api_path, with the shape's suffix replaced by /models.
+func (p Provider) ModelsURL() string {
+	return strings.TrimRight(p.BaseURL, "/") + p.Shape().ModelsPath(p.APIPath)
+}
+
 // presets are the complete Providers `provider add` may start from.
 var presets = map[string]Provider{
 	"anthropic": {Alias: "anthropic", BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"},

@@ -178,7 +178,20 @@ its key reference.`,
 	bindGroupFlag(g, showCmd)
 	showCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
 
-	root.AddCommand(addCmd, listCmd, showCmd, editCmd, removeCmd)
+	var modelsPass passphraseSource
+	modelsCmd := &cobra.Command{
+		Use:   "models <alias>",
+		Short: "List the models a Provider says it serves, asking its endpoint with its key",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProviderModels(cmd.Context(), g, modelsPass, keyQuery, args[0])
+		},
+	}
+	bindGroupFlag(g, modelsCmd)
+	modelsCmd.Flags().StringVar(&keyQuery, "key", "", keyFlagHelp)
+	modelsPass.bind(modelsCmd)
+
+	root.AddCommand(addCmd, listCmd, showCmd, modelsCmd, editCmd, removeCmd)
 	return root
 }
 
@@ -263,6 +276,42 @@ func runProviderShow(ctx context.Context, g *globals, keyQuery, alias string) er
 			return exitOperational(err)
 		}
 		fmt.Fprintf(g.app.Stdout, "body %s\n", body)
+	}
+	return nil
+}
+
+// modelView is one model a Provider lists, human or JSON.
+type modelView struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// runProviderModels asks Provider alias's endpoint for its models. The
+// Vault opens, asking for the passphrase, only when its key is not in the
+// environment.
+func runProviderModels(ctx context.Context, g *globals, pass passphraseSource, keyQuery, alias string) error {
+	h, group, conv, err := workspaceTarget(g, keyQuery)
+	if err != nil {
+		return err
+	}
+	ms, err := h.ProviderModels(ctx, group, conv, alias, pass.asked(g))
+	if err != nil {
+		return providerReadError(err)
+	}
+	views := make([]modelView, len(ms))
+	for i, m := range ms {
+		views[i] = modelView{ID: m.ID, Name: m.Name}
+	}
+	if g.json {
+		return g.emitJSON(views)
+	}
+	out := g.out()
+	for _, v := range views {
+		if v.Name == "" {
+			fmt.Fprintln(g.app.Stdout, out.primary(v.ID))
+		} else {
+			fmt.Fprintf(g.app.Stdout, "%s  %s\n", out.primary(v.ID), v.Name)
+		}
 	}
 	return nil
 }

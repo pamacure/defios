@@ -339,3 +339,43 @@ func bobID(t *testing.T, s *shell.Shell) string {
 	t.Fatal("no other device")
 	return ""
 }
+
+// The Agents page lists a Provider's models with its key from the Vault
+// the app holds open; one that refuses the list is a Problem, and so is
+// an alias the Group has no Provider by.
+func TestTheAgentsPageListsAProvidersModels(t *testing.T) {
+	if testing.Short() {
+		t.Skip("forms a Group")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "sk-vault" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":[{"id":"claude-opus-5-5","display_name":"Claude Opus 5.5"}],"has_more":false}`)
+	}))
+	defer srv.Close()
+	alice, _, _, _ := formedAt(t)
+	agentsOK(t, "add provider", alice.SaveProvider(shell.ProviderDraft{New: true, Alias: "claude", Preset: "anthropic", BaseURL: srv.URL, APIKey: "CLAUDE_KEY"}))
+
+	if m := alice.ProviderModels("claude"); m.Problem == nil || m.Problem.Code != "no-key" || m.Models == nil {
+		t.Fatalf("with no Secret set: %+v", m)
+	}
+	if sv := alice.NewSecret("CLAUDE_KEY", "sk-vault"); sv.Problem != nil {
+		t.Fatalf("new Secret: %+v", sv.Problem)
+	}
+	m := alice.ProviderModels("claude")
+	if want := []shell.ModelOption{{ID: "claude-opus-5-5", Name: "Claude Opus 5.5"}}; m.Problem != nil || !slices.Equal(m.Models, want) {
+		t.Fatalf("models: %+v; want %+v", m, want)
+	}
+	if sv := alice.NewSecret("CLAUDE_KEY", "sk-wrong"); sv.Problem != nil {
+		t.Fatalf("replace Secret: %+v", sv.Problem)
+	}
+	if m := alice.ProviderModels("claude"); m.Problem == nil || m.Problem.Code != "models-unlisted" || !strings.Contains(m.Problem.Detail, "401") {
+		t.Fatalf("a refused list: %+v", m.Problem)
+	}
+	if m := alice.ProviderModels("ghost"); m.Problem == nil || m.Problem.Code != "unknown-provider" {
+		t.Fatalf("an unknown alias: %+v", m.Problem)
+	}
+}

@@ -80,6 +80,7 @@ func (u *UI) SaveProvider(d shell.ProviderDraft) shell.AgentsView {
 	return u.shell.SaveProvider(d)
 }
 func (u *UI) RemoveProvider(alias string) shell.AgentsView { return u.shell.RemoveProvider(alias) }
+func (u *UI) ProviderModels(alias string) shell.ModelsView { return u.shell.ProviderModels(alias) }
 
 // Triggers: the edit-target Group's Jobs, Hooks and Schedules, and its
 // config.toml as text.
