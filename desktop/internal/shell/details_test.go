@@ -296,3 +296,27 @@ func TestAJobsMessageGivesItsJobRun(t *testing.T) {
 		t.Fatalf("another device's Job's message: %+v", d)
 	}
 }
+
+// A chain may end before what its agent wrote reaches this Node's log, as
+// when the log is busy with a Sign Request's Session: the message, once it
+// arrives, still shows its run.
+func TestAnAgentsMessageThatArrivesAfterItsChainEndedShowsItsRun(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := served(t, r)
+	chain := fmt.Sprintf("c4%062x", 2)
+	msgID := fmt.Sprintf("a9%062x", 7)
+	r.node.mu.Lock()
+	r.node.sg().runs[chain] = append(r.node.sg().runs[chain], transcript.Run{
+		Step: 1, Chain: chain, Handle: "solana", Depth: 1, Outcome: transcript.OutcomeWrote, MsgID: msgID, Summons: "(summons)", Turn: "(summons)"})
+	r.node.mu.Unlock()
+	chainEvent(r.node, node.GroupTalk, node.ChainEvent{Type: serve.EventChainEnd, Chain: chain})
+	time.Sleep(300 * time.Millisecond) // its Transcript read, without the message
+	r.node.commit(node.GroupTalk, node.Message{MsgID: msgID, NodeID: r.node.NodeID(), DisplayName: "laptop", Handle: "solana", Depth: 1, Text: "Proposed"})
+
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool {
+		return slices.ContainsFunc(ts.Items, func(it shell.Item) bool { return it.MsgID == msgID && it.Chain == chain })
+	})
+	if d := s.MessageDetails(msgID); d.Problem != nil || d.Run == nil || d.Chain != chain {
+		t.Fatalf("details: %+v", d)
+	}
+}

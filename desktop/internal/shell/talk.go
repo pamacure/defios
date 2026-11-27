@@ -1250,6 +1250,13 @@ func (t *talk) event(n TalkNode, ev node.Event) {
 		t.status = *ev.Status
 	case ev.Message != nil && ev.Message.Group == group:
 		if ev.Message.Conversation == open {
+			// This device's agent's message may reach the log after its
+			// chain ended and what it wrote was read: it is read again. A
+			// chain still going is read as it ends.
+			if m := ev.Message.Message; m.NodeID == t.self && m.Handle != "" && t.wrote[m.MsgID] == "" && len(t.live[open]) == 0 {
+				t.wroteStale = true
+				t.wroteVer++
+			}
 			reload = t.loadMessages
 		} else if !ev.Message.Message.Mine {
 			reload = t.loadConversations // its row's unread
