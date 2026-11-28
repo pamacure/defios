@@ -982,6 +982,13 @@ body[data-page="talk"] .toasts { top: 116px; }
   --glass-blur: none;
   --glass-sheen: none;
   --glass-lit: 0 0 transparent;
+  /* The header band: the Group selector and Device line, the palette's
+     surface (the bar's colour before) a few shades darker and duller, so it
+     stands out from the rest in every palette; --grain is its texture, in
+     either theme, light and dark specks balanced so it does not darken it. */
+  --band: oklch(from var(--surface) calc(l - 0.05) calc(c * 0.85) h);
+  --band-line: var(--edge);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='a'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='2' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 2.4 0 0 0 -1.45'/%3E%3C/filter%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.6 0 0 0 1.05'/%3E%3C/filter%3E%3Cg opacity='.16'%3E%3Crect width='100%25' height='100%25' filter='url(%23a)' opacity='.8'/%3E%3Crect width='100%25' height='100%25' filter='url(%23b)' opacity='.4'/%3E%3C/g%3E%3C/svg%3E");
   --snap: cubic-bezier(.3, 1.45, .5, 1);
   --out: cubic-bezier(.2, .8, .2, 1);
 }
@@ -1001,6 +1008,8 @@ body[data-page="talk"] .toasts { top: 116px; }
     --glass-blur: blur(20px) saturate(1.3);
     --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 45%);
     --glass-lit: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --band: oklch(from var(--surface) calc(l - 0.03) calc(c * 0.85) h);
+  --band-line: var(--edge);
   }
 }
 :root[data-theme="dark"], .darkwin {
@@ -1018,6 +1027,8 @@ body[data-page="talk"] .toasts { top: 116px; }
   --glass-blur: blur(20px) saturate(1.3);
   --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 45%);
   --glass-lit: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --band: oklch(from var(--surface) calc(l - 0.03) calc(c * 0.85) h);
+  --band-line: var(--edge);
 }
 
 /* Dark backgrounds (Settings, Dark backgrounds; app.js sets data-dark).
@@ -1279,6 +1290,11 @@ select:not([multiple]):not([size]):disabled { color: var(--muted); cursor: defau
    where the blur has something to show; kept to these few, small layers
    as each re-blurs what is behind it on every redraw. */
 .part, .card, .signcard { background-image: var(--sand); }
+/* The header band (--band, --grain): bolder than the page, its text and
+   Group selector kept to the palette's own colours over it. */
+.shell > .header { background: var(--grain), var(--band); border-bottom-color: var(--band-line); }
+.shell > .header .who, .groupmenu .label, .groupmenu .online { color: var(--text-soft); }
+.groupmenu > button { background: var(--surface); }
 .dropdown, .popover, .suggest, .toast, .modal {
   background: var(--glass-sheen), var(--sand), var(--glass-bg);
   -webkit-backdrop-filter: var(--glass-blur);
