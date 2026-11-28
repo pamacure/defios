@@ -20,9 +20,11 @@ type NetworkAddress struct {
 // type is typ, on those of nets of that type alone, in their order: where
 // this Node uses the Key (ADR 0046). Ethereum: the EIP-55 address. Bitcoin:
 // the bech32 P2WPKH address of that Network's bitcoin network. Solana: the
-// public key in base58. Never nil.
+// public key in base58. With none of that type, it is the one TypeAddress
+// gives, so a Key always has an address. key_address, key inspect and the
+// desktop all give these.
 func KeyAddresses(publicKey []byte, typ string, nets []network.Network) ([]NetworkAddress, error) {
-	out := []NetworkAddress{}
+	var out []NetworkAddress
 	for _, n := range nets {
 		if n.Type != typ {
 			continue
@@ -32,6 +34,13 @@ func KeyAddresses(publicKey []byte, typ string, nets []network.Network) ([]Netwo
 			return nil, fmt.Errorf("network %s: %w", n.Alias, err)
 		}
 		out = append(out, NetworkAddress{Network: n.Alias, Type: n.Type, Address: addr})
+	}
+	if len(out) == 0 {
+		a, err := TypeAddress(publicKey, typ)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
 	}
 	return out, nil
 }

@@ -194,14 +194,32 @@ func TestAnAgentFillsThenProposesTheDraft(t *testing.T) {
 // key_address gives the Conversation's Key and its address on each of the
 // Node's Networks of its Network type alone: EIP-55 on Ethereum for an
 // ECDSA Key with none set, bech32 P2WPKH on Bitcoin for one set to
-// bitcoin (ADR 0046). It is offered only in a Key's Conversation.
+// bitcoin (ADR 0046). With no Network of its type, it gives its type's own
+// address, on no network. It is offered only in a Key's Conversation.
 func TestKeyAddressShowsTheKeysAccountOnItsNetworkTypesNetworks(t *testing.T) {
-	for _, c := range []struct{ networkType, resolved, want string }{
-		{"", "ethereum", `{\"network\":\"eth\",\"type\":\"ethereum\",\"address\":\"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf\"}`},
-		{"bitcoin", "bitcoin", `{\"network\":\"btc\",\"type\":\"bitcoin\",\"address\":\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\"}`},
+	for _, c := range []struct {
+		networkType, resolved, want string
+		noBitcoin                   bool
+	}{
+		{"", "ethereum", `{\"network\":\"eth\",\"type\":\"ethereum\",\"address\":\"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf\"}`, false},
+		{"bitcoin", "bitcoin", `{\"network\":\"btc\",\"type\":\"bitcoin\",\"address\":\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\"}`, false},
+		{"bitcoin", "bitcoin", `{\"type\":\"bitcoin\",\"address\":\"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\"}`, true},
 	} {
-		t.Run("network type "+c.networkType, func(t *testing.T) {
+		name := "network type " + c.networkType
+		if c.noBitcoin {
+			name += " without a Bitcoin Network"
+		}
+		t.Run(name, func(t *testing.T) {
 			a, provider, conv := fillPair(t, `["talk_write", "key_address"]`)
+			if c.noBitcoin {
+				path := a.paths.GroupConfigFile(group.ImplicitAlias)
+				body := readFile(t, path)
+				const btc = "\n[networks.btc]\ntype = \"bitcoin\"\nnetwork = \"mainnet\"\n"
+				if !strings.Contains(body, btc) {
+					t.Fatalf("no btc Network in %s", body)
+				}
+				writeConfig(t, path, strings.Replace(body, btc, "", 1))
+			}
 			if c.networkType != "" {
 				files, err := config.ConversationFiles(a.paths, group.ImplicitAlias)
 				if err != nil || len(files) != 1 {

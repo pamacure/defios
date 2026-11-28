@@ -11,7 +11,7 @@ import (
 // A Key's addresses are on the Networks of its Network type alone, one per
 // Network in their order: EIP-55 on Ethereum, bech32 P2WPKH of that
 // Network's bitcoin network on Bitcoin, the base58 public key on Solana
-// (ADR 0046). With no Network of its type, it has none.
+// (ADR 0046). With no Network of its type, it has its type's own address.
 func TestKeyAddressesAreOnItsNetworkTypesNetworks(t *testing.T) {
 	g, _ := hex.DecodeString(btcPubkey)
 	ed := make([]byte, 32)
@@ -37,7 +37,8 @@ func TestKeyAddressesAreOnItsNetworkTypesNetworks(t *testing.T) {
 			{"btc", network.Bitcoin, "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"},
 			{"tbtc", network.Bitcoin, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"}}},
 		{"solana", network.Solana, ed, nets, []NetworkAddress{{"sol", network.Solana, "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"}}},
-		{"no network of its type", network.Bitcoin, g, nets[2:4], []NetworkAddress{}},
+		{"no network of its type", network.Bitcoin, g, nets[2:4], []NetworkAddress{{"", network.Bitcoin, "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"}}},
+		{"no networks", network.Ethereum, g, nil, []NetworkAddress{{"", network.Ethereum, evm}}},
 	} {
 		got, err := KeyAddresses(c.pub, c.typ, c.nets)
 		if err != nil || got == nil || !slices.Equal(got, c.want) {

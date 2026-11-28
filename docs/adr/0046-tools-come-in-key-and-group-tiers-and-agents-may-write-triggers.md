@@ -72,6 +72,11 @@ change Triggers, and no agent in Group-level talk can sign.** This amends
   Node's Networks of its Network type alone: an Ethereum Key's EIP-55
   address on each Ethereum Network, a Bitcoin Key's P2WPKH address on each
   Bitcoin Network, a Solana Key's base58 public key on each Solana Network.
+  With no Network of its type, a Key still has its type's own address, on
+  no Network: the EIP-55 address, the base58 public key, or the P2WPKH
+  address on bitcoin mainnet. `key_address`, `key inspect` and the desktop
+  give a Key's addresses from one function, so they always agree; which
+  Networks exist is for a Networks Tool to tell.
   Every Key has a Network type, since one with none set takes its curve's
   default (below). This tells a Group agent how the Node uses the
   Key without implying any limit on what it signs: the Network type still

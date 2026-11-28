@@ -89,7 +89,7 @@ const (
 	keyAddressDescription = "Show this Conversation's Key and its account, as JSON: its curve, public key and Network type, and its address on each of your Node's Networks of that type, " +
 		"by Network alias and type. Ethereum: the EIP-55 address. Solana: the public key in base58. Bitcoin: the bech32 P2WPKH address of that Network's bitcoin network, the one script type the Key spends from. " +
 		"An ECDSA Key with no Network type set is for Ethereum. The Network type is what your Node uses the Key for; it does not limit what the Key may sign. " +
-		"With no Network of its type, networks is empty. Read-only."
+		"With no Network of its type, networks holds the one address of the type itself, with no network: the EIP-55 address, the base58 public key, or the bitcoin mainnet P2WPKH address. Read-only."
 	signRefuseDescription = "Refuse a Sign Request of this Conversation's Key, as your Node and under your Handle, giving your own reason: " +
 		"your Node's stance is final, so name the check that failed, specifically enough for another party to propose a corrected request. " +
 		"Returns queued if it waits in your Node's Outbox."
@@ -545,8 +545,7 @@ func (s *server) chainFillTool(conv []byte) func(context.Context, json.RawMessag
 }
 
 // KeyAddressView is key_address's result: a Key, its Network type, and
-// its address on each of this Node's Networks of that type, in alias
-// order.
+// its addresses as signreq.KeyAddresses gives them.
 type KeyAddressView struct {
 	Key         string                   `json:"key"`
 	Curve       string                   `json:"curve"`

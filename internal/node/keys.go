@@ -305,13 +305,7 @@ func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byt
 		Addresses: []signreq.NetworkAddress{}, AddressesErr: netsErr,
 	}
 	if netsErr == nil {
-		addrs, err := signreq.KeyAddresses(k.PublicKey, v.NetworkType, nets)
-		if err == nil && len(addrs) == 0 {
-			var a signreq.NetworkAddress
-			a, err = signreq.TypeAddress(k.PublicKey, v.NetworkType)
-			addrs = []signreq.NetworkAddress{a}
-		}
-		if err != nil {
+		if addrs, err := signreq.KeyAddresses(k.PublicKey, v.NetworkType, nets); err != nil {
 			v.AddressesErr = err
 		} else {
 			v.Addresses = addrs

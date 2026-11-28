@@ -17,8 +17,8 @@ each transaction, in order:
 
 1. **Network.** The intent's `network`, which `chain` also names, is the
    one the talk meant, and one of your Node's Networks, as `key_address`
-   lists them: `mainnet` is real money, `testnet`, `signet` and `regtest`
-   are not. Every output's address is of that network: the decoder flags
+   lists them (an address it gives with no `network` is on none of them):
+   `mainnet` is real money, `testnet`, `signet` and `regtest` are not. Every output's address is of that network: the decoder flags
    one that is not, and such a transaction fails here. Testnet, signet and
    regtest share address forms, so an address alone cannot tell them apart;
    check those against the talk.
