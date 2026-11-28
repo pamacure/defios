@@ -166,3 +166,39 @@ func TestAGrantedSkillNotInstalledFailsTheSummon(t *testing.T) {
 		})
 	}
 }
+
+// A Group-tier agent granted the built-in defios/write-triggers loads it
+// with skill_load, beside the Trigger-config Tools it explains (ADR 0046).
+func TestAGroupAgentLoadsWriteTriggers(t *testing.T) {
+	a, _, _, provider := agentPair(t, "builder")
+	writeConfig(t, a.paths.AgentProfileFile("builder"), "provider = \"claude\"\ntools = [\"talk_write\", \"job_add\", \"key_list\", \"job_runs\"]\nskills = [\"defios/write-triggers\"]\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		streamParts(w)
+		if n == 1 {
+			endCall(w, "skill_load", `{"name":"defios/write-triggers"}`)
+			return
+		}
+		endTalkWrite(w, "loaded")
+	})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@builder ping me on each Sign Request", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "commit:loaded end") {
+		t.Fatalf("events = %s", got)
+	}
+	calls := provider.seen()
+	if len(calls) != 2 {
+		t.Fatalf("%d calls, want 2", len(calls))
+	}
+	if calls[0].Tools != "talk_write job_add job_runs key_list skill_load" {
+		t.Errorf("tools offered %q", calls[0].Tools)
+	}
+	if !strings.Contains(calls[0].System, "- defios/write-triggers: How to turn a person's spec into Jobs, Hooks and Schedules") {
+		t.Errorf("system block lacks the Skill:\n%s", calls[0].System)
+	}
+	if body := lastTurn(calls[1]); !strings.Contains(body, "# Writing Triggers") || strings.Contains(body, "description:") || strings.Contains(body, `"is_error":true`) {
+		t.Errorf("skill_load answered %s", body)
+	}
+}
