@@ -1,45 +1,38 @@
 package shell
 
 import (
+	"errors"
+	"slices"
 	"testing"
 
 	"defios.com/internal/node"
+	"defios.com/internal/signreq"
 )
 
-// The secp256k1 generator point, compressed: BIP-173's P2WPKH test vector.
-const g = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+// The About panel shows the Key's addresses as the Node gives them, the
+// ones key_address gives, each labelled by its Network; none with no
+// Network of its type, and why when they could not be made.
+func TestAKeysAddressesAreTheNodesLabelledByNetwork(t *testing.T) {
+	var tk talk
+	k := node.Key{Curve: "ecdsa", NetworkType: "bitcoin", Addresses: []signreq.NetworkAddress{
+		{Network: "btc", Type: "bitcoin", Address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"},
+		{Network: "tbtc", Type: "bitcoin", Address: "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"},
+	}}
+	want := []KeyAddress{
+		{"Address on btc", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"},
+		{"Address on tbtc", "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"},
+	}
+	if d := tk.keyDetail(k); !slices.Equal(d.Addresses, want) || d.AddressError != "" {
+		t.Errorf("Addresses = %v, %q, want %v", d.Addresses, d.AddressError, want)
+	}
 
-func TestAKeysAddressesFollowItsNetworkType(t *testing.T) {
-	const (
-		eth     = "Ethereum address 0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
-		btc     = "Bitcoin address bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
-		testnet = "Bitcoin testnet address tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
-	)
-	for _, c := range []struct {
-		name string
-		k    node.Key
-		nets []string
-		want []string
-	}{
-		{"ethereum", node.Key{Curve: "ecdsa", PublicKey: g, NetworkType: "ethereum"}, []string{"mainnet"}, []string{eth}},
-		{"bitcoin, no Networks", node.Key{Curve: "ecdsa", PublicKey: g, NetworkType: "bitcoin"}, nil, []string{btc}},
-		{"bitcoin on its Networks", node.Key{Curve: "ecdsa", PublicKey: g, NetworkType: "bitcoin"}, []string{"mainnet", "testnet"}, []string{btc, testnet}},
-		{"solana", node.Key{Curve: "eddsa", PublicKey: "0101010101010101010101010101010101010101010101010101010101010101", NetworkType: "solana"}, nil,
-			[]string{"Solana address 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"}},
-	} {
-		var got []string
-		for _, a := range keyAddresses(c.k, c.nets) {
-			got = append(got, a.Label+" "+a.Address)
-		}
-		if len(got) != len(c.want) {
-			t.Errorf("%s: %q, want %q", c.name, got, c.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != c.want[i] {
-				t.Errorf("%s: %q, want %q", c.name, got, c.want)
-				break
-			}
-		}
+	k = node.Key{Curve: "ecdsa", NetworkType: "ethereum", Addresses: []signreq.NetworkAddress{}}
+	if d := tk.keyDetail(k); d.Addresses == nil || len(d.Addresses) != 0 {
+		t.Errorf("with no Network of its type, Addresses = %#v, want empty", d.Addresses)
+	}
+
+	k.AddressesErr = errors.New("config.toml: bad")
+	if d := tk.keyDetail(k); d.AddressError != "config.toml: bad" {
+		t.Errorf("AddressError = %q", d.AddressError)
 	}
 }

@@ -11,13 +11,10 @@ import (
 	"strings"
 
 	"defios.com/internal/agent"
-	"defios.com/internal/base58"
 	"defios.com/internal/chainfill"
 	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
-	"defios.com/internal/key"
-	"defios.com/internal/network"
 	"defios.com/internal/outbox"
 	"defios.com/internal/session"
 	"defios.com/internal/signreq"
@@ -551,18 +548,11 @@ func (s *server) chainFillTool(conv []byte) func(context.Context, json.RawMessag
 // its address on each of this Node's Networks of that type, in alias
 // order.
 type KeyAddressView struct {
-	Key         string           `json:"key"`
-	Curve       string           `json:"curve"`
-	PublicKey   string           `json:"public_key"`
-	NetworkType string           `json:"network_type"`
-	Networks    []NetworkAddress `json:"networks"`
-}
-
-// NetworkAddress is a Key's address on one Network.
-type NetworkAddress struct {
-	Network string `json:"network"`
-	Type    string `json:"type"`
-	Address string `json:"address"`
+	Key         string                   `json:"key"`
+	Curve       string                   `json:"curve"`
+	PublicKey   string                   `json:"public_key"`
+	NetworkType string                   `json:"network_type"`
+	Networks    []signreq.NetworkAddress `json:"networks"`
 }
 
 // keyAddressTool is key_address in conv: its Key's address on each of
@@ -588,44 +578,12 @@ func (s *server) keyAddressTool(conv []byte) func(context.Context, json.RawMessa
 			return "", toolError(err)
 		}
 		typ := e.KeyNetworkType(k.Curve)
-		addrs, err := keyAddresses(k.PublicKey, typ, nets)
+		addrs, err := signreq.KeyAddresses(k.PublicKey, typ, nets)
 		if err != nil {
 			return "", err
 		}
 		return toolJSON(KeyAddressView{Key: k.Ref(), Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey), NetworkType: typ, Networks: addrs})
 	}
-}
-
-// keyAddresses are the addresses of the Key of publicKey, whose Network
-// type is typ, on those of nets of that type alone, in their order: the
-// addresses this Node uses the Key at (ADR 0046). Never nil.
-func keyAddresses(publicKey []byte, typ string, nets []network.Network) ([]NetworkAddress, error) {
-	out := []NetworkAddress{}
-	for _, n := range nets {
-		if n.Type != typ {
-			continue
-		}
-		addr, err := networkAddress(n, publicKey)
-		if err != nil {
-			return nil, fmt.Errorf("network %s: %w", n.Alias, err)
-		}
-		out = append(out, NetworkAddress{Network: n.Alias, Type: n.Type, Address: addr})
-	}
-	return out, nil
-}
-
-// networkAddress is the address of the Key of publicKey on n, whose curve
-// it is of.
-func networkAddress(n network.Network, publicKey []byte) (string, error) {
-	switch n.Type {
-	case network.Ethereum:
-		return key.EthereumAddress(publicKey)
-	case network.Solana:
-		return base58.Encode(publicKey), nil
-	case network.Bitcoin:
-		return signreq.BitcoinAddress(n.BitcoinNetwork, publicKey)
-	}
-	return "", fmt.Errorf("no address for a %s Network", n.Type)
 }
 
 // toolError is err as a Tool's error: prefixed with its kind, the code the

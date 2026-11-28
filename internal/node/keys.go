@@ -9,12 +9,12 @@ import (
 	"slices"
 	"strings"
 
-	"defios.com/internal/base58"
 	"defios.com/internal/config"
 	"defios.com/internal/key"
 	"defios.com/internal/keyalias"
 	"defios.com/internal/network"
 	"defios.com/internal/serve"
+	"defios.com/internal/signreq"
 	"defios.com/internal/vault"
 )
 
@@ -56,9 +56,13 @@ type Key struct {
 	// Share: this Node holds a share of it, as far as can be told: see
 	// Keys.
 	Share bool
-	// Address is where the Key funds and spends: an ECDSA Key's Ethereum
-	// address, an EdDSA Key's Solana address (its public key in base58).
-	Address string
+	// Addresses are where the Key funds and spends: its address on each of
+	// its Conversation's Networks of its Network type, as key_address
+	// gives them (ADR 0046); empty with none of that type. AddressesErr
+	// is why they could not be made: its config.toml did not read, or a
+	// Network or its public key is malformed.
+	Addresses    []signreq.NetworkAddress
+	AddressesErr error
 	// NetworkType is the Network type this Node uses it for (ADR 0044):
 	// its config.toml's network_type when that fits its curve, else
 	// ethereum for an ECDSA Key and solana for an EdDSA one.
@@ -83,10 +87,9 @@ func (h *Host) Keys(ctx context.Context, groupAlias string, passphrase Passphras
 		return nil, err
 	}
 	aliases := config.ReadKeyAliases(h.p, groupAlias, keys)
-	names := key.WorkspaceNames(keys)
 	out := make([]Key, len(keys))
 	for i, k := range keys {
-		out[i] = keyOf(k, have, aliases[k.Ref()], names)
+		out[i] = h.keyView(groupAlias, keys, k, have, aliases[k.Ref()])
 	}
 	return out, nil
 }
@@ -107,7 +110,7 @@ func (h *Host) InspectKey(ctx context.Context, groupAlias, query string, passphr
 	if err != nil {
 		return Key{}, err
 	}
-	return keyOf(k, have, aliases[k.Ref()], key.WorkspaceNames(keys)), nil
+	return h.keyView(groupAlias, keys, k, have, aliases[k.Ref()]), nil
 }
 
 // SetKeyAlias sets, renames or with alias "" clears the alias of the Key
@@ -155,7 +158,7 @@ func (h *Host) SetKeyAlias(ctx context.Context, groupAlias, query, alias string)
 		}
 	}
 	own.Alias = alias
-	return keyOf(k, nil, own, key.WorkspaceNames(keys)), nil
+	return h.keyView(groupAlias, keys, k, nil, own), nil
 }
 
 // SetKeyNetworkType sets the Network type this Node uses the Key query
@@ -190,7 +193,7 @@ func (h *Host) SetKeyNetworkType(ctx context.Context, groupAlias, query, typ str
 		}
 	}
 	own.NetworkType = typ
-	return keyOf(k, nil, own, key.WorkspaceNames(keys)), nil
+	return h.keyView(groupAlias, keys, k, nil, own), nil
 }
 
 // refuseWaitingAlias fails if the process serving this Node holds alias
@@ -291,18 +294,42 @@ func (h *Host) shares(ctx context.Context, groupAlias string, passphrase Passphr
 	return out, nil
 }
 
-func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byte]string) Key {
+// keyOf is k as this Node has it, nets being its Conversation's Networks,
+// or netsErr why they did not read.
+func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byte]string, nets []network.Network, netsErr error) Key {
 	v := Key{
 		Key: k.Ref(), Alias: a.Alias, AliasErr: a.Err, Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey),
 		ConversationID: k.Conversation(), Workspace: names[key.ConversationID(k.Curve, k.PublicKey)], SessionID: k.SessionID.String(),
-		T: k.T, N: k.N, Share: have[k.Ref()],
+		T: k.T, N: k.N, Share: have[k.Ref()], NetworkType: network.KeyType(k.Curve, a.NetworkType),
+		Addresses: []signreq.NetworkAddress{}, AddressesErr: netsErr,
 	}
-	switch k.Curve {
-	case "ecdsa":
-		v.Address, _ = key.EthereumAddress(k.PublicKey)
-	case "eddsa":
-		v.Address = base58.Encode(k.PublicKey)
+	if netsErr == nil {
+		if addrs, err := signreq.KeyAddresses(k.PublicKey, v.NetworkType, nets); err != nil {
+			v.AddressesErr = err
+		} else {
+			v.Addresses = addrs
+		}
 	}
-	v.NetworkType = network.KeyType(k.Curve, a.NetworkType)
 	return v
+}
+
+// keyNetworks are the Networks in force in k's Conversation in groupAlias,
+// keys being all of its Keys.
+func (h *Host) keyNetworks(groupAlias string, keys []key.Key, k key.Key) ([]network.Network, error) {
+	id := key.ConversationID(k.Curve, k.PublicKey)
+	e, err := config.Load(h.p, groupAlias, id[:], keys)
+	if err != nil {
+		return nil, err
+	}
+	return e.Networks()
+}
+
+// keyView is keyOf with k's Conversation's Networks read, unless its
+// config.toml already failed to: then AddressesErr is that same AliasErr.
+func (h *Host) keyView(groupAlias string, keys []key.Key, k key.Key, have map[string]bool, a config.KeyAlias) Key {
+	if a.Err != nil {
+		return keyOf(k, have, a, key.WorkspaceNames(keys), nil, a.Err)
+	}
+	nets, err := h.keyNetworks(groupAlias, keys, k)
+	return keyOf(k, have, a, key.WorkspaceNames(keys), nets, err)
 }

@@ -137,6 +137,7 @@ func (s *Shell) networkChange(where string, change func(Node, string) error) Net
 		}
 	} else {
 		v.Saved = true
+		s.talk.loadConversations() // a Key's addresses are on its Networks
 	}
 	s.fillNetworks(n, &v)
 	return v

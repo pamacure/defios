@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"defios.com/internal/config"
 	"defios.com/internal/cosl"
 	"defios.com/internal/group"
 	"defios.com/internal/identity"
@@ -150,6 +151,15 @@ func seedMinted(t *testing.T, dir string) (pk, other []byte) {
 // several Groups can be read per-Group with --group (#28).
 func seedMintedAlias(t *testing.T, dir, alias string) (pk, other []byte) {
 	t.Helper()
+	pk, other = fillKey(0x02, 0xaa), fillKey(0x02, 0xab)
+	seedMintedKeys(t, dir, alias, pk, other)
+	return pk, other
+}
+
+// seedMintedKeys writes a 2-of-2 ECDSA Key of each of pubs into dir's
+// replica of Group alias, in order.
+func seedMintedKeys(t *testing.T, dir, alias string, pubs ...[]byte) {
+	t.Helper()
 	ensureNode(t, dir)
 	alice, err := identity.Generate()
 	if err != nil {
@@ -187,8 +197,6 @@ func seedMintedAlias(t *testing.T, dir, alias string) (pk, other []byte) {
 			t.Fatalf("apply: %v %+v", err, res)
 		}
 	}
-	pk = fillKey(0x02, 0xaa)
-	other = fillKey(0x02, 0xab)
 	mint := func(pub []byte) {
 		t.Helper()
 		var id session.ID
@@ -200,9 +208,53 @@ func seedMintedAlias(t *testing.T, dir, alias string) (pk, other []byte) {
 		apply(alice, cosl.TypeSessionComplete, &coslv1.SessionComplete{SessionId: id[:], Curve: "ecdsa", PublicKey: pub})
 		apply(bob, cosl.TypeSessionComplete, &coslv1.SessionComplete{SessionId: id[:], Curve: "ecdsa", PublicKey: pub})
 	}
-	mint(pk)
-	mint(other)
-	return pk, other
+	for _, pub := range pubs {
+		mint(pub)
+	}
+}
+
+// key inspect gives a Key's address on each of its Conversation's Networks
+// of its Network type alone, as key_address does: Ethereum's for an ECDSA
+// Key with none set, Bitcoin's once it is set to bitcoin (ADR 0046).
+func TestKeyInspectGivesTheAddressesOfItsNetworkType(t *testing.T) {
+	dir := t.TempDir()
+	mustInit(t, dir)
+	g, _ := hex.DecodeString("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+	seedMintedKeys(t, dir, group.ImplicitAlias, g)
+	ref := "ecdsa:" + hex.EncodeToString(g)
+	for _, args := range [][]string{
+		{"eth", "--type", "ethereum", "--chain-id", "1"},
+		{"btc", "--type", "bitcoin", "--bitcoin-network", "mainnet"},
+		{"tbtc", "--type", "bitcoin", "--bitcoin-network", "testnet"},
+	} {
+		if r := run(t, nil, "", append([]string{"--dir", dir, "network", "add"}, args...)...); r.code != 0 {
+			t.Fatalf("network add %s: exit %d: %s", args[0], r.code, r.stderr)
+		}
+	}
+	const (
+		eth  = "address eth 0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf\n"
+		btc  = "address btc bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\n"
+		tbtc = "address tbtc tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx\n"
+	)
+	r := run(t, nil, "", "--dir", dir, "key", "inspect", ref)
+	if r.code != 0 || !strings.Contains(r.stdout, "network_type ethereum\n") || !strings.Contains(r.stdout, eth) || strings.Contains(r.stdout, "address btc") {
+		t.Fatalf("unset inspect exit %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+
+	if err := config.WriteKeyNetworkType(keyConfigFile(dir, group.ImplicitAlias, ref), "bitcoin"); err != nil {
+		t.Fatal(err)
+	}
+	r = run(t, nil, "", "--dir", dir, "key", "inspect", ref)
+	if r.code != 0 || !strings.Contains(r.stdout, "network_type bitcoin\n") || !strings.Contains(r.stdout, btc+tbtc) || strings.Contains(r.stdout, "0x7E5F") {
+		t.Fatalf("bitcoin inspect exit %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	r = run(t, nil, "", "--dir", dir, "key", "inspect", ref, "--json")
+	var view struct {
+		Addresses []struct{ Network, Type, Address string } `json:"addresses"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &view); err != nil || len(view.Addresses) != 2 || view.Addresses[1].Network != "tbtc" || view.Addresses[1].Type != "bitcoin" {
+		t.Fatalf("json inspect %s: %v", r.stdout, err)
+	}
 }
 
 func fillKey(prefix, fill byte) []byte {

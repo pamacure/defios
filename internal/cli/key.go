@@ -10,6 +10,7 @@ import (
 	"defios.com/internal/key"
 	"defios.com/internal/keyalias"
 	"defios.com/internal/node"
+	"defios.com/internal/signreq"
 )
 
 func keyCommand(g *globals) *cobra.Command {
@@ -78,9 +79,10 @@ type keyView struct {
 	// NetworkType is what this Node uses the Key for (ADR 0044): an ECDSA
 	// Key with none set is for Ethereum (ADR 0046).
 	NetworkType string `json:"network_type"`
-	// Address is where the Key funds and spends: an ECDSA Key's Ethereum
-	// address, an EdDSA Key's Solana address.
-	Address string `json:"address,omitempty"`
+	// Addresses are where the Key funds and spends: its address on each
+	// of its Conversation's Networks of its Network type, as key_address
+	// gives them.
+	Addresses []signreq.NetworkAddress `json:"addresses"`
 }
 
 func runKeyList(ctx context.Context, g *globals, pass passphraseSource) error {
@@ -121,8 +123,8 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 	}
 	fmt.Fprintf(g.app.Stdout, "key %s\npublic_key %s\nconversation %s\nworkspace %s\nsession %s\ncurve %s\nnetwork_type %s\nt %d\nn %d\nshare %s\n",
 		v.shownAs(g.out()), v.PublicKey, v.ConversationID, v.Workspace, v.SessionID, v.Curve, v.NetworkType, v.T, v.N, yesNo(v.Share))
-	if v.Address != "" {
-		fmt.Fprintf(g.app.Stdout, "%s_address %s\n", addressChain(v.Curve), v.Address)
+	for _, a := range v.Addresses {
+		fmt.Fprintf(g.app.Stdout, "address %s %s\n", a.Network, a.Address)
 	}
 	return nil
 }
@@ -184,24 +186,23 @@ func (v keyView) shownAs(p palette) string {
 	return p.primary(v.Alias) + "  " + v.Key
 }
 
-// addressChain names the chain a Key's Address is on, by its curve.
-func addressChain(curve string) string {
-	if curve == "eddsa" {
-		return "solana"
-	}
-	return "ethereum"
-}
-
-// viewOf is k as key prints it, warning when its config.toml did not read:
+// viewOf is k as key prints it, warning when its config.toml did not read,
+// or its addresses could not be made:
 // naming a Key by curve:hex reads no Workspace, so listing one must not
 // fail on one (ADR 0033).
 func viewOf(g *globals, k node.Key) keyView {
+	warn := func(err error) {
+		fmt.Fprintf(g.app.Stderr, "%s %v\n", paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:"), err)
+	}
 	if k.AliasErr != nil {
-		fmt.Fprintf(g.app.Stderr, "%s %v\n", paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:"), k.AliasErr)
+		warn(k.AliasErr)
+	}
+	if k.AddressesErr != nil && k.AddressesErr != k.AliasErr {
+		warn(k.AddressesErr)
 	}
 	return keyView{
 		Key: k.Key, Alias: k.Alias, Curve: k.Curve, PublicKey: k.PublicKey,
 		ConversationID: k.ConversationID, Workspace: k.Workspace, SessionID: k.SessionID,
-		T: k.T, N: k.N, Share: k.Share, NetworkType: k.NetworkType, Address: k.Address,
+		T: k.T, N: k.N, Share: k.Share, NetworkType: k.NetworkType, Addresses: k.Addresses,
 	}
 }
