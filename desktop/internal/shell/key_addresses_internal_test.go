@@ -24,7 +24,6 @@ func TestAKeysAddressesFollowItsNetworkType(t *testing.T) {
 		{"ethereum", node.Key{Curve: "ecdsa", PublicKey: g, NetworkType: "ethereum"}, []string{"mainnet"}, []string{eth}},
 		{"bitcoin, no Networks", node.Key{Curve: "ecdsa", PublicKey: g, NetworkType: "bitcoin"}, nil, []string{btc}},
 		{"bitcoin on its Networks", node.Key{Curve: "ecdsa", PublicKey: g, NetworkType: "bitcoin"}, []string{"mainnet", "testnet"}, []string{btc, testnet}},
-		{"unset", node.Key{Curve: "ecdsa", PublicKey: g}, nil, []string{eth, btc}},
 		{"solana", node.Key{Curve: "eddsa", PublicKey: "0101010101010101010101010101010101010101010101010101010101010101", NetworkType: "solana"}, nil,
 			[]string{"Solana address 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"}},
 	} {

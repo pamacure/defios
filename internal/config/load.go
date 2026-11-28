@@ -79,6 +79,14 @@ func (e Effective) GroupFile() string { return e.groupFile }
 // or not; empty for Group-level talk or a Conversation with no Key.
 func (e Effective) ConversationFile() string { return e.convFile }
 
+// KeyNetworkType is the Network type this Node uses the Conversation's Key
+// of curve for: what its config.toml sets, else curve's default
+// (network.KeyType). A Group's network_type is refused, so Group-level talk
+// has only the default.
+func (e Effective) KeyNetworkType(curve string) string {
+	return network.KeyType(curve, e.conv.NetworkType)
+}
+
 // Networks are the Networks in force here: the chains this Node signs for
 // (ADR 0023).
 func (e Effective) Networks() ([]network.Network, error) {

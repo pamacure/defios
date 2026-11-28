@@ -127,3 +127,21 @@ func TestFindMatchesByIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A Key's Network type is the one set for it when that fits its curve, else
+// its curve's default: Ethereum for ECDSA, Solana for EdDSA (ADR 0046).
+func TestKeyTypeDefaultsByCurve(t *testing.T) {
+	for _, c := range []struct{ curve, set, want string }{
+		{"ecdsa", "", Ethereum},
+		{"ecdsa", Bitcoin, Bitcoin},
+		{"ecdsa", Ethereum, Ethereum},
+		{"ecdsa", Solana, Ethereum},
+		{"ecdsa", "dogecoin", Ethereum},
+		{"eddsa", "", Solana},
+		{"eddsa", Bitcoin, Solana},
+	} {
+		if got := KeyType(c.curve, c.set); got != c.want {
+			t.Errorf("KeyType(%q, %q) = %q, want %q", c.curve, c.set, got, c.want)
+		}
+	}
+}

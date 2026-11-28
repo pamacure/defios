@@ -314,8 +314,7 @@ type KeyDetail struct {
 	NetworkType                  string // as Conversation's
 	// Addresses are where it funds and spends for its Network type: one
 	// for Ethereum or Solana, one per bitcoin network of this
-	// Conversation's Networks for Bitcoin (mainnet with none), and both
-	// Ethereum's and Bitcoin's for an ECDSA Key whose type is unset.
+	// Conversation's Networks for Bitcoin (mainnet with none).
 	Addresses []KeyAddress
 	// NetworkTypes are those its curve allows, for choosing among.
 	NetworkTypes []string
@@ -340,14 +339,13 @@ func keyAddresses(k node.Key, nets []string) []KeyAddress {
 			out = append(out, KeyAddress{Label: label, Address: addr})
 		}
 	}
-	switch {
-	case k.Curve == "eddsa":
+	switch k.NetworkType {
+	case network.Solana:
 		add("Solana address", base58.Encode(pub), nil)
-	case k.NetworkType == network.Ethereum || k.NetworkType == "":
+	case network.Ethereum:
 		addr, err := key.EthereumAddress(pub)
 		add("Ethereum address", addr, err)
-	}
-	if k.Curve == "ecdsa" && k.NetworkType != network.Ethereum {
+	case network.Bitcoin:
 		if len(nets) == 0 {
 			nets = []string{"mainnet"}
 		}

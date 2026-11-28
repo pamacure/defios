@@ -8,7 +8,10 @@ Read the request with `sign_inspect`. Each of its `details` is one
 transaction: `chain` names its network (`bitcoin mainnet`), `lines` read it
 out, and `intent` holds it whole. Decode it by passing `intent` unchanged to
 `bitcoin__tx__decode_transaction`, with `key_address` set to the Key's
-address for this Network, from the `key_address` Tool. A transaction that
+address for this Network, from the `key_address` Tool. It lists Bitcoin
+addresses only for a Key your Node uses for Bitcoin; with none, the inputs
+and change cannot be checked, so do not accept, and say the Key is not
+marked for Bitcoin on your Node. A transaction that
 does not decode is refused, saying it could not be decoded. Otherwise check
 each transaction, in order:
 

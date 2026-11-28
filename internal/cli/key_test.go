@@ -56,15 +56,17 @@ func TestKeyListAndInspectWithoutServe(t *testing.T) {
 		ConversationID string `json:"conversation_id"`
 		Workspace      string `json:"workspace"`
 		Share          bool   `json:"share"`
+		NetworkType    string `json:"network_type"`
 	}
 	if err := json.Unmarshal([]byte(r.stdout), &view); err != nil {
 		t.Fatal(err)
 	}
-	if view.Key != ref || view.Share || len(view.ConversationID) != 64 || view.Workspace != "ecdsa-"+hex.EncodeToString(pk)[:12] {
+	// An ECDSA Key with no Network type set is for Ethereum (ADR 0046).
+	if view.Key != ref || view.Share || view.NetworkType != "ethereum" || len(view.ConversationID) != 64 || view.Workspace != "ecdsa-"+hex.EncodeToString(pk)[:12] {
 		t.Fatalf("inspect = %+v", view)
 	}
 	r = run(t, withPass, "", "--dir", dir, "key", "inspect", view.ConversationID)
-	if r.code != 0 || !strings.Contains(r.stdout, "share yes") || !strings.Contains(r.stdout, "key "+ref) {
+	if r.code != 0 || !strings.Contains(r.stdout, "share yes") || !strings.Contains(r.stdout, "key "+ref) || !strings.Contains(r.stdout, "\nnetwork_type ethereum\n") {
 		t.Fatalf("conversation inspect exit %d:\n%s\n%s", r.code, r.stdout, r.stderr)
 	}
 

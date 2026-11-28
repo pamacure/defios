@@ -53,6 +53,20 @@ func Types() []string { return []string{Bitcoin, Ethereum, Solana} }
 // SolanaClusters are the clusters a solana Network may name.
 func SolanaClusters() []string { return slices.Clone(solanaClusters) }
 
+// KeyType is the Network type a Node uses a Key of curve for, set being
+// the type its Conversation's config.toml sets: set when it is a type of
+// curve, else curve's default, Ethereum for ECDSA and Solana for EdDSA
+// (ADR 0046). Every Key has one; it restricts nothing the Key may sign.
+func KeyType(curve, set string) string {
+	if slices.Contains(Types(), set) && (Chain{Type: set}).Curve() == curve {
+		return set
+	}
+	if curve == "eddsa" {
+		return Solana
+	}
+	return Ethereum
+}
+
 // Network is one [networks.<alias>] table: a type, that type's identity
 // fields, and the RPC endpoints, each a plain URL or a "$NAME" Secret
 // reference, in failover order.

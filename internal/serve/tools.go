@@ -89,9 +89,10 @@ const (
 		"Bitcoin is refused: its inputs and fee need an indexer. Returns the completed transactions, " +
 		"per transaction the fields filled, the endpoint read and, for a call, the call decoded back from the encoded data, " +
 		"and a draft: the id sign_propose takes to propose these transactions as filled. Check them before you propose."
-	keyAddressDescription = "Show this Conversation's Key and its account, as JSON: its curve and public key, and its address on each of your Node's Networks it can sign for, " +
+	keyAddressDescription = "Show this Conversation's Key and its account, as JSON: its curve, public key and Network type, and its address on each of your Node's Networks of that type, " +
 		"by Network alias and type. Ethereum: the EIP-55 address. Solana: the public key in base58. Bitcoin: the bech32 P2WPKH address of that Network's bitcoin network, the one script type the Key spends from. " +
-		"A Network of the other curve is left out; with none of the Key's curve, networks is empty. Read-only."
+		"An ECDSA Key with no Network type set is for Ethereum. The Network type is what your Node uses the Key for; it does not limit what the Key may sign. " +
+		"With no Network of its type, networks is empty. Read-only."
 	signRefuseDescription = "Refuse a Sign Request of this Conversation's Key, as your Node and under your Handle, giving your own reason: " +
 		"your Node's stance is final, so name the check that failed, specifically enough for another party to propose a corrected request. " +
 		"Returns queued if it waits in your Node's Outbox."
@@ -546,13 +547,15 @@ func (s *server) chainFillTool(conv []byte) func(context.Context, json.RawMessag
 	}
 }
 
-// KeyAddressView is key_address's result: a Key and its address on each
-// of this Node's Networks of its curve, in alias order.
+// KeyAddressView is key_address's result: a Key, its Network type, and
+// its address on each of this Node's Networks of that type, in alias
+// order.
 type KeyAddressView struct {
-	Key       string           `json:"key"`
-	Curve     string           `json:"curve"`
-	PublicKey string           `json:"public_key"`
-	Networks  []NetworkAddress `json:"networks"`
+	Key         string           `json:"key"`
+	Curve       string           `json:"curve"`
+	PublicKey   string           `json:"public_key"`
+	NetworkType string           `json:"network_type"`
+	Networks    []NetworkAddress `json:"networks"`
 }
 
 // NetworkAddress is a Key's address on one Network.
@@ -563,7 +566,7 @@ type NetworkAddress struct {
 }
 
 // keyAddressTool is key_address in conv: its Key's address on each of
-// this Node's Networks of its curve, as they are when called.
+// this Node's Networks of its Network type, as they are when called.
 func (s *server) keyAddressTool(conv []byte) func(context.Context, json.RawMessage) (string, error) {
 	return func(_ context.Context, input json.RawMessage) (string, error) {
 		dec := json.NewDecoder(bytes.NewReader(input))
@@ -576,23 +579,39 @@ func (s *server) keyAddressTool(conv []byte) func(context.Context, json.RawMessa
 		if !running {
 			return "", ErrNoReplica
 		}
-		k, _, nets, err := s.keyNetworks(store, conversationKey(conv))
+		k, _, e, err := s.keyConfig(store, conversationKey(conv))
 		if err != nil {
 			return "", toolError(err)
 		}
-		v := KeyAddressView{Key: k.Ref(), Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey), Networks: []NetworkAddress{}}
-		for _, n := range nets {
-			if n.Curve() != k.Curve {
-				continue
-			}
-			addr, err := networkAddress(n, k.PublicKey)
-			if err != nil {
-				return "", fmt.Errorf("network %s: %w", n.Alias, err)
-			}
-			v.Networks = append(v.Networks, NetworkAddress{Network: n.Alias, Type: n.Type, Address: addr})
+		nets, err := e.Networks()
+		if err != nil {
+			return "", toolError(err)
 		}
-		return toolJSON(v)
+		typ := e.KeyNetworkType(k.Curve)
+		addrs, err := keyAddresses(k.PublicKey, typ, nets)
+		if err != nil {
+			return "", err
+		}
+		return toolJSON(KeyAddressView{Key: k.Ref(), Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey), NetworkType: typ, Networks: addrs})
 	}
+}
+
+// keyAddresses are the addresses of the Key of publicKey, whose Network
+// type is typ, on those of nets of that type alone, in their order: the
+// addresses this Node uses the Key at (ADR 0046). Never nil.
+func keyAddresses(publicKey []byte, typ string, nets []network.Network) ([]NetworkAddress, error) {
+	out := []NetworkAddress{}
+	for _, n := range nets {
+		if n.Type != typ {
+			continue
+		}
+		addr, err := networkAddress(n, publicKey)
+		if err != nil {
+			return nil, fmt.Errorf("network %s: %w", n.Alias, err)
+		}
+		out = append(out, NetworkAddress{Network: n.Alias, Type: n.Type, Address: addr})
+	}
+	return out, nil
 }
 
 // networkAddress is the address of the Key of publicKey on n, whose curve

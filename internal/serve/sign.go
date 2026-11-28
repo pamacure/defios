@@ -95,16 +95,7 @@ func (s *server) signPropose(ctx context.Context, req signProposeRequest, handle
 // keyNetworks is the Key query names, its Conversation ID, and this Node's
 // Networks as that Conversation's settings give them.
 func (s *server) keyNetworks(store *cosl.Store, query string) (key.Key, [32]byte, []network.Network, error) {
-	keys, err := key.Read(store)
-	if err != nil {
-		return key.Key{}, [32]byte{}, nil, err
-	}
-	k, err := config.FindKey(s.opts.Paths, s.opts.Alias, keys, query)
-	if err != nil {
-		return key.Key{}, [32]byte{}, nil, err
-	}
-	conv := key.ConversationID(k.Curve, k.PublicKey)
-	e, err := s.load(store, conv[:])
+	k, conv, e, err := s.keyConfig(store, query)
 	if err != nil {
 		return key.Key{}, [32]byte{}, nil, err
 	}
@@ -113,6 +104,25 @@ func (s *server) keyNetworks(store *cosl.Store, query string) (key.Key, [32]byte
 		return key.Key{}, [32]byte{}, nil, err
 	}
 	return k, conv, nets, nil
+}
+
+// keyConfig is the Key query names, its Conversation ID, and the settings
+// in force in that Conversation.
+func (s *server) keyConfig(store *cosl.Store, query string) (key.Key, [32]byte, config.Effective, error) {
+	keys, err := key.Read(store)
+	if err != nil {
+		return key.Key{}, [32]byte{}, config.Effective{}, err
+	}
+	k, err := config.FindKey(s.opts.Paths, s.opts.Alias, keys, query)
+	if err != nil {
+		return key.Key{}, [32]byte{}, config.Effective{}, err
+	}
+	conv := key.ConversationID(k.Curve, k.PublicKey)
+	e, err := s.load(store, conv[:])
+	if err != nil {
+		return key.Key{}, [32]byte{}, config.Effective{}, err
+	}
+	return k, conv, e, nil
 }
 
 // signInfoFrom is the Session layer's view of a sign.request, read off the log.

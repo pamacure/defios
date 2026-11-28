@@ -121,15 +121,14 @@ async function act(method, ...args) {
 
 const curveName = (c) => ({ ecdsa: "ECDSA", eddsa: "EdDSA" }[c] ?? c);
 // convIcon marks a row of the rack: the Group's for Group talk, else what
-// this device uses the Key for, or its curve's while that is unset.
+// this device uses the Key for, which every Key has (ADR 0046).
 const NETWORK_TYPES = { bitcoin: "Bitcoin", ethereum: "Ethereum and EVM chains", solana: "Solana" };
 // TYPE_CURVE is the curve each Network type's Keys sign with, as the Node
 // has it: the New Key form asks the network and makes the Key on its curve.
 const TYPE_CURVE = { bitcoin: "ecdsa", ethereum: "ecdsa", solana: "eddsa" };
 const convIcon = (c) => {
   if (c.ID === GROUP_TALK) return groupIcon(ts.Roster.length, ts.Online);
-  const kind = NETWORK_TYPES[c.NetworkType] ? c.NetworkType : c.Curve;
-  return h("span", { class: `conv-icon conv-icon-${kind}`, "aria-hidden": "true" });
+  return h("span", { class: `conv-icon conv-icon-${c.NetworkType}`, "aria-hidden": "true" });
 };
 
 // groupIcon is the Group's devices as n dots round a ring, the first m,
@@ -1275,7 +1274,8 @@ function keyDetails(k) {
 }
 
 // usedFor picks what this device uses Key k for, among the Network types
-// of its curve; it only marks the Key's row. An ECDSA Key may be unset.
+// of its curve; it only marks the Key's row. An ECDSA Key set to none is
+// for Ethereum.
 function usedFor(k) {
   const types = k.NetworkTypes ?? [];
   return h("div", { class: "value" },
@@ -1283,7 +1283,6 @@ function usedFor(k) {
       class: "field left", "aria-label": "Used for", disabled: tui.busy,
       onchange: (e) => act("SetKeyNetworkType", e.target.value),
     },
-    !types.includes(k.NetworkType) && h("option", { value: "", selected: true }, "Not set"),
     types.map((t) => h("option", { value: t, selected: t === k.NetworkType }, NETWORK_TYPES[t] ?? t))),
     h("p", { class: "hint" }, "Marks this Key's conversation. Only this device sees it."));
 }

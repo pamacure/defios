@@ -313,8 +313,6 @@ button.conv > .sub { grid-column: 2 / -1; }
 .conv-icon-bitcoin { --conv-icon: url(convicons/key-bitcoin.svg); }
 .conv-icon-ethereum { --conv-icon: url(convicons/key-evm.svg); }
 .conv-icon-solana { --conv-icon: url(convicons/key-solana.svg); }
-.conv-icon-ecdsa { --conv-icon: url(convicons/key-ecdsa.svg); }
-.conv-icon-eddsa { --conv-icon: url(convicons/key-eddsa.svg); }
 .conv .marks { grid-column: 3; grid-row: 1; margin-block: -2px; display: flex; align-items: center; gap: 4px; }
 .conv .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-s); background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; }
 .conv .badge.unread { background: var(--text-soft); color: var(--surface); }

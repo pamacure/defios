@@ -61,8 +61,7 @@ type Key struct {
 	Address string
 	// NetworkType is the Network type this Node uses it for (ADR 0044):
 	// its config.toml's network_type when that fits its curve, else
-	// solana for an EdDSA Key and "" for an ECDSA one, which may be
-	// either bitcoin or ethereum.
+	// ethereum for an ECDSA Key and solana for an EdDSA one.
 	NetworkType string
 }
 
@@ -303,10 +302,7 @@ func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byt
 		v.Address, _ = key.EthereumAddress(k.PublicKey)
 	case "eddsa":
 		v.Address = base58.Encode(k.PublicKey)
-		v.NetworkType = network.Solana
 	}
-	if a.NetworkType != "" && (network.Chain{Type: a.NetworkType}).Curve() == k.Curve {
-		v.NetworkType = a.NetworkType
-	}
+	v.NetworkType = network.KeyType(k.Curve, a.NetworkType)
 	return v
 }

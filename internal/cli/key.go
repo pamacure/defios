@@ -75,6 +75,9 @@ type keyView struct {
 	T         int    `json:"t"`
 	N         int    `json:"n"`
 	Share     bool   `json:"share"`
+	// NetworkType is what this Node uses the Key for (ADR 0044): an ECDSA
+	// Key with none set is for Ethereum (ADR 0046).
+	NetworkType string `json:"network_type"`
 	// Address is where the Key funds and spends: an ECDSA Key's Ethereum
 	// address, an EdDSA Key's Solana address.
 	Address string `json:"address,omitempty"`
@@ -116,8 +119,8 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 	if g.json {
 		return g.emitJSON(v)
 	}
-	fmt.Fprintf(g.app.Stdout, "key %s\npublic_key %s\nconversation %s\nworkspace %s\nsession %s\ncurve %s\nt %d\nn %d\nshare %s\n",
-		v.shownAs(g.out()), v.PublicKey, v.ConversationID, v.Workspace, v.SessionID, v.Curve, v.T, v.N, yesNo(v.Share))
+	fmt.Fprintf(g.app.Stdout, "key %s\npublic_key %s\nconversation %s\nworkspace %s\nsession %s\ncurve %s\nnetwork_type %s\nt %d\nn %d\nshare %s\n",
+		v.shownAs(g.out()), v.PublicKey, v.ConversationID, v.Workspace, v.SessionID, v.Curve, v.NetworkType, v.T, v.N, yesNo(v.Share))
 	if v.Address != "" {
 		fmt.Fprintf(g.app.Stdout, "%s_address %s\n", addressChain(v.Curve), v.Address)
 	}
@@ -199,6 +202,6 @@ func viewOf(g *globals, k node.Key) keyView {
 	return keyView{
 		Key: k.Key, Alias: k.Alias, Curve: k.Curve, PublicKey: k.PublicKey,
 		ConversationID: k.ConversationID, Workspace: k.Workspace, SessionID: k.SessionID,
-		T: k.T, N: k.N, Share: k.Share, Address: k.Address,
+		T: k.T, N: k.N, Share: k.Share, NetworkType: k.NetworkType, Address: k.Address,
 	}
 }

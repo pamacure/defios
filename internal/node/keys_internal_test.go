@@ -26,16 +26,16 @@ func TestKeyAddressIsTheChainAddressOfItsCurve(t *testing.T) {
 }
 
 // An EdDSA Key is used for Solana unless its config.toml says otherwise; an
-// ECDSA Key for nothing in particular. A type that does not fit the curve,
+// ECDSA Key for Ethereum (ADR 0046). A type that does not fit the curve,
 // put there by hand, is ignored.
 func TestKeyNetworkTypeDefaultsByCurve(t *testing.T) {
 	pub := bytes.Repeat([]byte{0x66}, 32)
 	for _, c := range []struct{ curve, stored, want string }{
 		{"eddsa", "", "solana"},
-		{"ecdsa", "", ""},
+		{"ecdsa", "", "ethereum"},
 		{"ecdsa", "bitcoin", "bitcoin"},
 		{"ecdsa", "ethereum", "ethereum"},
-		{"ecdsa", "solana", ""},
+		{"ecdsa", "solana", "ethereum"},
 		{"eddsa", "bitcoin", "solana"},
 	} {
 		k := keyOf(key.Key{Curve: c.curve, PublicKey: pub}, nil, config.KeyAlias{NetworkType: c.stored}, nil)
