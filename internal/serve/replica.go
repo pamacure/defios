@@ -16,8 +16,8 @@ import (
 	"defios.com/internal/signreq"
 )
 
-// joinRetry paces membership.join attempts while the other Node is still
-// coming up (n=2 needs both for commit, §4.5).
+// joinRetry paces membership.join attempts while the other Nodes are
+// still coming up (commit needs a majority of the Roster, §4.5).
 const joinRetry = 2 * time.Second
 
 // startReplica starts Raft if the Slot holds a valid Group and nothing is
@@ -252,7 +252,7 @@ func (s *server) join(ctx context.Context, replica *raftx.Replica, store *cosl.S
 		case errors.Is(err, raftx.ErrClosed), ctx.Err() != nil:
 			return
 		case errors.Is(err, raftx.ErrNoLeader), errors.Is(err, raftx.ErrNotCaughtUp):
-			s.opts.Logf("serve: membership.join waiting for the other Node")
+			s.opts.Logf("serve: membership.join waiting for a majority of the Group's Nodes")
 		default:
 			s.opts.Logf("serve: membership.join: %v", err)
 			return

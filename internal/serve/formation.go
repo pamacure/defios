@@ -154,19 +154,21 @@ func (s *server) post(ctx context.Context, to discovered, path string, msg proto
 func (s *server) groupCreate(ctx context.Context, nodeIDs []identity.ID) (GroupView, error) {
 	self := s.opts.Node.NodeID
 	others := make([]identity.ID, 0, len(nodeIDs))
-	seenSelf := false
+	seen := make(map[identity.ID]bool, len(nodeIDs))
 	for _, id := range nodeIDs {
-		if id == self {
-			seenSelf = true
-			continue
+		if seen[id] {
+			return GroupView{}, &requestError{fmt.Sprintf("serve: node %s appears twice", id)}
 		}
-		others = append(others, id)
+		seen[id] = true
+		if id != self {
+			others = append(others, id)
+		}
 	}
-	if !seenSelf {
+	if !seen[self] {
 		return GroupView{}, &requestError{"serve: this Node must be on the roster"}
 	}
-	if len(others) != 1 {
-		return GroupView{}, &requestError{fmt.Sprintf("serve: MVP forms Groups of exactly one other Node; got %d", len(others))}
+	if len(others) == 0 {
+		return GroupView{}, &requestError{"serve: a Group needs at least one other Node"}
 	}
 	if rec, ok := s.slot.Current(); ok {
 		return GroupView{}, fmt.Errorf("%w (%s, %s)", group.ErrOneGroup, rec.GroupID(), rec.Status())

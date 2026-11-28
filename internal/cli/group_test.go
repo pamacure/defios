@@ -332,8 +332,9 @@ func TestGroupCreateUsageAndServeErrors(t *testing.T) {
 		{"no args", nil, 1, ""},
 		{"bad hex", []string{self, "nothex"}, 1, "Node ID"},
 		{"self missing", []string{other, identity.ID{8}.String()}, 1, "this Node"},
-		{"only self", []string{self}, 1, "exactly one other"},
-		{"three nodes", []string{self, other, identity.ID{8}.String()}, 1, "exactly one other"},
+		{"only self", []string{self}, 1, "at least one other"},
+		{"named twice", []string{self, other, other}, 1, "named twice"},
+		{"three nodes", []string{self, other, identity.ID{8}.String()}, 2, "serve is not running"},
 		{"no serve", []string{self, other}, 2, "serve is not running"},
 	}
 	for _, c := range cases {

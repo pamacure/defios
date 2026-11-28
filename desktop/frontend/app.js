@@ -52,7 +52,7 @@ const attempts = new Map();
 // a redraw never drops what was typed.
 const ui = {
   page: "talk", focus: null, menuOpen: false, addingGroup: false, busy: false,
-  restore: null, invite: "propose", pick: "", declining: false, form: {},
+  restore: null, invite: "propose", picks: [], declining: false, form: {},
   backingUp: false, backupDismissed: -1,
   // The onboarding or lock screen's Problem typed past: hidden, as its
   // JSON, until the next attempt says again or otherwise.
@@ -74,7 +74,7 @@ function apply(next) {
   // Past a step, forget what was typed for it; once formed, land on Talk.
   if (["locked", "served", "forming"].includes(state.View)) ui.restore = null;
   if (!["no-node", "creating", "restoring", "no-group"].includes(state.View) && !ui.addingGroup) ui.form = {};
-  if (state.View !== "forming") { ui.pick = ""; ui.declining = false; }
+  if (state.View !== "forming") { ui.picks = []; ui.declining = false; }
   if (was === "forming" && state.View === "served") ui.page = "talk";
   // Once served, a Problem is something that happened, as a setting not
   // saved: it shows as a toast and is dropped, so it never stays on a page.
@@ -159,7 +159,7 @@ function render(force = false) {
   const s = state;
   applyTheme(s.Prefs.Theme, s.Prefs.Light, s.Prefs.Dark);
   const key = JSON.stringify([s.View, s.Selected, s.Groups, s.Problem, s.Node, ui.addingGroup,
-    s.Progress, s.Forming, s.Restored, s.PassphraseHeld, ui.restore, ui.invite, ui.pick, ui.declining,
+    s.Progress, s.Forming, s.Restored, s.PassphraseHeld, ui.restore, ui.invite, ui.picks, ui.declining,
     s.View === "served" && !ui.addingGroup ? [s.Seq, ui.page, ui.menuOpen, ui.busy] : ui.busy]);
   if (!force && key === shownKey) return;
   shownKey = key;
@@ -476,40 +476,45 @@ function connect(s, f) {
 }
 
 function propose(s, f) {
-  const unreached = (f.NotReached ?? []).length > 0;
+  const notReached = f.NotReached ?? [];
+  const unreached = notReached.length > 0;
+  const proposed = f.Proposed ?? [];
+  if (unreached && !ui.picks.length) ui.picks = proposed.map((d) => d.ID);
+  // A device the invitation went to stays listed while picked, even once
+  // it drops off the tailnet, so it can be unpicked or tried again.
   const found = f.Discovered ?? [];
-  if (unreached && !found.some((d) => d.ID === ui.pick)) ui.pick = f.Proposed[0]?.ID ?? "";
-  const list = found.length
-    ? h("div", { class: "devices", role: "radiogroup", "aria-label": "Devices on this tailnet" },
-      found.map((d) => h("label", { class: "devrow pick" },
+  const rows = [...found, ...proposed.filter((d) => ui.picks.includes(d.ID) && !found.some((x) => x.ID === d.ID))];
+  const toggle = (id, on) => { ui.picks = on ? [...ui.picks, id] : ui.picks.filter((x) => x !== id); render(true); };
+  const list = rows.length
+    ? h("div", { class: "devices", role: "group", "aria-label": "Devices on this tailnet" },
+      rows.map((d) => h("label", { class: "devrow pick" },
         h("input", {
-          type: "radio", name: "device", value: d.ID, checked: ui.pick === d.ID, disabled: ui.busy,
-          onchange: () => { ui.pick = d.ID; render(true); },
+          type: "checkbox", name: "device", value: d.ID, checked: ui.picks.includes(d.ID), disabled: ui.busy,
+          onchange: (e) => toggle(d.ID, e.target.checked),
         }),
         h("div", { class: "who" }, h("strong", {}, d.Name || "Unnamed device"), h("code", { title: d.ID }, shortID(d.ID))),
-        (f.NotReached ?? []).includes(d.ID) && chip("Not reached", "bad"))))
+        notReached.includes(d.ID) && chip("Not reached", "bad"))))
     : h("div", { class: "searching" },
       h("div", { class: "progress wide", role: "progressbar", "aria-label": "Looking for devices" }),
       h("p", { class: "hint" }, f.DiscoverProblem?.Code === "tailnet-down" || !f.DiscoverProblem
         ? "Looking for devices on this tailnet…"
         : f.DiscoverProblem.Message));
-  const picked = found.find((d) => d.ID === ui.pick) ?? (f.Proposed ?? []).find((d) => d.ID === ui.pick);
   return h("div", { class: "stack" },
     unreached && h("div", { class: "warning", role: "alert" },
-      h("strong", {}, `The invitation didn't reach ${(f.Proposed ?? []).filter((d) => f.NotReached.includes(d.ID)).map((d) => d.Name || shortID(d.ID)).join(", ")}.`),
+      h("strong", {}, `The invitation didn't reach ${proposed.filter((d) => notReached.includes(d.ID)).map((d) => d.Name || shortID(d.ID)).join(", ")}.`),
       " It was withdrawn. Check that device is online with DeFiOS open on this Group, then try again."),
     h("p", { class: "lead" }, "Devices on this tailnet"),
     list,
-    h("p", { class: "hint" }, "For now a Group is two devices: this one and one other."),
+    h("p", { class: "hint" }, "Pick every device to be in the Group with this one. Each is invited, and the Group forms once all accept."),
     h("button", {
-      class: "btn bright", type: "button", disabled: ui.busy || !picked,
-      onclick: () => act("Propose", [ui.pick]),
-    }, unreached && picked && f.NotReached.includes(picked.ID) ? "Try again" : "Send invitation"));
+      class: "btn bright", type: "button", disabled: ui.busy || !ui.picks.length,
+      onclick: () => act("Propose", ui.picks),
+    }, unreached && ui.picks.some((id) => notReached.includes(id)) ? "Try again" : ui.picks.length > 1 ? `Invite ${ui.picks.length} devices` : "Send invitation"));
 }
 
 function waitForInvite(s) {
   return h("div", { class: "stack" },
-    h("p", { class: "lead" }, "On the other device, choose Invite a device and pick this one:"),
+    h("p", { class: "lead" }, "On the inviting device, choose Invite a device and pick this one:"),
     h("div", { class: "devrow self" },
       h("div", { class: "who" }, h("strong", {}, `${nodeName(s)} (This Device)`), h("code", { class: "full" }, s.Node.ID))),
     h("div", { class: "progress wide", role: "progressbar", "aria-label": "Waiting for an invitation" }),

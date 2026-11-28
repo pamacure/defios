@@ -673,7 +673,7 @@ func TestConversationSendExitCodesFromServe(t *testing.T) {
 		code   int
 	}{
 		{"no replica", 409, "no-replica", "serve: this Node has no valid Group; nothing to append to", 2},
-		{"no leader", 503, "no-leader", "raftx: no leader; the other Node is not reachable", 2},
+		{"no leader", 503, "no-leader", "raftx: no leader; a majority of the Group's Nodes is not reachable", 2},
 		{"not inserted", 422, "not-inserted", "raftx: committed but not inserted at index 9: sender is not on the Roster", 3},
 		{"tailnet down", 503, "tailnet-down", "serve: tailnet is still coming up", 2},
 	}

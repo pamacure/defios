@@ -61,9 +61,9 @@ const (
 )
 
 var (
-	// ErrNoLeader means no leader is known before ctx expired; with n=2
-	// that is the other Node being unreachable (§4.5). Retryable.
-	ErrNoLeader = errors.New("raftx: no leader; the other Node is not reachable")
+	// ErrNoLeader means no leader is known before ctx expired: a majority
+	// of the Roster is not reachable (§4.5). Retryable.
+	ErrNoLeader = errors.New("raftx: no leader; a majority of the Group's Nodes is not reachable")
 	// ErrNotCaughtUp means WaitCaughtUp's ctx expired while a leader was
 	// known but this replica had not yet applied what the leader had.
 	ErrNotCaughtUp = errors.New("raftx: not caught up with the leader yet")

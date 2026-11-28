@@ -225,24 +225,22 @@ func runGroupCreate(cmd *cobra.Command, g *globals, args []string) error {
 	if err != nil {
 		return err
 	}
-	others := 0
-	seenSelf := false
+	seen := make(map[string]bool, len(args))
 	for _, a := range args {
 		id, err := identity.ParseID(strings.ToLower(a))
 		if err != nil {
 			return exitUsagef("%v", err)
 		}
-		if id.String() == h.NodeID() {
-			seenSelf = true
-		} else {
-			others++
+		if seen[id.String()] {
+			return exitUsagef("Node %s is named twice", id)
 		}
+		seen[id.String()] = true
 	}
-	if !seenSelf {
+	if !seen[h.NodeID()] {
 		return exitUsagef("this Node (%s) must be on the roster", h.NodeID())
 	}
-	if others != 1 {
-		return exitUsagef("MVP forms Groups of exactly one other Node; got %d", others)
+	if len(seen) < 2 {
+		return exitUsagef("a Group needs at least one other Node")
 	}
 	f, err := h.Propose(cmd.Context(), node.ServedGroup, args)
 	if err != nil {
