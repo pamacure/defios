@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -18,26 +17,6 @@ import (
 	"defios.com/internal/config"
 	"defios.com/internal/key"
 )
-
-// TriggerConfig writes the served Group's Jobs, Hooks and Schedules for
-// the Trigger-config Tools (ADR 0046): node's AddJob and the rest, checked
-// as a person's save is, but keeping the by the Tool sets. Add refuses a
-// name already defined, edit and delete one that is not, and a write the
-// config loader would refuse is refused, saying why.
-type TriggerConfig interface {
-	AddJob(ctx context.Context, name string, j config.Job) error
-	EditJob(ctx context.Context, name string, j config.Job) error
-	DeleteJob(ctx context.Context, name string) error
-	AddHook(ctx context.Context, name string, hk config.Hook) error
-	EditHook(ctx context.Context, name string, hk config.Hook) error
-	DeleteHook(ctx context.Context, name string) error
-	AddSchedule(ctx context.Context, name string, s config.Schedule) error
-	EditSchedule(ctx context.Context, name string, s config.Schedule) error
-	DeleteSchedule(ctx context.Context, name string) error
-}
-
-// errNoTriggerConfig refuses a write with no TriggerConfig to make it.
-var errNoTriggerConfig = errors.New("your Node writes no Trigger config for this Group")
 
 // triggerKind is one of the three kinds of Trigger config a Tool writes:
 // its noun, the input field holding an entry, and its config.toml table.
@@ -156,8 +135,8 @@ func (s *server) triggerListTool(k triggerKind) func(context.Context, json.RawMe
 		if len(bytes.TrimSpace(input)) > 0 && dec.Decode(&in) != nil {
 			return "", errors.New("its input must be {}")
 		}
-		c, err := config.ReadFile(s.opts.Paths.GroupConfigFile(s.opts.Alias))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		c, err := s.triggers().Config()
+		if err != nil {
 			return "", err
 		}
 		places, err := s.keyPlaces()
@@ -217,7 +196,7 @@ func (s *server) triggerListTool(k triggerKind) func(context.Context, json.RawMe
 // handle's run: the entry given, its Keys named by Workspace name and its
 // by handle.
 func (s *server) triggerSetTool(k triggerKind, edit bool, handle string) func(context.Context, json.RawMessage) (string, error) {
-	return func(ctx context.Context, input json.RawMessage) (string, error) {
+	return func(_ context.Context, input json.RawMessage) (string, error) {
 		shape := fmt.Sprintf(`its input must be {"name": "<name>", "%s": {<its config.toml keys>}}`, k.field)
 		var in map[string]json.RawMessage
 		if err := json.Unmarshal(input, &in); err != nil || in == nil {
@@ -227,10 +206,7 @@ func (s *server) triggerSetTool(k triggerKind, edit bool, handle string) func(co
 		if err := json.Unmarshal(in["name"], &name); err != nil || name == "" || in[k.field] == nil || len(in) != 2 {
 			return "", errors.New(shape)
 		}
-		tc := s.opts.Triggers
-		if tc == nil {
-			return "", errNoTriggerConfig
-		}
+		tc := s.triggers()
 		places, err := s.keyPlaces()
 		if err != nil {
 			return "", err
@@ -252,9 +228,9 @@ func (s *server) triggerSetTool(k triggerKind, edit bool, handle string) func(co
 			}
 			j.By = handle
 			if edit {
-				err = tc.EditJob(ctx, name, j)
+				err = tc.EditJob(name, j)
 			} else {
-				err = tc.AddJob(ctx, name, j)
+				err = tc.AddJob(name, j)
 			}
 		case kindHook:
 			var hk config.Hook
@@ -268,9 +244,9 @@ func (s *server) triggerSetTool(k triggerKind, edit bool, handle string) func(co
 			}
 			hk.By = handle
 			if edit {
-				err = tc.EditHook(ctx, name, hk)
+				err = tc.EditHook(name, hk)
 			} else {
-				err = tc.AddHook(ctx, name, hk)
+				err = tc.AddHook(name, hk)
 			}
 		case kindSchedule:
 			var sc config.Schedule
@@ -279,9 +255,9 @@ func (s *server) triggerSetTool(k triggerKind, edit bool, handle string) func(co
 			}
 			sc.By = handle
 			if edit {
-				err = tc.EditSchedule(ctx, name, sc)
+				err = tc.EditSchedule(name, sc)
 			} else {
-				err = tc.AddSchedule(ctx, name, sc)
+				err = tc.AddSchedule(name, sc)
 			}
 		}
 		if err != nil {
@@ -293,7 +269,7 @@ func (s *server) triggerSetTool(k triggerKind, edit bool, handle string) func(co
 
 // triggerDeleteTool is k's delete Tool.
 func (s *server) triggerDeleteTool(k triggerKind) func(context.Context, json.RawMessage) (string, error) {
-	return func(ctx context.Context, input json.RawMessage) (string, error) {
+	return func(_ context.Context, input json.RawMessage) (string, error) {
 		var in struct {
 			Name string `json:"name"`
 		}
@@ -302,24 +278,28 @@ func (s *server) triggerDeleteTool(k triggerKind) func(context.Context, json.Raw
 		if err := dec.Decode(&in); err != nil || in.Name == "" {
 			return "", errors.New(`its input must be {"name": "<name>"}`)
 		}
-		tc := s.opts.Triggers
-		if tc == nil {
-			return "", errNoTriggerConfig
-		}
+		tc := s.triggers()
 		var err error
 		switch k {
 		case kindJob:
-			err = tc.DeleteJob(ctx, in.Name)
+			err = tc.DeleteJob(in.Name)
 		case kindHook:
-			err = tc.DeleteHook(ctx, in.Name)
+			err = tc.DeleteHook(in.Name)
 		case kindSchedule:
-			err = tc.DeleteSchedule(ctx, in.Name)
+			err = tc.DeleteSchedule(in.Name)
 		}
 		if err != nil {
 			return "", toolError(err)
 		}
 		return fmt.Sprintf("%s %s deleted.", k.noun, in.Name), nil
 	}
+}
+
+// triggers is the served Group's Trigger config, as the Trigger-config
+// Tools write it: checked as a person's save is, but keeping the by the
+// Tool sets (ADR 0046).
+func (s *server) triggers() config.Triggers {
+	return config.Triggers{Paths: s.opts.Paths, Group: s.opts.Alias}
 }
 
 // keyPlaces names this Group's Keys' Conversations, as the Trigger-config

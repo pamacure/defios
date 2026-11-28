@@ -286,54 +286,30 @@ func TestDeletingAJobInUseNamesItsTriggers(t *testing.T) {
 	}
 }
 
-// The Trigger-config Tools' writes keep the by they set, checked as a
-// person's are, and a person's save of the same entry clears it
-// (ADR 0046).
-func TestAnAgentsTriggerWriteKeepsByAndAPersonsClearsIt(t *testing.T) {
-	_, h := triggerNode(t)
+// What an agent wrote, its by set, a person's save of the same entry
+// clears (ADR 0046).
+func TestAPersonsTriggerSaveClearsBy(t *testing.T) {
+	p, h := triggerNode(t)
 	ctx := context.Background()
-	at := node.AgentTriggers(h, "alpha")
-	if err := at.AddJob(ctx, "j", config.Job{Exec: []string{"true"}, By: "builder"}); err != nil {
+	agent := config.Triggers{Paths: p, Group: "alpha"}
+	if err := agent.AddJob("j", config.Job{Exec: []string{"true"}, By: "builder"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := at.EditHook(ctx, "everything", config.Hook{Jobs: []string{"j"}, By: "builder"}); err != nil {
+	if err := agent.EditHook("everything", config.Hook{Jobs: []string{"j"}, By: "builder"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := at.AddSchedule(ctx, "daily", config.Schedule{Cron: "0 9 * * *", Jobs: []string{"j"}, By: "builder"}); err != nil {
+	if err := agent.AddSchedule("daily", config.Schedule{Cron: "0 9 * * *", Jobs: []string{"j"}, By: "builder"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := at.AddJob(ctx, "x", config.Job{Agent: "auditor", Target: "group", By: "builder"}); !errors.As(err, new(*node.JobNotIncludedError)) {
-		t.Errorf("an agent's Job whose agent is not included: %v; want JobNotIncludedError", err)
-	}
-	if err := at.AddJob(ctx, "j", config.Job{Exec: []string{"true"}, By: "builder"}); !errors.Is(err, node.ErrAlreadyDefined) {
-		t.Errorf("an agent's add of a defined Job: %v; want ErrAlreadyDefined", err)
-	}
-	if err := at.EditJob(ctx, "missing", config.Job{Exec: []string{"true"}, By: "builder"}); !errors.Is(err, node.ErrNotDefined) {
-		t.Errorf("an agent's edit of an undefined Job: %v; want ErrNotDefined", err)
-	}
-	by := func() (job, hook, schedule string) {
-		jobs, _ := h.Jobs(ctx, "alpha")
-		hooks, _ := h.Hooks(ctx, "alpha")
-		scheds, _ := h.Schedules(ctx, "alpha")
-		for _, j := range jobs {
-			if j.Name == "j" {
-				job = j.By
-			}
+	by := func() []string {
+		c, err := agent.Config()
+		if err != nil {
+			t.Fatal(err)
 		}
-		for _, hk := range hooks {
-			if hk.Name == "everything" {
-				hook = hk.By
-			}
-		}
-		for _, s := range scheds {
-			if s.Name == "daily" {
-				schedule = s.By
-			}
-		}
-		return
+		return []string{c.Jobs["j"].By, c.Hooks["everything"].By, c.Schedules["daily"].By}
 	}
-	if j, hk, s := by(); j != "builder" || hk != "builder" || s != "builder" {
-		t.Fatalf("by after an agent's writes: %q, %q, %q", j, hk, s)
+	if got := by(); !reflect.DeepEqual(got, []string{"builder", "builder", "builder"}) {
+		t.Fatalf("by after an agent's writes: %q", got)
 	}
 	if err := h.EditJob(ctx, "alpha", "j", config.Job{Exec: []string{"false"}, By: "builder"}); err != nil {
 		t.Fatal(err)
@@ -344,7 +320,7 @@ func TestAnAgentsTriggerWriteKeepsByAndAPersonsClearsIt(t *testing.T) {
 	if err := h.EditSchedule(ctx, "alpha", "daily", config.Schedule{Cron: "0 9 * * *", Jobs: []string{"j"}, By: "builder"}); err != nil {
 		t.Fatal(err)
 	}
-	if j, hk, s := by(); j != "" || hk != "" || s != "" {
-		t.Errorf("by after a person's saves: %q, %q, %q; want none", j, hk, s)
+	if got := by(); !reflect.DeepEqual(got, []string{"", "", ""}) {
+		t.Errorf("by after a person's saves: %q; want none", got)
 	}
 }

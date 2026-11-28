@@ -85,9 +85,6 @@ type Options struct {
 	// os.Getenv; nil Secrets is none.
 	Getenv  func(string) string
 	Secrets func() (map[string]string, error)
-	// Triggers writes this Group's Jobs, Hooks and Schedules for the
-	// Trigger-config Tools (ADR 0046); nil refuses them.
-	Triggers TriggerConfig
 	// AgentBackoff is the wait before an agent's first retry, doubling
 	// after each; zero is a second (ADR 0015).
 	AgentBackoff time.Duration

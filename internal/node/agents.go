@@ -480,7 +480,7 @@ func (h *Host) editInclusion(group, conv string, edit func(list []string) ([]str
 			if err := h.checkPlaced(Place{Group: group, Conversation: GroupTalk}, c.Agent.Profiles, l); err != nil {
 				return err
 			}
-			if err := h.checkAnswers(group, *c, config.ConversationGroup, l); err != nil {
+			if err := h.triggers(group).CheckAnswers(*c, config.ConversationGroup, l); err != nil {
 				return err
 			}
 			c.Agent.Profiles, list = l, l
@@ -514,7 +514,7 @@ func (h *Host) editInclusion(group, conv string, edit func(list []string) ([]str
 	if err != nil {
 		return Inclusion{}, err
 	}
-	if err := h.checkAnswers(group, c, name, l); err != nil {
+	if err := h.triggers(group).CheckAnswers(c, name, l); err != nil {
 		return Inclusion{}, err
 	}
 	w.Agent.Profiles = l

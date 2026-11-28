@@ -1,92 +1,29 @@
 package serve_test
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
-	"sync"
 	"testing"
 
 	"defios.com/internal/config"
 	"defios.com/internal/group"
-	"defios.com/internal/serve"
 )
-
-// fileTriggers is the Trigger config node gives serve, as these tests
-// need it: config.SetEntry on the Group's config.toml, refusing a name
-// already defined or not.
-type fileTriggers struct {
-	mu   sync.Mutex
-	path string
-}
-
-func (f *fileTriggers) set(table, name string, v any, exists bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	c, err := config.ReadFile(f.path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	var defined bool
-	switch table {
-	case config.TableJobs:
-		_, defined = c.Jobs[name]
-	case config.TableHooks:
-		_, defined = c.Hooks[name]
-	case config.TableSchedules:
-		_, defined = c.Schedules[name]
-	}
-	if defined != exists {
-		return fmt.Errorf("[%s.%s]: defined %v", table, name, defined)
-	}
-	return config.SetEntry(f.path, table, name, v)
-}
-
-func (f *fileTriggers) AddJob(_ context.Context, n string, j config.Job) error {
-	return f.set(config.TableJobs, n, j, false)
-}
-func (f *fileTriggers) EditJob(_ context.Context, n string, j config.Job) error {
-	return f.set(config.TableJobs, n, j, true)
-}
-func (f *fileTriggers) DeleteJob(_ context.Context, n string) error {
-	return f.set(config.TableJobs, n, nil, true)
-}
-func (f *fileTriggers) AddHook(_ context.Context, n string, h config.Hook) error {
-	return f.set(config.TableHooks, n, h, false)
-}
-func (f *fileTriggers) EditHook(_ context.Context, n string, h config.Hook) error {
-	return f.set(config.TableHooks, n, h, true)
-}
-func (f *fileTriggers) DeleteHook(_ context.Context, n string) error {
-	return f.set(config.TableHooks, n, nil, true)
-}
-func (f *fileTriggers) AddSchedule(_ context.Context, n string, s config.Schedule) error {
-	return f.set(config.TableSchedules, n, s, false)
-}
-func (f *fileTriggers) EditSchedule(_ context.Context, n string, s config.Schedule) error {
-	return f.set(config.TableSchedules, n, s, true)
-}
-func (f *fileTriggers) DeleteSchedule(_ context.Context, n string) error {
-	return f.set(config.TableSchedules, n, nil, true)
-}
 
 // triggerTools grants every Trigger-config Tool.
 const triggerTools = `["talk_write", "job_list", "job_add", "job_edit", "job_delete", "hook_list", "hook_add", "hook_edit", "hook_delete", "schedule_list", "schedule_add", "schedule_edit", "schedule_delete"]`
 
 // builderPair is agentPair with alice's @builder, in Group-level talk,
 // granted the Trigger-config Tools, and a Key minted whose alias is
-// treasury; it returns that Key's Workspace name.
+// treasury, whose Conversation includes @auditor; it returns that Key's
+// Workspace name.
 func builderPair(t *testing.T) (a *node, provider *fakeProvider, workspace string) {
 	t.Helper()
-	var triggers fileTriggers
-	a, b, gid, provider := agentPairTuned(t, func(o *serve.Options) { o.Triggers = &triggers }, "builder")
-	triggers.path = a.paths.GroupConfigFile(group.ImplicitAlias)
+	a, b, gid, provider := agentPair(t, "builder")
 	writeConfig(t, a.paths.AgentProfileFile("builder"), "provider = \"claude\"\nmax_turns = 40\ntools = "+triggerTools+"\n\n[body]\nmodel = \"claude-test\"\nstream = true\nmax_tokens = 1024\n")
 	workspace = mintKeyOf(t, a, b, gid, 0x33)
 	waitWorkspace(t, a, workspace)
+	includeIn(t, a, workspace, "auditor")
 	if err := config.WriteKeyAlias(a.paths.ConversationConfigFile(group.ImplicitAlias, workspace), "treasury"); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +116,8 @@ func TestAnAgentWritesTriggerConfig(t *testing.T) {
 
 // Each Trigger-config Tool refuses, saying why, what it may not write: a
 // by given, an unknown key, a name defined already or not, a Key no
-// alias or Workspace name names, and what the config loader would refuse.
+// alias or Workspace name names, an agent not included where its Job
+// answers, a Job a Trigger runs, and what the config loader would refuse.
 // Nothing refused is written.
 func TestTriggerConfigToolsRefuse(t *testing.T) {
 	a, provider, _ := builderPair(t)
@@ -192,18 +130,21 @@ func TestTriggerConfigToolsRefuse(t *testing.T) {
 		{"job_add", `{"name":"j","job":{"exec":["true"],"by":"auditor"}}`, "by is set to your Handle"},
 		{"job_add", `{"name":"j","job":{"exec":["true"],"webhook":"https://x.example"}}`, "exactly one of agent, exec or webhook"},
 		{"job_add", `{"name":"j","job":{"agent":"builder","prompt":"x","target":"vault"}}`, `\"vault\" is neither \"group\", a Key alias nor the Workspace name`},
-		{"job_add", `{"name":"sign_accept","job":{"exec":["true"]}}`, "defined true"},
-		{"job_edit", `{"name":"missing","job":{"exec":["true"]}}`, "defined false"},
-		{"job_delete", `{"name":"missing"}`, "defined false"},
+		{"job_add", `{"name":"j","job":{"agent":"auditor","prompt":"x","target":"group"}}`, "@auditor is not included in group"},
+		{"job_delete", `{"name":"sign_accept"}`, "Job sign_accept is run by Hook accept_all"},
+		{"job_add", `{"name":"sign_accept","job":{"exec":["true"]}}`, "already defined in this Group's config.toml"},
+		{"job_edit", `{"name":"missing","job":{"exec":["true"]}}`, "not defined in this Group's config.toml"},
+		{"job_delete", `{"name":"missing"}`, "not defined in this Group's config.toml"},
 		{"hook_add", `{"name":"h","hook":{"jobs":["sign_accept"],"when":"now"}}`, "unknown key when"},
-		{"hook_edit", `{"name":"missing","hook":{"jobs":["sign_accept"]}}`, "defined false"},
-		{"hook_delete", `{"name":"missing"}`, "defined false"},
+		{"hook_edit", `{"name":"missing","hook":{"jobs":["sign_accept"]}}`, "not defined in this Group's config.toml"},
+		{"hook_delete", `{"name":"missing"}`, "not defined in this Group's config.toml"},
 		{"schedule_add", `{"name":"s","schedule":{"cron":"0 9 * * *","jobs":["missing"]}}`, "jobs: no [jobs.missing]"},
-		{"schedule_edit", `{"name":"missing","schedule":{"at":"2030-01-01T09:00:00Z","jobs":["sign_accept"]}}`, "defined false"},
-		{"schedule_delete", `{"name":"missing"}`, "defined false"},
+		{"schedule_edit", `{"name":"missing","schedule":{"at":"2030-01-01T09:00:00Z","jobs":["sign_accept"]}}`, "not defined in this Group's config.toml"},
+		{"schedule_delete", `{"name":"missing"}`, "not defined in this Group's config.toml"},
 	}
-	// The Group's config.toml holds sign_accept, as a new Group's does.
-	writeConfig(t, path, before+"\n[jobs.sign_accept]\nexec = [\"true\"]\n")
+	// The Group's config.toml holds sign_accept, as a new Group's does, and
+	// a Hook that runs it.
+	writeConfig(t, path, before+"\n[jobs.sign_accept]\nexec = [\"true\"]\n\n[hooks.accept_all]\njobs = [\"sign_accept\"]\n")
 	before = readFile(t, path)
 	calls := make([][2]string, len(cases))
 	for i, c := range cases {

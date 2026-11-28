@@ -3,12 +3,10 @@ package node
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"defios.com/internal/config"
@@ -24,9 +22,9 @@ import (
 var (
 	// ErrAlreadyDefined: a Job, Hook or Schedule by that name is already
 	// defined.
-	ErrAlreadyDefined = errors.New("node: already defined in this Group's config.toml")
+	ErrAlreadyDefined = config.ErrAlreadyDefined
 	// ErrNotDefined: no Job, Hook or Schedule by that name is defined.
-	ErrNotDefined = errors.New("node: not defined in this Group's config.toml")
+	ErrNotDefined = config.ErrNotDefined
 	// ErrNoJob: RunJob named a Job the served Group's config.toml does
 	// not define.
 	ErrNoJob = serve.ErrNoJob
@@ -34,27 +32,7 @@ var (
 
 // JobInUseError is a DeleteJob refused because Triggers still run the
 // Job: the Hooks and Schedules that do, by name.
-type JobInUseError struct {
-	Job              string
-	Hooks, Schedules []string
-}
-
-func (e *JobInUseError) Error() string {
-	return fmt.Sprintf("node: Job %s is run by %s", e.Job, strings.Join(e.Triggers(), ", "))
-}
-
-// Triggers are the Hooks and Schedules that run the Job, as "Hook <name>"
-// and "Schedule <name>".
-func (e *JobInUseError) Triggers() []string {
-	var by []string
-	for _, n := range e.Hooks {
-		by = append(by, "Hook "+n)
-	}
-	for _, n := range e.Schedules {
-		by = append(by, "Schedule "+n)
-	}
-	return by
-}
+type JobInUseError = config.JobInUseError
 
 // Job is one Job of a Group's config.toml (ADR 0032).
 type Job struct {
@@ -158,171 +136,77 @@ func (h *Host) groupConfig(group string) (config.Config, error) {
 	if err := h.knownGroup(group); err != nil {
 		return config.Config{}, err
 	}
-	c, err := config.ReadFile(h.p.GroupConfigFile(group))
-	if errors.Is(err, os.ErrNotExist) {
-		return config.Config{}, nil
-	}
-	return c, err
+	return h.triggers(group).Config()
 }
 
-// AddJob defines Job name in group's config.toml, as a person's save: it
-// clears j's by (ADR 0046). An agent Job that answers in Group-level talk
-// or a Key's Conversation must have its agent included there, or it is a
-// JobNotIncludedError. That it names an Agent Profile of this Node's is a
-// front end's to offer, as the loader checks it only where the Job runs.
+// triggers is group's Trigger config on this Node's disk.
+func (h *Host) triggers(group string) config.Triggers {
+	return config.Triggers{Paths: h.p, Group: group}
+}
+
+// AddJob defines Job name in group's config.toml, as config.Triggers'
+// AddJob does, as a person's save: it clears j's by (ADR 0046).
 func (h *Host) AddJob(ctx context.Context, group, name string, j config.Job) error {
 	j.By = ""
-	return h.setJob(group, name, j, false)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.AddJob(name, j) })
 }
 
 // EditJob replaces Job name's definition with j, checked as AddJob does,
 // and clears its by.
 func (h *Host) EditJob(ctx context.Context, group, name string, j config.Job) error {
 	j.By = ""
-	return h.setJob(group, name, j, true)
-}
-
-// setJob defines Job name as j, by and all; exists as setEntry's.
-func (h *Host) setJob(group, name string, j config.Job, exists bool) error {
-	if err := h.checkJob(group, j); err != nil {
-		return err
-	}
-	return h.setEntry(group, config.TableJobs, name, j, exists)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.EditJob(name, j) })
 }
 
 // DeleteJob removes Job name, which no Trigger may still run: one that
 // does is a JobInUseError.
 func (h *Host) DeleteJob(ctx context.Context, group, name string) error {
-	c, err := h.groupConfig(group)
-	if err != nil {
-		return err
-	}
-	inUse := &JobInUseError{Job: name}
-	for _, n := range slices.Sorted(maps.Keys(c.Hooks)) {
-		if slices.Contains(c.Hooks[n].Jobs, name) {
-			inUse.Hooks = append(inUse.Hooks, n)
-		}
-	}
-	for _, n := range slices.Sorted(maps.Keys(c.Schedules)) {
-		if slices.Contains(c.Schedules[n].Jobs, name) {
-			inUse.Schedules = append(inUse.Schedules, n)
-		}
-	}
-	if len(inUse.Hooks)+len(inUse.Schedules) > 0 {
-		return inUse
-	}
-	return h.setEntry(group, config.TableJobs, name, nil, true)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.DeleteJob(name) })
 }
 
 // AddHook defines Hook name, whose Jobs must be defined, and clears its
 // by, as AddJob does.
 func (h *Host) AddHook(ctx context.Context, group, name string, hk config.Hook) error {
 	hk.By = ""
-	return h.setEntry(group, config.TableHooks, name, hk, false)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.AddHook(name, hk) })
 }
 
 // EditHook replaces Hook name's definition with hk, clearing its by.
 func (h *Host) EditHook(ctx context.Context, group, name string, hk config.Hook) error {
 	hk.By = ""
-	return h.setEntry(group, config.TableHooks, name, hk, true)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.EditHook(name, hk) })
 }
 
 // DeleteHook removes Hook name.
 func (h *Host) DeleteHook(ctx context.Context, group, name string) error {
-	return h.setEntry(group, config.TableHooks, name, nil, true)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.DeleteHook(name) })
 }
 
 // AddSchedule defines Schedule name, whose Jobs must be defined, and
 // clears its by, as AddJob does.
 func (h *Host) AddSchedule(ctx context.Context, group, name string, s config.Schedule) error {
 	s.By = ""
-	return h.setEntry(group, config.TableSchedules, name, s, false)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.AddSchedule(name, s) })
 }
 
 // EditSchedule replaces Schedule name's definition with s, clearing its by.
 func (h *Host) EditSchedule(ctx context.Context, group, name string, s config.Schedule) error {
 	s.By = ""
-	return h.setEntry(group, config.TableSchedules, name, s, true)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.EditSchedule(name, s) })
 }
 
 // DeleteSchedule removes Schedule name.
 func (h *Host) DeleteSchedule(ctx context.Context, group, name string) error {
-	return h.setEntry(group, config.TableSchedules, name, nil, true)
+	return h.writeTriggers(group, func(t config.Triggers) error { return t.DeleteSchedule(name) })
 }
 
-// agentTriggers is group's Trigger config as the Trigger-config Tools
-// write it (ADR 0046): checked as a person's save is, but keeping the by
-// the Tool set.
-type agentTriggers struct {
-	h     *Host
-	group string
-}
-
-var _ serve.TriggerConfig = agentTriggers{}
-
-func (a agentTriggers) AddJob(ctx context.Context, name string, j config.Job) error {
-	return a.h.setJob(a.group, name, j, false)
-}
-
-func (a agentTriggers) EditJob(ctx context.Context, name string, j config.Job) error {
-	return a.h.setJob(a.group, name, j, true)
-}
-
-func (a agentTriggers) DeleteJob(ctx context.Context, name string) error {
-	return a.h.DeleteJob(ctx, a.group, name)
-}
-
-func (a agentTriggers) AddHook(ctx context.Context, name string, hk config.Hook) error {
-	return a.h.setEntry(a.group, config.TableHooks, name, hk, false)
-}
-
-func (a agentTriggers) EditHook(ctx context.Context, name string, hk config.Hook) error {
-	return a.h.setEntry(a.group, config.TableHooks, name, hk, true)
-}
-
-func (a agentTriggers) DeleteHook(ctx context.Context, name string) error {
-	return a.h.DeleteHook(ctx, a.group, name)
-}
-
-func (a agentTriggers) AddSchedule(ctx context.Context, name string, s config.Schedule) error {
-	return a.h.setEntry(a.group, config.TableSchedules, name, s, false)
-}
-
-func (a agentTriggers) EditSchedule(ctx context.Context, name string, s config.Schedule) error {
-	return a.h.setEntry(a.group, config.TableSchedules, name, s, true)
-}
-
-func (a agentTriggers) DeleteSchedule(ctx context.Context, name string) error {
-	return a.h.DeleteSchedule(ctx, a.group, name)
-}
-
-// setEntry sets [<table>.<name>] of group's config.toml to v, nil to
-// remove it; exists says whether it must be defined already or must not.
-func (h *Host) setEntry(group, table, name string, v any, exists bool) error {
-	c, err := h.groupConfig(group)
-	if err != nil {
+// writeTriggers makes write to group's Trigger config, a write the loader
+// would refuse being an InvalidError.
+func (h *Host) writeTriggers(group string, write func(config.Triggers) error) error {
+	if err := h.knownGroup(group); err != nil {
 		return err
 	}
-	var defined bool
-	switch table {
-	case config.TableJobs:
-		_, defined = c.Jobs[name]
-	case config.TableHooks:
-		_, defined = c.Hooks[name]
-	case config.TableSchedules:
-		_, defined = c.Schedules[name]
-	}
-	if defined && !exists {
-		return fmt.Errorf("%w: [%s.%s]", ErrAlreadyDefined, table, name)
-	}
-	if !defined && exists {
-		return fmt.Errorf("%w: [%s.%s]", ErrNotDefined, table, name)
-	}
-	path := h.p.GroupConfigFile(group)
-	if err := mkdirPrivate(filepath.Dir(path)); err != nil {
-		return err
-	}
-	err = config.SetEntry(path, table, name, v)
+	err := write(h.triggers(group))
 	if errors.Is(err, config.ErrNotWritten) {
 		return &InvalidError{Err: err}
 	}
