@@ -27,6 +27,11 @@
   --livery-cyan: #0B7285; --livery-cyan-wash: #DDF1F4;
   --livery-slate: #4F6475; --livery-slate-wash: #E5EAEF;
   --livery-brown: #8A5A2B; --livery-brown-wash: #F2E8DE;
+  /* An agent's bubble is a tone of its Livery's colour: its hue, at
+     --lv-tone lightness and --lv-chroma of its chroma, so it keeps the
+     colour clean rather than greying it toward --surface; --text is at
+     least 6:1 on every tone. */
+  --lv-tone: 0.88; --lv-chroma: 0.45;
   --bar: #6C8E88;
   --soft: #ADDFD7;
   --on-bright: #151A1F;
@@ -64,6 +69,7 @@
     --livery-cyan: #4FD1E0; --livery-cyan-wash: #0E3A40;
     --livery-slate: #A9BBCB; --livery-slate-wash: #2A3540;
     --livery-brown: #D3A272; --livery-brown-wash: #3A2A1A;
+    --lv-tone: 0.40;
     --bar: #8BB5AE;
     --soft: #334542;
     color-scheme: dark;
@@ -91,6 +97,7 @@
   --livery-cyan: #4FD1E0; --livery-cyan-wash: #0E3A40;
   --livery-slate: #A9BBCB; --livery-slate-wash: #2A3540;
   --livery-brown: #D3A272; --livery-brown-wash: #3A2A1A;
+  --lv-tone: 0.40;
   --bar: #8BB5AE;
   --soft: #334542;
   color-scheme: dark;
@@ -377,6 +384,13 @@ button.conv > .sub { grid-column: 2 / -1; }
 .msg .text { padding: 8px 12px; border-radius: var(--radius-l); background: var(--surface); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
 .msg.right .text { background: var(--accent-wash); border-color: transparent; border-bottom-right-radius: 0; }
 .msg.left .text { border-bottom-left-radius: 0; }
+/* An agent's bubble: an opaque tone of its Livery's colour under the
+   cards' sand grain (dark only), edged in the full colour (see --lv-tone);
+   plain --surface for one with none. A mention in it keeps its own wash. */
+.msg .text.lv, .msg.streaming .blk.lv:not(.thinking):not(.tool) {
+  background: var(--sand), oklch(from var(--lv) var(--lv-tone) calc(c * var(--lv-chroma)) h);
+  border-color: var(--lv);
+}
 .msg.sending .text { opacity: 0.6; }
 .msg.unreadable .text { color: var(--muted); font-style: italic; background: transparent; border-style: dashed; }
 .msg.unposted .text { color: var(--muted); font-style: italic; opacity: .75; }

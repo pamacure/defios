@@ -560,11 +560,15 @@ function item(it) {
   }
   return h("div", { ...sel, class: `msg ${it.Side} ${run} ${sel.class}` },
     meta,
-    beside(it, h("div", { class: "text" }, (it.Parts ?? [{ Text: it.Text }]).map(part))),
+    beside(it, h("div", { class: `text ${tint(it)}` }, (it.Parts ?? [{ Text: it.Text }]).map(part))),
     summoned(it.Summoned),
     it.Droppable && h("div", { class: "actions" },
       h("button", { class: "link", type: "button", disabled: tui.busy, onclick: () => act("DropQueued", it.MsgID) }, "Drop")));
 }
+
+// tint is the classes that fill an agent's bubble with its Livery's
+// colour; none for a party that is no agent or has no Livery.
+const tint = (it) => (it.Handle && it.Livery ? `lv ${liveryClass(it.Livery)}` : "");
 
 // beside puts a left-side message's bubble beside its avatar column,
 // bottoms aligned, so what follows the bubble (its actions) hangs below
@@ -659,7 +663,7 @@ function liveChain(c) {
       h("div", { class: "meta" }, h("span", { class: "who" }, h("strong", {}, "This Device"), h("span", { class: `handle ${liveryClass(a.Livery)}` }, `@${a.Handle}`))),
       h("div", { class: "line" }, avatar(a.Livery, { open: openLivery(a.Party, `@${a.Handle}`), label: `@${a.Handle}` }), h("div", { class: "body" },
         a.Blocks.length
-          ? a.Blocks.map((b) => h("div", { class: `blk ${b.Kind}` },
+          ? a.Blocks.map((b) => h("div", { class: `blk ${b.Kind} ${tint(a)}` },
             b.Kind !== "text" && h("span", { class: "kind" }, b.Kind === "thinking" ? "Thinking" : "Tool"),
             h("div", {}, b.Text)))
           : h("p", { class: "placeholder" }, "Thinking…"))),
