@@ -250,10 +250,9 @@ func (t *talk) setKeyNetworkType(typ string) TalkState {
 }
 
 // setAgentIncluded includes or excludes handle in the open Conversation.
-// A Key's Conversation that follows Group talk's agents gets a list of its
-// own, starting from the Group's, so toggling one agent keeps the others.
-// One refused because a Job answers there with that agent names the Job
-// and its Key as the page does.
+// One refused because a Job answers there with that agent, or because its
+// Tools' tier may not be included there, names the Job or the place, and
+// a Key as the page does.
 func (t *talk) setAgentIncluded(handle string, on bool) TalkState {
 	return t.act(func(a at) error {
 		before, err := a.n.IncludedAgents(t.ctx, a.group, a.conv)

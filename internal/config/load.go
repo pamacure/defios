@@ -32,8 +32,9 @@ type Effective struct {
 // whose ID is conv, or Group-level talk when conv is nil. A Group with no
 // config.toml is empty; the Conversation's config.toml is found by its Key's
 // Workspace name in keys, and a Conversation with none, or with no Key in
-// keys, follows the Group's. It fails only when a file does not read or
-// parse, or the merge is refused, naming the files. Whether [agent]
+// keys, has the Group's settings, but no agents: a Conversation never
+// follows the Group's list of agents (ADR 0046). It fails only when a file
+// does not read or parse, or the merge is refused, naming the files. Whether [agent]
 // profiles names defined profiles is for Included to find out.
 func Load(p nodedir.Paths, alias string, conv []byte, keys []key.Key) (Effective, error) {
 	e := Effective{paths: p, groupFile: p.GroupConfigFile(alias)}
@@ -50,6 +51,7 @@ func Load(p nodedir.Paths, alias string, conv []byte, keys []key.Key) (Effective
 		return e, nil
 	}
 	copy(id[:], conv)
+	e.Workspace.Agent.Profiles = nil
 	name, ok := key.WorkspaceNames(keys)[id]
 	if !ok {
 		return e, nil
@@ -99,10 +101,11 @@ func (e Effective) Included() (Included, error) {
 		p, err := ReadProfile(file)
 		if errors.Is(err, os.ErrNotExist) {
 			err := fmt.Errorf("config: [agent] profiles: no Agent Profile %q", h)
-			if e.conv.Agent.Profiles != nil {
-				return Included{}, fmt.Errorf("%w: fix [agent] profiles in %s, or add %s", err, e.convFile, file)
+			listed := e.groupFile
+			if e.convFile != "" {
+				listed = e.convFile
 			}
-			return Included{}, fmt.Errorf("%w: fix [agent] profiles in %s, or add %s", err, e.groupFile, file)
+			return Included{}, fmt.Errorf("%w: fix [agent] profiles in %s, or add %s", err, listed, file)
 		} else if err != nil {
 			return Included{}, err
 		}

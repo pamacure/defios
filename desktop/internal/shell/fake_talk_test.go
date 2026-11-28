@@ -24,8 +24,8 @@ type fakeTalk struct {
 	queued    map[string][]node.Message
 	keys      []node.Key
 	keygens   []node.Session
-	// included are the Handles included per Conversation; a Conversation
-	// with none of its own follows GroupTalk's.
+	// included are the Handles included per Conversation; one with none
+	// of its own has none.
 	included map[string][]string
 	// refuseInclusion, set, is what SetIncludedAgents fails with.
 	refuseInclusion error
@@ -191,10 +191,7 @@ func (n *fakeNode) Chat(_ context.Context, group, conv string, limit int, transc
 
 func (n *fakeNode) included(conv string) []string {
 	t := n.tk()
-	if l, ok := t.included[conv]; ok {
-		return l
-	}
-	return t.included[node.GroupTalk]
+	return t.included[conv]
 }
 
 func (n *fakeNode) Send(_ context.Context, group, conv string, m node.Outgoing) (node.Sent, error) {
@@ -375,9 +372,8 @@ func (n *fakeNode) SetIncludedAgents(_ context.Context, group, conv string, hand
 	if t.refuseInclusion != nil {
 		return node.Inclusion{}, t.refuseInclusion
 	}
-	_, own := t.included[conv]
 	t.included[conv] = slices.Clone(handles)
-	return node.Inclusion{Handles: slices.Clone(handles), OwnList: !own && conv != node.GroupTalk}, nil
+	return node.Inclusion{Handles: slices.Clone(handles)}, nil
 }
 
 func (n *fakeNode) Providers(_ context.Context, group, conv string) ([]node.Provider, error) {

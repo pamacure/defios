@@ -126,10 +126,13 @@ type ProviderView struct {
 }
 
 // Catalog is what an Agent Profile may be granted: the built-in Tools,
-// and the Skills and MCP Servers of the Plugins this Node has.
+// and the Skills and MCP Servers of the Plugins this Node has. KeyTools
+// and GroupTools are the Tools of each tier, which a profile may not mix;
+// the rest have none (ADR 0046).
 type Catalog struct {
-	Tools   []string
-	Skills  []CatalogSkill
+	Tools                []string
+	KeyTools, GroupTools []string
+	Skills               []CatalogSkill
 	Servers []CatalogServer
 }
 
@@ -528,7 +531,7 @@ func (s *Shell) fillAgents(n Node, v *AgentsView, open string) {
 		v.FreeLiveries = free
 	}
 	v.Presets = node.PresetNames()
-	v.Catalog.Tools = config.Tools
+	v.Catalog.Tools, v.Catalog.KeyTools, v.Catalog.GroupTools = config.Tools, config.KeyTools, config.GroupTools
 	if plugins, err := n.Plugins(s.ctx); err != nil {
 		v.CatalogProblem = problemOf(err)
 	} else {
@@ -675,7 +678,18 @@ func providerProblem(err error) *Problem {
 // and Providers; nil for another error.
 func agentsProblem(err error) *Problem {
 	var included *node.ProfileIncludedError
+	var misplaced *node.MisplacedError
 	switch {
+	case errors.As(err, &misplaced):
+		parts := make([]string, len(misplaced.Agents))
+		for i, m := range misplaced.Agents {
+			where := "Group talk"
+			if m.In.Conversation != node.GroupTalk {
+				where = targetText(err, m.In.Workspace)
+			}
+			parts[i] = fmt.Sprintf("@%s has %s Tools, so it can be included %s, not in %s", m.Handle, m.Tier, m.Tier.Where(), where)
+		}
+		return &Problem{Code: "misplaced", Message: strings.Join(parts, "; ") + ". An agent that signs never changes Triggers, and one that changes Triggers never signs."}
 	case errors.As(err, &included):
 		return &Problem{Code: "profile-included", Message: fmt.Sprintf("@%s can't be deleted while it is included in %s. Exclude it there first, on Talk.", included.Handle, placesText(included.In))}
 	case errors.Is(err, node.ErrProfileExists):

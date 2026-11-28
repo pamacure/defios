@@ -300,6 +300,14 @@ func agentNode(t *testing.T, n *node, baseURL string, handles ...string) {
 	n.secrets["ANTHROPIC_KEY"] = "sk-" + n.name
 }
 
+// includeIn gives n's Conversation Workspace name its own list of agents,
+// handles: a Conversation never follows the Group's list (ADR 0046).
+func includeIn(t *testing.T, n *node, name string, handles ...string) {
+	t.Helper()
+	writeConfig(t, n.paths.ConversationConfigFile(group.ImplicitAlias, name),
+		fmt.Sprintf("[agent]\nprofiles = [\"%s\"]\n", strings.Join(handles, `", "`)))
+}
+
 // agentPair is a valid Group of alice and bob, a fake Messages API, and
 // alice's Agent Profiles for handles running on it as her Provider
 // "claude". Retries back off by a millisecond.
@@ -906,7 +914,7 @@ func TestMentionInAKeysConversation(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe")
 	name := mintKey(t, a, b, gid)
 	waitWorkspace(t, a, name)
-	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, name), "[agent]\nmax_depth = 2\n")
+	writeConfig(t, a.paths.ConversationConfigFile(group.ImplicitAlias, name), "[agent]\nprofiles = [\"auditor\", \"scribe\"]\nmax_depth = 2\n")
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	ctx := context.Background()
 	if _, err := a.client().ConversationSend(ctx, "group talk", nil); err != nil {
@@ -971,7 +979,9 @@ func maxDepth2(t *testing.T, a *node) {
 func TestTranscriptsAreOnePerAgentInTheConversationDir(t *testing.T) {
 	a, b, gid, provider := agentPair(t, "auditor", "scribe")
 	answerAs(provider, map[string]string{"auditor": "checked", "scribe": "noted"})
-	waitWorkspace(t, a, mintKey(t, a, b, gid))
+	name := mintKey(t, a, b, gid)
+	waitWorkspace(t, a, name)
+	includeIn(t, a, name, "auditor", "scribe")
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	ctx := context.Background()
 	gdir := a.paths.GroupDir(group.ImplicitAlias)

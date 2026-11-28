@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -401,8 +402,7 @@ func TestAgentDeleteRefusesWhileIncluded(t *testing.T) {
 // and print the Handles mentionable there, one per line or as a JSON array.
 // Including an included Handle or excluding an absent one changes nothing
 // and is not an error, even with no profile, so a list naming a profile
-// deleted by hand can be fixed; excluding the last leaves profiles = [],
-// never no key. Including a Handle with no Agent Profile is refused.
+// deleted by hand can be fixed; excluding the last leaves none. Including a Handle with no Agent Profile is refused.
 func TestAgentIncludeExcludeEditTheGroupsList(t *testing.T) {
 	p := agentsWithKeys(t)
 	path := p.GroupConfigFile(group.ImplicitAlias)
@@ -421,11 +421,8 @@ func TestAgentIncludeExcludeEditTheGroupsList(t *testing.T) {
 			t.Fatalf("%v: exit %d, stdout %q, stderr %q; want %q", c.args, r.code, r.stdout, r.stderr, c.want)
 		}
 	}
-	if got := readFile(t, path); !strings.Contains(got, "profiles = []") {
-		t.Fatalf("excluding the last Handle dropped the key:\n%s", got)
-	}
 	c, err := config.ReadFile(path)
-	if err != nil || c.Agent.Profiles == nil || len(c.Agent.Profiles) != 0 {
+	if err != nil || len(c.Agent.Profiles) != 0 {
 		t.Fatalf("Group config: profiles %#v, %v", c.Agent.Profiles, err)
 	}
 
@@ -475,7 +472,7 @@ func TestAgentIncludeExcludeEditAConversationsList(t *testing.T) {
 	want := config.Workspace{
 		Alias:     "treasury",
 		Providers: map[string]config.Provider{"claude": {BaseURL: "https://gateway.example"}},
-		Agent:     config.Agent{Profiles: []string{}, MaxDepth: 2},
+		Agent:     config.Agent{MaxDepth: 2},
 	}
 	if err != nil || !reflect.DeepEqual(w, want) {
 		t.Fatalf("Conversation config = %#v, %v\nwant %#v", w, err, want)
@@ -485,24 +482,24 @@ func TestAgentIncludeExcludeEditAConversationsList(t *testing.T) {
 	}
 }
 
-// On a Conversation with no list of its own, include --key writes only
-// that Handle, not the Group's list, and warns that it no longer follows
-// the Group's; exclude --key refuses and writes nothing.
-func TestAgentIncludeExcludeOnAConversationFollowingTheGroup(t *testing.T) {
+// A Conversation with no list of its own has no agents, whatever the
+// Group's list holds (ADR 0046): exclude --key leaves it with none, and
+// include --key writes only that Handle.
+func TestAgentIncludeExcludeOnAConversationWithNoListOfItsOwn(t *testing.T) {
 	p := agentsWithKeys(t)
 	path := p.ConversationConfigFile(group.ImplicitAlias, "eddsa-ab2222222222")
 	writeFile(t, path, "[agent]\nmax_depth = 3\n")
 
-	r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "auditor", "--key", eddsaKeyRef)
-	if r.code != 1 || !strings.Contains(r.stderr, eddsaKeyRef+" follows the Group's list; exclude it there, or give "+eddsaKeyRef+" its own list with include --key") {
-		t.Fatalf("exclude --key on a list-less Conversation: exit %d, stderr %q", r.code, r.stderr)
+	if r := run(t, nil, "", "--dir", p.Config, "agent", "list", "--key", eddsaKeyRef); r.code != 0 || strings.Contains(r.stdout, "[included]") {
+		t.Fatalf("list --key on a list-less Conversation: exit %d, stdout %q, stderr %q; want auditor not included", r.code, r.stdout, r.stderr)
 	}
-	if got := readFile(t, path); got != "[agent]\nmax_depth = 3\n" {
-		t.Fatalf("a refused exclude wrote %q", got)
+	r := run(t, nil, "", "--dir", p.Config, "agent", "exclude", "auditor", "--key", eddsaKeyRef)
+	if r.code != 0 || r.stdout != "" || r.stderr != "" {
+		t.Fatalf("exclude --key on a list-less Conversation: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
 
 	r = run(t, nil, "", "--dir", p.Config, "agent", "include", "scribe", "--key", eddsaKeyRef)
-	if r.code != 0 || r.stdout != "scribe\n" || !strings.Contains(r.stderr, "no longer follows the Group's") {
+	if r.code != 0 || r.stdout != "scribe\n" || r.stderr != "" {
 		t.Fatalf("include --key on a list-less Conversation: exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
 	}
 	w, err := config.ReadWorkspace(path)
@@ -614,4 +611,59 @@ func TestAgentEditGivesARandomLivery(t *testing.T) {
 	if again := livery(); again == "" || again == first {
 		t.Fatalf("random again gave %q after %q; want another", again, first)
 	}
+}
+
+// groupTool is a stand-in Group Tool, for the Group Tools come in later
+// tickets.
+const groupTool = "job_list"
+
+// withGroupTool makes groupTool a built-in Group Tool for t.
+func withGroupTool(t *testing.T) {
+	t.Helper()
+	tools, group := config.Tools, config.GroupTools
+	config.Tools = append(slices.Clone(tools), groupTool)
+	config.GroupTools = append(slices.Clone(group), groupTool)
+	t.Cleanup(func() { config.Tools, config.GroupTools = tools, group })
+}
+
+// A profile grants Tools of one tier, and its tier fixes where it is
+// included: grant refuses a mixed profile, and include, or a grant to an
+// included profile, that would put it in the wrong place, naming each
+// place and writing nothing (ADR 0046).
+func TestAgentToolTiersAreRefusedWhereTheyDoNotFit(t *testing.T) {
+	withGroupTool(t)
+	p := agentsWithKeys(t)
+	alias := group.ImplicitAlias
+	refused := func(want string, args ...string) {
+		t.Helper()
+		files := []string{p.AgentProfileFile("auditor"), p.AgentProfileFile("scribe"), p.GroupConfigFile(alias), p.ConversationConfigFile(alias, "ecdsa-ab1111111111")}
+		before := make([]string, len(files))
+		for i, f := range files {
+			before[i] = readFile(t, f)
+		}
+		r := run(t, nil, "", append([]string{"--dir", p.Config, "agent"}, args...)...)
+		if r.code != 1 || !strings.Contains(r.stderr, want) {
+			t.Fatalf("%v: exit %d, stderr %q; want 1 saying %q", args, r.code, r.stderr, want)
+		}
+		for i, f := range files {
+			if readFile(t, f) != before[i] {
+				t.Fatalf("%v: a refusal changed %s", args, f)
+			}
+		}
+	}
+	ok := func(args ...string) {
+		t.Helper()
+		if r := run(t, nil, "", append([]string{"--dir", p.Config, "agent"}, args...)...); r.code != 0 {
+			t.Fatalf("%v: exit %d, stderr %q", args, r.code, r.stderr)
+		}
+	}
+
+	// auditor is in Group-level talk, scribe in a Key's Conversation.
+	refused("@auditor grants Key Tools, so may be included only in a Key's Conversation, not in Group-level talk of "+alias, "grant", "auditor", "sign_list")
+	refused("@scribe grants Group Tools, so may be included only in Group-level talk, not in "+alias+"/ecdsa-ab1111111111", "grant", "scribe", groupTool)
+	ok("grant", "scribe", "sign_list")
+	refused("@scribe grants Key Tools, so may be included only in a Key's Conversation, not in Group-level talk of "+alias, "include", "scribe")
+	refused("grants Key Tools (sign_list) and Group Tools ("+groupTool+")", "grant", "scribe", groupTool)
+	ok("grant", "auditor", groupTool)
+	refused("@auditor grants Group Tools, so may be included only in Group-level talk, not in "+alias+"/ecdsa-ab1111111111", "include", "auditor", "--key", ecdsaKeyRef)
 }

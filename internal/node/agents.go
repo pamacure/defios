@@ -29,9 +29,6 @@ var (
 	ErrProfileExists = errors.New("node: an Agent Profile by that Handle already exists")
 	// ErrProfileUnchanged: an edit that would change nothing.
 	ErrProfileUnchanged = errors.New("node: the Agent Profile is unchanged")
-	// ErrFollowsGroup: an exclude from a Conversation that has no list of
-	// its own, so follows the Group's.
-	ErrFollowsGroup = errors.New("node: the Conversation follows the Group's list of agents")
 )
 
 // The fields of an Agent Profile, as an InvalidError from AddAgentProfile
@@ -352,7 +349,9 @@ func (h *Host) SetAgentBrief(ctx context.Context, handle, brief string) error {
 // Grant grants handle a built-in Tool, or a Skill or MCP Server of a
 // Plugin installed or built in as <plugin>/<name>, with secrets for an MCP
 // Server (config.Profile.Grant), and returns what item is and the profile
-// after. Granting what it has changes nothing.
+// after. Granting what it has changes nothing. A Tool that would leave it
+// included where its tier may not be is a *MisplacedError naming each
+// such place, and writes nothing (ADR 0046).
 func (h *Host) Grant(ctx context.Context, handle, item string, secrets []string) (GrantKind, AgentProfile, error) {
 	return h.grant(ctx, handle, func(p config.Profile) (config.Profile, GrantKind, bool, error) {
 		return p.Grant(h.p.PluginsDir(), item, secrets)
@@ -377,6 +376,9 @@ func (h *Host) grant(ctx context.Context, handle string, change func(config.Prof
 		return kind, AgentProfile{}, err
 	}
 	if changed {
+		if err := h.checkStaysPlaced(handle, p); err != nil {
+			return kind, AgentProfile{}, err
+		}
 		if err := writeProfile(h.p.AgentProfileFile(handle), p); err != nil {
 			return kind, AgentProfile{}, err
 		}
@@ -389,22 +391,20 @@ func (h *Host) grant(ctx context.Context, handle string, change func(config.Prof
 // or exclude.
 type Inclusion struct {
 	Handles []string // never nil
-	// OwnList: the Conversation followed the Group's list and has its own
-	// now, so no longer follows the Group's.
-	OwnList bool
 }
 
 // IncludeAgent adds handle, an Agent Profile on this Node, to the [agent]
 // profiles of group's Group-level talk, or of Conversation conv. A
-// Conversation with no list of its own follows the Group's; including one
-// there gives it a list of that Handle alone. The Group need not be
-// served. One that would leave a Job's agent no longer included where it
-// answers is an AnswersError, and writes nothing.
+// Conversation's list is its own: one with none has no agents, and never
+// follows the Group's (ADR 0046). The Group need not be served. A profile
+// whose tier may not be included there is a *MisplacedError, and one that
+// would leave a Job's agent no longer included where it answers is an
+// AnswersError; either writes nothing.
 func (h *Host) IncludeAgent(ctx context.Context, group, conv, handle string) (Inclusion, error) {
 	if _, err := h.readProfile(handle); err != nil {
 		return Inclusion{}, err
 	}
-	return h.editInclusion(group, conv, func(list []string, _ bool) ([]string, error) {
+	return h.editInclusion(group, conv, func(list []string) ([]string, error) {
 		if slices.Contains(list, handle) {
 			return list, nil
 		}
@@ -414,18 +414,13 @@ func (h *Host) IncludeAgent(ctx context.Context, group, conv, handle string) (In
 
 // ExcludeAgent takes handle out of the [agent] profiles of group's
 // Group-level talk, or of Conversation conv. Excluding the last leaves an
-// empty list, so no agent answers there. A Conversation with no list of
-// its own is ErrFollowsGroup. One that would take a Job's agent out of
-// where it answers is an AnswersError, and writes nothing: excluding from
-// Group-level talk takes it out of the Conversations that follow it too.
+// empty list, so no agent answers there. One that would take a Job's
+// agent out of where it answers is an AnswersError, and writes nothing.
 func (h *Host) ExcludeAgent(ctx context.Context, group, conv, handle string) (Inclusion, error) {
 	if err := validHandle(handle); err != nil {
 		return Inclusion{}, err
 	}
-	return h.editInclusion(group, conv, func(list []string, following bool) ([]string, error) {
-		if following {
-			return nil, ErrFollowsGroup
-		}
+	return h.editInclusion(group, conv, func(list []string) ([]string, error) {
 		out := []string{}
 		for _, x := range list {
 			if x != handle {
@@ -439,9 +434,9 @@ func (h *Host) ExcludeAgent(ctx context.Context, group, conv, handle string) (In
 // SetIncludedAgents replaces the [agent] profiles of group's Group-level
 // talk, or of Conversation conv, with handles, each an Agent Profile on
 // this Node, in their order; none leaves an empty list, so no agent
-// answers there. A Conversation that followed the Group's list has its own
-// from then on. It is refused as ExcludeAgent's is when it would take a
-// Job's agent out of where it answers.
+// answers there. It is refused as IncludeAgent's is when it adds a profile
+// whose tier may not be included there, naming each, and as ExcludeAgent's
+// when it would take a Job's agent out of where it answers.
 func (h *Host) SetIncludedAgents(ctx context.Context, group, conv string, handles []string) (Inclusion, error) {
 	list := []string{}
 	for _, x := range handles {
@@ -452,12 +447,11 @@ func (h *Host) SetIncludedAgents(ctx context.Context, group, conv string, handle
 			list = append(list, x)
 		}
 	}
-	return h.editInclusion(group, conv, func([]string, bool) ([]string, error) { return list, nil })
+	return h.editInclusion(group, conv, func([]string) ([]string, error) { return list, nil })
 }
 
 // IncludedAgents is the list of Handles in force in group's Group-level
-// talk or Conversation conv: the Conversation's own, or the Group's it
-// follows.
+// talk or Conversation conv: a Conversation's own, none if it has none.
 func (h *Host) IncludedAgents(ctx context.Context, group, conv string) ([]string, error) {
 	e, err := h.loadConfig(group, conv)
 	if err != nil {
@@ -472,15 +466,18 @@ func (h *Host) IncludedAgents(ctx context.Context, group, conv string) ([]string
 // editInclusion applies edit to the [agent] profiles of group's
 // Group-level talk or Conversation conv and writes it back, keeping the
 // file's other sections and never merging the Conversation's over the
-// Group's. edit is told whether a Conversation follows the Group's list.
-// A list that would take a Job's agent out of where it answers is an
-// AnswersError.
-func (h *Host) editInclusion(group, conv string, edit func(list []string, following bool) ([]string, error)) (Inclusion, error) {
+// Group's. A list that adds a profile whose tier may not be included
+// there is a *MisplacedError, and one that would take a Job's agent out of
+// where it answers an AnswersError.
+func (h *Host) editInclusion(group, conv string, edit func(list []string) ([]string, error)) (Inclusion, error) {
 	if conv == GroupTalk {
 		var list []string
 		err := h.writeGroupConfig(group, func(c *config.Config) error {
-			l, err := edit(c.Agent.Profiles, false)
+			l, err := edit(c.Agent.Profiles)
 			if err != nil {
+				return err
+			}
+			if err := h.checkPlaced(Place{Group: group, Conversation: GroupTalk}, c.Agent.Profiles, l); err != nil {
 				return err
 			}
 			if err := h.checkAnswers(group, *c, config.ConversationGroup, l); err != nil {
@@ -506,9 +503,11 @@ func (h *Host) editInclusion(group, conv string, edit func(list []string, follow
 	if err != nil {
 		return Inclusion{}, err
 	}
-	following := w.Agent.Profiles == nil
-	l, err := edit(w.Agent.Profiles, following)
+	l, err := edit(w.Agent.Profiles)
 	if err != nil {
+		return Inclusion{}, err
+	}
+	if err := h.checkPlaced(Place{Group: group, Conversation: conv, Workspace: name}, w.Agent.Profiles, l); err != nil {
 		return Inclusion{}, err
 	}
 	c, err := h.groupConfig(group)
@@ -525,7 +524,10 @@ func (h *Host) editInclusion(group, conv string, edit func(list []string, follow
 	if err := config.WriteWorkspace(path, w); err != nil {
 		return Inclusion{}, err
 	}
-	return Inclusion{Handles: l, OwnList: following}, nil
+	if l == nil {
+		l = []string{}
+	}
+	return Inclusion{Handles: l}, nil
 }
 
 // profileHandles is the Handle of every Agent Profile on this Node,

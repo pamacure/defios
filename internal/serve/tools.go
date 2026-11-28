@@ -147,12 +147,39 @@ func (sum *runSummons) may(inc config.Included, handle string) []config.Resolved
 	return out
 }
 
+// placed refuses p's run in conv, nil for Group-level talk, where its
+// tier may not be included, as a hand edit can leave it (ADR 0046): the
+// run fails, saying why, rather than drop the Tools that do not fit.
+func placed(p config.ResolvedProfile, conv []byte) error {
+	tier, err := config.Profile{Tools: p.Tools}.Tier()
+	if err != nil {
+		return fmt.Errorf("@%s's %w", p.Handle, err)
+	}
+	groupTalk := conv == nil
+	if tier.Fits(groupTalk) {
+		return nil
+	}
+	var tools []string
+	for _, t := range p.Tools {
+		if config.ToolTier(t) == tier {
+			tools = append(tools, t)
+		}
+	}
+	here := "a Key's Conversation"
+	if groupTalk {
+		here = "Group-level talk"
+	}
+	return fmt.Errorf("@%s grants %s Tools (%s), so answers %s, not in %s: exclude it here, or revoke those Tools",
+		p.Handle, tier, strings.Join(tools, ", "), tier.Where(), here)
+}
+
 // agentTools are the Tools granted that handle's run in conv may call, in
 // the order config.Tools lists them: talk_read reading this Node's view of
 // conv's talk from ob and store, talk_summon adding to sum, talk_parties
-// reading sum, the sign Tools only in a Key's Conversation, never in Group-level talk (nil conv), and scoped to that
-// Key's Sign Requests. Those that write act as this Node under handle, a
-// proposal at the run's depth, and each that succeeds is told to did.
+// reading sum, and the Key Tools scoped to conv's Key, for placed has
+// refused a Key-tier run in Group-level talk (nil conv). Those that write
+// act as this Node under handle, a proposal at the run's depth, and each
+// that succeeds is told to did.
 func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string, depth uint32, granted []string, conv []byte, did acted, sum *runSummons) []agent.Tool {
 	var out []agent.Tool
 	for _, name := range config.Tools {
@@ -172,33 +199,19 @@ func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string,
 			summons := slices.Contains(granted, config.ToolTalkSummon)
 			out = append(out, agent.Tool{Name: name, Description: talkPartiesDescription, Schema: talkPartiesSchema, Call: s.talkPartiesTool(store, conv, handle, depth, summons, sum)})
 		case config.ToolSignList:
-			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: signListDescription, Schema: signListSchema, Call: s.signListTool(conv)})
-			}
+			out = append(out, agent.Tool{Name: name, Description: signListDescription, Schema: signListSchema, Call: s.signListTool(conv)})
 		case config.ToolSignInspect:
-			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: signInspectDescription, Schema: signMsgIDSchema, Call: s.signInspectTool(conv)})
-			}
+			out = append(out, agent.Tool{Name: name, Description: signInspectDescription, Schema: signMsgIDSchema, Call: s.signInspectTool(conv)})
 		case config.ToolSignPropose:
-			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: signProposeDescription, Schema: signProposeSchema, Call: s.signProposeTool(conv, handle, depth, did)})
-			}
+			out = append(out, agent.Tool{Name: name, Description: signProposeDescription, Schema: signProposeSchema, Call: s.signProposeTool(conv, handle, depth, did)})
 		case config.ToolSignAccept:
-			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: signAcceptDescription, Schema: signMsgIDSchema, Call: s.signStanceTool(name, conv, handle, did)})
-			}
+			out = append(out, agent.Tool{Name: name, Description: signAcceptDescription, Schema: signMsgIDSchema, Call: s.signStanceTool(name, conv, handle, did)})
 		case config.ToolSignRefuse:
-			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: signRefuseDescription, Schema: signRefuseSchema, Call: s.signStanceTool(name, conv, handle, did)})
-			}
+			out = append(out, agent.Tool{Name: name, Description: signRefuseDescription, Schema: signRefuseSchema, Call: s.signStanceTool(name, conv, handle, did)})
 		case config.ToolChainFill:
-			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: chainFillDescription, Schema: chainFillSchema, Call: s.chainFillTool(conv)})
-			}
+			out = append(out, agent.Tool{Name: name, Description: chainFillDescription, Schema: chainFillSchema, Call: s.chainFillTool(conv)})
 		case config.ToolKeyAddress:
-			if conv != nil {
-				out = append(out, agent.Tool{Name: name, Description: keyAddressDescription, Schema: keyAddressSchema, Call: s.keyAddressTool(conv)})
-			}
+			out = append(out, agent.Tool{Name: name, Description: keyAddressDescription, Schema: keyAddressSchema, Call: s.keyAddressTool(conv)})
 		}
 	}
 	return out

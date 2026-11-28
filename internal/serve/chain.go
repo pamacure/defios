@@ -672,6 +672,9 @@ func (s *server) agentRequest(ctx context.Context, ob *outbox.Outbox, store *cos
 		return fail(errSkipped)
 	}
 	p := inc.Profiles[i]
+	if err := placed(p, conv); err != nil {
+		return fail(err)
+	}
 	briefFile := filepath.Join(p.Dir, nodedir.BriefFile)
 	brief, err := os.ReadFile(briefFile)
 	if errors.Is(err, fs.ErrNotExist) {

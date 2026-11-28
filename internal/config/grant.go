@@ -38,7 +38,8 @@ func refused(format string, a ...any) error { return refusal{fmt.Sprintf(format,
 // the Secrets an MCP Server's process gets, each one it asks for, and are
 // for nothing else. Granting a server again sets its Secrets to secrets.
 // It returns what item is and whether p changed: granting what p has
-// changes nothing. A name that is both a Skill and an MCP Server is ambiguous.
+// changes nothing. A Tool of the other tier than those p grants is
+// refused (ADR 0046). A name that is both a Skill and an MCP Server is ambiguous.
 func (p Profile) Grant(pluginsDir, item string, secrets []string) (Profile, GrantKind, bool, error) {
 	if !strings.Contains(item, "/") {
 		if secrets != nil {
@@ -50,8 +51,12 @@ func (p Profile) Grant(pluginsDir, item string, secrets []string) (Profile, Gran
 		if slices.Contains(p.Tools, item) {
 			return p, GrantTool, false, nil
 		}
-		p.Tools = append(slices.Clone(p.Tools), item)
-		return p, GrantTool, true, nil
+		next := p
+		next.Tools = append(slices.Clone(p.Tools), item)
+		if _, err := next.Tier(); err != nil {
+			return p, GrantTool, false, refused("%s is a %s Tool: %v", item, ToolTier(item), err)
+		}
+		return next, GrantTool, true, nil
 	}
 	kind, srv, err := pluginItem(pluginsDir, item)
 	if err != nil {

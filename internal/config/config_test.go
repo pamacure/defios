@@ -645,7 +645,9 @@ profiles = ["trader", "auditor", "scribe"]
 			`{"model":"claude-opus-5-5"}`,
 		}},
 	} {
-		p := withProfiles(t, node(t, group, tc.conv), map[string]string{
+		// A Conversation has only its own agents (ADR 0046).
+		conv := tc.conv + "\n[agent]\nprofiles = [\"trader\", \"auditor\", \"scribe\"]\n"
+		p := withProfiles(t, node(t, group, conv), map[string]string{
 			"trader":  "provider = \"gpt\"\n",
 			"auditor": "provider = \"gpt\"\n\n[body]\nmodel = \"gpt-big\"\ninclude = []\n\n[body.reasoning]\neffort = \"high\"\n",
 			"scribe":  "provider = \"claude\"\n\n[body]\nmodel = \"claude-opus-5-5\"\n",
@@ -678,17 +680,15 @@ profiles = ["trader", "auditor", "scribe"]
 }
 
 // WriteWorkspace writes a Conversation's config.toml so it reads back as it
-// was: an [agent] profiles list set empty stays set, for it replaces the
-// Group's list with none where an absent one keeps the Group's.
-func TestWriteWorkspaceKeepsAnEmptyProfilesList(t *testing.T) {
+// was. An [agent] profiles list set empty is no different from an unset
+// one: either means no agents (ADR 0046).
+func TestWriteWorkspaceReadsBack(t *testing.T) {
 	for name, w := range map[string]config.Workspace{
-		"empty":        {Agent: config.Agent{Profiles: []string{}}},
-		"empty, depth": {Agent: config.Agent{Profiles: []string{}, MaxDepth: 2}},
-		"unset":        {Agent: config.Agent{MaxDepth: 3}},
-		"listed":       {Agent: config.Agent{Profiles: []string{"auditor"}}},
+		"unset":  {Agent: config.Agent{MaxDepth: 3}},
+		"listed": {Agent: config.Agent{Profiles: []string{"auditor"}}},
 		"with a provider": {
 			Providers: map[string]config.Provider{"claude": {BaseURL: "https://gateway.example"}},
-			Agent:     config.Agent{Profiles: []string{}},
+			Agent:     config.Agent{Profiles: []string{"auditor"}},
 		},
 	} {
 		path := filepath.Join(t.TempDir(), "config.toml")
@@ -699,22 +699,6 @@ func TestWriteWorkspaceKeepsAnEmptyProfilesList(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, w) {
 			t.Errorf("%s: read back %#v, %v\nwant %#v", name, got, err, w)
 		}
-	}
-}
-
-// WriteFile keeps a Group's [agent] profiles set empty, as WriteWorkspace
-// does, so excluding the last Handle leaves the key.
-func TestWriteFileKeepsAnEmptyProfilesList(t *testing.T) {
-	c := config.Config{
-		Workspace: config.Workspace{Providers: map[string]config.Provider{"claude": {BaseURL: "https://api.anthropic.com", APIPath: "/v1/messages"}}, Agent: config.Agent{Profiles: []string{}}},
-	}
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := config.WriteFile(path, c); err != nil {
-		t.Fatal(err)
-	}
-	got, err := config.ReadFile(path)
-	if err != nil || !reflect.DeepEqual(got, c) {
-		t.Fatalf("read back %#v, %v\nwant %#v", got, err, c)
 	}
 }
 
@@ -777,13 +761,27 @@ max_depth = 3
 		return p, inc, err
 	}
 
-	p, got, err := included(group, "")
+	p := withProfiles(t, node(t, group, ""), map[string]string{"auditor": "provider = \"claude\"\n"})
+	e, err := config.Load(p, "home", nil, []key.Key{mainKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.Included()
 	want := config.Included{
 		Profiles: []config.ResolvedProfile{{Handle: "auditor", Dir: filepath.Join(p.Config, "agents", "auditor"), Provider: "claude", MaxTurns: 8, Tools: []string{}}},
 		MaxDepth: 3,
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Group-level = %+v, %v\nwant %+v", got, err, want)
+	}
+
+	// A Conversation never follows the Group's list: one with no list of
+	// its own has no agents, though its other settings merge (ADR 0046).
+	for name, conv := range map[string]string{"no config.toml": "", "no profiles": "[agent]\nmax_depth = 2\n", "profiles = []": "[agent]\nprofiles = []\n"} {
+		_, got, err = included(group, conv)
+		if err != nil || len(got.Profiles) != 0 || got.MaxDepth == 1 {
+			t.Fatalf("Conversation with %s = %+v, %v; want none, the Group's or its own depth", name, got, err)
+		}
 	}
 
 	p, got, err = included(group, "[agent]\nprofiles = [\"quant\", \"trader\", \"scout\"]\n")
@@ -807,7 +805,11 @@ max_depth = 3
 	if _, _, err := included(group, "[agent]\nprofiles = [\"ghost\"]\n"); err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("a Conversation including an undefined Handle = %v; want an error naming it", err)
 	}
-	if _, _, err := included("[agent]\nprofiles = [\"ghost\"]\n", ""); err == nil || !strings.Contains(err.Error(), filepath.Join("agents", "ghost", "config.toml")) {
+	ge, err := config.Load(node(t, "[agent]\nprofiles = [\"ghost\"]\n", ""), "home", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ge.Included(); err == nil || !strings.Contains(err.Error(), filepath.Join("agents", "ghost", "config.toml")) {
 		t.Fatalf("a Group including a Handle with no profile = %v; want an error naming its config.toml", err)
 	}
 

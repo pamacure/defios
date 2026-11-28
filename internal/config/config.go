@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -176,45 +175,37 @@ func (w Workspace) Provider(alias string) (Provider, error) {
 // Agent is which agents may answer in Group-level talk, or in that
 // Conversation, and how deep a chain of them may go.
 type Agent struct {
-	// Profiles are the Handles a mention may summon here. Set in a
-	// Conversation, even empty, it replaces the Group's list.
+	// Profiles are the Handles a mention may summon here. A Conversation's
+	// is its own, never the Group's: unset there, as empty, is none
+	// (ADR 0046).
 	Profiles []string `toml:"profiles,omitempty"`
 	// MaxDepth is the depth a chain of agents may reach; 0 is unset, and
 	// unset everywhere is 1.
 	MaxDepth int `toml:"max_depth,omitzero"`
 }
 
-// WriteFile writes a Group's config.toml, mode 0600, keeping an [agent]
-// profiles set empty as WriteWorkspace does.
+// WriteFile writes a Group's config.toml, mode 0600.
 func WriteFile(path string, c Config) error {
-	return write(path, c, c.Agent)
+	return write(path, c)
 }
 
-// WriteWorkspace writes a Conversation's config.toml, mode 0600. The encoder
-// drops an empty list, so an [agent] profiles set empty, which replaces the
-// Group's list with none, is written under the [agent] header by hand.
+// WriteWorkspace writes a Conversation's config.toml, mode 0600.
 func WriteWorkspace(path string, w Workspace) error {
-	return write(path, w, w.Agent)
+	return write(path, w)
 }
-
-// agentHeader is the [agent] table's header as the encoder writes it.
-var agentHeader = regexp.MustCompile(`(?m)^\[agent\]\n`)
 
 // ErrNotWritten is a write refused because ReadFile or ReadWorkspace would
 // refuse what it writes: a config that does not read back stops every
 // command and summon that reads it until it is fixed by hand.
 var ErrNotWritten = errors.New("not written")
 
-// write encodes v, whose [agent] table is a, to path, once it reads back.
-func write(path string, v any, a Agent) error {
+// write encodes v to path, once it reads back.
+func write(path string, v any) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(v); err != nil {
 		return fmt.Errorf("config: %w; %w", err, ErrNotWritten)
 	}
 	out := buf.Bytes()
-	if a.Profiles != nil && len(a.Profiles) == 0 {
-		out = agentHeader.ReplaceAll(out, []byte("[agent]\nprofiles = []\n"))
-	}
 	var err error
 	switch v.(type) {
 	case Config:
@@ -263,7 +254,7 @@ func parseConfig(path string, data []byte) (Config, error) {
 // WriteProfile writes an Agent Profile's config.toml, mode 0600, once it
 // reads back.
 func WriteProfile(path string, p Profile) error {
-	return write(path, p, Agent{})
+	return write(path, p)
 }
 
 // ReadProfile parses and validates an Agent Profile's config.toml. A missing
@@ -304,6 +295,9 @@ func parseProfile(path string, data []byte) (Profile, error) {
 		if slices.Contains(p.Tools[:i], t) {
 			return fail("tools: %q is listed twice", t)
 		}
+	}
+	if _, err := p.Tier(); err != nil {
+		return fail("%w", err)
 	}
 	for i, ref := range p.Skills {
 		if _, _, err := plugin.ParseSkillRef(ref); err != nil {
@@ -473,9 +467,11 @@ func ValidateHandle(h string) error {
 }
 
 // Merge is w with over laid on it table by table, an alias or Network type
-// being no part of it: a whole Network table, a Provider's base_url, api_path or api_key, an [agent] profiles list (even
-// an empty one), or a max_depth that over sets wins, and everything over
-// leaves unset comes from w. A Provider's body in over merges over w's as a
+// being no part of it: a whole Network table, a Provider's base_url,
+// api_path or api_key, or a max_depth that over sets wins, and everything
+// over leaves unset comes from w. The [agent] profiles list is over's
+// alone, none if it sets none: a Conversation never follows the Group's
+// list (ADR 0046). A Provider's body in over merges over w's as a
 // profile's body does. Neither input is changed. Merged Networks that name
 // one chain twice, an alias from each, are refused as either file's would
 // be (ADR 0023).
@@ -512,9 +508,7 @@ func (w Workspace) Merge(over Workspace) (Workspace, error) {
 			out.Providers[name] = cur
 		}
 	}
-	if over.Agent.Profiles != nil {
-		out.Agent.Profiles = over.Agent.Profiles
-	}
+	out.Agent.Profiles = over.Agent.Profiles
 	if over.Agent.MaxDepth != 0 {
 		out.Agent.MaxDepth = over.Agent.MaxDepth
 	}

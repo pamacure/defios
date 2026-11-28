@@ -76,6 +76,7 @@ func agentError(handle string, err error) error {
 	var included *node.ProfileIncludedError
 	var taken *node.LiveryTakenError
 	var answers *node.AnswersError
+	var misplaced *node.MisplacedError
 	switch {
 	case errors.As(err, &exit):
 		return err
@@ -95,11 +96,27 @@ func agentError(handle string, err error) error {
 			jobs[i] = fmt.Sprintf("@%s answers in %s for Job %s", j.Handle, jobTarget(j.Target), j.Job)
 		}
 		return exitUsagef("%s; change the Job's target in config.toml first", strings.Join(jobs, ", "))
+	case errors.As(err, &misplaced):
+		return exitUsagef("%s", misplacedText(misplaced))
 	case errors.As(err, &invalid), errors.Is(err, config.ErrNotWritten), errors.Is(err, config.ErrGrantRefused),
 		errors.Is(err, key.ErrUnknown), errors.Is(err, key.ErrAmbiguous):
 		return exitUsagef("%w", err)
 	}
 	return talkError(err)
+}
+
+// misplacedText names each agent a MisplacedError refuses, and where, as
+// the CLI names places.
+func misplacedText(e *node.MisplacedError) string {
+	parts := make([]string, len(e.Agents))
+	for i, m := range e.Agents {
+		where := "Group-level talk of " + m.In.Group
+		if m.In.Conversation != node.GroupTalk {
+			where = placeNames([]node.Place{m.In})[0]
+		}
+		parts[i] = fmt.Sprintf("@%s grants %s Tools, so may be included %s, not in %s", m.Handle, m.Tier, m.Tier.Where(), where)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // jobTarget names an agent Job's target as the CLI prints it.
@@ -265,8 +282,8 @@ nothing, while any Group or Conversation on this Node includes its Handle: exclu
 		Use:   "include <handle>",
 		Short: "Include an agent in Group-level talk, or with --key in that Conversation, and print who is mentionable there",
 		Long: `Add the Handle of an Agent Profile on this Node to [agent] profiles: the Group's, or with --key the Conversation's.
-A Conversation with no list of its own follows the Group's; including one there gives it a list of
-that Handle alone, and it no longer follows the Group's until its profiles line is deleted by hand.`,
+A Conversation's list is its own: one with none has no agents. A profile granting Key Tools is
+included only with --key, and one granting Group Tools only without it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
@@ -280,8 +297,7 @@ that Handle alone, and it no longer follows the Group's until its profiles line 
 		Use:   "exclude <handle>",
 		Short: "Exclude an agent from Group-level talk, or with --key from that Conversation, and print who is mentionable there",
 		Long: `Take a Handle out of [agent] profiles: the Group's, or with --key the Conversation's. Excluding the last
-leaves an empty list, so no agent answers there. A Conversation with no list of its own follows the
-Group's, and exclude --key refuses it.`,
+leaves an empty list, so no agent answers there.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := handleArg(args)
@@ -448,14 +464,8 @@ func runAgentInclusion(ctx context.Context, g *globals, keyQuery, handle string,
 	} else {
 		in, err = h.ExcludeAgent(ctx, alias, conv, handle)
 	}
-	if errors.Is(err, node.ErrFollowsGroup) {
-		return exitUsagef("%s follows the Group's list; exclude it there, or give %s its own list with include --key", keyQuery, keyQuery)
-	} else if err != nil {
+	if err != nil {
 		return agentError(handle, err)
-	}
-	if in.OwnList {
-		fmt.Fprintf(g.app.Stderr, "%s %s now has its own list of agents and no longer follows the Group's\n",
-			paletteFor(g.app.Stderr, g.app.Getenv).caution("warning:"), keyQuery)
 	}
 	if g.json {
 		return g.emitJSON(in.Handles)

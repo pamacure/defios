@@ -150,7 +150,7 @@ func TestIncludeAndExcludeAnAgentWhereverItsGroupIsServedOrNot(t *testing.T) {
 	}{
 		{"alpha", node.GroupTalk, "auditor", node.Inclusion{Handles: []string{"auditor"}}},
 		{"alpha", node.GroupTalk, "auditor", node.Inclusion{Handles: []string{"auditor"}}},
-		{"alpha", conv, "scribe", node.Inclusion{Handles: []string{"scribe"}, OwnList: true}},
+		{"alpha", conv, "scribe", node.Inclusion{Handles: []string{"scribe"}}},
 		{"alpha", conv, "auditor", node.Inclusion{Handles: []string{"scribe", "auditor"}}},
 		{"beta", node.GroupTalk, "auditor", node.Inclusion{Handles: []string{"auditor"}}},
 	} {
@@ -196,24 +196,36 @@ func TestIncludeAndExcludeAnAgentWhereverItsGroupIsServedOrNot(t *testing.T) {
 	}
 }
 
-// Excluding from a Conversation that follows the Group's list is refused.
-func TestExcludeFromAConversationFollowingTheGroupIsRefused(t *testing.T) {
+// A Conversation with no list of its own has no agents, whatever the
+// Group's list holds, and excluding from it leaves it with none
+// (ADR 0046).
+func TestAConversationWithNoListOfItsOwnHasNoAgents(t *testing.T) {
 	alice, _, k := keyed(t, "", "")
 	ctx := context.Background()
-	conv, err := alice.h.ResolveConversation(ctx, "alpha", k)
+	h := alice.h
+	conv, err := h.ResolveConversation(ctx, "alpha", k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := alice.h.ExcludeAgent(ctx, "alpha", conv, "auditor"); !errors.Is(err, node.ErrFollowsGroup) {
-		t.Fatalf("exclude: %v; want ErrFollowsGroup", err)
+	if _, err := h.AddAgentProfile(ctx, "auditor", node.ProfileEdit{Provider: ptr("claude")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.IncludeAgent(ctx, "alpha", node.GroupTalk, "auditor"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.IncludedAgents(ctx, "alpha", conv); err != nil || !reflect.DeepEqual(got, []string{}) {
+		t.Fatalf("included in the Conversation: %#v, %v; want none", got, err)
+	}
+	if got, err := h.ExcludeAgent(ctx, "alpha", conv, "auditor"); err != nil || !reflect.DeepEqual(got, node.Inclusion{Handles: []string{}}) {
+		t.Fatalf("exclude: %#v, %v; want none", got, err)
 	}
 }
 
 // An agent Job that answers in Group-level talk or a Key's Conversation
 // needs its agent included there, and an include, exclude or new list
 // that would take a Job's agent out of where it answers is refused,
-// naming the Job: in Group-level talk, for the Conversations that follow
-// it too. A Job answering in the event's Conversation names no place.
+// naming the Job. A Job answering in the event's Conversation names no
+// place.
 func TestAJobsAgentStaysIncludedWhereItAnswers(t *testing.T) {
 	alice, _, k := keyed(t, "", "")
 	ctx := context.Background()
@@ -250,8 +262,15 @@ func TestAJobsAgentStaysIncludedWhereItAnswers(t *testing.T) {
 	if err := h.AddJob(ctx, "alpha", "ingroup", job(config.ConversationGroup)); err != nil {
 		t.Fatal(err)
 	}
+	var not *node.JobNotIncludedError
+	if err := h.AddJob(ctx, "alpha", "inkey", job(ws)); !errors.As(err, &not) {
+		t.Fatalf("a Job answering in a Conversation, included only in the Group: %v; want JobNotIncludedError", err)
+	}
+	if _, err := h.IncludeAgent(ctx, "alpha", conv, "auditor"); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.AddJob(ctx, "alpha", "inkey", job(ws)); err != nil {
-		t.Fatalf("a Job answering in a Conversation following the Group: %v", err)
+		t.Fatal(err)
 	}
 
 	answers := func(err error, want ...node.JobAnswer) {
@@ -263,14 +282,12 @@ func TestAJobsAgentStaysIncludedWhereItAnswers(t *testing.T) {
 	}
 	inGroup := node.JobAnswer{Job: "ingroup", Handle: "auditor", Target: config.ConversationGroup}
 	inKey := node.JobAnswer{Job: "inkey", Handle: "auditor", Target: ws}
-	_, err = h.ExcludeAgent(ctx, "alpha", node.GroupTalk, "auditor")
-	answers(err, inGroup, inKey)
-	// Its own list of scribe alone would leave auditor out.
-	_, err = h.IncludeAgent(ctx, "alpha", conv, "scribe")
+	// A list of scribe alone would leave auditor out.
+	_, err = h.SetIncludedAgents(ctx, "alpha", conv, []string{"scribe"})
 	answers(err, inKey)
 
 	got, err := h.SetIncludedAgents(ctx, "alpha", conv, []string{"auditor", "scribe", "auditor"})
-	if err != nil || !reflect.DeepEqual(got, node.Inclusion{Handles: []string{"auditor", "scribe"}, OwnList: true}) {
+	if err != nil || !reflect.DeepEqual(got, node.Inclusion{Handles: []string{"auditor", "scribe"}}) {
 		t.Fatalf("set the Conversation's list: %#v, %v", got, err)
 	}
 	_, err = h.ExcludeAgent(ctx, "alpha", node.GroupTalk, "auditor")

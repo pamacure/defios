@@ -168,6 +168,7 @@ func TestAnAgentJobsTargetAndDepth(t *testing.T) {
 	replyAs(provider, map[string]string{"auditor": "looked"})
 	name := mintKey(t, a, b, gid)
 	waitWorkspace(t, a, name)
+	includeIn(t, a, name, "auditor")
 	maxDepth2(t, a)
 	hookConfig(t, a, b, `
 [jobs.here]

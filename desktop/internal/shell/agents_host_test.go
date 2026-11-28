@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/config"
 	"defios.com/internal/node"
 	"defios.com/internal/secret"
 )
@@ -202,6 +203,18 @@ func TestGrantsProvidersAndRefusedEditsOnTheAgentsPage(t *testing.T) {
 		t.Fatalf("the CLI after the grant:\n%s", cli)
 	}
 	agentsOK(t, "grant a tool", alice.GrantAgent("auditor", "sign_list", nil))
+	if !slices.Contains(v.Catalog.KeyTools, "sign_list") || slices.Contains(v.Catalog.KeyTools, "talk_write") || v.Catalog.GroupTools == nil {
+		t.Fatalf("catalog tiers: %+v %+v", v.Catalog.KeyTools, v.Catalog.GroupTools)
+	}
+	// A Tool of the other tier is refused (ADR 0046), job_list standing in
+	// for a Group Tool.
+	tools, groupTools := config.Tools, config.GroupTools
+	config.Tools, config.GroupTools = append(slices.Clone(tools), "job_list"), append(slices.Clone(groupTools), "job_list")
+	v = alice.GrantAgent("auditor", "job_list", nil)
+	config.Tools, config.GroupTools = tools, groupTools
+	if v.Problem == nil || v.Problem.Code != "grant-refused" || !strings.Contains(v.Problem.Message, "sign_list") {
+		t.Fatalf("a Group Tool for a Key-tier agent: %+v", v.Problem)
+	}
 	v = alice.GrantAgent("auditor", "audit/scanner", []string{"NOT_ASKED"})
 	if v.Problem == nil || v.Problem.Code != "grant-refused" || v.Where != "grant:audit/scanner" {
 		t.Fatalf("a Secret it does not ask for: %+v %q", v.Problem, v.Where)

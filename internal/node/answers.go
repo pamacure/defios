@@ -48,7 +48,8 @@ func (e *JobNotIncludedError) Error() string {
 
 // inclusions are the lists of agents of a Group's places that Jobs answer
 // in: Group-level talk's, and each such Conversation's own; a Workspace
-// name not in own follows the Group's.
+// name not in own has none, for a Conversation never follows the Group's
+// list (ADR 0046).
 type inclusions struct {
 	group []string
 	own   map[string][]string
@@ -56,10 +57,10 @@ type inclusions struct {
 
 // at is the list in force where target names.
 func (in inclusions) at(target string) []string {
-	if l, ok := in.own[target]; ok {
-		return l
+	if target == config.ConversationGroup {
+		return in.group
 	}
-	return in.group
+	return in.own[target]
 }
 
 // with is in with place's list replaced by list: config.ConversationGroup
@@ -89,9 +90,7 @@ func (h *Host) inclusions(group string, groupList []string, jobs map[string]conf
 		if err != nil {
 			return inclusions{}, err
 		}
-		if w.Agent.Profiles != nil {
-			in.own[t] = w.Agent.Profiles
-		}
+		in.own[t] = w.Agent.Profiles
 	}
 	return in, nil
 }

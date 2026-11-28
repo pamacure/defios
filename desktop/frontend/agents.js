@@ -364,17 +364,26 @@ function grant(method, args) {
   act(method, args);
 }
 
-// grants are a profile's Tools, Skills and MCP Servers.
+// grants are a profile's Tools, Skills and MCP Servers. A profile grants
+// Tools of one tier at most, Key or Group (ADR 0046), so once one is
+// ticked the other tier's boxes are disabled.
 function grants(o) {
   const cat = av.Catalog ?? {};
   const union = (listed, granted) => [...new Set([...(listed ?? []), ...(granted ?? [])])].sort();
-  const toggle = (ref, granted, label, desc) => h("div", { class: "grant" },
-    h("label", { class: "check" },
-      h("input", { type: "checkbox", checked: granted, disabled: busy,
+  const toggle = (ref, granted, label, desc, barred) => h("div", { class: "grant" },
+    h("label", { class: "check", title: barred ?? "" },
+      h("input", { type: "checkbox", checked: granted, disabled: busy || (!granted && !!barred),
         onchange: (e) => grant(e.target.checked ? "GrantAgent" : "RevokeAgent", e.target.checked ? [o.Handle, ref, []] : [o.Handle, ref]) }),
       h("span", {}, h("code", {}, label), desc && h("span", { class: "hint" }, desc))));
 
-  const tools = union(cat.Tools, o.Tools).map((t) => toggle(t, o.Tools.includes(t), t));
+  const keyTools = cat.KeyTools ?? [], groupTools = cat.GroupTools ?? [];
+  const hasKey = o.Tools.some((t) => keyTools.includes(t)), hasGroup = o.Tools.some((t) => groupTools.includes(t));
+  const barred = (t) => {
+    if (hasGroup && keyTools.includes(t)) return "A Key Tool: it can't be granted with Group Tools, so an agent that changes Triggers never signs.";
+    if (hasKey && groupTools.includes(t)) return "A Group Tool: it can't be granted with Key Tools, so an agent that signs never changes Triggers.";
+    return null;
+  };
+  const tools = union(cat.Tools, o.Tools).map((t) => toggle(t, o.Tools.includes(t), t, barred(t) && "Not with the other tier's Tools.", barred(t)));
   const skillDesc = Object.fromEntries((cat.Skills ?? []).map((s) => [s.Ref, s.Description]));
   const skills = union((cat.Skills ?? []).map((s) => s.Ref), o.Skills).map((ref) => toggle(ref, o.Skills.includes(ref), ref, skillDesc[ref] ?? "Its Plugin is not on this device."));
   const servers = new Map((cat.Servers ?? []).map((s) => [s.Ref, s]));

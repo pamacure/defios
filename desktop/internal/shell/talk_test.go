@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"defios.com/desktop/internal/shell"
+	"defios.com/internal/config"
 	"defios.com/internal/node"
 	"defios.com/internal/serve"
 	"defios.com/internal/transcript"
@@ -553,40 +554,51 @@ func TestAKeysConversationShowsItsKeyAndWhetherItCanSign(t *testing.T) {
 	}
 }
 
-func TestIncludingAnAgentInAConversationKeepsTheGroupsAgents(t *testing.T) {
+// A Key's Conversation has only its own agents, never Group talk's
+// (ADR 0046).
+func TestAConversationHasOnlyItsOwnAgents(t *testing.T) {
 	r := newRig(t, "alpha")
 	k := withKey(t, r)
 	r.node.tk().profiles = []string{"auditor", "scribe", "signer"}
 	r.node.tk().included[node.GroupTalk] = []string{"auditor", "scribe"}
 	s := served(t, r)
 	ts := s.OpenConversation(k.ConversationID)
-	if got := included(ts); got != "auditor,scribe" {
-		t.Fatalf("follows the Group's: %s", got)
+	if got := included(ts); got != "" {
+		t.Fatalf("a Conversation with no list of its own includes %s", got)
 	}
-	if ts := s.SetAgentIncluded("signer", true); ts.Problem != nil || included(ts) != "auditor,scribe,signer" {
+	if ts := s.SetAgentIncluded("signer", true); ts.Problem != nil || included(ts) != "signer" {
 		t.Fatalf("include: %+v %s", ts.Problem, included(ts))
 	}
-	if ts := s.SetAgentIncluded("auditor", false); ts.Problem != nil || included(ts) != "scribe,signer" || !slices.Equal(ts.Handles, []shell.Handle{{Handle: "scribe"}, {Handle: "signer"}}) {
-		t.Fatalf("exclude: %+v %s", ts.Problem, included(ts))
+	if ts := s.SetAgentIncluded("signer", false); ts.Problem != nil || included(ts) != "" {
+		t.Fatalf("exclude the last: %+v %s", ts.Problem, included(ts))
 	}
-	// Group talk keeps its own.
 	if ts := s.OpenConversation(node.GroupTalk); included(ts) != "auditor,scribe" {
 		t.Fatalf("group: %s", included(ts))
 	}
 }
 
-func TestExcludingFromAConversationThatFollowsTheGroupKeepsTheOthers(t *testing.T) {
+// Including an agent where its Tools' tier may not be names each place,
+// a Key as the page names it (ADR 0046).
+func TestIncludingAMisplacedAgentNamesWhere(t *testing.T) {
 	r := newRig(t, "alpha")
 	k := withKey(t, r)
-	r.node.tk().profiles = []string{"auditor", "scribe"}
-	r.node.tk().included[node.GroupTalk] = []string{"auditor", "scribe"}
+	r.node.tk().profiles = []string{"signer"}
+	r.node.tk().refuseInclusion = &node.MisplacedError{Agents: []node.Misplaced{
+		{Handle: "signer", Tier: config.TierKey, In: node.Place{Group: "alpha", Conversation: node.GroupTalk}},
+		{Handle: "builder", Tier: config.TierGroup, In: node.Place{Group: "alpha", Conversation: k.ConversationID, Workspace: k.Workspace}},
+	}}
 	s := served(t, r)
-	s.OpenConversation(k.ConversationID)
-	if ts := s.SetAgentIncluded("scribe", false); ts.Problem != nil || included(ts) != "auditor" {
-		t.Fatalf("exclude: %+v %s", ts.Problem, included(ts))
+	eventuallyTalk(t, s, func(ts shell.TalkState) bool { return len(ts.Conversations) == 2 })
+	s.OpenConversation(node.GroupTalk)
+	ts := s.SetAgentIncluded("signer", true)
+	want := "@signer has Key Tools, so it can be included only in a Key's Conversation, not in Group talk; " +
+		"@builder has Group Tools, so it can be included only in Group-level talk, not in vault. " +
+		"An agent that signs never changes Triggers, and one that changes Triggers never signs."
+	if ts.Problem == nil || ts.Problem.Code != "misplaced" || ts.Problem.Message != want {
+		t.Fatalf("refused: %+v", ts.Problem)
 	}
-	if ts := s.SetAgentIncluded("auditor", false); ts.Problem != nil || included(ts) != "" {
-		t.Fatalf("exclude the last: %+v %s", ts.Problem, included(ts))
+	if included(ts) != "" {
+		t.Fatalf("included: %s", included(ts))
 	}
 }
 

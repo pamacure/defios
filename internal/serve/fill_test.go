@@ -57,7 +57,9 @@ func fillPair(t *testing.T, tools string) (a *node, provider *fakeProvider, conv
 	grantTools(t, a, "auditor", tools)
 	path := a.paths.GroupConfigFile(group.ImplicitAlias)
 	writeConfig(t, path, readFile(t, path)+"\n[networks.eth]\ntype = \"ethereum\"\nchain_id = 1\nrpc_urls = [\""+fakeEth(t)+"\"]\n\n[networks.btc]\ntype = \"bitcoin\"\nnetwork = \"mainnet\"\n")
-	waitWorkspace(t, a, mintPublicKey(t, a, b, gid, generator))
+	name := mintPublicKey(t, a, b, gid, generator)
+	waitWorkspace(t, a, name)
+	includeIn(t, a, name, "auditor")
 	id := key.ConversationID("ecdsa", generator)
 	return a, provider, id[:]
 }

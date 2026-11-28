@@ -208,8 +208,7 @@ func (s *Shell) SaveJob(d JobDraft) TriggersView {
 
 // IncludeForJob includes this device's agent handle where the agent Job
 // form where says it answers, target: "group" or a Key's Conversation's
-// Workspace name. A Key's Conversation that follows Group talk's agents
-// gets a list of its own, starting from the Group's, as Talk gives it.
+// Workspace name.
 // The form stays open as typed: its Job is not saved.
 func (s *Shell) IncludeForJob(where, handle, target string) TriggersView {
 	s.op.Lock()

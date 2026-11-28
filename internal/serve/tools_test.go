@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"defios.com/internal/config"
 	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/serve"
@@ -37,7 +39,9 @@ func signToolsPair(t *testing.T, tools string) (a *node, provider *fakeProvider,
 	eth := json.RawMessage(`{"to":"AAAAAAAAAAAAAAAAAAAAAAAAAAA=","value":"1000","nonce":"0","gasLimit":"21000","maxFeePerGas":"30","maxPriorityFeePerGas":"1"}`)
 	var ids []string
 	for _, fill := range []byte{0x33, 0x44} {
-		waitWorkspace(t, a, mintKeyOf(t, a, b, gid, fill))
+		name := mintKeyOf(t, a, b, gid, fill)
+		waitWorkspace(t, a, name)
+		includeIn(t, a, name, "auditor")
 		spec := signreq.Spec{Reason: fmt.Sprintf("pay invoice %x", fill), Transactions: []signreq.TxSpec{{Network: "eth", Ethereum: eth}}}
 		v, err := a.client().SignPropose(context.Background(), "ecdsa:"+hexOf(bytes.Repeat([]byte{fill}, 33)), spec, "")
 		if err != nil {
@@ -131,39 +135,45 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 	}
 }
 
-// In Group-level talk the sign Tools are not offered, even granted, nor
-// named in the system block; a call of one is a tool error.
-func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
-	a, _, _, provider := agentPair(t, "auditor")
-	grantTools(t, a, "auditor", `["talk_write", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse", "chain_fill", "key_address"]`)
-	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
-		streamParts(w)
-		switch n {
-		case 1:
-			endCall(w, "sign_list", `{}`)
-		case 2:
-			endCall(w, "sign_propose", `{"reason":"pay","transactions":`+payEthTool+`}`)
-		default:
-			endTalkWrite(w, "nothing to sign here")
+// A run that finds its profile included where its tier may not be, after
+// a hand edit, fails saying why, and never calls the Provider: a Key-tier
+// agent in Group-level talk, a Group-tier one in a Key's Conversation. No
+// Tool is silently dropped (ADR 0046).
+func TestAMisplacedRunFailsSayingWhy(t *testing.T) {
+	tools, groupTools := config.Tools, config.GroupTools
+	config.Tools = append(slices.Clone(tools), "job_list")
+	config.GroupTools = append(slices.Clone(groupTools), "job_list")
+	t.Cleanup(func() { config.Tools, config.GroupTools = tools, groupTools })
+	a, b, gid, provider := agentPair(t, "auditor")
+	name := mintKey(t, a, b, gid)
+	waitWorkspace(t, a, name)
+	includeIn(t, a, name, "auditor")
+	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
+	for _, c := range []struct {
+		tools string
+		conv  []byte
+		want  string
+	}{
+		{`["talk_write", "sign_list"]`, nil, "@auditor grants Key Tools (sign_list), so answers only in a Key's Conversation, not in Group-level talk"},
+		{`["talk_write", "job_list"]`, id[:], "@auditor grants Group Tools (job_list), so answers only in Group-level talk, not in a Key's Conversation"},
+	} {
+		grantTools(t, a, "auditor", c.tools)
+		s, err := a.client().ConversationStream(context.Background(), c.conv)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	s := watch(t, a)
-	v, err := a.client().ConversationSend(context.Background(), "@auditor what is open?", nil)
-	if err != nil {
-		t.Fatal(err)
+		v, err := a.client().ConversationSend(context.Background(), "@auditor what is open?", c.conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events := untilEnd(t, s, v.MsgID)
+		s.Close()
+		if ev := events[len(events)-2]; ev.Type != serve.EventAgentError || !strings.Contains(ev.Error, c.want) {
+			t.Errorf("%s: %+v; want an error saying %q", c.tools, ev, c.want)
+		}
 	}
-	if got := summary(untilEnd(t, s, v.MsgID)); !strings.HasSuffix(got, "commit:nothing to sign here end") {
-		t.Fatalf("events = %s", got)
-	}
-	calls := provider.seen()
-	if calls[0].Tools != "talk_write" || strings.Contains(calls[0].System, "sign_") || strings.Contains(calls[0].System, "chain_fill") || strings.Contains(calls[0].System, "key_address") {
-		t.Errorf("tools offered %q; system block %s", calls[0].Tools, calls[0].System)
-	}
-	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"sign_list\"`) {
-		t.Errorf("sign_list answered %s", got)
-	}
-	if got := lastTurn(calls[2]); !strings.Contains(got, `no tool named \"sign_propose\"`) {
-		t.Errorf("sign_propose answered %s", got)
+	if calls := provider.seen(); len(calls) != 0 {
+		t.Errorf("a misplaced run called the Provider %d times", len(calls))
 	}
 }
 
@@ -171,7 +181,7 @@ func TestSignToolsAreNotOfferedInGroupLevelTalk(t *testing.T) {
 // it calls is refused, and the run ends silent with nothing committed.
 func TestAProfileWithoutSayNeverCommitsTalk(t *testing.T) {
 	a, _, _, provider := agentPair(t, "auditor")
-	grantTools(t, a, "auditor", `["sign_list"]`)
+	grantTools(t, a, "auditor", `["talk_read"]`)
 	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
 		if n == 1 {
 			streamSay(w, "let me speak")
@@ -189,7 +199,7 @@ func TestAProfileWithoutSayNeverCommitsTalk(t *testing.T) {
 		t.Fatalf("events = %s", got)
 	}
 	calls := provider.seen()
-	if len(calls) != 2 || calls[0].Tools != "" || !strings.Contains(calls[0].System, "no talk_write") {
+	if len(calls) != 2 || calls[0].Tools != "talk_read" || !strings.Contains(calls[0].System, "no talk_write") {
 		t.Fatalf("calls = %+v", calls)
 	}
 	if got := lastTurn(calls[1]); !strings.Contains(got, `no tool named \"talk_write\"`) {
@@ -214,9 +224,11 @@ func signingAgents(t *testing.T) (a, b *node, provider *fakeProvider, conv []byt
 	a.joins(t, gid, 2)
 	b.joins(t, gid, 2)
 	provider = newFakeProvider(t)
-	mintKey(t, a, b, gid)
+	name := mintKey(t, a, b, gid)
 	id := key.ConversationID("ecdsa", bytes.Repeat([]byte{0x33}, 33))
 	for n, h := range map[*node]string{a: "auditor", b: "reviewer"} {
+		waitWorkspace(t, n, name)
+		includeIn(t, n, name, h)
 		agentNode(t, n, provider.URL, h)
 		grantTools(t, n, h, `["talk_write", "sign_list", "sign_inspect", "sign_propose", "sign_accept", "sign_refuse"]`)
 		path := n.paths.GroupConfigFile(group.ImplicitAlias)
