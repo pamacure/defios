@@ -237,6 +237,22 @@ func List(dir string) ([]Run, error) {
 	return out, nil
 }
 
+// Latest is the Job Runs kept in dir, newest first, as List gives them:
+// Job job's alone if job is set, and only the latest last if last > 0.
+func Latest(dir, job string, last int) ([]Run, error) {
+	runs, err := List(dir)
+	if err != nil {
+		return nil, err
+	}
+	if job != "" {
+		runs = slices.DeleteFunc(runs, func(r Run) bool { return r.Job != job })
+	}
+	if last > 0 && len(runs) > last {
+		runs = runs[:last]
+	}
+	return runs, nil
+}
+
 // Get is the Job Run kept in dir by id.
 func Get(dir string, id uint64) (Run, error) {
 	b, err := os.ReadFile(filepath.Join(dir, fileName(id)))

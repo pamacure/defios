@@ -36,6 +36,12 @@ func TestAProfilesTierComesFromItsTools(t *testing.T) {
 			t.Fatalf("%s is not a Key Tool", tool)
 		}
 	}
+	// key_list is a Group Tool: a name's prefix is not its tier.
+	for _, tool := range []string{"job_runs", "key_list"} {
+		if config.ToolTier(tool) != config.TierGroup {
+			t.Fatalf("%s is not a Group Tool", tool)
+		}
+	}
 }
 
 // A profile granting Tools of both tiers is refused by the loader, so

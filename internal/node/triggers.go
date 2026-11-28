@@ -67,17 +67,7 @@ func (h *Host) JobRuns(ctx context.Context, group, job string, last int) ([]JobR
 	if err := h.knownGroup(group); err != nil {
 		return nil, err
 	}
-	runs, err := jobrun.List(h.p.JobRunsDir(group))
-	if err != nil {
-		return nil, err
-	}
-	if job != "" {
-		runs = slices.DeleteFunc(runs, func(r JobRun) bool { return r.Job != job })
-	}
-	if last > 0 && len(runs) > last {
-		runs = runs[:last]
-	}
-	return runs, nil
+	return jobrun.Latest(h.p.JobRunsDir(group), job, last)
 }
 
 // JobRun is the Job Run group keeps by id, or ErrNoJobRun. The Group need

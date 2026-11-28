@@ -174,11 +174,11 @@ func placed(p config.ResolvedProfile, conv []byte) error {
 // agentTools are the Tools granted that handle's run in conv may call, in
 // the order config.Tools lists them: talk_read reading this Node's view of
 // conv's talk from ob and store, talk_summon adding to sum, talk_parties
-// reading sum, the Key Tools scoped to conv's Key, for placed has
-// refused a Key-tier run in Group-level talk (nil conv), and the
-// Trigger-config Tools on the served Group, writing as handle. Those that write
-// act as this Node under handle, a proposal at the run's depth, and each
-// that succeeds is told to did.
+// reading sum, the Key Tools scoped to conv's Key, for placed has refused
+// a Key-tier run in Group-level talk (nil conv), and the Group Tools on the
+// served Group, the Trigger-config Tools writing as handle. Those that
+// write act as this Node under handle, a proposal at the run's depth, and
+// each that succeeds is told to did.
 func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string, depth uint32, granted []string, conv []byte, did acted, sum *runSummons) []agent.Tool {
 	var out []agent.Tool
 	for _, name := range config.Tools {
@@ -186,6 +186,10 @@ func (s *server) agentTools(ob *outbox.Outbox, store *cosl.Store, handle string,
 			continue
 		}
 		if t, ok := s.triggerTool(name, handle); ok {
+			out = append(out, t)
+			continue
+		}
+		if t, ok := s.groupReadTool(name); ok {
 			out = append(out, t)
 			continue
 		}
@@ -577,16 +581,11 @@ func (s *server) keyAddressTool(conv []byte) func(context.Context, json.RawMessa
 		if err != nil {
 			return "", toolError(err)
 		}
-		nets, err := e.Networks()
+		v, err := keyAccount(k, e)
 		if err != nil {
 			return "", toolError(err)
 		}
-		typ := e.KeyNetworkType(k.Curve)
-		addrs, err := signreq.KeyAddresses(k.PublicKey, typ, nets)
-		if err != nil {
-			return "", err
-		}
-		return toolJSON(KeyAddressView{Key: k.Ref(), Curve: k.Curve, PublicKey: hex.EncodeToString(k.PublicKey), NetworkType: typ, Networks: addrs})
+		return toolJSON(v)
 	}
 }
 

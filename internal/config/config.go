@@ -109,6 +109,9 @@ const (
 	ToolScheduleAdd    = "schedule_add"
 	ToolScheduleEdit   = "schedule_edit"
 	ToolScheduleDelete = "schedule_delete"
+	// The Group's Job Runs (ADR 0040) and its Keys (ADR 0046).
+	ToolJobRuns = "job_runs"
+	ToolKeyList = "key_list"
 )
 
 // ToolSkillLoad reads a granted Skill (ADR 0030). It is offered whenever a
@@ -118,7 +121,7 @@ const ToolSkillLoad = "skill_load"
 // Tools is every built-in Tool, in the order a run offers them.
 var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolTalkSummon, ToolTalkParties, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill, ToolKeyAddress,
 	ToolJobList, ToolJobAdd, ToolJobEdit, ToolJobDelete, ToolHookList, ToolHookAdd, ToolHookEdit, ToolHookDelete,
-	ToolScheduleList, ToolScheduleAdd, ToolScheduleEdit, ToolScheduleDelete}
+	ToolScheduleList, ToolScheduleAdd, ToolScheduleEdit, ToolScheduleDelete, ToolJobRuns, ToolKeyList}
 
 // ValidateTool refuses a name that is no built-in Tool.
 func ValidateTool(name string) error {

@@ -27,7 +27,7 @@ var KeyTools = []string{ToolSignList, ToolSignInspect, ToolSignPropose, ToolSign
 // GroupTools act on the Group as a whole. The talk_ Tools and skill_load,
 // in neither list, have no tier.
 var GroupTools = []string{ToolJobList, ToolJobAdd, ToolJobEdit, ToolJobDelete, ToolHookList, ToolHookAdd, ToolHookEdit, ToolHookDelete,
-	ToolScheduleList, ToolScheduleAdd, ToolScheduleEdit, ToolScheduleDelete}
+	ToolScheduleList, ToolScheduleAdd, ToolScheduleEdit, ToolScheduleDelete, ToolJobRuns, ToolKeyList}
 
 // String names t as a refusal does: Key, Group or untiered.
 func (t Tier) String() string {
