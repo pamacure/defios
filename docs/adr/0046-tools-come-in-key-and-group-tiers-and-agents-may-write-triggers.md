@@ -85,7 +85,8 @@ change Triggers, and no agent in Group-level talk can sign.** This amends
   filtered the same way, so both Tools give one Key the same addresses.
 - **`by = "<handle>"`** on a Job, Hook or Schedule names the agent that last
   wrote it. The Tools set it and refuse a `by` passed to them. A person's
-  save, from the desktop, the CLI or by editing the text, clears it. An agent
+  save of an entry, from the desktop's forms or the CLI, clears it. A text
+  edit is the person's own: what they write, `by` included, is kept. An agent
   Job with `by` set gives its prompt as `A Job written by @<by> asks:`, so the
   agent it runs weighs it as another agent's words, not the operator's. An
   agent's edit to a person's Job sets `by`. Hooks and Schedules carry no
