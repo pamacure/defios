@@ -88,6 +88,14 @@ _Avoid_: assistant, bot, the agent across Nodes
 An action built into DeFiOS that an agent may call during a run, such as `talk_write` or `sign_accept`. An agent may call only the Tools its Agent Profile grants, and a profile grants none it does not name, the `talk_` Tools included. Only Tools act as the Node: nothing else an agent is given can write to the COSL.
 _Avoid_: function, command, capability
 
+**Key Tool**:
+A Tool that acts on one Key, such as `sign_accept` or `chain_fill`. An Agent Profile granted one is includable only in Key's Conversations, never in Group-level talk.
+_Avoid_: sign tool (they are not all signing), conversation tool
+
+**Group Tool**:
+A Tool that acts on the Group as a whole, such as `job_add` or `hook_edit`, which write this Node's Triggers and Jobs. An Agent Profile granted one is includable only in Group-level talk, never in a Key's Conversation, and may grant no Key Tool. Tools of neither kind, such as the `talk_` Tools, go anywhere.
+_Avoid_: admin tool, config tool, trigger tool
+
 **Plugin**:
 A package of Skills and MCP Servers, shipped with DeFiOS or installed on a Node from a repository or a local path. Installed Node-wide, but nothing in it reaches an agent until that agent's profile grants the item by name.
 _Avoid_: extension, toolset, add-on, package
@@ -157,7 +165,7 @@ A human-chosen label a Node gives one Key, used to name and select that Key on t
 _Avoid_: key name, label, nickname
 
 **Key's Network type**:
-The Network type a Node uses one Key for, such as Bitcoin for an ECDSA Key, which marks that Key's Conversation in the desktop. Like a Key alias, it starts as the one proposed when the Key's keygen Session began and is this Node's alone from then on. It restricts nothing the Key may sign. With none set, an EdDSA Key's is Solana and an ECDSA Key's is unset (ADR 0044).
+The Network type a Node uses one Key for, such as Bitcoin for an ECDSA Key, which marks that Key's Conversation in the desktop. Like a Key alias, it starts as the one proposed when the Key's keygen Session began and is this Node's alone from then on. It restricts nothing the Key may sign. With none set, an EdDSA Key's is Solana and an ECDSA Key's is Ethereum (ADR 0046), so every Key has one.
 _Avoid_: chain, key type, used-for
 
 **Session**:
