@@ -51,6 +51,7 @@ func (u *UI) SetMessageNotifications(on bool) shell.State {
 }
 func (u *UI) SetTheme(name string) shell.State { return u.shell.SetTheme(name) }
 func (u *UI) SetDark(name string) shell.State  { return u.shell.SetDark(name) }
+func (u *UI) SetLight(name string) shell.State { return u.shell.SetLight(name) }
 
 // Settings: the edit-target Group's part.
 

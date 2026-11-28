@@ -194,6 +194,31 @@ func TestTheDarkBackgroundsAreCharcoalUntilOthersAreChosen(t *testing.T) {
 	}
 }
 
+// The light backgrounds are Slate until another is chosen, are kept
+// across starts, and refuse a name they do not know.
+func TestTheLightBackgroundsAreSlateUntilOthersAreChosen(t *testing.T) {
+	r := newRig(t, "alpha")
+	s := r.start(false)
+	if st := s.State(); st.Prefs.Light != "slate" {
+		t.Fatalf("default light = %q", st.Prefs.Light)
+	}
+	if st := s.SetLight("mint"); st.Prefs.Light != "mint" || st.Problem != nil || r.prefs.get().Light != prefs.LightMint {
+		t.Fatalf("mint: %+v, saved %q", st, r.prefs.get().Light)
+	}
+	if st := r.start(false).State(); st.Prefs.Light != "mint" {
+		t.Fatalf("after a restart: %q", st.Prefs.Light)
+	}
+	if st := s.SetLight("cream"); st.Problem == nil || st.Problem.Code != "bad-light" || st.Prefs.Light != "mint" {
+		t.Fatalf("an unknown light: %+v", st)
+	}
+	if st := s.SetLight("sage"); st.Prefs.Light != "sage" || st.Problem != nil || r.prefs.get().Light != prefs.LightSage {
+		t.Fatalf("sage: %+v", st)
+	}
+	if st := s.SetLight("slate"); st.Prefs.Light != "slate" || st.Problem != nil || r.prefs.get().Light != prefs.LightSlate {
+		t.Fatalf("back to slate: %+v", st)
+	}
+}
+
 func TestStartAtLoginRegistersWithTheOS(t *testing.T) {
 	r := newRig(t, "alpha")
 	s := r.start(false)

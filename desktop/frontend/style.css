@@ -1,7 +1,8 @@
 /* Colours are the Figma palette frame's (assets/palette.css and the
    DeFiOS file's Color palette): a slate-blue neutral ramp with the brand
-   green as the accent. */
-:root {
+   green as the accent. The light blocks also colour Settings' .lightwin
+   previews, so each shows light whatever the app is. */
+:root, .lightwin {
   --bg: #EDF1F4;
   --surface: #FFFFFF;
   --field: #DFE6EC; /* text inputs: a shade under --bg, so they read as wells */
@@ -956,7 +957,7 @@ body[data-page="talk"] .toasts { top: 116px; }
 @font-face { font-family: "IBM Plex Mono"; font-weight: 600; font-display: block; src: url("/fonts/IBMPlexMono-SemiBold.woff2") format("woff2"); }
 @font-face { font-family: "IBM Plex Mono"; font-weight: 700; font-display: block; src: url("/fonts/IBMPlexMono-Bold.woff2") format("woff2"); }
 
-:root {
+:root, .lightwin {
   --display: "Quantico", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   --depth: 3px;
@@ -1027,6 +1028,17 @@ body[data-page="talk"] .toasts { top: 116px; }
 }
 :root[data-theme="dark"][data-dark="teal"], .darkwin[data-dark="teal"] { --bg: #111F1E; --surface: #1C2E2C; --field: #0A1413; --line: #304643; --edge: #070E0D; --soft: #304643; --soft-edge: #1C2E2C; }
 :root[data-theme="dark"][data-dark="forest"], .darkwin[data-dark="forest"] { --bg: #01150A; --surface: #05301D; --field: #000D06; --line: #0E5336; --edge: #000A04; --soft: #1A7A51; --soft-edge: #0E5336; }
+
+/* Light backgrounds (Settings, Light backgrounds; app.js sets data-light),
+   the light twins of the dark ones. The light blocks above are Slate, the
+   lightest; Sage is muted, a grey-green ramp, and Mint the greenest, pale
+   greens of the brand green's hue (~152). Accents do not change. */
+@media not all and (prefers-color-scheme: dark) {
+  :root:not([data-theme="dark"])[data-light="sage"] { --bg: #E7EEEB; --surface: #F8FAF9; --field: #D9E3DF; --line: #B3C6BF; --edge: #9AB0A8; --soft: #B7D5CC; --soft-edge: #8EB4A9; }
+  :root:not([data-theme="dark"])[data-light="mint"] { --bg: #E0F4EA; --surface: #F5FDF9; --field: #CDEADB; --line: #A3D6BC; --edge: #82C1A1; --soft: #9CE2C1; --soft-edge: #6BC69A; }
+}
+:root[data-theme="light"][data-light="sage"], .lightwin[data-light="sage"] { --bg: #E7EEEB; --surface: #F8FAF9; --field: #D9E3DF; --line: #B3C6BF; --edge: #9AB0A8; --soft: #B7D5CC; --soft-edge: #8EB4A9; }
+:root[data-theme="light"][data-light="mint"], .lightwin[data-light="mint"] { --bg: #E0F4EA; --surface: #F5FDF9; --field: #CDEADB; --line: #A3D6BC; --edge: #82C1A1; --soft: #9CE2C1; --soft-edge: #6BC69A; }
 
 /* Quantico: titles, section labels, and counts. */
 .page h1, .center h1, .card h1, .modal h2, .chat-head h2 { font-family: var(--display); font-weight: 700; letter-spacing: .01em; }
@@ -1223,36 +1235,38 @@ select:not([multiple]):not([size]):disabled { color: var(--muted); cursor: defau
 .combomenu .opt .mono { font-family: var(--mono); font-size: 12px; }
 .combomenu .opt .muted { color: var(--muted); }
 
-/* Settings, Dark backgrounds: one small window per choice, in its own
-   colours (the forced-dark blocks above); the chosen one glows. */
-.toggle.darkpick { flex-direction: column; }
-.darkopts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; width: 100%; max-width: 560px; }
-.darkopt { position: relative; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
-.darkopt input { position: absolute; opacity: 0; pointer-events: none; }
-.darkopt .name { display: flex; align-items: baseline; gap: 6px; font-size: 13px; }
-.darkopt .name strong { color: var(--text); font-weight: 600; }
-.darkopt .name span { color: var(--muted); }
-.darkwin { display: grid; grid-template-columns: 22px 1fr; height: 92px; overflow: hidden; color-scheme: dark; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); outline: 2px solid transparent; outline-offset: 2px; transition: outline-color .12s, box-shadow .12s; }
-.darkopt:hover .darkwin { outline-color: var(--line); }
-.darkopt.on .darkwin { outline-color: var(--accent-bright); box-shadow: 0 0 18px var(--glow); }
-.darkopt input:focus-visible + .darkwin { outline-color: var(--live); }
-.darkwin i { display: block; }
-.darkwin .rail { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; background: var(--surface); border-right: 1px solid var(--line); }
-.darkwin .rail i { width: 12px; height: 8px; border-radius: 2px; background: var(--line); }
-.darkwin .rail .mark { width: 12px; height: 12px; margin-bottom: 3px; background: var(--accent); }
-.darkwin .rail .on { position: relative; background: var(--accent-wash); box-shadow: -5px 0 0 -3px var(--live), -4px 0 8px -2px var(--glow); }
-.darkwin .body { display: flex; flex-direction: column; gap: 4px; padding: 6px; min-width: 0; }
-.darkwin .row { height: 5px; width: 70%; border-radius: 2px; background: var(--line); }
-.darkwin .row.sel { width: 85%; height: 8px; background: var(--accent-wash); }
-.darkwin .card { display: flex; flex-direction: column; gap: 4px; padding: 4px 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 2px; box-shadow: 0 2px 0 var(--edge); }
-.darkwin .card.live { border-color: var(--live); box-shadow: 0 2px 0 var(--edge), 0 0 12px -4px var(--glow); }
-.darkwin .card .row { width: 60%; background: var(--muted); opacity: .5; }
-.darkwin .quorum { display: flex; gap: 2px; }
-.darkwin .seg { width: 10px; height: 4px; border-radius: 1px; background: var(--bg); border: 1px solid var(--line); }
-.darkwin .seg.on { background: var(--accent-bright); border-color: var(--bright-edge); box-shadow: 0 0 6px var(--glow); }
-.darkwin .foot { display: flex; gap: 4px; margin-top: auto; }
-.darkwin .well { flex: 1; height: 9px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); }
-.darkwin .go { width: 18px; height: 9px; border-radius: 2px; background: var(--accent); box-shadow: 0 2px 0 var(--accent-edge); }
+/* Settings, Light and Dark backgrounds: one small window per choice, in
+   its own colours (.lightwin and .palwin above); the chosen one glows. */
+.toggle.palpick { flex-direction: column; }
+.palopts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; width: 100%; max-width: 560px; }
+.palopt { position: relative; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
+.palopt input { position: absolute; opacity: 0; pointer-events: none; }
+.palopt .name { display: flex; align-items: baseline; gap: 6px; font-size: 13px; }
+.palopt .name strong { color: var(--text); font-weight: 600; }
+.palopt .name span { color: var(--muted); }
+.palwin { display: grid; grid-template-columns: 22px 1fr; height: 92px; overflow: hidden; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); outline: 2px solid transparent; outline-offset: 2px; transition: outline-color .12s, box-shadow .12s; }
+.palopt:hover .palwin { outline-color: var(--line); }
+.palopt.on .palwin { outline-color: var(--accent-bright); box-shadow: 0 0 18px var(--glow); }
+.palopt input:focus-visible + .palwin { outline-color: var(--live); }
+.palwin i { display: block; }
+.palwin .rail { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; background: var(--surface); border-right: 1px solid var(--line); }
+.palwin .rail i { width: 12px; height: 8px; border-radius: 2px; background: var(--line); }
+.palwin .rail .mark { width: 12px; height: 12px; margin-bottom: 3px; background: var(--accent); }
+.palwin .rail .on { position: relative; background: var(--accent-wash); box-shadow: -5px 0 0 -3px var(--live), -4px 0 8px -2px var(--glow); }
+.palwin .body { display: flex; flex-direction: column; gap: 4px; padding: 6px; min-width: 0; }
+.palwin .row { height: 5px; width: 70%; border-radius: 2px; background: var(--line); }
+.palwin .row.sel { width: 85%; height: 8px; background: var(--accent-wash); }
+.palwin .card { display: flex; flex-direction: column; gap: 4px; padding: 4px 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 2px; box-shadow: 0 2px 0 var(--edge); }
+.palwin .card.live { border-color: var(--live); box-shadow: 0 2px 0 var(--edge), 0 0 12px -4px var(--glow); }
+.palwin .card .row { width: 60%; background: var(--muted); opacity: .5; }
+.palwin .quorum { display: flex; gap: 2px; }
+.palwin .seg { width: 10px; height: 4px; border-radius: 1px; background: var(--bg); border: 1px solid var(--line); }
+.palwin .seg.on { background: var(--accent-bright); border-color: var(--bright-edge); box-shadow: 0 0 6px var(--glow); }
+.palwin .foot { display: flex; gap: 4px; margin-top: auto; }
+.palwin .well { flex: 1; height: 9px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); }
+.palwin .go { width: 18px; height: 9px; border-radius: 2px; background: var(--accent); box-shadow: 0 2px 0 var(--accent-edge); }
+.lightwin { color-scheme: light; }
+.darkwin { color-scheme: dark; }
 
 /* Textures, dark only (--sand and --glass-* are none or plain in light).
    Sand: a 140px noise tile at 10%, drawn once, on the cards that sit on

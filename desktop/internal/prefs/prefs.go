@@ -35,6 +35,8 @@ type Prefs struct {
 	Theme Theme `json:"theme,omitempty"`
 	// Dark is the background palette the app uses whenever it is dark.
 	Dark Dark `json:"dark,omitempty"`
+	// Light is the background palette the app uses whenever it is light.
+	Light Light `json:"light,omitempty"`
 	// LastGroup is the Group the app last served, which the lock screen
 	// preselects.
 	LastGroup string `json:"last_group,omitempty"`
@@ -69,6 +71,19 @@ const (
 	DarkTeal Dark = "teal"
 	// DarkForest is colourful: deep greens that match the accents.
 	DarkForest Dark = "forest"
+)
+
+// Light picks the backgrounds of the light theme; the accents stay the same.
+type Light string
+
+// The Lights; the zero value is Slate.
+const (
+	// LightSlate is the lightest: a pale slate page with white panels.
+	LightSlate Light = ""
+	// LightSage is desaturated: a grey-green ramp.
+	LightSage Light = "sage"
+	// LightMint is colourful: pale greens that match the accents.
+	LightMint Light = "mint"
 )
 
 // Notifications reports whether the app may post notifications.

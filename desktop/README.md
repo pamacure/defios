@@ -134,3 +134,5 @@ needs checking by hand:
   backgrounds at once whenever the app is dark (by the OS or by Dark),
   keep the green accents, and stay after a restart; in Light nothing
   changes.
+- Settings, Light backgrounds: Slate, Sage and Mint do the same whenever
+  the app is light (by the OS or by Light); in Dark nothing changes.
