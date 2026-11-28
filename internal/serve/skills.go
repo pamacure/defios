@@ -14,12 +14,12 @@ import (
 	"defios.com/internal/plugin"
 )
 
-const skillLoadDescription = "Read one of your Skills, named <plugin>/<skill> as your Skills list them: without file, its SKILL.md " +
+const skillLoadDescription = "Read one of your Skills, named <plugin>/<skill> as your Skills list them: without file, or with it empty, its SKILL.md " +
 	"instructions; with file, a file under that Skill's directory that its instructions refer to, by a path relative to it."
 
 var skillLoadSchema = json.RawMessage(`{"type":"object","properties":{` +
 	`"name":{"type":"string","description":"The Skill, <plugin>/<skill>."},` +
-	`"file":{"type":"string","description":"A path relative to the Skill's directory; unset reads its SKILL.md."}},` +
+	`"file":{"type":"string","description":"A path relative to the Skill's directory; unset or empty reads its SKILL.md."}},` +
 	`"required":["name"],"additionalProperties":false}`)
 
 // grantedSkill is a Skill a profile grants, found in its Plugin.
@@ -63,7 +63,7 @@ func skillLoadTool(skills []grantedSkill) agent.Tool {
 	call := func(_ context.Context, input json.RawMessage) (string, error) {
 		var in struct {
 			Name string  `json:"name"`
-			File *string `json:"file"`
+			File string `json:"file"` // "" is SKILL.md: some models send every property
 		}
 		if err := json.Unmarshal(input, &in); err != nil || in.Name == "" {
 			return "", errors.New(`its input must be {"name": "<plugin>/<skill>", "file": "<optional path in the Skill>"}`)
@@ -77,10 +77,10 @@ func skillLoadTool(skills []grantedSkill) agent.Tool {
 			return "", fmt.Errorf("Skill %q is not granted to you: your Skills are %s", in.Name, strings.Join(refs, ", "))
 		}
 		g := skills[i]
-		if in.File == nil {
+		if in.File == "" {
 			return g.plugin.SkillBody(g.name)
 		}
-		return g.plugin.SkillFile(g.name, *in.File)
+		return g.plugin.SkillFile(g.name, in.File)
 	}
 	return agent.Tool{Name: config.ToolSkillLoad, Description: skillLoadDescription, Schema: skillLoadSchema, Call: call}
 }

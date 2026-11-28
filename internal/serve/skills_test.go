@@ -202,3 +202,32 @@ func TestAGroupAgentLoadsWriteTriggers(t *testing.T) {
 		t.Errorf("skill_load answered %s", body)
 	}
 }
+
+// skill_load given an empty file reads the Skill's SKILL.md, as one given
+// none does: a model that fills every property sends file as "".
+func TestSkillLoadReadsSkillMDForAnEmptyFile(t *testing.T) {
+	a, _, _, provider := agentPair(t, "auditor")
+	installAudits(t, a)
+	grantSkills(t, a, "auditor", `["audits/erc20"]`)
+	provider.set(func(n int, w http.ResponseWriter, _ *http.Request) {
+		streamParts(w)
+		if n == 1 {
+			endCall(w, "skill_load", `{"name":"audits/erc20","file":""}`)
+			return
+		}
+		endTalkWrite(w, "done")
+	})
+	s := watch(t, a)
+	v, err := a.client().ConversationSend(context.Background(), "@auditor audit", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untilEnd(t, s, v.MsgID)
+	calls := provider.seen()
+	if len(calls) < 2 {
+		t.Fatalf("%d calls", len(calls))
+	}
+	if got := lastTurn(calls[1]); !strings.Contains(got, "# ERC-20") || strings.Contains(got, `"is_error":true`) {
+		t.Errorf("skill_load with an empty file answered %s", got)
+	}
+}
