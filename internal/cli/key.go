@@ -81,7 +81,7 @@ type keyView struct {
 	NetworkType string `json:"network_type"`
 	// Addresses are where the Key funds and spends: its address on each
 	// of its Conversation's Networks of its Network type, as key_address
-	// gives them.
+	// gives them, or with none its type's own address, with no network.
 	Addresses []signreq.NetworkAddress `json:"addresses"`
 }
 
@@ -124,7 +124,11 @@ func runKeyInspect(ctx context.Context, g *globals, pass passphraseSource, query
 	fmt.Fprintf(g.app.Stdout, "key %s\npublic_key %s\nconversation %s\nworkspace %s\nsession %s\ncurve %s\nnetwork_type %s\nt %d\nn %d\nshare %s\n",
 		v.shownAs(g.out()), v.PublicKey, v.ConversationID, v.Workspace, v.SessionID, v.Curve, v.NetworkType, v.T, v.N, yesNo(v.Share))
 	for _, a := range v.Addresses {
-		fmt.Fprintf(g.app.Stdout, "address %s %s\n", a.Network, a.Address)
+		if a.Network == "" {
+			fmt.Fprintf(g.app.Stdout, "address %s\n", a.Address) // no Network of its type
+		} else {
+			fmt.Fprintf(g.app.Stdout, "address %s %s\n", a.Network, a.Address)
+		}
 	}
 	return nil
 }

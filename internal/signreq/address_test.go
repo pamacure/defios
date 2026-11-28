@@ -48,3 +48,26 @@ func TestKeyAddressesAreOnItsNetworkTypesNetworks(t *testing.T) {
 		t.Error("a malformed public key gave a Bitcoin address")
 	}
 }
+
+// With no Network, a Key's address is its Network type's own: the EIP-55
+// address, the base58 public key, or the bech32 P2WPKH address on bitcoin
+// mainnet.
+func TestTypeAddressNeedsNoNetwork(t *testing.T) {
+	g, _ := hex.DecodeString(btcPubkey)
+	for typ, want := range map[string]string{
+		network.Ethereum: "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+		network.Bitcoin:  "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+	} {
+		got, err := TypeAddress(g, typ)
+		if err != nil || got != (NetworkAddress{Type: typ, Address: want}) {
+			t.Errorf("%s: %v, %v, want %s", typ, got, err, want)
+		}
+	}
+	ed := make([]byte, 32)
+	for i := range ed {
+		ed[i] = 1
+	}
+	if got, err := TypeAddress(ed, network.Solana); err != nil || got.Address != "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi" {
+		t.Errorf("solana: %v, %v", got, err)
+	}
+}

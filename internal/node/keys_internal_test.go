@@ -13,7 +13,8 @@ import (
 
 // A Key's addresses are those on its Conversation's Networks of its
 // Network type alone, as key_address gives them (ADR 0046): a Bitcoin
-// Key's on each Bitcoin Network and no Ethereum one.
+// Key's on each Bitcoin Network and no Ethereum one. With no Network of
+// its type, it has its type's own address, on no Network.
 func TestKeyAddressesFollowItsNetworkType(t *testing.T) {
 	// secp256k1 generator point, compressed; its addresses are well known.
 	g := []byte{0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87, 0x0b, 0x07,
@@ -34,8 +35,9 @@ func TestKeyAddressesFollowItsNetworkType(t *testing.T) {
 			t.Errorf("network_type %q: Addresses = %v, %v, want %v", c.stored, k.Addresses, k.AddressesErr, c.want)
 		}
 	}
-	if k := keyOf(key.Key{Curve: "ecdsa", PublicKey: g}, nil, config.KeyAlias{}, nil, nil, nil); k.Addresses == nil || len(k.Addresses) != 0 {
-		t.Errorf("with no Networks, Addresses = %#v, want empty", k.Addresses)
+	want := []signreq.NetworkAddress{{Type: "bitcoin", Address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"}}
+	if k := keyOf(key.Key{Curve: "ecdsa", PublicKey: g}, nil, config.KeyAlias{NetworkType: "bitcoin"}, nil, nets[1:], nil); !slices.Equal(k.Addresses, want) {
+		t.Errorf("with no Bitcoin Network, Addresses = %v, want %v", k.Addresses, want)
 	}
 }
 

@@ -8,9 +8,10 @@ import (
 	"defios.com/internal/network"
 )
 
-// NetworkAddress is a Key's address on one Network.
+// NetworkAddress is a Key's address on one Network, or, Network "", its
+// Network type's own (TypeAddress).
 type NetworkAddress struct {
-	Network string `json:"network"`
+	Network string `json:"network,omitempty"`
 	Type    string `json:"type"`
 	Address string `json:"address"`
 }
@@ -33,6 +34,21 @@ func KeyAddresses(publicKey []byte, typ string, nets []network.Network) ([]Netwo
 		out = append(out, NetworkAddress{Network: n.Alias, Type: n.Type, Address: addr})
 	}
 	return out, nil
+}
+
+// TypeAddress is the address of the Key of publicKey for its Network type
+// typ on no Network in particular: Ethereum's and Solana's are the same on
+// every Network of the type, and Bitcoin's is the one on mainnet.
+func TypeAddress(publicKey []byte, typ string) (NetworkAddress, error) {
+	n := network.Network{Type: typ}
+	if typ == network.Bitcoin {
+		n.BitcoinNetwork = "mainnet"
+	}
+	addr, err := networkAddress(n, publicKey)
+	if err != nil {
+		return NetworkAddress{}, err
+	}
+	return NetworkAddress{Type: typ, Address: addr}, nil
 }
 
 // networkAddress is the address of the Key of publicKey on n.

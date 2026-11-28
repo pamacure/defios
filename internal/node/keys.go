@@ -58,7 +58,8 @@ type Key struct {
 	Share bool
 	// Addresses are where the Key funds and spends: its address on each of
 	// its Conversation's Networks of its Network type, as key_address
-	// gives them (ADR 0046); empty with none of that type. AddressesErr
+	// gives them (ADR 0046); with none of that type, its type's own
+	// address on no Network (signreq.TypeAddress). AddressesErr
 	// is why they could not be made: its config.toml did not read, or a
 	// Network or its public key is malformed.
 	Addresses    []signreq.NetworkAddress
@@ -304,7 +305,13 @@ func keyOf(k key.Key, have map[string]bool, a config.KeyAlias, names map[[32]byt
 		Addresses: []signreq.NetworkAddress{}, AddressesErr: netsErr,
 	}
 	if netsErr == nil {
-		if addrs, err := signreq.KeyAddresses(k.PublicKey, v.NetworkType, nets); err != nil {
+		addrs, err := signreq.KeyAddresses(k.PublicKey, v.NetworkType, nets)
+		if err == nil && len(addrs) == 0 {
+			var a signreq.NetworkAddress
+			a, err = signreq.TypeAddress(k.PublicKey, v.NetworkType)
+			addrs = []signreq.NetworkAddress{a}
+		}
+		if err != nil {
 			v.AddressesErr = err
 		} else {
 			v.Addresses = addrs

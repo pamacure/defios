@@ -310,8 +310,8 @@ type KeyDetail struct {
 	NetworkType                  string // as Conversation's
 	// Addresses are where it funds and spends: one on each of this
 	// Conversation's Networks of its Network type, as key_address gives
-	// them; none with no such Network. AddressError is why they could not
-	// be made, "" if they could.
+	// them, or with no such Network its type's own address. AddressError
+	// is why they could not be made, "" if they could.
 	Addresses    []KeyAddress
 	AddressError string
 	// NetworkTypes are those its curve allows, for choosing among.
@@ -324,7 +324,7 @@ type KeyDetail struct {
 }
 
 // KeyAddress is one of a Key's addresses and what it is: "Address on
-// eth".
+// eth", or "Bitcoin address" on no Network.
 type KeyAddress struct{ Label, Address string }
 
 // Agent is an Agent Profile of this device, its party key and Livery,
@@ -923,11 +923,18 @@ func (t *talk) devices() []Device {
 	return out
 }
 
+// typeNames are the Network types as a person reads them.
+var typeNames = map[string]string{network.Bitcoin: "Bitcoin", network.Ethereum: "Ethereum", network.Solana: "Solana"}
+
 func (t *talk) keyDetail(k node.Key) *KeyDetail {
 	d := &KeyDetail{Key: k.Key, Alias: k.Alias, Curve: k.Curve, PublicKey: k.PublicKey, NetworkType: k.NetworkType, T: k.T, N: k.N, Share: k.Share}
 	d.Addresses = make([]KeyAddress, len(k.Addresses))
 	for i, a := range k.Addresses {
-		d.Addresses[i] = KeyAddress{Label: "Address on " + a.Network, Address: a.Address}
+		label := "Address on " + a.Network
+		if a.Network == "" {
+			label = typeNames[a.Type] + " address"
+		}
+		d.Addresses[i] = KeyAddress{Label: label, Address: a.Address}
 	}
 	if k.AddressesErr != nil {
 		d.AddressError = k.AddressesErr.Error()

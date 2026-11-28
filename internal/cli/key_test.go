@@ -215,13 +215,17 @@ func seedMintedKeys(t *testing.T, dir, alias string, pubs ...[]byte) {
 
 // key inspect gives a Key's address on each of its Conversation's Networks
 // of its Network type alone, as key_address does: Ethereum's for an ECDSA
-// Key with none set, Bitcoin's once it is set to bitcoin (ADR 0046).
+// Key with none set, Bitcoin's once it is set to bitcoin (ADR 0046). With
+// no Network of its type it gives its type's own address.
 func TestKeyInspectGivesTheAddressesOfItsNetworkType(t *testing.T) {
 	dir := t.TempDir()
 	mustInit(t, dir)
 	g, _ := hex.DecodeString("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
 	seedMintedKeys(t, dir, group.ImplicitAlias, g)
 	ref := "ecdsa:" + hex.EncodeToString(g)
+	if r := run(t, nil, "", "--dir", dir, "key", "inspect", ref); r.code != 0 || !strings.Contains(r.stdout, "\naddress 0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf\n") {
+		t.Fatalf("inspect with no Networks exit %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
 	for _, args := range [][]string{
 		{"eth", "--type", "ethereum", "--chain-id", "1"},
 		{"btc", "--type", "bitcoin", "--bitcoin-network", "mainnet"},

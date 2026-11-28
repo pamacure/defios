@@ -1270,10 +1270,7 @@ function keyDetails(k) {
     row("Signers", h("div", { class: "value" }, `${k.T} of ${k.N} devices`)),
     row("Public key", copyable(k.PublicKey, "Public key")),
     (k.Addresses ?? []).map((ad) => row(ad.Label, copyable(ad.Address, ad.Label))),
-    k.AddressError
-      ? row("Address", h("div", { class: "value" }, h("p", { class: "hint" }, `Its addresses could not be made: ${k.AddressError}`)))
-      : !k.Addresses?.length && row("Address", h("div", { class: "value" },
-        h("p", { class: "hint" }, `No ${NETWORK_TYPES[k.NetworkType] ?? k.NetworkType} Network here yet. Add one to see where this Key funds and spends.`))),
+    k.AddressError && row("Address", h("div", { class: "value" }, h("p", { class: "hint" }, `Its addresses could not be made: ${k.AddressError}`))),
     row("This device", h("div", { class: "value" }, k.Share ? "Holds a share" : "Holds no share")));
 }
 
