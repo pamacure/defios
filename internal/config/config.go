@@ -96,6 +96,19 @@ const (
 	ToolSignRefuse  = "sign_refuse"
 	ToolChainFill   = "chain_fill"
 	ToolKeyAddress  = "key_address"
+	// The Trigger-config Tools (ADR 0046).
+	ToolJobList        = "job_list"
+	ToolJobAdd         = "job_add"
+	ToolJobEdit        = "job_edit"
+	ToolJobDelete      = "job_delete"
+	ToolHookList       = "hook_list"
+	ToolHookAdd        = "hook_add"
+	ToolHookEdit       = "hook_edit"
+	ToolHookDelete     = "hook_delete"
+	ToolScheduleList   = "schedule_list"
+	ToolScheduleAdd    = "schedule_add"
+	ToolScheduleEdit   = "schedule_edit"
+	ToolScheduleDelete = "schedule_delete"
 )
 
 // ToolSkillLoad reads a granted Skill (ADR 0030). It is offered whenever a
@@ -103,7 +116,9 @@ const (
 const ToolSkillLoad = "skill_load"
 
 // Tools is every built-in Tool, in the order a run offers them.
-var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolTalkSummon, ToolTalkParties, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill, ToolKeyAddress}
+var Tools = []string{ToolTalkWrite, ToolTalkRead, ToolTalkSummon, ToolTalkParties, ToolSignList, ToolSignInspect, ToolSignPropose, ToolSignAccept, ToolSignRefuse, ToolChainFill, ToolKeyAddress,
+	ToolJobList, ToolJobAdd, ToolJobEdit, ToolJobDelete, ToolHookList, ToolHookAdd, ToolHookEdit, ToolHookDelete,
+	ToolScheduleList, ToolScheduleAdd, ToolScheduleEdit, ToolScheduleDelete}
 
 // ValidateTool refuses a name that is no built-in Tool.
 func ValidateTool(name string) error {

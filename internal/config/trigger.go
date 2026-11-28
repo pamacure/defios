@@ -46,6 +46,10 @@ type Job struct {
 	// Timeout bounds an exec Job's run or each webhook attempt; zero is
 	// the kind's default.
 	Timeout Age `toml:"timeout,omitzero"`
+	// By is the Handle of the agent that last wrote it with a Tool, unset
+	// for a person's (ADR 0046): an agent Job with it set frames its
+	// prompt as that agent's words, not the operator's.
+	By string `toml:"by,omitempty"`
 }
 
 // Kinds of Job.
@@ -104,6 +108,8 @@ type Hook struct {
 	Text string `toml:"text,omitempty"`
 	// Jobs are the Jobs it runs, by name, in order.
 	Jobs []string `toml:"jobs"`
+	// By is the Handle of the agent that last wrote it, as a Job's.
+	By string `toml:"by,omitempty"`
 }
 
 // Schedule is a Trigger that fires at set times while serve serves its
@@ -118,6 +124,8 @@ type Schedule struct {
 	// Jobs are the Jobs it runs, by name, in order. An agent Job among
 	// them names its target, for a Schedule has no event to take one from.
 	Jobs []string `toml:"jobs"`
+	// By is the Handle of the agent that last wrote it, as a Job's.
+	By string `toml:"by,omitempty"`
 }
 
 // Next is the first time after after that s fires; zero if it never does
@@ -149,6 +157,9 @@ func (s Schedule) location() (*time.Location, error) {
 }
 
 func (s Schedule) validate(jobs map[string]Job) error {
+	if err := validateBy(s.By); err != nil {
+		return err
+	}
 	switch {
 	case (s.Cron == "") == (s.At == ""):
 		return errors.New("a Schedule has exactly one of cron or at")
@@ -271,6 +282,9 @@ func (j Job) validate(md toml.MetaData, name string) error {
 	if kinds != 1 {
 		return errors.New("a Job has exactly one of agent, exec or webhook")
 	}
+	if err := validateBy(j.By); err != nil {
+		return err
+	}
 	if md.IsDefined("jobs", name, "exec") && (len(j.Exec) == 0 || j.Exec[0] == "") {
 		return errors.New("exec must name a program to run")
 	}
@@ -321,6 +335,17 @@ func (j Job) validate(md toml.MetaData, name string) error {
 	return nil
 }
 
+// validateBy checks a Trigger's by: unset, or an agent's Handle.
+func validateBy(by string) error {
+	if by == "" {
+		return nil
+	}
+	if err := ValidateHandle(by); err != nil {
+		return fmt.Errorf("by: %w", err)
+	}
+	return nil
+}
+
 // validateURLOrRef accepts a Secret reference, or an http(s) URL with a
 // host. A literal URL is not echoed, for it may carry a token.
 func validateURLOrRef(v string) error {
@@ -336,6 +361,9 @@ func validateURLOrRef(v string) error {
 }
 
 func (h Hook) validate(jobs map[string]Job) error {
+	if err := validateBy(h.By); err != nil {
+		return err
+	}
 	if err := validateJobList(h.Jobs, jobs); err != nil {
 		return err
 	}

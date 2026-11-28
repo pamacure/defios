@@ -122,19 +122,20 @@ func TestHookAndScheduleListReadConfig(t *testing.T) {
 
 // job list reads the Group's config.toml, with no serve running: each Job
 // by name with its kind and what it runs, a webhook's URL never shown, for
-// it may carry a token.
+// it may carry a token, and the agent that wrote it, if one did.
 func TestJobListReadsConfig(t *testing.T) {
 	dir := triggerNode(t, triggersBody+`
 [jobs.slow]
 exec = ["sleep", "10"]
 timeout = "30s"
+by = "builder"
 `)
 	r := run(t, nil, "", "--dir", dir, "job", "list")
 	want := "notify  webhook\n" +
 		"ping  exec true\n" +
 		"sign_accept  exec defios sign accept $DEFIOS_SIGN_REQUEST_ID\n" +
 		"sign_refuse  exec defios sign refuse $DEFIOS_SIGN_REQUEST_ID --reason \"refused by this Node's sign_refuse Job\"\n" +
-		"slow  exec sleep 10  timeout 30s\n"
+		"slow  exec sleep 10  timeout 30s  by @builder\n"
 	if r.code != 0 || r.stdout != want {
 		t.Fatalf("job list exit %d:\n%s%s\nwant:\n%s", r.code, r.stdout, r.stderr, want)
 	}
@@ -145,9 +146,10 @@ timeout = "30s"
 		Exec    []string `json:"exec"`
 		Webhook string   `json:"webhook"`
 		Timeout string   `json:"timeout"`
+		By      string   `json:"by"`
 	}
 	if err := json.Unmarshal([]byte(r.stdout), &jv); err != nil || len(jv) != 5 || jv[0].Kind != "webhook" || jv[0].Webhook != "" ||
-		jv[4].Exec[1] != "10" || jv[4].Timeout != "30s" || strings.Contains(r.stdout, "ntfy.example") {
+		jv[4].Exec[1] != "10" || jv[4].Timeout != "30s" || jv[4].By != "builder" || jv[1].By != "" || strings.Contains(r.stdout, "ntfy.example") {
 		t.Fatalf("job list --json = %s (%v)", r.stdout, err)
 	}
 }

@@ -104,6 +104,8 @@ type JobView struct {
 	// UsedBy are the Triggers that run it, as "Hook <name>" or
 	// "Schedule <name>".
 	UsedBy []string
+	// By is the agent that last wrote it, "" for a person (ADR 0046).
+	By string
 }
 
 // KeyChoice is a Key an agent Job may answer in the Conversation of:
@@ -132,6 +134,8 @@ type HookView struct {
 	Events, From, Handles, Conversation []string
 	Text                                string
 	Jobs                                []string
+	// By is the agent that last wrote it, as a JobView's.
+	By string
 }
 
 // ScheduleView is one Schedule and its next firing; nil when it fires no
@@ -140,6 +144,8 @@ type ScheduleView struct {
 	Name, Cron, TZ, At string
 	Jobs               []string
 	Next               *time.Time
+	// By is the agent that last wrote it, as a JobView's.
+	By string
 }
 
 // JobDraft is a Job's form as filled in: New adds one by Name, else Name
@@ -439,14 +445,14 @@ func (s *Shell) fillTriggers(n Node, v *TriggersView) {
 	v.Hooks = make([]HookView, len(hooks))
 	for i, hk := range hooks {
 		v.Hooks[i] = HookView{Name: hk.Name, Events: orEmpty(hk.Events), From: orEmpty(hk.From), Handles: orEmpty(hk.Handles),
-			Conversation: orEmpty(hk.Conversation), Text: hk.Text, Jobs: orEmpty(hk.Jobs)}
+			Conversation: orEmpty(hk.Conversation), Text: hk.Text, Jobs: orEmpty(hk.Jobs), By: hk.By}
 		for _, j := range hk.Jobs {
 			usedBy[j] = append(usedBy[j], "Hook "+hk.Name)
 		}
 	}
 	v.Schedules = make([]ScheduleView, len(scheds))
 	for i, sc := range scheds {
-		v.Schedules[i] = ScheduleView{Name: sc.Name, Cron: sc.Cron, TZ: sc.TZ, At: sc.At, Jobs: orEmpty(sc.Jobs)}
+		v.Schedules[i] = ScheduleView{Name: sc.Name, Cron: sc.Cron, TZ: sc.TZ, At: sc.At, Jobs: orEmpty(sc.Jobs), By: sc.By}
 		if !sc.Next.IsZero() {
 			next := sc.Next
 			v.Schedules[i].Next = &next
@@ -458,7 +464,7 @@ func (s *Shell) fillTriggers(n Node, v *TriggersView) {
 	v.Jobs = make([]JobView, len(jobs))
 	for i, j := range jobs {
 		jv := JobView{Name: j.Name, Kind: j.Kind(), Agent: j.Agent, Prompt: j.Prompt, Target: j.Target,
-			Exec: orEmpty(j.Exec), Secrets: orEmpty(j.Secrets), Headers: []Header{}, UsedBy: orEmpty(usedBy[j.Name])}
+			Exec: orEmpty(j.Exec), Secrets: orEmpty(j.Secrets), Headers: []Header{}, UsedBy: orEmpty(usedBy[j.Name]), By: j.By}
 		if name, ok := secretName(j.Webhook); ok {
 			jv.WebhookSecret = name
 		} else {

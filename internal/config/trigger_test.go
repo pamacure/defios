@@ -77,9 +77,11 @@ func TestJobsAndHooksRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	in := config.Config{
 		DisplayName: "laptop", Hostname: "defios-a",
-		Jobs:  map[string]config.Job{"sign_accept": {Exec: []string{"defios", "sign", "accept", "$DEFIOS_SIGN_REQUEST_ID"}}},
-		Hooks: map[string]config.Hook{"h": {Events: []string{"app.freeform"}, From: config.Names{"self"}, Jobs: []string{"sign_accept"}}},
+		Jobs:      map[string]config.Job{"sign_accept": {Exec: []string{"defios", "sign", "accept", "$DEFIOS_SIGN_REQUEST_ID"}}},
+		Hooks:     map[string]config.Hook{"h": {Events: []string{"app.freeform"}, From: config.Names{"self"}, Jobs: []string{"sign_accept"}, By: "builder"}},
+		Schedules: map[string]config.Schedule{"s": {Cron: "0 9 * * 1-5", Jobs: []string{"sign_accept"}, By: "builder"}},
 	}
+	in.Jobs["summarise"] = config.Job{Agent: "auditor", Prompt: "Summarise the talk.", By: "builder"}
 	if err := config.WriteFile(path, in); err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +129,9 @@ func TestConfigRefusesMalformedJobsAndHooks(t *testing.T) {
 		"bad text":                     "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\ntext = \"(\"\njobs = [\"j\"]",
 		"from not a string":            "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\nfrom = 1\njobs = [\"j\"]",
 		"unknown hook key":             "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\njobs = [\"j\"]\nwhen = \"x\"",
+		"job by no handle":             "[jobs.j]\nexec = [\"true\"]\nby = \"Builder\"",
+		"hook by no handle":            "[jobs.j]\nexec = [\"true\"]\n[hooks.h]\njobs = [\"j\"]\nby = \"@builder\"",
+		"schedule by no handle":        "[jobs.j]\nexec = [\"true\"]\n[schedules.s]\ncron = \"0 9 * * *\"\njobs = [\"j\"]\nby = \"user\"",
 	} {
 		if _, err := config.ReadFile(write(t, body)); err == nil {
 			t.Errorf("%s: read without error", name)

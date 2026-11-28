@@ -165,24 +165,29 @@ func (h *Host) groupConfig(group string) (config.Config, error) {
 	return c, err
 }
 
-// AddJob defines Job name in group's config.toml. An agent Job that
-// answers in Group-level talk or a Key's Conversation must have its agent
-// included there, or it is a JobNotIncludedError. That it names an Agent
-// Profile of this Node's is a front end's to offer, as the loader checks
-// it only where the Job runs.
+// AddJob defines Job name in group's config.toml, as a person's save: it
+// clears j's by (ADR 0046). An agent Job that answers in Group-level talk
+// or a Key's Conversation must have its agent included there, or it is a
+// JobNotIncludedError. That it names an Agent Profile of this Node's is a
+// front end's to offer, as the loader checks it only where the Job runs.
 func (h *Host) AddJob(ctx context.Context, group, name string, j config.Job) error {
-	if err := h.checkJob(group, j); err != nil {
-		return err
-	}
-	return h.setEntry(group, config.TableJobs, name, j, false)
+	j.By = ""
+	return h.setJob(group, name, j, false)
 }
 
-// EditJob replaces Job name's definition with j, checked as AddJob does.
+// EditJob replaces Job name's definition with j, checked as AddJob does,
+// and clears its by.
 func (h *Host) EditJob(ctx context.Context, group, name string, j config.Job) error {
+	j.By = ""
+	return h.setJob(group, name, j, true)
+}
+
+// setJob defines Job name as j, by and all; exists as setEntry's.
+func (h *Host) setJob(group, name string, j config.Job, exists bool) error {
 	if err := h.checkJob(group, j); err != nil {
 		return err
 	}
-	return h.setEntry(group, config.TableJobs, name, j, true)
+	return h.setEntry(group, config.TableJobs, name, j, exists)
 }
 
 // DeleteJob removes Job name, which no Trigger may still run: one that
@@ -209,13 +214,16 @@ func (h *Host) DeleteJob(ctx context.Context, group, name string) error {
 	return h.setEntry(group, config.TableJobs, name, nil, true)
 }
 
-// AddHook defines Hook name, whose Jobs must be defined.
+// AddHook defines Hook name, whose Jobs must be defined, and clears its
+// by, as AddJob does.
 func (h *Host) AddHook(ctx context.Context, group, name string, hk config.Hook) error {
+	hk.By = ""
 	return h.setEntry(group, config.TableHooks, name, hk, false)
 }
 
-// EditHook replaces Hook name's definition with hk.
+// EditHook replaces Hook name's definition with hk, clearing its by.
 func (h *Host) EditHook(ctx context.Context, group, name string, hk config.Hook) error {
+	hk.By = ""
 	return h.setEntry(group, config.TableHooks, name, hk, true)
 }
 
@@ -224,19 +232,68 @@ func (h *Host) DeleteHook(ctx context.Context, group, name string) error {
 	return h.setEntry(group, config.TableHooks, name, nil, true)
 }
 
-// AddSchedule defines Schedule name, whose Jobs must be defined.
+// AddSchedule defines Schedule name, whose Jobs must be defined, and
+// clears its by, as AddJob does.
 func (h *Host) AddSchedule(ctx context.Context, group, name string, s config.Schedule) error {
+	s.By = ""
 	return h.setEntry(group, config.TableSchedules, name, s, false)
 }
 
-// EditSchedule replaces Schedule name's definition with s.
+// EditSchedule replaces Schedule name's definition with s, clearing its by.
 func (h *Host) EditSchedule(ctx context.Context, group, name string, s config.Schedule) error {
+	s.By = ""
 	return h.setEntry(group, config.TableSchedules, name, s, true)
 }
 
 // DeleteSchedule removes Schedule name.
 func (h *Host) DeleteSchedule(ctx context.Context, group, name string) error {
 	return h.setEntry(group, config.TableSchedules, name, nil, true)
+}
+
+// agentTriggers is group's Trigger config as the Trigger-config Tools
+// write it (ADR 0046): checked as a person's save is, but keeping the by
+// the Tool set.
+type agentTriggers struct {
+	h     *Host
+	group string
+}
+
+var _ serve.TriggerConfig = agentTriggers{}
+
+func (a agentTriggers) AddJob(ctx context.Context, name string, j config.Job) error {
+	return a.h.setJob(a.group, name, j, false)
+}
+
+func (a agentTriggers) EditJob(ctx context.Context, name string, j config.Job) error {
+	return a.h.setJob(a.group, name, j, true)
+}
+
+func (a agentTriggers) DeleteJob(ctx context.Context, name string) error {
+	return a.h.DeleteJob(ctx, a.group, name)
+}
+
+func (a agentTriggers) AddHook(ctx context.Context, name string, hk config.Hook) error {
+	return a.h.setEntry(a.group, config.TableHooks, name, hk, false)
+}
+
+func (a agentTriggers) EditHook(ctx context.Context, name string, hk config.Hook) error {
+	return a.h.setEntry(a.group, config.TableHooks, name, hk, true)
+}
+
+func (a agentTriggers) DeleteHook(ctx context.Context, name string) error {
+	return a.h.DeleteHook(ctx, a.group, name)
+}
+
+func (a agentTriggers) AddSchedule(ctx context.Context, name string, s config.Schedule) error {
+	return a.h.setEntry(a.group, config.TableSchedules, name, s, false)
+}
+
+func (a agentTriggers) EditSchedule(ctx context.Context, name string, s config.Schedule) error {
+	return a.h.setEntry(a.group, config.TableSchedules, name, s, true)
+}
+
+func (a agentTriggers) DeleteSchedule(ctx context.Context, name string) error {
+	return a.h.DeleteSchedule(ctx, a.group, name)
 }
 
 // setEntry sets [<table>.<name>] of group's config.toml to v, nil to

@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"defios.com/internal/config"
 	"defios.com/internal/group"
 	"defios.com/internal/key"
 	"defios.com/internal/serve"
@@ -140,10 +138,6 @@ func TestSignToolsAreScopedToTheConversationsKey(t *testing.T) {
 // agent in Group-level talk, a Group-tier one in a Key's Conversation. No
 // Tool is silently dropped (ADR 0046).
 func TestAMisplacedRunFailsSayingWhy(t *testing.T) {
-	tools, groupTools := config.Tools, config.GroupTools
-	config.Tools = append(slices.Clone(tools), "job_list")
-	config.GroupTools = append(slices.Clone(groupTools), "job_list")
-	t.Cleanup(func() { config.Tools, config.GroupTools = tools, groupTools })
 	a, b, gid, provider := agentPair(t, "auditor")
 	name := mintKey(t, a, b, gid)
 	waitWorkspace(t, a, name)

@@ -232,3 +232,40 @@ func TestAnAgentJobsAgentIsIncludedWhereItAnswers(t *testing.T) {
 		t.Fatalf("exclude: %+v", ts.Problem)
 	}
 }
+
+// A Job, Hook or Schedule an agent wrote shows its by, and a save through
+// the forms, a person's, clears it (ADR 0046).
+func TestTriggersShowTheAgentThatWroteThem(t *testing.T) {
+	if testing.Short() {
+		t.Skip("forms a Group")
+	}
+	alice, _, _, _ := formedAt(t)
+	text := alice.TriggersTOML().Text + `
+[jobs.ping]
+exec = ["true"]
+by = "builder"
+
+[hooks.requests]
+events = ["sign.request"]
+jobs = ["ping"]
+by = "builder"
+
+[schedules.daily]
+cron = "0 9 * * *"
+jobs = ["ping"]
+by = "builder"
+`
+	if tv := alice.SaveTriggersTOML(text); tv.Problem != nil {
+		t.Fatalf("save toml: %+v", tv.Problem)
+	}
+	v := alice.Triggers()
+	if j := jobNamed(v, "ping"); j == nil || j.By != "builder" || len(v.Hooks) != 1 || v.Hooks[0].By != "builder" || len(v.Schedules) != 1 || v.Schedules[0].By != "builder" {
+		t.Fatalf("by not shown: jobs %+v hooks %+v schedules %+v", v.Jobs, v.Hooks, v.Schedules)
+	}
+	triggersOK(t, "edit job", alice.SaveJob(shell.JobDraft{Name: "ping", Kind: "exec", Exec: []string{"true"}}))
+	triggersOK(t, "edit hook", alice.SaveHook(shell.HookDraft{Name: "requests", Events: []string{"sign.request"}, Jobs: []string{"ping"}}))
+	v = triggersOK(t, "edit schedule", alice.SaveSchedule(shell.ScheduleDraft{Name: "daily", Cron: "0 9 * * *", Jobs: []string{"ping"}}))
+	if j := jobNamed(v, "ping"); j.By != "" || v.Hooks[0].By != "" || v.Schedules[0].By != "" {
+		t.Errorf("a person's save kept by: jobs %+v hooks %+v schedules %+v", v.Jobs, v.Hooks, v.Schedules)
+	}
+}

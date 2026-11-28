@@ -306,6 +306,12 @@ const agentBrick = (handle) => {
   return l === undefined ? "" : `brick ${brickClass(l)}`;
 };
 
+// byChip names the agent that last wrote a Job, Hook or Schedule with a
+// Tool, none for a person's (ADR 0046).
+function byChip(x) {
+  return x.By && h("span", { class: "chip", title: "An agent wrote this. Saving it here makes it yours." }, "Written by ", agentTag(x.By));
+}
+
 function agentTag(handle) {
   const b = agentBrick(handle);
   return h("span", { class: `agent-tag ${agentClass(handle)}` }, b && h("span", { class: b, "aria-hidden": "true" }), `@${handle}`);
@@ -357,6 +363,7 @@ function jobRow(j) {
         ? [agentTag(j.Agent), answersIn(j)]
         : jobSummary(j))),
       h("span", { class: "chip" }, KINDS[j.Kind] ?? j.Kind),
+      byChip(j),
       h("span", { class: `chip ${j.UsedBy.length ? "ok" : ""}` }, j.UsedBy.length ? `Run by ${j.UsedBy.join(", ")}` : "No Trigger runs it"),
       h("button", {
         class: "btn small", type: "button", disabled: !tv.Served || isRunning,
@@ -573,6 +580,7 @@ function hookRow(hk) {
   const on = hk.Events.length ? hk.Events.join(", ") : "every event";
   return itemRow(`hook:${hk.Name}`, hk.Name,
     h("div", { class: "who" }, h("strong", {}, hk.Name), h("code", { title: on }, `on ${on}`)),
+    byChip(hk),
     h("span", { class: "chip" }, `Runs ${hk.Jobs.join(", ")}`));
 }
 
@@ -724,6 +732,7 @@ function scheduleRow(s) {
   return itemRow(`schedule:${s.Name}`, s.Name,
     h("div", { class: "who" }, h("strong", {}, s.Name), h("span", { class: "when", title: s.At || `cron ${s.Cron}` }, when(s))),
     h("span", { class: `chip ${next ? "ok" : ""}`, title: next ? next.toString() : "" }, next ? `Next: ${next.toLocaleString()}` : "Fires no more"),
+    byChip(s),
     h("span", { class: "chip" }, `Runs ${s.Jobs.join(", ")}`));
 }
 

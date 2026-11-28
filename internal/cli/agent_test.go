@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -613,25 +612,14 @@ func TestAgentEditGivesARandomLivery(t *testing.T) {
 	}
 }
 
-// groupTool is a stand-in Group Tool, for the Group Tools come in later
-// tickets.
-const groupTool = "job_list"
-
-// withGroupTool makes groupTool a built-in Group Tool for t.
-func withGroupTool(t *testing.T) {
-	t.Helper()
-	tools, group := config.Tools, config.GroupTools
-	config.Tools = append(slices.Clone(tools), groupTool)
-	config.GroupTools = append(slices.Clone(group), groupTool)
-	t.Cleanup(func() { config.Tools, config.GroupTools = tools, group })
-}
+// groupTool is a Group Tool.
+const groupTool = config.ToolJobList
 
 // A profile grants Tools of one tier, and its tier fixes where it is
 // included: grant refuses a mixed profile, and include, or a grant to an
 // included profile, that would put it in the wrong place, naming each
 // place and writing nothing (ADR 0046).
 func TestAgentToolTiersAreRefusedWhereTheyDoNotFit(t *testing.T) {
-	withGroupTool(t)
 	p := agentsWithKeys(t)
 	alias := group.ImplicitAlias
 	refused := func(want string, args ...string) {

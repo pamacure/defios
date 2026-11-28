@@ -103,6 +103,8 @@ type jobView struct {
 	Secrets []string `json:"secrets,omitempty"`
 	Webhook string   `json:"webhook,omitempty"`
 	Timeout string   `json:"timeout,omitempty"`
+	// By is the agent that last wrote it, absent for a person (ADR 0046).
+	By string `json:"by,omitempty"`
 }
 
 func runJobList(ctx context.Context, g *globals) error {
@@ -116,7 +118,7 @@ func runJobList(ctx context.Context, g *globals) error {
 	}
 	views := make([]jobView, 0, len(jobs))
 	for _, j := range jobs {
-		v := jobView{Name: j.Name, Kind: j.Kind(), Agent: j.Agent, Prompt: j.Prompt, Target: j.Target, Exec: j.Exec, Secrets: j.Secrets}
+		v := jobView{Name: j.Name, Kind: j.Kind(), Agent: j.Agent, Prompt: j.Prompt, Target: j.Target, Exec: j.Exec, Secrets: j.Secrets, By: j.By}
 		if strings.HasPrefix(j.Webhook, "$") {
 			v.Webhook = j.Webhook
 		}
@@ -150,6 +152,9 @@ func runJobList(ctx context.Context, g *globals) error {
 		if v.Timeout != "" {
 			parts = append(parts, "timeout "+v.Timeout)
 		}
+		if v.By != "" {
+			parts = append(parts, "by @"+v.By)
+		}
 		fmt.Fprintln(g.app.Stdout, strings.Join(parts, "  "))
 	}
 	return nil
@@ -164,6 +169,7 @@ type hookView struct {
 	Conversation []string `json:"conversation,omitempty"`
 	Text         string   `json:"text,omitempty"`
 	Jobs         []string `json:"jobs"`
+	By           string   `json:"by,omitempty"`
 }
 
 func runHookList(ctx context.Context, g *globals) error {
@@ -179,7 +185,7 @@ func runHookList(ctx context.Context, g *globals) error {
 	for _, h := range hooks {
 		views = append(views, hookView{
 			Name: h.Name, Events: h.Events, From: h.From, Handles: h.Handles,
-			Conversation: h.Conversation, Text: h.Text, Jobs: h.Jobs,
+			Conversation: h.Conversation, Text: h.Text, Jobs: h.Jobs, By: h.By,
 		})
 	}
 	if g.json {
@@ -203,6 +209,9 @@ func runHookList(ctx context.Context, g *globals) error {
 			parts = append(parts, "text "+v.Text)
 		}
 		parts = append(parts, "jobs "+strings.Join(v.Jobs, ", "))
+		if v.By != "" {
+			parts = append(parts, "by @"+v.By)
+		}
 		fmt.Fprintln(g.app.Stdout, strings.Join(parts, "  "))
 	}
 	return nil
@@ -217,6 +226,7 @@ type scheduleView struct {
 	At   string   `json:"at,omitempty"`
 	Next string   `json:"next,omitempty"`
 	Jobs []string `json:"jobs"`
+	By   string   `json:"by,omitempty"`
 }
 
 func runScheduleList(ctx context.Context, g *globals) error {
@@ -230,7 +240,7 @@ func runScheduleList(ctx context.Context, g *globals) error {
 	}
 	views := make([]scheduleView, 0, len(schedules))
 	for _, s := range schedules {
-		v := scheduleView{Name: s.Name, Cron: s.Cron, TZ: s.TZ, At: s.At, Jobs: s.Jobs}
+		v := scheduleView{Name: s.Name, Cron: s.Cron, TZ: s.TZ, At: s.At, Jobs: s.Jobs, By: s.By}
 		if !s.Next.IsZero() {
 			v.Next = s.Next.Format(time.RFC3339)
 		}
@@ -252,7 +262,11 @@ func runScheduleList(ctx context.Context, g *globals) error {
 		if next == "" {
 			next = "none"
 		}
-		fmt.Fprintf(g.app.Stdout, "%s  %s  next %s  jobs %s\n", p.primary(v.Name), when, p.dim(next), strings.Join(v.Jobs, ", "))
+		by := ""
+		if v.By != "" {
+			by = "  by @" + v.By
+		}
+		fmt.Fprintf(g.app.Stdout, "%s  %s  next %s  jobs %s%s\n", p.primary(v.Name), when, p.dim(next), strings.Join(v.Jobs, ", "), by)
 	}
 	return nil
 }

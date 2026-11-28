@@ -11,18 +11,8 @@ import (
 	"defios.com/internal/node"
 )
 
-// groupTool is a stand-in Group Tool, for the Group Tools come in later
-// tickets.
-const groupTool = "job_list"
-
-// withGroupTool makes groupTool a built-in Group Tool for t.
-func withGroupTool(t *testing.T) {
-	t.Helper()
-	tools, group := config.Tools, config.GroupTools
-	config.Tools = append(slices.Clone(tools), groupTool)
-	config.GroupTools = append(slices.Clone(group), groupTool)
-	t.Cleanup(func() { config.Tools, config.GroupTools = tools, group })
-}
+// groupTool is a Group Tool.
+const groupTool = config.ToolJobList
 
 // misplaced fails t unless err is a MisplacedError naming want.
 func misplaced(t *testing.T, err error, want ...node.Misplaced) {
@@ -38,7 +28,6 @@ func misplaced(t *testing.T, err error, want ...node.Misplaced) {
 // IncludeAgent and SetIncludedAgents refuse one misplaced, naming each
 // place, and write nothing (ADR 0046).
 func TestAProfilesTierFixesWhereItIsIncluded(t *testing.T) {
-	withGroupTool(t)
 	alice, _, k := keyed(t, "", "")
 	ctx := context.Background()
 	h := alice.h
@@ -84,7 +73,6 @@ func TestAProfilesTierFixesWhereItIsIncluded(t *testing.T) {
 // be is refused, naming every such place, and a mixed-tier grant is
 // refused as the loader refuses it (ADR 0046).
 func TestAGrantMayNotMisplaceAnIncludedProfile(t *testing.T) {
-	withGroupTool(t)
 	alice, _, k := keyed(t, "", "")
 	ctx := context.Background()
 	h := alice.h

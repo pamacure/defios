@@ -678,6 +678,7 @@ func (h *Host) start(passphrase, alias string) (*serving, error) {
 		NewSigner:         sessions.Sign,
 		Getenv:            h.o.Getenv,
 		Secrets:           secrets,
+		Triggers:          agentTriggers{h: h, group: alias},
 		OnProposal: func(p group.Proposal) {
 			ev := &Proposal{Group: alias, GroupID: p.GroupID.String(), Initiator: p.Initiator.String()}
 			for _, n := range p.Roster.Nodes() {

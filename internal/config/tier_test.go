@@ -4,30 +4,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"defios.com/internal/config"
 )
 
-// groupTool is a stand-in Group Tool, for the Group Tools come in later
-// tickets.
-const groupTool = "job_list"
-
-// withGroupTool makes groupTool a built-in Group Tool for t.
-func withGroupTool(t *testing.T) {
-	t.Helper()
-	tools, group := config.Tools, config.GroupTools
-	config.Tools = append(slices.Clone(tools), groupTool)
-	config.GroupTools = append(slices.Clone(group), groupTool)
-	t.Cleanup(func() { config.Tools, config.GroupTools = tools, group })
-}
+// groupTool is a Group Tool.
+const groupTool = config.ToolJobList
 
 // A profile's tier is that of the tiered Tools it grants; the talk_ Tools,
 // Skills and MCP Servers have none.
 func TestAProfilesTierComesFromItsTools(t *testing.T) {
-	withGroupTool(t)
 	for name, c := range map[string]struct {
 		tools []string
 		want  config.Tier
@@ -53,7 +41,6 @@ func TestAProfilesTierComesFromItsTools(t *testing.T) {
 // A profile granting Tools of both tiers is refused by the loader, so
 // never written, and a grant that would make one is refused.
 func TestAMixedTierProfileIsRefused(t *testing.T) {
-	withGroupTool(t)
 	mixed := config.Profile{Provider: "claude", Tools: []string{"sign_list", groupTool}}
 	if _, err := mixed.Tier(); err == nil {
 		t.Fatal("a mixed profile has a tier")
