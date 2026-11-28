@@ -14,6 +14,9 @@
   --accent-strong: #1A7A51;
   --accent-bright: #3FF9AA;
   --accent-wash: #DCF6F1;
+  /* --mine fills your own bubbles: a teal tint at least 1.5:1 on --bg,
+     so it stands off the transcript in every palette; --text is at least 8:1 on it. */
+  --mine: #A5CFC4;
   --warn-bg: #FFF4D6;
   --warn-text: #9D7302;
   --danger: #DF2935;
@@ -59,6 +62,7 @@
     --accent: #32CD8B;
     --accent-strong: #3FF9AA;
     --accent-wash: #0E5336;
+    --mine: #0E5336;
     --warn-bg: #3A2E0A;
     --warn-text: #FDCA40;
     --danger-bg: #3B1216;
@@ -87,6 +91,7 @@
   --accent: #32CD8B;
   --accent-strong: #3FF9AA;
   --accent-wash: #0E5336;
+  --mine: #0E5336;
   --warn-bg: #3A2E0A;
   --warn-text: #FDCA40;
   --danger-bg: #3B1216;
@@ -383,7 +388,7 @@ button.conv > .sub { grid-column: 2 / -1; }
 .msg .who strong { color: var(--text-soft); font-weight: 600; }
 .msg .handle { color: var(--lv, var(--accent-strong)); font-weight: 600; } /* an agent's in its Livery's colour */
 .msg .text { padding: 8px 12px; border-radius: var(--radius-l); background: var(--surface); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
-.msg.right .text { background: var(--accent-wash); border-color: transparent; border-bottom-right-radius: 0; }
+.msg.right .text { background: var(--mine); border-color: transparent; border-bottom-right-radius: 0; }
 .msg.left .text { border-bottom-left-radius: 0; }
 /* An agent's bubble: an opaque tone of its Livery's colour under the
    cards' sand grain (dark only), edged in the full colour (see --lv-tone);
@@ -1034,11 +1039,11 @@ body[data-page="talk"] .toasts { top: 116px; }
    lightest; Sage is muted, a grey-green ramp, and Mint the greenest, pale
    greens of the brand green's hue (~152). Accents do not change. */
 @media not all and (prefers-color-scheme: dark) {
-  :root:not([data-theme="dark"])[data-light="sage"] { --bg: #E7EEEB; --surface: #F8FAF9; --field: #D9E3DF; --line: #B3C6BF; --edge: #9AB0A8; --soft: #B7D5CC; --soft-edge: #8EB4A9; }
-  :root:not([data-theme="dark"])[data-light="mint"] { --bg: #E0F4EA; --surface: #F5FDF9; --field: #CDEADB; --line: #A3D6BC; --edge: #82C1A1; --soft: #9CE2C1; --soft-edge: #6BC69A; }
+  :root:not([data-theme="dark"])[data-light="sage"] { --bg: #E7EEEB; --surface: #F8FAF9; --field: #D9E3DF; --line: #B3C6BF; --edge: #9AB0A8; --soft: #B7D5CC; --soft-edge: #8EB4A9; --mine: #9FCBBC; }
+  :root:not([data-theme="dark"])[data-light="mint"] { --bg: #E0F4EA; --surface: #F5FDF9; --field: #CDEADB; --line: #A3D6BC; --edge: #82C1A1; --soft: #9CE2C1; --soft-edge: #6BC69A; --mine: #A2CDBD; }
 }
-:root[data-theme="light"][data-light="sage"], .lightwin[data-light="sage"] { --bg: #E7EEEB; --surface: #F8FAF9; --field: #D9E3DF; --line: #B3C6BF; --edge: #9AB0A8; --soft: #B7D5CC; --soft-edge: #8EB4A9; }
-:root[data-theme="light"][data-light="mint"], .lightwin[data-light="mint"] { --bg: #E0F4EA; --surface: #F5FDF9; --field: #CDEADB; --line: #A3D6BC; --edge: #82C1A1; --soft: #9CE2C1; --soft-edge: #6BC69A; }
+:root[data-theme="light"][data-light="sage"], .lightwin[data-light="sage"] { --bg: #E7EEEB; --surface: #F8FAF9; --field: #D9E3DF; --line: #B3C6BF; --edge: #9AB0A8; --soft: #B7D5CC; --soft-edge: #8EB4A9; --mine: #9FCBBC; }
+:root[data-theme="light"][data-light="mint"], .lightwin[data-light="mint"] { --bg: #E0F4EA; --surface: #F5FDF9; --field: #CDEADB; --line: #A3D6BC; --edge: #82C1A1; --soft: #9CE2C1; --soft-edge: #6BC69A; --mine: #A2CDBD; }
 
 /* Quantico: titles, section labels, and counts. */
 .page h1, .center h1, .card h1, .modal h2, .chat-head h2 { font-family: var(--display); font-weight: 700; letter-spacing: .01em; }
